@@ -161,6 +161,8 @@ db:
     name: postgres
     usernameKey: username
     passwordKey: password
+    # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
+    endpointKey: ""
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
@@ -206,6 +208,10 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
   ttlSecondsAfterFinished: 120
+  resources: {}
+  #  requests:
+  #    cpu: 100m
+  #    memory: 100Mi
   extraContainers: []
   
   # Hook configuration

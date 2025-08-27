@@ -2,8 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Quick Start
-Quick start CLI, Config, Docker
+# CLI - Quick Start
+
+Setup LiteLLM Proxy quickly via CLI. 
 
 LiteLLM Server (LLM Gateway) manages:
 

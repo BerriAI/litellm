@@ -7,7 +7,8 @@ import {
   TextInput,
   TableCell,
 } from "@tremor/react";
-import { Typography, message, Divider } from "antd";
+import { Typography } from "antd";
+import NotificationManager from "./molecules/notifications_manager";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
@@ -24,7 +25,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
   premiumUser,
   alerts,
 }) => {
-  const handleSaveEmailSettings = () => {
+  const handleSaveEmailSettings = async () => {
     if (!accessToken) {
       return;
     }
@@ -52,12 +53,11 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
       environment_variables: updatedVariables,
     };
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
+      NotificationManager.success("Email settings updated successfully");
     } catch (error) {
-      message.error("Failed to update alerts: " + error, 20);
+      NotificationManager.fromBackend(error);
     }
-
-    message.success("Email settings updated successfully");
   }
 
   return (
@@ -191,9 +191,15 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
               Save Changes
             </Button>
             <Button
-              onClick={() =>
-                accessToken && serviceHealthCheck(accessToken, "email")
-              }
+              onClick={async () => {
+                if (!accessToken) return;
+                try {
+                  await serviceHealthCheck(accessToken, "email");
+                  NotificationManager.success("Email test triggered. Check your configured email inbox/logs.");
+                } catch (error) {
+                  NotificationManager.fromBackend(error);
+                }
+              }}
               className="mx-2"
             >
               Test Email Alerts

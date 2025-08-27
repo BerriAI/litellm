@@ -348,6 +348,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             for message in messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
+
                 if (
                     message_role == "user"
                     and message_content
@@ -427,6 +428,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
+
+        optional_params.pop("max_retries", None)
 
         return {
             "model": model,

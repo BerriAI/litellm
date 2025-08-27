@@ -1,5 +1,23 @@
 # AI/ML API  
+https://aimlapi.com/
 
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | AI/ML API provides access to state-of-the-art AI models including flux-pro/v1.1 for high-quality image generation. |
+| Provider Route on LiteLLM | `aiml/` |
+| Link to Provider Doc | [AI/ML API ↗](https://docs.aimlapi.com/) |
+| Supported Operations | [`/chat/completions`], [`/images/generations`](#image-generation) |
+
+LiteLLM supports AI/ML API Image Generation calls.
+
+## API Base, Key
+```python
+# env variable
+os.environ['AIML_API_KEY'] = "your-api-key"
+os.environ['AIML_API_BASE'] = "https://api.aimlapi.com"  # [optional] 
+```
 Getting started with the AI/ML API is simple. Follow these steps to set up your integration:
 
 ### 1. Get Your API Key  
@@ -24,7 +42,7 @@ You can choose from LLama, Qwen, Flux, and 200+ other open and closed-source mod
 import litellm
 
 response = litellm.completion(
-    model="openai/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", # The model name must include prefix "openai" + the model name from ai/ml api
+    model="aiml/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", # The model name must include prefix "openai" + the model name from ai/ml api
     api_key="", # your aiml api-key 
     api_base="https://api.aimlapi.com/v2",
     messages=[
@@ -42,7 +60,7 @@ response = litellm.completion(
 import litellm
 
 response = litellm.completion(
-    model="openai/Qwen/Qwen2-72B-Instruct",  # The model name must include prefix "openai" + the model name from ai/ml api
+    model="aiml/Qwen/Qwen2-72B-Instruct",  # The model name must include prefix "openai" + the model name from ai/ml api
     api_key="",  # your aiml api-key 
     api_base="https://api.aimlapi.com/v2",
     messages=[
@@ -67,7 +85,7 @@ import litellm
 
 async def main():
     response = await litellm.acompletion(
-        model="openai/anthropic/claude-3-5-haiku",  # The model name must include prefix "openai" + the model name from ai/ml api
+        model="aiml/anthropic/claude-3-5-haiku",  # The model name must include prefix "openai" + the model name from ai/ml api
         api_key="",  # your aiml api-key
         api_base="https://api.aimlapi.com/v2",
         messages=[
@@ -97,7 +115,7 @@ async def main():
     try:
         print("test acompletion + streaming")
         response = await litellm.acompletion(
-            model="openai/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF", # The model name must include prefix "openai" + the model name from ai/ml api
+            model="aiml/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF", # The model name must include prefix "openai" + the model name from ai/ml api
             api_key="", # your aiml api-key
             api_base="https://api.aimlapi.com/v2",
             messages=[{"content": "Hey, how's it going?", "role": "user"}],
@@ -125,7 +143,7 @@ import litellm
 
 async def main():
     response = await litellm.aembedding(
-        model="openai/text-embedding-3-small", # The model name must include prefix "openai" + the model name from ai/ml api
+        model="aiml/text-embedding-3-small", # The model name must include prefix "openai" + the model name from ai/ml api
         api_key="",  # your aiml api-key
         api_base="https://api.aimlapi.com/v1", # 👈 the URL has changed from v2 to v1
         input="Your text string",
@@ -147,7 +165,7 @@ import litellm
 
 async def main():
     response = await litellm.aimage_generation(
-        model="openai/dall-e-3",  # The model name must include prefix "openai" + the model name from ai/ml api
+        model="aiml/dall-e-3",  # The model name must include prefix "openai" + the model name from ai/ml api
         api_key="",  # your aiml api-key
         api_base="https://api.aimlapi.com/v1", # 👈 the URL has changed from v2 to v1
         prompt="A cute baby sea otter",

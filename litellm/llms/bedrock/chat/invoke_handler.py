@@ -831,7 +831,7 @@ class BedrockLLM(BaseAWSLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )  # type: ignore
                 ## LOAD CONFIG
-                config = litellm.AmazonAnthropicClaude3Config.get_config()
+                config = litellm.AmazonAnthropicClaudeConfig.get_config()
                 for k, v in config.items():
                     if (
                         k not in inference_params

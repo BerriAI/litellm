@@ -579,3 +579,103 @@ async def test_get_service_provider_config(mocker):
     assert result.bulk.supported is False
     assert result.meta is not None
     assert result.meta["resourceType"] == "ServiceProviderConfig"
+
+
+@pytest.mark.asyncio
+async def test_update_group_metadata_serialization_issue(mocker):
+    """
+    Test that update_group properly serializes metadata to avoid Prisma DataError.
+    
+    This test reproduces the issue where metadata was passed as a dict instead of
+    a JSON string, causing: "Invalid argument type. `metadata` should be of any 
+    of the following types: `JsonNullValueInput`, `Json`"
+    """
+    from litellm.proxy.management_endpoints.scim.scim_v2 import update_group
+    from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMMember
+
+    # Create test data
+    group_id = "test-group-id"
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Test Group",
+        members=[SCIMMember(value="user1", display="User One")]
+    )
+    
+    # Mock existing team with metadata
+    mock_existing_team = mocker.MagicMock()
+    mock_existing_team.team_id = group_id
+    mock_existing_team.team_alias = "Old Group Name"
+    mock_existing_team.members = ["user1"]
+    mock_existing_team.metadata = {"existing_key": "existing_value"}
+    mock_existing_team.created_at = None
+    mock_existing_team.updated_at = None
+    
+    # Mock updated team response
+    mock_updated_team = mocker.MagicMock()
+    mock_updated_team.team_id = group_id
+    mock_updated_team.team_alias = "Test Group"
+    mock_updated_team.members = ["user1"]
+    mock_updated_team.created_at = None
+    mock_updated_team.updated_at = None
+    
+    # Create a properly structured mock for the prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    
+    # Mock team operations
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+    
+    # Mock user operations
+    mock_user = mocker.MagicMock()
+    mock_user.user_id = "user1"
+    mock_user.user_email = "user1@example.com"  # Add proper string value for user_email
+    mock_user.teams = [group_id]
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
+    
+    # Mock the _get_prisma_client_or_raise_exception to return our mock
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    
+    # Mock the transformation function
+    mock_scim_group_response = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Test Group",
+        members=[SCIMMember(value="user1", display="User One")]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=mock_scim_group_response),
+    )
+    
+    # Call the function that had the bug
+    result = await update_group(group_id=group_id, group=scim_group)
+    
+    # Verify the team update was called
+    mock_prisma_client.db.litellm_teamtable.update.assert_called_once()
+    
+    # Get the call arguments to verify metadata serialization
+    call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
+    update_data = call_args[1]["data"]
+    
+    # Verify that metadata is properly serialized as a string, not a dict
+    # This is the critical check that would have caught the original bug
+    assert "metadata" in update_data
+    metadata = update_data["metadata"]
+    
+    # The fix should ensure metadata is serialized as a JSON string
+    assert isinstance(metadata, str), f"metadata should be a JSON string, but got {type(metadata)}"
+    
+    # Verify we can parse it back to verify it contains the expected data
+    import json
+    parsed_metadata = json.loads(metadata)
+    assert "existing_key" in parsed_metadata
+    assert "scim_data" in parsed_metadata
+    assert parsed_metadata["existing_key"] == "existing_value"

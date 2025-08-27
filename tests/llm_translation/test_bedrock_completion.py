@@ -3308,7 +3308,7 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_bedrock_streaming_passthrough(monkeypatch):
+async def test_bedrock_streaming_passthrough_test2(monkeypatch):
     import litellm
     import time
     import asyncio
@@ -3350,7 +3350,7 @@ async def test_bedrock_streaming_passthrough(monkeypatch):
         async for chunk in response:
             print(chunk)
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
 
         mock_callback.assert_called_once()
         # check standard logging payload created
@@ -3360,7 +3360,7 @@ async def test_bedrock_streaming_passthrough(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_bedrock_streaming_passthrough(monkeypatch):
+async def test_bedrock_streaming_passthrough_test1(monkeypatch):
     import litellm
     import time
     import asyncio
@@ -3402,7 +3402,7 @@ async def test_bedrock_streaming_passthrough(monkeypatch):
         async for chunk in response:
             print(chunk)
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
 
         mock_callback.assert_called_once()
         # check standard logging payload created

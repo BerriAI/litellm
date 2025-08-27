@@ -4,11 +4,14 @@ Common utilities used across bedrock chat/embedding/image generation
 
 import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
@@ -443,23 +446,82 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
+        route_mappings: Dict[str, Literal["invoke", "converse_like", "converse", "agent"]] = {
+            "invoke/": "invoke",
+            "converse_like/": "converse_like", 
+            "converse/": "converse",
+            "agent/": "agent"
+        }
+        
+        # Check explicit routes first
+        for prefix, route_type in route_mappings.items():
+            if prefix in model:
+                return route_type
+        
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if "invoke/" in model:
-            return "invoke"
-        elif "converse_like" in model:
-            return "converse_like"
-        elif "converse/" in model:
-            return "converse"
-        elif "agent/" in model:
-            return "agent"
-        elif (
+        if (
             base_model in litellm.bedrock_converse_models
             or alt_model in litellm.bedrock_converse_models
         ):
             return "converse"
         return "invoke"
+    
+    @staticmethod
+    def _explicit_converse_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse route.
+        """
+        return "converse/" in model
+    
+    @staticmethod
+    def _explicit_invoke_route(model: str) -> bool:
+        """
+        Check if the model is an explicit invoke route.
+        """
+        return "invoke/" in model
+    
+    @staticmethod
+    def _explicit_agent_route(model: str) -> bool:
+        """
+        Check if the model is an explicit agent route.
+        """
+        return "agent/" in model
+    
+    @staticmethod
+    def _explicit_converse_like_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse like route.
+        """
+        return "converse_like/" in model
+    
 
+    @staticmethod
+    def get_bedrock_provider_config_for_messages_api(model: str) -> Optional[BaseAnthropicMessagesConfig]:
+        """
+        Get the bedrock provider config for the given model.
+
+        Only route to AmazonAnthropicClaude3MessagesConfig() for BaseMessagesConfig
+
+        All other routes should return None since they will go through litellm.completion
+        """
+
+        #########################################################
+        # Converse routes should go through litellm.completion()
+        if BedrockModelInfo._explicit_converse_route(model):
+            return None
+        
+        #########################################################
+        # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
+        # Since bedrock Invoke supports Native Anthropic Messages API
+        #########################################################
+        if "claude" in model:
+            return litellm.AmazonAnthropicClaudeMessagesConfig()
+        
+        #########################################################
+        # These routes will go through litellm.completion()
+        #########################################################
+        return None
 
 class BedrockEventStreamDecoderBase:
     """
@@ -524,3 +586,25 @@ class BedrockEventStreamDecoderBase:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
+    """
+    Extract anthropic-beta header values and convert them to a list.
+    Supports comma-separated values from user headers.
+    
+    Used by both converse and invoke transformations for consistent handling
+    of anthropic-beta headers that should be passed to AWS Bedrock.
+    
+    Args:
+        headers (dict): Request headers dictionary
+        
+    Returns:
+        List[str]: List of anthropic beta feature strings, empty list if no header
+    """
+    anthropic_beta_header = headers.get("anthropic-beta")
+    if not anthropic_beta_header:
+        return []
+    
+    # Split comma-separated values and strip whitespace
+    return [beta.strip() for beta in anthropic_beta_header.split(",")]

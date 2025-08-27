@@ -16,6 +16,7 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
 
@@ -262,10 +263,18 @@ async def count_tokens(
         )
         
         # Call the internal token counter function with direct request flag set to False
-        token_response = await internal_token_counter(token_request, is_direct_request=False)
-        
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+        _token_response_dict: dict = {}
+        if isinstance(token_response, TokenCountResponse):
+            _token_response_dict = token_response.model_dump()
+        elif isinstance(token_response, dict):
+            _token_response_dict = token_response
+    
         # Convert the internal response to Anthropic API format
-        return {"input_tokens": token_response.total_tokens}
+        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
         
     except HTTPException:
         raise

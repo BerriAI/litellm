@@ -138,6 +138,7 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+
 def _suppress_loggers():
     """Suppress noisy loggers at INFO level"""
     # Suppress httpx request logging at INFO level
@@ -149,6 +150,7 @@ def _suppress_loggers():
     apscheduler_executors_logger.setLevel(logging.WARNING)
     apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
     apscheduler_scheduler_logger.setLevel(logging.WARNING)
+
 
 # Call the suppression function
 _suppress_loggers()
@@ -224,8 +226,4 @@ def _is_debugging_on() -> bool:
     """
     Returns True if debugging is on
     """
-    if verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True:
-        return True
-    return False
-
-
+    return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
