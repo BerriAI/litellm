@@ -3017,6 +3017,7 @@ class PreProcessNonDefaultParams:
         default_param_values: dict,
         additional_endpoint_specific_params: List[str],
     ) -> dict:
+        # Process special params more efficiently
         for k, v in special_params.items():
             if k.startswith("aws_") and (
                 custom_llm_provider != "bedrock"
@@ -3033,26 +3034,34 @@ class PreProcessNonDefaultParams:
                 continue
             passed_params[k] = v
 
-        # filter out those parameters that were passed with non-default values
-        non_default_params = {
-            k: v
-            for k, v in passed_params.items()
-            if (
-                k != "model"
-                and k != "custom_llm_provider"
-                and k != "api_version"
-                and k != "drop_params"
-                and k != "allowed_openai_params"
-                and k != "additional_drop_params"
-                and k not in additional_endpoint_specific_params
-                and k in default_param_values
-                and v != default_param_values[k]
-                and _should_drop_param(
-                    k=k, additional_drop_params=additional_drop_params
-                )
-                is False
-            )
+        # Pre-compute excluded parameters for faster lookup
+        excluded_params = {
+            "model",
+            "custom_llm_provider", 
+            "api_version",
+            "drop_params",
+            "allowed_openai_params",
+            "additional_drop_params",
         }
+        excluded_params.update(additional_endpoint_specific_params)
+        
+        # Pre-compute dropped parameters for faster lookup
+        dropped_params = set(additional_drop_params) if additional_drop_params else set()
+
+        # Optimized filtering - use simple loops instead of complex comprehension
+        non_default_params = {}
+        for k, v in passed_params.items():
+            # Quick exclusion checks first (most common cases)
+            if k in excluded_params:
+                continue
+            if k not in default_param_values:
+                continue
+            if v == default_param_values[k]:
+                continue
+            if k in dropped_params:
+                continue
+                
+            non_default_params[k] = v
 
         return non_default_params
 
@@ -3317,9 +3326,7 @@ def get_optional_params(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
     )
     provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
+    if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
@@ -3367,13 +3374,17 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
-    supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
-    if supported_params is None:
+    # Optimize: avoid double calls to get_supported_openai_params
+    if provider_config is not None:
+        supported_params = provider_config.get_supported_openai_params(model=model)
+    else:
         supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider="openai"
+            model=model, custom_llm_provider=custom_llm_provider
         )
+        if supported_params is None:
+            supported_params = get_supported_openai_params(
+                model=model, custom_llm_provider="openai"
+            )
 
     supported_params = supported_params or []
     allowed_openai_params = allowed_openai_params or []
@@ -3382,8 +3393,20 @@ def get_optional_params(  # noqa: PLR0915
     _check_valid_arg(
         supported_params=supported_params or [],
     )
-    ## raise exception if provider doesn't support passed in param
-    if custom_llm_provider == "anthropic":
+    ## Optimize: Use provider_config if available, otherwise use provider-specific logic
+    if provider_config is not None:
+        # Use the cached provider_config to avoid repeated config instantiation
+        optional_params = provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+    elif custom_llm_provider == "anthropic":
         ## check if unsupported param passed in
         optional_params = litellm.AnthropicConfig().map_openai_params(
             model=model,
@@ -3396,16 +3419,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "anthropic_text":
-        optional_params = litellm.AnthropicTextConfig().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
+        # Fix: Remove duplicate call
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
