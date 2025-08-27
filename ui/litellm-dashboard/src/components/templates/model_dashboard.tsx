@@ -39,6 +39,7 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  modelDeleteCall,
 } from "../networking"
 import { BarChart, AreaChart } from "@tremor/react"
 import { Popover, Form, InputNumber, message } from "antd"
@@ -63,6 +64,8 @@ import ModelGroupAliasSettings from "../model_group_alias_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from "@tanstack/react-table";
 import NotificationsManager from "../molecules/notifications_manager";
+import { Switch, Tooltip, Modal } from "antd";
+import { ExclamationIcon } from "@heroicons/react/outline";
 
 interface ModelDashboardProps {
   accessToken: string | null
@@ -198,6 +201,110 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null)
   const tableRef = useRef<TableInstance<any>>(null)
   const [selectedTabIndex, setSelectedTabIndex] = useState(0)
+
+  // New state for bulk operations
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
+  const [disabledModels, setDisabledModels] = useState<Set<string>>(new Set())
+  const [bulkOperationLoading, setBulkOperationLoading] = useState<boolean>(false)
+  
+  // New state for bulk confirmation modals
+  const [showBulkDisableModal, setShowBulkDisableModal] = useState(false)
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false)
+  const [pendingBulkAction, setPendingBulkAction] = useState<{action: 'disable' | 'enable' | 'delete', modelIds: string[]} | null>(null)
+
+  // Handlers for bulk operations
+  const handleBulkDisable = async (modelIds: string[], disable: boolean) => {
+    setBulkOperationLoading(true)
+    try {
+      // TODO: Replace with actual API call when available
+      // await bulkDisableModelsAPI(accessToken, modelIds, disable)
+      
+      // For now, update local state
+      const newDisabledModels = new Set(disabledModels)
+      if (disable) {
+        modelIds.forEach(id => newDisabledModels.add(id))
+      } else {
+        modelIds.forEach(id => newDisabledModels.delete(id))
+      }
+      setDisabledModels(newDisabledModels)
+      
+      // Show success message
+      const action = disable ? 'disabled' : 'enabled'
+      console.log(`Successfully ${action} ${modelIds.length} model(s)`)
+      
+    } catch (error) {
+      console.error('Error in bulk disable operation:', error)
+      // TODO: Show error message to user
+    } finally {
+      setBulkOperationLoading(false)
+    }
+  }
+
+  const handleBulkDelete = async (modelIds: string[]) => {
+    setBulkOperationLoading(true)
+    try {
+      // TODO: Replace with actual API call when available
+      // await bulkDeleteModelsAPI(accessToken, modelIds)
+      
+      // For now, just log the operation
+      console.log(`Would delete ${modelIds.length} model(s):`, modelIds)
+      
+      // Clear selection after deletion
+      setSelectedModels(new Set())
+      
+      // Refresh the model list
+      handleRefreshClick()
+      
+    } catch (error) {
+      console.error('Error in bulk delete operation:', error)
+      // TODO: Show error message to user
+    } finally {
+      setBulkOperationLoading(false)
+    }
+  }
+
+  // New handlers for bulk confirmation modals
+  const handleBulkDisableClick = (action: 'disable' | 'enable') => {
+    const selectedArray = Array.from(selectedModels)
+    const applicableModels = action === 'disable' 
+      ? selectedArray.filter(id => !disabledModels.has(id))
+      : selectedArray.filter(id => disabledModels.has(id))
+    
+    if (applicableModels.length > 0) {
+      setPendingBulkAction({ action, modelIds: applicableModels })
+      setShowBulkDisableModal(true)
+    }
+  }
+
+  const handleBulkDeleteClick = () => {
+    const selectedArray = Array.from(selectedModels)
+    if (selectedArray.length > 0) {
+      setPendingBulkAction({ action: 'delete', modelIds: selectedArray })
+      setShowBulkDeleteModal(true)
+    }
+  }
+
+  const confirmBulkDisableAction = () => {
+    if (pendingBulkAction && pendingBulkAction.action !== 'delete') {
+      handleBulkDisable(pendingBulkAction.modelIds, pendingBulkAction.action === 'disable')
+    }
+    setShowBulkDisableModal(false)
+    setPendingBulkAction(null)
+  }
+
+  const confirmBulkDeleteAction = () => {
+    if (pendingBulkAction && pendingBulkAction.action === 'delete') {
+      handleBulkDelete(pendingBulkAction.modelIds)
+    }
+    setShowBulkDeleteModal(false)
+    setPendingBulkAction(null)
+  }
+
+  const cancelBulkAction = () => {
+    setShowBulkDisableModal(false)
+    setShowBulkDeleteModal(false)
+    setPendingBulkAction(null)
+  }
 
   const handleCreateNewModelClick = () => {
     if (selectedModelId) {
@@ -1188,6 +1295,213 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </div>
                         </div>
 
+                        {/* Bulk Operations Toolbar */}
+                        {selectedModels.size > 0 && (
+                          <div className="border-b px-6 py-3 bg-blue-50">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-4">
+                                <span className="text-sm font-medium text-blue-900">
+                                  {selectedModels.size} model{selectedModels.size !== 1 ? 's' : ''} selected
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="xs"
+                                    variant="secondary"
+                                    onClick={() => handleBulkDisableClick('disable')}
+                                    disabled={bulkOperationLoading || Array.from(selectedModels).every(id => disabledModels.has(id))}
+                                    className="bg-orange-100 text-orange-700 hover:bg-orange-200"
+                                  >
+                                    {bulkOperationLoading ? 'Processing...' : 'Disable Selected'}
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="secondary"
+                                    onClick={() => handleBulkDisableClick('enable')}
+                                    disabled={bulkOperationLoading || Array.from(selectedModels).every(id => !disabledModels.has(id))}
+                                    className="bg-green-100 text-green-700 hover:bg-green-200"
+                                  >
+                                    {bulkOperationLoading ? 'Processing...' : 'Enable Selected'}
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="secondary"
+                                    onClick={handleBulkDeleteClick}
+                                    disabled={bulkOperationLoading}
+                                    className="bg-red-100 text-red-700 hover:bg-red-200"
+                                  >
+                                    {bulkOperationLoading ? 'Processing...' : 'Delete Selected'}
+                                  </Button>
+                                </div>
+                              </div>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                onClick={() => setSelectedModels(new Set())}
+                                className="text-gray-600"
+                              >
+                                Clear Selection
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Bulk Disable/Enable Confirmation Modal */}
+                        <Modal
+                          title={
+                            <div className="flex items-center">
+                              <ExclamationIcon className="h-5 w-5 text-orange-600 mr-2" />
+                              {pendingBulkAction?.action === 'disable' ? 'Disable Models' : 'Enable Models'}
+                            </div>
+                          }
+                          open={showBulkDisableModal}
+                          onCancel={cancelBulkAction}
+                          footer={null}
+                          destroyOnClose={true}
+                          maskClosable={false}
+                          width={600}
+                        >
+                          <div className="mt-4">
+                            <div className={`border rounded-md p-4 mb-4 ${
+                              pendingBulkAction?.action === 'disable' 
+                                ? 'bg-orange-50 border-orange-200' 
+                                : 'bg-green-50 border-green-200'
+                            }`}>
+                              <div className="flex">
+                                <div className="ml-3">
+                                  <h3 className={`text-sm font-medium ${
+                                    pendingBulkAction?.action === 'disable' 
+                                      ? 'text-orange-800' 
+                                      : 'text-green-800'
+                                  }`}>
+                                    {pendingBulkAction?.action === 'disable' 
+                                      ? `This will disable ${pendingBulkAction?.modelIds.length || 0} model(s)` 
+                                      : `This will enable ${pendingBulkAction?.modelIds.length || 0} model(s)`}
+                                  </h3>
+                                  <div className={`mt-2 text-sm ${
+                                    pendingBulkAction?.action === 'disable' 
+                                      ? 'text-orange-700' 
+                                      : 'text-green-700'
+                                  }`}>
+                                    <p>
+                                      {pendingBulkAction?.action === 'disable' 
+                                        ? 'These models will no longer be available for API requests.'
+                                        : 'These models will become available for API requests.'}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="mb-4">
+                              <p className="text-sm font-medium text-gray-900 mb-2">
+                                Selected Models ({pendingBulkAction?.modelIds.length || 0}):
+                              </p>
+                              <div className="bg-gray-50 rounded-md p-3 text-sm max-h-40 overflow-y-auto">
+                                {pendingBulkAction?.modelIds.map((modelId) => {
+                                  const model = modelData.data.find((m: any) => m.model_info.id === modelId);
+                                  const displayName = model ? getDisplayModelName(model) || model.model_name : modelId;
+                                  return (
+                                    <div key={modelId} className="flex justify-between items-center py-1">
+                                      <span className="font-mono text-xs">{modelId}</span>
+                                      <span className="text-xs text-gray-600">{displayName}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end space-x-3">
+                              <Button
+                                size="xs"
+                                variant="secondary"
+                                onClick={cancelBulkAction}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="xs"
+                                color={pendingBulkAction?.action === 'disable' ? 'orange' : 'green'}
+                                onClick={confirmBulkDisableAction}
+                              >
+                                {pendingBulkAction?.action === 'disable' 
+                                  ? `Disable ${pendingBulkAction?.modelIds.length || 0} Model(s)` 
+                                  : `Enable ${pendingBulkAction?.modelIds.length || 0} Model(s)`}
+                              </Button>
+                            </div>
+                          </div>
+                        </Modal>
+
+                        {/* Bulk Delete Confirmation Modal */}
+                        <Modal
+                          title={
+                            <div className="flex items-center">
+                              <ExclamationIcon className="h-6 w-6 text-red-600 mr-2" />
+                              Delete Multiple Models
+                            </div>
+                          }
+                          open={showBulkDeleteModal}
+                          onCancel={cancelBulkAction}
+                          footer={null}
+                          destroyOnClose={true}
+                          maskClosable={false}
+                          width={600}
+                        >
+                          <div className="mt-4">
+                            <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
+                              <div className="flex">
+                                <div className="ml-3">
+                                  <h3 className="text-sm font-medium text-red-800">
+                                    This action cannot be undone
+                                  </h3>
+                                  <div className="mt-2 text-sm text-red-700">
+                                    <p>
+                                      This will permanently delete {pendingBulkAction?.modelIds.length || 0} model(s) and all their configurations.
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="mb-4">
+                              <p className="text-sm font-medium text-gray-900 mb-2">
+                                Models to Delete ({pendingBulkAction?.modelIds.length || 0}):
+                              </p>
+                              <div className="bg-gray-50 rounded-md p-3 text-sm max-h-40 overflow-y-auto">
+                                {pendingBulkAction?.modelIds.map((modelId) => {
+                                  const model = modelData.data.find((m: any) => m.model_info.id === modelId);
+                                  const displayName = model ? getDisplayModelName(model) || model.model_name : modelId;
+                                  return (
+                                    <div key={modelId} className="flex justify-between items-center py-1">
+                                      <span className="font-mono text-xs">{modelId}</span>
+                                      <span className="text-xs text-gray-600">{displayName}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end space-x-3">
+                              <Button
+                                size="xs"
+                                variant="secondary"
+                                onClick={cancelBulkAction}
+                                disabled={bulkOperationLoading}
+                              >
+                                Cancel
+                              </Button>
+                              <Button
+                                size="xs"
+                                color="red"
+                                onClick={confirmBulkDeleteAction}
+                                loading={bulkOperationLoading}
+                                disabled={bulkOperationLoading}
+                              >
+                                {bulkOperationLoading ? 'Deleting...' : `Delete ${pendingBulkAction?.modelIds.length || 0} Model(s)`}
+                              </Button>
+                            </div>
+                          </div>
+                        </Modal>
+
                         <ModelDataTable
                           columns={columns(
                             userRole,
@@ -1201,6 +1515,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             setEditModel,
                             expandedRows,
                             setExpandedRows,
+                            // New props for bulk operations
+                            selectedModels,
+                            setSelectedModels,
+                            handleBulkDisable,
+                            disabledModels,
+                            // Add accessToken for deletion
+                            accessToken,
                           )}
                           data={modelData.data.filter((model: any) => {
                             // Model name search filter
@@ -1223,10 +1544,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             let teamAccessMatch = true
                             if (modelViewMode === "current_team") {
                               if (currentTeam === "personal") {
-                                // Show only models with direct access
                                 teamAccessMatch = model.model_info?.direct_access === true
                               } else {
-                                // Show only models accessible by the current team
                                 teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true
                               }
                             }
@@ -1236,6 +1555,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           })}
                           isLoading={false}
                           table={tableRef}
+                          selectedModels={selectedModels} // Add this prop
                         />
                       </div>
                     </div>
