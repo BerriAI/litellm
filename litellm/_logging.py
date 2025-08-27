@@ -4,41 +4,21 @@ import os
 import sys
 from datetime import datetime
 from logging import Formatter
+
 set_verbose = False
-
-def __strtobool(val: str) -> bool:
-    """Convert a string representation of truth to true (1) or false (0).
-
-    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
-    are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
-    'val' is anything else.
-    """
-    val = val.lower()
-    if val in ('y', 'yes', 't', 'true', 'on', '1'):
-        return True
-    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
-        return False
-    else:
-        raise ValueError(f"invalid truth value {val!r}")
 
 if set_verbose is True:
     logging.warning(
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
-    
-json_logs = __strtobool(os.getenv("JSON_LOGS", "False"))
+json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
 
-log_file = os.getenv("LITELLM_LOG_FILE", "")
 
-file_handler = None
-if log_file:
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(numeric_level)
 class JsonFormatter(Formatter):
     def __init__(self):
         super(JsonFormatter, self).__init__()
@@ -60,7 +40,6 @@ class JsonFormatter(Formatter):
 
         return json.dumps(json_record)
 
-json_formatter = JsonFormatter()
 
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
@@ -110,10 +89,8 @@ def _setup_json_exception_handlers(formatter):
 
 # Create a formatter and set it for the handler
 if json_logs:
-    handler.setFormatter(json_formatter)
-    if file_handler: 
-        file_handler.setFormatter(json_formatter)
-    _setup_json_exception_handlers(json_formatter)
+    handler.setFormatter(JsonFormatter())
+    _setup_json_exception_handlers(JsonFormatter())
 else:
     formatter = logging.Formatter(
         "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
@@ -121,17 +98,10 @@ else:
     )
 
     handler.setFormatter(formatter)
-    if file_handler:
-        file_handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
-
-# Set logger levels
-verbose_proxy_logger.setLevel(numeric_level)
-verbose_router_logger.setLevel(numeric_level)
-verbose_logger.setLevel(numeric_level)
 
 # Add the handler to the logger
 verbose_router_logger.addHandler(handler)
@@ -154,13 +124,6 @@ def _suppress_loggers():
 
 # Call the suppression function
 _suppress_loggers()
-
-if file_handler:
-    verbose_router_logger.addHandler(file_handler)
-    verbose_proxy_logger.addHandler(file_handler)
-    verbose_logger.addHandler(file_handler)
-
-
 
 ALL_LOGGERS = [
     logging.getLogger(),
@@ -190,10 +153,10 @@ def _turn_on_json():
     - Adds a JSON formatter to all loggers
     """
     handler = logging.StreamHandler()
-    handler.setFormatter(json_formatter)
+    handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
-    _setup_json_exception_handlers(json_formatter)
+    _setup_json_exception_handlers(JsonFormatter())
 
 
 def _turn_on_debug():

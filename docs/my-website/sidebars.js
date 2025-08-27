@@ -493,6 +493,7 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "completion/audio",
+        "completion/image_generation_chat",
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
