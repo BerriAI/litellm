@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast, overload, List
+from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
 
 import httpx
 
@@ -347,6 +347,7 @@ def image_generation(  # noqa: PLR0915
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
             
             return llm_http_handler.image_generation_handler(
+                api_key=api_key,
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,

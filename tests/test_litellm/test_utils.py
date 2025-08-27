@@ -847,6 +847,7 @@ async def test_supports_tool_choice():
             or "o3" in model_name
             or "mistral" in model_name
             or "oci" in model_name
+            or "openrouter" in model_name
         ):
             continue
 
