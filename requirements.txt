@@ -1,6 +1,4 @@
 # LITELLM PROXY DEPENDENCIES #
-anyio==4.8.0 # openai + http req.
-httpx==0.28.1
 openai==1.99.5  # openai req.
 fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
@@ -16,7 +14,7 @@ mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
-google-genai==1.22.0
+google-genai==1.31.0
 anthropic[vertex]==0.54.0
 mcp==1.10.1    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
@@ -53,10 +51,7 @@ rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
 aiohttp==3.10.11 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
-tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
-pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
-websockets==13.1.0 # for realtime API
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
