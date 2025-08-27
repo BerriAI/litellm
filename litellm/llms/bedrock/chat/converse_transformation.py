@@ -1043,7 +1043,6 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         json_mode: Optional[bool] = optional_params.pop("json_mode", None)
-        structured_output_tool_name: Optional[str] = optional_params.pop("structured_output_tool_name", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
