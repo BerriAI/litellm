@@ -284,7 +284,17 @@ export default function UserInfoView({
               <Card>
                 <Text>Teams</Text>
                 <div className="mt-2">
-                  <Text>{userData.teams?.length || 0} teams</Text>
+                  {userData.teams?.length && userData.teams?.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {userData.teams?.map((team, index) => (
+                        <Badge key={index} color="blue">
+                          {team.team_alias}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <Text>No teams</Text>
+                  )}
                 </div>
               </Card>
 
