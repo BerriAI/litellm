@@ -119,6 +119,28 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
         assert response.choices[0].message.content is not None
+    
+    def test_system_message_with_no_user_message(self):
+        """
+        Test that the system message is translated correctly for non-OpenAI providers.
+        """
+        base_completion_call_args = self.get_base_completion_call_args()
+        messages = [
+            {
+                "role": "system",
+                "content": "Be a good bot!",
+            },
+        ]
+        try:
+            response = self.completion_function(
+                **base_completion_call_args,
+                messages=messages,
+            )
+            assert response is not None
+        except litellm.InternalServerError:
+            pytest.skip("Model is overloaded")
+
+        assert response.choices[0].message.content is not None
 
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
