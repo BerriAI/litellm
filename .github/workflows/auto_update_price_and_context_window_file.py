@@ -122,7 +122,10 @@ async def transform_remote_data(data):
                 # Add context length information from endpoint if available
                 if endpoint_data.get("context_length"):
                     obj["max_tokens"] = endpoint_data["context_length"]
-                
+
+                if endpoint_data.get("supports_implicit_caching"):
+                    obj["supports_prompt_caching"] = True 
+                                  
                 # Add max_input_tokens if available
                 if endpoint_data.get("max_prompt_tokens"):
                     obj["max_input_tokens"] = endpoint_data["max_prompt_tokens"]
@@ -171,7 +174,7 @@ async def transform_remote_data(data):
                 # Check for prompt caching support
                 if "cache_control" in supported_params or "prompt_caching" in supported_params:
                     obj["supports_prompt_caching"] = True
-                
+
                 # Check for PDF input support
                 if "pdf" in supported_params or "document" in supported_params:
                     obj["supports_pdf_input"] = True
