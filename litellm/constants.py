@@ -638,18 +638,55 @@ featherless_ai_models: set = set([
 ])
 
 nebius_models: set = set([
+    # deepseek models
+    "deepseek-ai/DeepSeek-R1-0528",
+    "deepseek-ai/DeepSeek-V3-0324",
+    "deepseek-ai/DeepSeek-V3",
+    "deepseek-ai/DeepSeek-R1",
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    # google models
+    "google/gemma-2-2b-it",
+    "google/gemma-2-9b-it-fast",
+    # llama models
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "meta-llama/Meta-Llama-3.1-8B-Instruct",
+    "meta-llama/Meta-Llama-3.1-405B-Instruct",
+    "NousResearch/Hermes-3-Llama-405B",
+    # microsoft models
+    "microsoft/phi-4",
+    # mistral models
+    "mistralai/Mistral-Nemo-Instruct-2407",
+    "mistralai/Devstral-Small-2505",
+    # moonshot models
+    "moonshotai/Kimi-K2-Instruct",
+    # nvidia models
+    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+    "nvidia/Llama-3_3-Nemotron-Super-49B-v1",
+    # openai models
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    # qwen models
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "Qwen/Qwen3-235B-A22B-Instruct-2507",
     "Qwen/Qwen3-235B-A22B",
-    "Qwen/Qwen3-30B-A3B-fast",
+    "Qwen/Qwen3-30B-A3B",
     "Qwen/Qwen3-32B",
     "Qwen/Qwen3-14B",
-    "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
-    "deepseek-ai/DeepSeek-V3-0324",
-    "deepseek-ai/DeepSeek-V3-0324-fast",
-    "deepseek-ai/DeepSeek-R1",
-    "deepseek-ai/DeepSeek-R1-fast",
-    "meta-llama/Llama-3.3-70B-Instruct-fast",
-    "Qwen/Qwen2.5-32B-Instruct-fast",
-    "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
+    "Qwen/Qwen3-4B-fast",
+    "Qwen/Qwen2.5-Coder-7B",
+    "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/QwQ-32B",
+    "Qwen/Qwen3-30B-A3B-Thinking-2507",
+    "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    # zai models
+    "zai-org/GLM-4.5",
+    "zai-org/GLM-4.5-Air",
+    # other models
+    "aaditya/Llama3-OpenBioLLM-70B",
+    "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
+    "all-hands/openhands-lm-32b-v0.1",
 ])
 
 dashscope_models: set = set([

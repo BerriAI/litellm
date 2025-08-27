@@ -11,15 +11,17 @@ from litellm.integrations.braintrust_logging import BraintrustLogger
 class TestBraintrustSpanName(unittest.TestCase):
     """Test custom span_name functionality in Braintrust logging."""
 
-    @patch('litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler')
-    def test_default_span_name(self, mock_http_handler):
+    @patch('litellm.integrations.braintrust_logging.HTTPHandler')
+    def test_default_span_name(self, MockHTTPHandler):
         """Test that default span name is 'Chat Completion' when not provided."""
+        # Mock HTTP response
+        mock_http_handler = Mock()
+        mock_http_handler.post.return_value = Mock()
+        MockHTTPHandler.return_value = mock_http_handler
+
         # Setup
         logger = BraintrustLogger(api_key="test-key")
         logger.default_project_id = "test-project-id"
-        
-        # Mock HTTP response
-        mock_http_handler.post.return_value = Mock()
         
         # Create a properly structured mock response
         response_obj = litellm.ModelResponse(
@@ -52,15 +54,17 @@ class TestBraintrustSpanName(unittest.TestCase):
         json_data = call_args.kwargs['json']
         self.assertEqual(json_data['events'][0]['span_attributes']['name'], 'Chat Completion')
 
-    @patch('litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler')
-    def test_custom_span_name(self, mock_http_handler):
+    @patch('litellm.integrations.braintrust_logging.HTTPHandler')
+    def test_custom_span_name(self, MockHTTPHandler):
         """Test that custom span name is used when provided in metadata."""
+        # Mock HTTP response
+        mock_http_handler = Mock()
+        mock_http_handler.post.return_value = Mock()
+        MockHTTPHandler.return_value = mock_http_handler
+
         # Setup
         logger = BraintrustLogger(api_key="test-key")
         logger.default_project_id = "test-project-id"
-        
-        # Mock HTTP response
-        mock_http_handler.post.return_value = Mock()
         
         # Create a properly structured mock response
         response_obj = litellm.ModelResponse(
@@ -93,15 +97,17 @@ class TestBraintrustSpanName(unittest.TestCase):
         json_data = call_args.kwargs['json']
         self.assertEqual(json_data['events'][0]['span_attributes']['name'], 'Custom Operation')
 
-    @patch('litellm.integrations.braintrust_logging.global_braintrust_sync_http_handler')
-    def test_span_name_with_other_metadata(self, mock_http_handler):
+    @patch('litellm.integrations.braintrust_logging.HTTPHandler')
+    def test_span_name_with_other_metadata(self, MockHTTPHandler):
         """Test that span_name works alongside other metadata fields."""
+        # Mock HTTP response
+        mock_http_handler = Mock()
+        mock_http_handler.post.return_value = Mock()
+        MockHTTPHandler.return_value = mock_http_handler
+
         # Setup
         logger = BraintrustLogger(api_key="test-key")
         logger.default_project_id = "test-project-id"
-        
-        # Mock HTTP response
-        mock_http_handler.post.return_value = Mock()
         
         # Create a properly structured mock response
         response_obj = litellm.ModelResponse(
@@ -153,15 +159,17 @@ class TestBraintrustSpanName(unittest.TestCase):
         # Span name should be in span_attributes, not in metadata
         self.assertIn('span_name', event_metadata)  # span_name is also kept in metadata
 
-    @patch('litellm.integrations.braintrust_logging.global_braintrust_http_handler')
-    async def test_async_custom_span_name(self, mock_http_handler):
+    @patch('litellm.integrations.braintrust_logging.get_async_httpx_client')
+    async def test_async_custom_span_name(self, mock_get_http_handler):
         """Test async logging with custom span name."""
+        # Mock async HTTP response
+        mock_http_handler = MagicMock()
+        mock_http_handler.post = MagicMock(return_value=Mock())
+        mock_get_http_handler.return_value = mock_http_handler
+
         # Setup
         logger = BraintrustLogger(api_key="test-key")
         logger.default_project_id = "test-project-id"
-        
-        # Mock async HTTP response
-        mock_http_handler.post = MagicMock(return_value=Mock())
         
         # Create a properly structured mock response
         response_obj = litellm.ModelResponse(

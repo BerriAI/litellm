@@ -7,6 +7,7 @@ backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==23.0.0 # server dep
+fastuuid==0.12.0 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.36.0 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
@@ -23,7 +24,7 @@ async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 ddtrace==2.19.0      # for advanced DD tracing / profiling
-orjson==3.10.12 # fast /embedding responses
+orjson==3.11.2 # fast /embedding responses
 polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.16.0 # admin UI, SSO
