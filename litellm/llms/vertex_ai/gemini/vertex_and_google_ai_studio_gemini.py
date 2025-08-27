@@ -90,7 +90,7 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import ModelResponseStream, StreamingChoices
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -1127,6 +1127,41 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif web_search_queries:
                     web_search_requests = len(grounding_metadata)
         return web_search_requests
+    
+    @staticmethod
+    def _create_streaming_choice(
+        chat_completion_message: ChatCompletionResponseMessage,
+        candidate: Candidates,
+        idx: int,
+        tools: Optional[List[ChatCompletionToolCallChunk]],
+        functions: Optional[ChatCompletionToolCallFunctionChunk],
+        chat_completion_logprobs: Optional[ChoiceLogprobs],
+        image_response: Optional[ImageURLObject],
+    ) -> StreamingChoices:
+        """
+        Helper method to create a streaming choice object for Vertex AI
+        """
+        from litellm.types.utils import Delta, StreamingChoices
+
+        # create a streaming choice object
+        choice = StreamingChoices(
+            finish_reason=VertexGeminiConfig._check_finish_reason(
+                chat_completion_message, candidate.get("finishReason")
+            ),
+            index=candidate.get("index", idx),
+            delta=Delta(
+                content=chat_completion_message.get("content"),
+                reasoning_content=chat_completion_message.get(
+                    "reasoning_content"
+                ),
+                tool_calls=tools,
+                image=image_response,
+                function_call=functions,
+            ),
+            logprobs=chat_completion_logprobs,
+            enhancements=None,
+        )
+        return choice
 
     @staticmethod
     def _process_candidates(
@@ -1237,25 +1272,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 chat_completion_message["function_call"] = functions
 
             if isinstance(model_response, ModelResponseStream):
-                from litellm.types.utils import Delta, StreamingChoices
-
-                # create a streaming choice object
-                choice = StreamingChoices(
-                    finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, candidate.get("finishReason")
-                    ),
-                    index=candidate.get("index", idx),
-                    delta=Delta(
-                        content=chat_completion_message.get("content"),
-                        reasoning_content=chat_completion_message.get(
-                            "reasoning_content"
-                        ),
-                        tool_calls=tools,
-                        image=image_response,
-                        function_call=functions,
-                    ),
-                    logprobs=chat_completion_logprobs,
-                    enhancements=None,
+                choice = VertexGeminiConfig._create_streaming_choice(
+                    chat_completion_message=chat_completion_message,
+                    candidate=candidate, 
+                    idx=idx, 
+                    tools=tools, 
+                    functions=functions, 
+                    chat_completion_logprobs=chat_completion_logprobs,
+                    image_response=image_response
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
