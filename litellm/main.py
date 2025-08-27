@@ -18,6 +18,7 @@ import sys
 import time
 import traceback
 import uuid
+from contextlib import contextmanager
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -208,6 +209,62 @@ from .types.utils import (
     ProviderSpecificHeader,
     all_litellm_params,
 )
+
+# Performance timing utilities for benchmarking
+_PERFORMANCE_TIMINGS = {}
+
+@contextmanager
+def _timer(operation_name: str):
+    """Context manager for timing operations during benchmarking"""
+    start_time = time.perf_counter()
+    try:
+        yield
+    finally:
+        end_time = time.perf_counter()
+        duration = end_time - start_time
+        if operation_name not in _PERFORMANCE_TIMINGS:
+            _PERFORMANCE_TIMINGS[operation_name] = []
+        _PERFORMANCE_TIMINGS[operation_name].append(duration)
+
+def get_performance_timings():
+    """Get accumulated performance timings"""
+    return _PERFORMANCE_TIMINGS.copy()
+
+def reset_performance_timings():
+    """Reset performance timings"""
+    global _PERFORMANCE_TIMINGS
+    _PERFORMANCE_TIMINGS = {}
+
+def print_performance_summary():
+    """Print a summary of performance timings"""
+    if not _PERFORMANCE_TIMINGS:
+        print("No performance timings recorded")
+        return
+    
+    print("\n=== LiteLLM Performance Timing Summary ===")
+    total_calls = len(next(iter(_PERFORMANCE_TIMINGS.values())))
+    
+    # Calculate totals and averages
+    timing_stats = []
+    for operation, times in _PERFORMANCE_TIMINGS.items():
+        total_time = sum(times)
+        avg_time = total_time / len(times)
+        timing_stats.append((operation, total_time, avg_time, len(times)))
+    
+    # Sort by total time descending
+    timing_stats.sort(key=lambda x: x[1], reverse=True)
+    
+    print(f"Total completion calls: {total_calls}")
+    print(f"{'Operation':<35} {'Total(s)':<10} {'Avg(ms)':<10} {'Calls':<8} {'%':<6}")
+    print("-" * 75)
+    
+    total_overall = sum(stat[1] for stat in timing_stats)
+    for operation, total_time, avg_time, call_count in timing_stats:
+        percentage = (total_time / total_overall * 100) if total_overall > 0 else 0
+        print(f"{operation:<35} {total_time:<10.4f} {avg_time*1000:<10.2f} {call_count:<8} {percentage:<6.1f}")
+    
+    print("-" * 75)
+    print(f"{'TOTAL':<35} {total_overall:<10.4f} {'':<10} {'':<8} {'100.0':<6}")
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -870,10 +927,12 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
     return model_info, model
-
+from line_profiler import profile
+@profile
 
 @tracer.wrap()
 @client
+@profile
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -967,10 +1026,12 @@ def completion(  # type: ignore # noqa: PLR0915
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages)
-    tools = validate_and_fix_openai_tools(tools=tools)
-    # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # Timing #12 bottleneck: validate_and_fix_openai_messages (0.5% of total time)
+    with _timer("12_validate_messages"):
+        messages = validate_and_fix_openai_messages(messages=messages)
+        tools = validate_and_fix_openai_tools(tools=tools)
+        # validate tool_choice
+        tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
@@ -1052,7 +1113,9 @@ def completion(  # type: ignore # noqa: PLR0915
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    non_default_params = get_non_default_completion_params(kwargs=kwargs)
+    # Timing: get_non_default_completion_params processing
+    with _timer("7_get_non_default_params"):
+        non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
@@ -1094,8 +1157,10 @@ def completion(  # type: ignore # noqa: PLR0915
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
-        model_response = ModelResponse()
-        setattr(model_response, "usage", litellm.Usage())
+        # Timing #1 bottleneck: ModelResponse instantiation (29.2% of total time)
+        with _timer("1_model_response_creation"):
+            model_response = ModelResponse()
+            setattr(model_response, "usage", litellm.Usage())
         if (
             kwargs.get("azure", False) is True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
@@ -1103,12 +1168,14 @@ def completion(  # type: ignore # noqa: PLR0915
         if deployment_id is not None:  # azure llms
             model = deployment_id
             custom_llm_provider = "azure"
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            api_key=api_key,
-        )
+        # Timing #14 bottleneck: get_llm_provider call (0.4% of total time)
+        with _timer("14_get_llm_provider"):
+            model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+            )
 
         if provider_specific_header is not None:
             headers.update(ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -1187,12 +1254,16 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
-            provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders(custom_llm_provider)
-            )
+        # Timing #5 bottleneck: LlmProviders enumeration check (6.5% of total time)
+        with _timer("5_llm_providers_validation"):
+            if custom_llm_provider is not None and custom_llm_provider in [
+                provider.value for provider in LlmProviders
+            ]:
+                # Timing #11 bottleneck: get_provider_chat_config (0.5% of total time)
+                with _timer("11_provider_config_lookup"):
+                    provider_config = ProviderConfigManager.get_provider_chat_config(
+                        model=model, provider=LlmProviders(custom_llm_provider)
+                    )
 
         if provider_config is not None:
             messages = provider_config.translate_developer_role_to_system_role(
@@ -1209,7 +1280,9 @@ def completion(  # type: ignore # noqa: PLR0915
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        optional_param_args = {
+        # Timing #16 bottleneck: optional_param_args dictionary creation (0.3% of total time)
+        with _timer("16_optional_param_args_dict"):
+            optional_param_args = {
             "functions": functions,
             "function_call": function_call,
             "temperature": temperature,
@@ -1243,20 +1316,25 @@ def completion(  # type: ignore # noqa: PLR0915
             "reasoning_effort": reasoning_effort,
             "thinking": thinking,
             "web_search_options": web_search_options,
-            "allowed_openai_params": kwargs.get("allowed_openai_params"),
-        }
-        optional_params = get_optional_params(
-            **optional_param_args, **non_default_params
-        )
-        processed_non_default_params = pre_process_non_default_params(
-            model=model,
-            passed_params=optional_param_args,
-            special_params=non_default_params,
-            custom_llm_provider=custom_llm_provider,
-            additional_drop_params=kwargs.get("additional_drop_params"),
-            remove_sensitive_keys=True,
-            add_provider_specific_params=True,
-        )
+                "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            }
+        # Timing #3 bottleneck: get_optional_params call (18.6% of total time)
+        with _timer("3_get_optional_params"):
+            optional_params = get_optional_params(
+                **optional_param_args, **non_default_params
+            )
+        # Timing #4 bottleneck: pre_process_non_default_params call (7.7% of total time)
+        with _timer("4_preprocess_params"):
+            processed_non_default_params = pre_process_non_default_params(
+                model=model,
+                passed_params=optional_param_args,
+                special_params=non_default_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=kwargs.get("additional_drop_params"),
+                remove_sensitive_keys=True,
+                add_provider_specific_params=True,
+                provider_config=provider_config,
+            )
 
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
@@ -1269,7 +1347,9 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         # For logging - save the values of the litellm-specific params passed in
-        litellm_params = get_litellm_params(
+        # Timing #6 bottleneck: get_litellm_params call (2.5% of total time)
+        with _timer("6_get_litellm_params"):
+            litellm_params = get_litellm_params(
             acompletion=acompletion,
             api_key=api_key,
             force_timeout=force_timeout,
@@ -1317,8 +1397,8 @@ def completion(  # type: ignore # noqa: PLR0915
             azure_password=kwargs.get("azure_password"),
             azure_scope=kwargs.get("azure_scope"),
             max_retries=max_retries,
-            timeout=timeout,
-        )
+                timeout=timeout,
+            )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
@@ -1328,20 +1408,22 @@ def completion(  # type: ignore # noqa: PLR0915
         )
         if mock_response or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
-            return mock_completion(
-                model,
-                messages,
-                stream=stream,
-                n=n,
-                mock_response=mock_response,
-                mock_tool_calls=mock_tool_calls,
-                logging=logging,
-                acompletion=acompletion,
-                mock_delay=kwargs.get("mock_delay", None),
-                custom_llm_provider=custom_llm_provider,
-                mock_timeout=mock_timeout,
-                timeout=timeout,
-            )
+            # Timing #2 bottleneck: mock_completion call (25.1% of total time)
+            with _timer("2_mock_completion"):
+                return mock_completion(
+                    model,
+                    messages,
+                    stream=stream,
+                    n=n,
+                    mock_response=mock_response,
+                    mock_tool_calls=mock_tool_calls,
+                    logging=logging,
+                    acompletion=acompletion,
+                    mock_delay=kwargs.get("mock_delay", None),
+                    custom_llm_provider=custom_llm_provider,
+                    mock_timeout=mock_timeout,
+                    timeout=timeout,
+                )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(

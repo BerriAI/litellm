@@ -1,0 +1,170 @@
+# LiteLLM Performance Analysis - Baseline and Top Expensive Operations
+
+## Test Configuration
+- **Test Type**: 10,000 async completion requests (2000 concurrent per batch, 5 batches)
+- **Model**: openai/gpt-4o (with mock_response)
+- **Mock Response**: "Hello, world!"
+- **Total Runtime**: ~15.74 seconds
+- **Average per request**: ~1.57ms
+
+## Performance Baseline Summary
+- **Total Time**: 15.7351 seconds
+- **Requests**: 10,000 
+- **Throughput**: ~635 requests/second
+- **Import overhead**: ~3.29 seconds (20.9% of total time)
+- **Async execution**: ~12.45 seconds (79.1% of total time)
+
+## Top 20 Most Expensive Operations by % Time
+
+### 1. **ModelResponse() instantiation** - 29.2%
+- **Line**: 1099 - `model_response = ModelResponse()`
+- **Time**: 13,326,407μs (13.33s total)
+- **Per call**: 1,332.6μs
+- **Impact**: Highest single cost - object creation overhead
+
+### 2. **mock_completion() call** - 25.1%
+- **Line**: 1333 - `return mock_completion(...)`
+- **Time**: 11,467,364μs (11.47s total)  
+- **Per call**: 573.4μs
+- **Impact**: Mock response generation logic
+
+### 3. **get_optional_params()** - 18.6%
+- **Line**: 1250 - `optional_params = get_optional_params(...)`
+- **Time**: 8,496,641μs (8.50s total)
+- **Per call**: 283.2μs
+- **Impact**: Parameter processing and validation
+
+### 4. **pre_process_non_default_params()** - 7.7%
+- **Line**: 1253 - `processed_non_default_params = pre_process_non_default_params(...)`
+- **Time**: 3,514,978μs (3.51s total)
+- **Per call**: 175.7μs
+- **Impact**: Parameter preprocessing and transformation
+
+### 5. **LlmProviders enumeration check** - 6.5%
+- **Line**: 1192 - `if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:`
+- **Time**: 2,990,968μs (2.99s total)
+- **Per call**: 149.5μs
+- **Impact**: Provider validation through enum iteration
+
+### 6. **get_litellm_params()** - 2.5%
+- **Line**: 1274 - `litellm_params = get_litellm_params(...)`
+- **Time**: 1,139,894μs (1.14s total)
+- **Per call**: 57.0μs
+- **Impact**: LiteLLM parameter collection
+
+### 7. **text_completion parameter extraction** - 1.7%
+- **Line**: 1295 - `text_completion=kwargs.get("text_completion")`
+- **Time**: 788,118μs (0.79s total)
+- **Per call**: 78.8μs
+- **Impact**: Parameter extraction overhead
+
+### 8. **get_litellm_params() parameter processing** - 1.3%
+- **Line**: 1274 - Various parameter assignments within get_litellm_params
+- **Time**: 595,939μs (0.60s total)
+- **Per call**: 1.3μs (multiple calls)
+- **Impact**: Multiple parameter assignments
+
+### 9. **tenant_id parameter** - 0.6%
+- **Line**: 1315 - `tenant_id=kwargs.get("tenant_id")`
+- **Time**: 284,817μs (0.28s total)
+- **Per call**: 28.5μs
+- **Impact**: Parameter extraction
+
+### 10. **azure_password parameter** - 0.5%
+- **Line**: 1319 - `azure_password=kwargs.get("azure_password")`
+- **Time**: 232,941μs (0.23s total)
+- **Per call**: 23.3μs
+- **Impact**: Parameter extraction
+
+### 11. **ProviderConfigManager.get_provider_chat_config()** - 0.5%
+- **Line**: 1195 - `provider_config = ProviderConfigManager.get_provider_chat_config(...)`
+- **Time**: 241,463μs (0.24s total)
+- **Per call**: 12.1μs
+- **Impact**: Provider configuration lookup
+
+### 12. **validate_and_fix_openai_messages()** - 0.5%
+- **Line**: 972 - `messages = validate_and_fix_openai_messages(messages=messages)`
+- **Time**: 235,478μs (0.24s total)
+- **Per call**: 23.5μs
+- **Impact**: Message validation and fixing
+
+### 13. **litellm_metadata parameter** - 0.5%
+- **Line**: 1303 - `litellm_metadata=kwargs.get("litellm_metadata")`
+- **Time**: 245,254μs (0.25s total)
+- **Per call**: 24.5μs
+- **Impact**: Metadata parameter extraction
+
+### 14. **get_llm_provider()** - 0.4%
+- **Line**: 1108 - `model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(...)`
+- **Time**: 183,779μs (0.18s total)
+- **Per call**: 9.2μs
+- **Impact**: Provider identification logic
+
+### 15. **Usage() object creation** - 0.4%
+- **Line**: 1100 - `setattr(model_response, "usage", litellm.Usage())`
+- **Time**: 182,034μs (0.18s total)
+- **Per call**: 18.2μs
+- **Impact**: Usage object instantiation
+
+### 16. **optional_param_args dictionary creation** - 0.3%
+- **Line**: 1214 - Building the optional_param_args dictionary
+- **Time**: 142,540μs (0.14s total)
+- **Per call**: 0.4μs (multiple assignments)
+- **Impact**: Dictionary construction with 34 key-value pairs
+
+### 17. **azure_ad_token parameter** - 0.3%
+- **Line**: 1314 - `azure_ad_token=kwargs.get("azure_ad_token")`
+- **Time**: 124,610μs (0.12s total)
+- **Per call**: 12.5μs
+- **Impact**: Parameter extraction
+
+### 18. **provider_specific_header check** - 0.2%
+- **Line**: 1115 - `if provider_specific_header is not None:`
+- **Time**: 94,105μs (0.09s total)
+- **Per call**: 9.4μs
+- **Impact**: Header processing check
+
+### 19. **litellm_call_id parameter** - 0.2%
+- **Line**: 1282 - `litellm_call_id=kwargs.get("litellm_call_id", None)`
+- **Time**: 94,657μs (0.09s total)
+- **Per call**: 9.5μs
+- **Impact**: Call ID extraction
+
+### 20. **timeout conversion** - 0.1%
+- **Line**: 1135 - `timeout = float(timeout)`
+- **Time**: 67,690μs (0.07s total)
+- **Per call**: 6.8μs
+- **Impact**: Type conversion overhead
+
+## Key Performance Insights
+
+### Critical Bottlenecks:
+1. **ModelResponse instantiation** is the single biggest bottleneck at 29.2% of total time
+2. **Parameter processing** (get_optional_params + pre_process_non_default_params) accounts for 26.3% combined
+3. **Mock completion logic** takes 25.1% of execution time
+4. **Provider validation** through enum iteration is expensive at 6.5%
+
+### Optimization Opportunities:
+1. **Object Creation**: ModelResponse() creation is extremely expensive - consider object pooling or lazy initialization
+2. **Parameter Processing**: The optional parameter processing pipeline is costly - could benefit from caching or optimization
+3. **Provider Validation**: The LlmProviders enum check could be optimized with a pre-computed set or dictionary lookup
+4. **Mock Response**: Even mock responses have significant overhead - streamline the mock path
+5. **Parameter Extraction**: Multiple kwargs.get() calls add up - batch parameter extraction could help
+
+### Mock vs Real Performance:
+- Mock responses still go through most of the parameter processing pipeline
+- The actual "mock" logic (25.1%) is less expensive than the setup overhead
+- Total overhead before reaching provider-specific code is ~70% of execution time
+
+### Recommendations:
+1. **Priority 1**: Optimize ModelResponse instantiation
+2. **Priority 2**: Streamline parameter processing pipeline  
+3. **Priority 3**: Cache provider validation results
+4. **Priority 4**: Create a fast-path for mock responses that bypasses unnecessary processing
+5. **Priority 5**: Batch parameter extraction operations
+
+## Test Environment:
+- **Python Version**: 3.x
+- **Tool**: line_profiler with kernprof
+- **Concurrency**: asyncio with 2000 concurrent requests per batch
+- **Hardware**: MacOS (darwin 22.5.0)
