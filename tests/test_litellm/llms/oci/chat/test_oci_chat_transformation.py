@@ -17,18 +17,30 @@ TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
 TEST_MESSAGES = [{"role": "user", "content": "Hello, how are you?"}]
 TEST_COMPARTMENT_ID = "ocid1.compartment.oc1..xxxxxx"
-TEST_OCI_PARAMS = {
+BASE_OCI_PARAMS = {
     "oci_region": "us-ashburn-1",
     "oci_user": "ocid1.user.oc1..xxxxxxEXAMPLExxxxxx",
     "oci_fingerprint": "4f:29:77:cc:b1:3e:55:ab:61:2a:de:47:f1:38:4c:90",
     "oci_tenancy": "ocid1.tenancy.oc1..xxxxxxEXAMPLExxxxxx",
     "oci_compartment_id": TEST_COMPARTMENT_ID,
-    "oci_key": "<private_key.pem as string>"
 }
 
+TEST_OCI_PARAMS_KEY = {
+    **BASE_OCI_PARAMS,
+    "oci_key": "<private_key.pem as string>",
+}
+
+TEST_OCI_PARAMS_KEY_FILE = {
+    **BASE_OCI_PARAMS,
+    "oci_key_file": "<private_key.pem as a Path>",
+}
 
 class TestOCIChatConfig:
-    def test_validate_environment_with_oci_region(self):
+    @pytest.mark.parametrize(
+        "optional_params",
+        [TEST_OCI_PARAMS_KEY, TEST_OCI_PARAMS_KEY_FILE],
+    )
+    def test_validate_environment_with_oci_region(self, optional_params):
         config = OCIChatConfig()
 
         headers = {}
@@ -37,25 +49,25 @@ class TestOCIChatConfig:
             headers=headers,
             model=TEST_MODEL,
             messages=TEST_MESSAGES,  # type: ignore
-            optional_params=TEST_OCI_PARAMS,
+            optional_params=optional_params,
             litellm_params={},
         )
 
         assert result["content-type"] == "application/json"
         assert result["user-agent"] == f"litellm/{version}"
 
-    def test_missing_oci_auth_parameters(self):
-        optional_params = TEST_OCI_PARAMS.copy()
-        optional_params.pop("oci_region")
+    def test_missing_oci_auth_parameters(self, optional_params):
+        # Start with a copy and remove `oci_region`
+        params = optional_params.copy()
+        params.pop("oci_region")
 
-        # Remove optional_params one by one and verify that an exception is raised
-        for key in optional_params.keys():
-            modified_params = optional_params.copy()
+        # Remove each remaining param one by one
+        for key in list(params.keys()):
+            modified_params = params.copy()
             del modified_params[key]
 
             with pytest.raises(Exception) as excinfo:
                 config = OCIChatConfig()
-
                 headers = {}
 
                 config.validate_environment(
@@ -67,7 +79,9 @@ class TestOCIChatConfig:
                     litellm_params={},
                 )
 
-            assert f"Missing one of the following parameters: oci_user, oci_fingerprint, oci_tenancy, oci_key, oci_compartment_id" in str(excinfo.value)
+            assert (
+                "Missing required parameters"
+            ) in str(excinfo.value)
 
     def test_transform_request_simple(self):
         """
