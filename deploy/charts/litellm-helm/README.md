@@ -44,6 +44,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 
 #### Example `proxy_config` ConfigMap from values (default):
 
+
 ```
 proxyConfigMap:
   create: true
@@ -61,6 +62,7 @@ proxy_config:
 
 #### Example using existing `proxyConfigMap` instead of creating it:
 
+
 ```
 proxyConfigMap:
   create: false
@@ -71,6 +73,7 @@ proxyConfigMap:
 ```
 
 #### Example `environmentSecrets` Secret 
+
 
 ```
 apiVersion: v1
