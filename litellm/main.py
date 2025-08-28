@@ -61,6 +61,9 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ProviderSpecificHeaderUtils,
+)
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
@@ -77,7 +80,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import RawRequestTypedDict
 from litellm.utils import (
@@ -130,7 +133,6 @@ from .litellm_core_utils.prompt_templates.factory import (
     stringify_json_tool_call_content,
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import baseten
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -1108,11 +1110,11 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
-        if (
-            provider_specific_header is not None
-            and provider_specific_header["custom_llm_provider"] == custom_llm_provider
-        ):
-            headers.update(provider_specific_header["extra_headers"])
+        if provider_specific_header is not None:
+            headers.update(ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                provider_specific_header=provider_specific_header,
+                custom_llm_provider=custom_llm_provider,
+            ))
 
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
@@ -1254,6 +1256,7 @@ def completion(  # type: ignore # noqa: PLR0915
             additional_drop_params=kwargs.get("additional_drop_params"),
             remove_sensitive_keys=True,
             add_provider_specific_params=True,
+            provider_config=provider_config,
         )
 
         if litellm.add_function_to_prompt and optional_params.get(
@@ -1562,6 +1565,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
         elif custom_llm_provider == "deepseek":
             ## COMPLETION CALL
+
             try:
                 response = base_llm_http_handler.completion(
                     model=model,
@@ -1592,18 +1596,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 raise e
 
         elif custom_llm_provider == "azure_ai":
-            api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-                or litellm.api_base
-                or get_secret("AZURE_AI_API_BASE")
-            )
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
+            api_base = AzureFoundryModelInfo.get_api_base(api_base)
             # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or get_secret("AZURE_AI_API_KEY")
-            )
+            api_key = AzureFoundryModelInfo.get_api_key(api_key)
 
             headers = headers or litellm.headers
 
@@ -1929,6 +1926,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "anyscale"
@@ -1981,26 +1979,51 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             ## COMPLETION CALL
+            use_base_llm_http_handler = get_secret_bool(
+                "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
+            )
+
             try:
-                response = openai_chat_completions.completion(
-                    model=model,
-                    messages=messages,
-                    headers=headers,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                    custom_prompt_dict=custom_prompt_dict,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    organization=organization,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if use_base_llm_http_handler:
+
+                    response = base_llm_http_handler.completion(
+                        model=model,
+                        messages=messages,
+                        api_base=api_base,
+                        custom_llm_provider=custom_llm_provider,
+                        model_response=model_response,
+                        encoding=encoding,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        timeout=timeout,
+                        litellm_params=litellm_params,
+                        acompletion=acompletion,
+                        stream=stream,
+                        api_key=api_key,
+                        headers=headers,
+                        client=client,
+                        provider_config=provider_config,
+                    )
+                else:
+                    response = openai_chat_completions.completion(
+                        model=model,
+                        messages=messages,
+                        headers=headers,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        api_key=api_key,
+                        api_base=api_base,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        timeout=timeout,  # type: ignore
+                        custom_prompt_dict=custom_prompt_dict,
+                        client=client,  # pass AsyncOpenAI, OpenAI client
+                        organization=organization,
+                        custom_llm_provider=custom_llm_provider,
+                    )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
@@ -2981,7 +3004,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logger_fn=logger_fn,
                     encoding=encoding,
                     logging_obj=logging,
-                    extra_headers=extra_headers,
+                    extra_headers=headers,  # Use merged headers instead of original extra_headers
                     timeout=timeout,
                     acompletion=acompletion,
                     client=client,
@@ -3245,42 +3268,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-        elif (
-            custom_llm_provider == "baseten"
-            or litellm.api_base == "https://app.baseten.co"
-        ):
-            custom_llm_provider = "baseten"
-            baseten_key = (
-                api_key
-                or litellm.baseten_key
-                or os.environ.get("BASETEN_API_KEY")
-                or litellm.api_key
-            )
 
-            model_response = baseten.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=baseten_key,
-                logging_obj=logging,
-            )
-            if inspect.isgenerator(model_response) or (
-                "stream" in optional_params and optional_params["stream"] is True
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="baseten",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "petals" or model in litellm.petals_models:
             api_base = api_base or litellm.api_base
 

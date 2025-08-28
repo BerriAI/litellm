@@ -27,7 +27,12 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.datadog_llm_obs import *
-from litellm.types.utils import CallTypes, StandardLoggingPayload
+from litellm.types.utils import (
+    CallTypes,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
+)
 
 
 class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
@@ -102,6 +107,24 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging success event - {str(e)}"
             )
+    
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            verbose_logger.debug(
+                f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
+            )
+            payload = self.create_llm_obs_payload(
+                kwargs, start_time, end_time
+            )
+            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+            self.log_queue.append(payload)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+        except Exception as e:
+            verbose_logger.exception(
+                f"DataDogLLMObs: Error logging failure event - {str(e)}"
+            )
 
     async def async_send_batch(self):
         try:
@@ -174,11 +197,14 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             call_type=standard_logging_payload.get("call_type")
         ))
 
+        error_info = self._assemble_error_info(standard_logging_payload)
+
         meta = Meta(
             kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
             input=input_meta,
             output=output_meta,
             metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
+            error=error_info,
         )
 
         # Calculate metrics (you may need to adjust these based on available data)
@@ -199,11 +225,31 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             start_ns=int(start_time.timestamp() * 1e9),
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
+            status="error" if error_info else "ok",
             tags=[
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
     
+    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+        """
+        Assemble error information for failure cases according to DD LLM Obs API spec
+        """
+        # Handle error information for failure cases according to DD LLM Obs API spec
+        error_info: Optional[DDLLMObsError] = None
+        
+        if standard_logging_payload.get("status") == "failure":
+            # Try to get structured error information first
+            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get("error_information")
+            
+            if error_information:
+                error_info = DDLLMObsError(
+                    message=error_information.get("error_message") or standard_logging_payload.get("error_str") or "Unknown error",
+                    type=error_information.get("error_class"),
+                    stack=error_information.get("traceback")
+                )
+        return error_info
+
     def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
         """
         Get the time to first token in seconds
@@ -232,8 +278,20 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         for now this handles logging /chat/completions responses
         """
+        if response_obj is None:
+            return []
+        
         if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
-            return [response_obj["choices"][0]["message"]]
+            try:
+                # Safely extract message from response_obj, handle failure cases
+                if isinstance(response_obj, dict) and "choices" in response_obj:
+                    choices = response_obj["choices"]
+                    if choices and len(choices) > 0 and "message" in choices[0]:
+                        return [choices[0]["message"]]
+                return []
+            except (KeyError, IndexError, TypeError):
+                # In case of any error accessing the response structure, return empty list
+                return []
         return []
 
     def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
@@ -350,11 +408,11 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
     def _get_dd_llm_obs_payload_metadata(
         self, standard_logging_payload: StandardLoggingPayload
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata = {
+        _metadata: Dict[str, Any] = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get(
                 "custom_llm_provider", "unknown"
@@ -364,9 +422,44 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
+            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
         }
+
+        #########################################################
+        # Add latency metrics to metadata
+        #########################################################
+        latency_metrics = self._get_latency_metrics(standard_logging_payload)
+        _metadata.update({"latency_metrics": dict(latency_metrics)})
+
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
         )
         _metadata.update(_standard_logging_metadata)
         return _metadata
+
+    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
+        """
+        Get the latency metrics from the standard logging payload
+        """
+        latency_metrics: DDLLMObsLatencyMetrics = DDLLMObsLatencyMetrics()
+        # Add latency metrics to metadata
+        # Time to first token (convert from seconds to milliseconds for consistency)
+        time_to_first_token_seconds = self._get_time_to_first_token_seconds(standard_logging_payload)
+        if time_to_first_token_seconds > 0:
+            latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
+
+        # LiteLLM overhead time
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_ms = hidden_params.get("litellm_overhead_time_ms")
+        if litellm_overhead_ms is not None:
+            latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
+
+        # Guardrail overhead latency
+        guardrail_info: Optional[StandardLoggingGuardrailInformation] = standard_logging_payload.get("guardrail_information")
+        if guardrail_info is not None:
+            _guardrail_duration_seconds: Optional[float] = guardrail_info.get("duration")
+            if _guardrail_duration_seconds is not None:
+                # Convert from seconds to milliseconds for consistency
+                latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
+            
+        return latency_metrics
