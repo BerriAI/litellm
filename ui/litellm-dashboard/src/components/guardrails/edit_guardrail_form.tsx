@@ -4,7 +4,7 @@ import { Button, TextInput } from '@tremor/react';
 import { GuardrailProviders, guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
-import NotificationManager from '../molecules/notifications_manager';
+import NotificationsManager from '../molecules/notifications_manager';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -60,7 +60,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         setGuardrailSettings(data);
       } catch (error) {
         console.error('Error fetching guardrail settings:', error);
-        NotificationManager.fromBackend('Failed to load guardrail settings');
+        NotificationsManager.fromBackend('Failed to load guardrail settings');
       }
     };
     
@@ -166,7 +166,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             guardrailData.guardrail.guardrail_info = configObj;
           }
         } catch (error) {
-          NotificationManager.fromBackend('Invalid JSON in configuration');
+          NotificationsManager.fromBackend('Invalid JSON in configuration');
           setLoading(false);
           return;
         }
@@ -194,14 +194,14 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         throw new Error(errorData || "Failed to update guardrail");
       }
 
-      message.success('Guardrail updated successfully');
+      NotificationsManager.success('Guardrail updated successfully');
       
       // Reset and close
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to update guardrail:", error);
-      NotificationManager.fromBackend('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
+      NotificationsManager.fromBackend('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }

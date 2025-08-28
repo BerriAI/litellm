@@ -774,11 +774,9 @@ class Cache:
         """
         Internal method to check if the cache type supports async get/set operations
 
-        Only S3 Cache Does NOT support async operations
+        All cache types now support async operations
 
         """
-        if self.type and self.type == LiteLLMCacheType.S3:
-            return False
         return True
 
 

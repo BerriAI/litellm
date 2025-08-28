@@ -25,6 +25,7 @@ import { credentialListCall, credentialCreateCall, credentialDeleteCall, credent
 import AddCredentialsTab from "./add_credentials_tab";
 import CredentialDeleteModal from "./CredentialDeleteModal";
 import { Form, message } from "antd";
+import NotificationsManager from "../molecules/notifications_manager";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
@@ -60,7 +61,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     };
 
     const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
-    message.success('Credential updated successfully');
+    NotificationsManager.success('Credential updated successfully');
     setIsUpdateModalOpen(false);
     fetchCredentials(accessToken);
   }
@@ -84,7 +85,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
 
     // Add to list and close modal
     const response = await credentialCreateCall(accessToken, newCredential);
-    message.success('Credential added successfully');
+    NotificationsManager.success('Credential added successfully');
     setIsAddModalOpen(false);
     fetchCredentials(accessToken);
   };
@@ -120,7 +121,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       return;
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
-    message.success('Credential deleted successfully');
+    NotificationsManager.success('Credential deleted successfully');
     setCredentialToDelete(null);
     fetchCredentials(accessToken);
   };
