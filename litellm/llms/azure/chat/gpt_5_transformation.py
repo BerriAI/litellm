@@ -10,6 +10,7 @@ from .gpt_transformation import AzureOpenAIConfig
 
 class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     """Azure specific handling for gpt-5 models."""
+
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
@@ -23,7 +24,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return OpenAIGPT5Config.get_supported_openai_params(self, model=model)
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,

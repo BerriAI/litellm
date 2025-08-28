@@ -15,7 +15,8 @@ sys.path.insert(
 import json
 import sys
 from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
-
+from litellm.secret_managers.main import get_secret_str
+import httpx
 from fastapi import HTTPException
 
 import litellm
@@ -248,31 +249,46 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         data: dict,
         optional_params: dict,
         aws_region_name: str,
+        api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-        api_base = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com/guardrail/{self.guardrailIdentifier}/version/{self.guardrailVersion}/apply"
-
-        encoded_data = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
+        api_base = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com/guardrail/{self.guardrailIdentifier}/version/{self.guardrailVersion}/apply"
+        encoded_data = json.dumps(data).encode("utf-8")
+        
+        # first check api-key, if none, fall back to sigV4
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
-        request = AWSRequest(
-            method="POST", url=api_base, data=encoded_data, headers=headers
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
+        if aws_bearer_token:
+            try:
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            request = AWSRequest(
+                method="POST", url=api_base, data=encoded_data, headers=headers
+            )
+        else:
+            try:
+                from botocore.auth import SigV4Auth
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
+            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+            request = AWSRequest(
+                method="POST", url=api_base, data=encoded_data, headers=headers
+            )
+            sigv4.add_auth(request)
+            if (
+                extra_headers is not None and "Authorization" in extra_headers
+            ):  # prevent sigv4 from overwriting the auth header
+                request.headers["Authorization"] = extra_headers["Authorization"]
         prepped_request = request.prepare()
 
         return prepped_request
@@ -284,6 +300,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: Optional[Union[Any, litellm.ModelResponse]] = None,
         request_data: Optional[dict] = None
     ) -> BedrockGuardrailResponse:
+        from datetime import datetime
+        start_time = datetime.now()
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
@@ -295,15 +313,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_guardrail_response: BedrockGuardrailResponse = (
             BedrockGuardrailResponse()
         )
+        api_key: Optional[str] = None
         if request_data:
             bedrock_request_data.update(
                 self.get_guardrail_dynamic_request_body_params(request_data=request_data)
             )
+            if request_data.get("api_key") is not None:
+                api_key = request_data["api_key"]
+    
         prepared_request = self._prepare_request(
             credentials=credentials,
             data=bedrock_request_data,
             optional_params=self.optional_params,
             aws_region_name=aws_region_name,
+            api_key=api_key,
         )
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
@@ -317,6 +340,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
+        #########################################################
+        # Add guardrail information to request trace
+        #########################################################
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=response.json(),
+            request_data=request_data or {},
+            guardrail_status=self._get_bedrock_guardrail_response_status(response=response),
+            start_time=start_time.timestamp(),
+            end_time=datetime.now().timestamp(),
+            duration=(datetime.now() - start_time).total_seconds(),
+        )
+        #########################################################
         if response.status_code == 200:
             # check if the response was flagged
             _json_response = response.json()
@@ -338,6 +373,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return bedrock_guardrail_response
     
+    def _get_bedrock_guardrail_response_status(self, response: httpx.Response) -> Literal["success", "failure"]:
+        """
+        Get the status of the bedrock guardrail response.
+        """
+        if response.status_code == 200:
+            return "success"
+        return "failure"
 
     def _get_http_exception_for_blocked_guardrail(self, response: BedrockGuardrailResponse) -> HTTPException:
         """
@@ -501,10 +543,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
-
         return data
 
-    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,
@@ -561,7 +601,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return data
 
-    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,

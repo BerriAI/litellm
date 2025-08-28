@@ -236,12 +236,17 @@ class MCPRequestHandler:
             )
 
             #########################################################
-            # If team has mcp_servers, then key must have a subset of the team's mcp_servers
+            # If team has mcp_servers, handle inheritance and intersection logic
             #########################################################
             if len(allowed_mcp_servers_for_team) > 0:
-                for _mcp_server in allowed_mcp_servers_for_key:
-                    if _mcp_server in allowed_mcp_servers_for_team:
-                        allowed_mcp_servers.append(_mcp_server)
+                if len(allowed_mcp_servers_for_key) > 0:
+                    # Key has its own MCP permissions - use intersection with team permissions
+                    for _mcp_server in allowed_mcp_servers_for_key:
+                        if _mcp_server in allowed_mcp_servers_for_team:
+                            allowed_mcp_servers.append(_mcp_server)
+                else:
+                    # Key has no MCP permissions - inherit from team
+                    allowed_mcp_servers = allowed_mcp_servers_for_team
             else:
                 allowed_mcp_servers = allowed_mcp_servers_for_key
 

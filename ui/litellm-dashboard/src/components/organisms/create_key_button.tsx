@@ -33,6 +33,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { callback_map, mapDisplayToInternalNames } from "../callback_info_helpers"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import ModelAliasManager from "../common_components/ModelAliasManager"
+import NotificationsManager from "../molecules/notifications_manager"
 
 const { Option } = Select;
 
@@ -281,7 +282,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         );
       }
 
-      message.info("Making API Call");
+      NotificationsManager.info("Making API Call");
       setIsModalVisible(true);
       
       if(keyOwner === "you"){
@@ -378,18 +379,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
-      message.success("API Key Created");
+      NotificationsManager.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
 
     } catch (error) {
       console.log("error in create key:", error);
-      message.error(`Error creating the key: ${error}`);
+      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
     }
   };
 
   const handleCopy = () => {
-    message.success("API Key copied to clipboard");
+    NotificationsManager.success("API Key copied to clipboard");
   };
 
   useEffect(() => {
@@ -434,7 +435,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setUserOptions(options);
     } catch (error) {
       console.error('Error fetching users:', error);
-      message.error('Failed to search for users');
+      NotificationsManager.fromBackend('Failed to search for users');
     } finally {
       setUserSearchLoading(false);
     }

@@ -40,6 +40,7 @@ const sidebars = {
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
+          "proxy/guardrails/noma_security",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -108,6 +109,7 @@ const sidebars = {
           type: "category",
           label: "Setup & Deployment",
           items: [
+            "proxy/quick_start",
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
@@ -372,7 +374,14 @@ const sidebars = {
             "providers/azure/azure_embedding",
           ]
         },
-        "providers/azure_ai",
+        {
+          type: "category",
+          label: "Azure AI",
+          items: [
+            "providers/azure_ai",
+            "providers/azure_ai_img",
+          ]
+        },
         {
           type: "category",
           label: "Vertex AI",
@@ -484,6 +493,7 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "completion/audio",
+        "completion/image_generation_chat",
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",

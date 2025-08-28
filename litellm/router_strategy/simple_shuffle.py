@@ -9,6 +9,7 @@ import random
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.core_helpers import safe_divide
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -56,6 +57,7 @@ def simple_shuffle(
                 f"get_available_deployment for model: {model}, Selected deployment: {llm_router_instance.print_deployment(deployment) or deployment[0]} for model: {model}"
             )
             return deployment or deployment[0]
+
 
     ############## No RPM/TPM passed, we do a random pick #################
     item = random.choice(healthy_deployments)

@@ -7,6 +7,7 @@ import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecif
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
 import GuardrailOptionalParams from './guardrail_optional_params';
+import NotificationsManager from '../molecules/notifications_manager';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -103,7 +104,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
         populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error('Error fetching guardrail data:', error);
-        message.error('Failed to load guardrail configuration');
+        NotificationsManager.fromBackend('Failed to load guardrail configuration');
       }
     };
 
@@ -186,7 +187,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       // Validate configuration steps
       if (currentStep === 1) {
         if (shouldRenderPIIConfigSettings(selectedProvider) && selectedEntities.length === 0) {
-          message.error('Please select at least one PII entity to continue');
+          NotificationsManager.fromBackend('Please select at least one PII entity to continue');
           return;
         }
       }
@@ -274,7 +275,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           // For some guardrails, the config values need to be in litellm_params
           guardrailData.guardrail_info = configObj;
         } catch (error) {
-          message.error('Invalid JSON in configuration');
+          NotificationsManager.fromBackend('Invalid JSON in configuration');
           setLoading(false);
           return;
         }
@@ -337,7 +338,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       console.log("Sending guardrail data:", JSON.stringify(guardrailData));
       await createGuardrailCall(accessToken, guardrailData);
       
-      message.success('Guardrail created successfully');
+      NotificationsManager.success('Guardrail created successfully');
       
       // Reset form and close modal
       resetForm();
@@ -345,7 +346,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to create guardrail:", error);
-      message.error('Failed to create guardrail: ' + (error instanceof Error ? error.message : String(error)));
+      NotificationsManager.fromBackend('Failed to create guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }

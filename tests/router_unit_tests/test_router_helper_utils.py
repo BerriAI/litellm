@@ -25,6 +25,8 @@ def model_list():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "tpm": 1000,  # Add TPM limit so async method doesn't return early
+                "rpm": 100,   # Add RPM limit so async method doesn't return early
             },
             "model_info": {
                 "access_groups": ["group1", "group2"],
@@ -390,6 +392,10 @@ async def test_deployment_callback_on_success(sync_mode):
         }
     ]
     router = Router(model_list=model_list)
+    # Get the actual deployment ID that was generated
+    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-3.5-turbo")
+    deployment_id = gpt_deployment["model_info"]["id"]
+    
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 100
     standard_logging_payload["model_id"] = "100"
@@ -398,7 +404,7 @@ async def test_deployment_callback_on_success(sync_mode):
             "metadata": {
                 "model_group": "gpt-3.5-turbo",
             },
-            "model_info": {"id": 100},
+            "model_info": {"id": deployment_id},
         },
         "standard_logging_object": standard_logging_payload,
     }

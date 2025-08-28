@@ -17,6 +17,7 @@ import {
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
 import { VectorStoreProviders, vectorStoreProviderLogoMap, vectorStoreProviderMap, getProviderSpecificFields, VectorStoreFieldConfig } from "../vector_store_providers";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreFormProps {
   isVisible: boolean;
@@ -45,7 +46,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       try {
         metadata = metadataJson.trim() ? JSON.parse(metadataJson) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
 
@@ -69,13 +70,13 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       payload["litellm_params"] = litellmParams;
 
       await vectorStoreCreateCall(accessToken, payload);
-      message.success("Vector store created successfully");
+      NotificationsManager.success("Vector store created successfully");
       form.resetFields();
       setMetadataJson("{}");
       onSuccess();
     } catch (error) {
       console.error("Error creating vector store:", error);
-      message.error("Error creating vector store: " + error);
+      NotificationsManager.fromBackend("Error creating vector store: " + error);
     }
   };
 

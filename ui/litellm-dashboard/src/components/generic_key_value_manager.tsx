@@ -13,6 +13,7 @@ import {
 import { message, Input } from "antd";
 import { EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined } from "@ant-design/icons";
 import { ChevronDownIcon, ChevronRightIcon, PlusCircleIcon } from "@heroicons/react/outline";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface KeyValueItem {
   id?: string;
@@ -73,7 +74,7 @@ const GenericKeyValueManager: React.FC<GenericKeyValueManagerProps> = ({
       setNewKey("");
       setNewValue("");
     } else {
-      message.error(`Please provide both ${keyLabel.toLowerCase()} and ${valueLabel.toLowerCase()}`);
+      NotificationManager.fromBackend(`Please provide both ${keyLabel.toLowerCase()} and ${valueLabel.toLowerCase()}`);
     }
   }, [newKey, newValue, items, onItemsChange, keyLabel, valueLabel]);
 
@@ -93,7 +94,7 @@ const GenericKeyValueManager: React.FC<GenericKeyValueManagerProps> = ({
       setEditingKey("");
       setEditingValue("");
     } else {
-      message.error(`Please provide both ${keyLabel.toLowerCase()} and ${valueLabel.toLowerCase()}`);
+      NotificationManager.fromBackend(`Please provide both ${keyLabel.toLowerCase()} and ${valueLabel.toLowerCase()}`);
     }
   }, [editingKey, editingValue, items, editingItem, onItemsChange, keyLabel, valueLabel]);
 
