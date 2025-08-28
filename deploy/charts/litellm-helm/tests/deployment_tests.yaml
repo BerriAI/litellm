@@ -115,3 +115,17 @@ tests:
           content:
             name: EXTRA_ENV_VAR
             value: EXTRA_ENV_VAR_VALUE
+  - it: should mount existing configmap when create=false
+    template: deployment.yaml
+    set:
+      proxyConfigMap:
+        create: false
+        name: my-litellm-config
+        key: custom.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="litellm-config")].configMap.name | first
+          value: my-litellm-config
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="litellm-config")].configMap.items[0].key
+          value: custom.yaml
