@@ -123,9 +123,17 @@ tests:
         name: my-litellm-config
         key: custom.yaml
     asserts:
-      - equal:
-          path: spec.template.spec.volumes[?(@.name=="litellm-config")][0].configMap.name
-          value: my-litellm-config
-      - equal:
-          path: spec.template.spec.volumes[?(@.name=="litellm-config")][0].configMap.items[0].key
-          value: custom.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: litellm-config
+            configMap:
+              name: my-litellm-config
+              items:
+                - key: custom.yaml
+                  path: config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/
