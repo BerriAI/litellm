@@ -300,6 +300,13 @@ class RouteChecks:
         if re.match(pattern, route):
             return True
         return False
+    
+    @staticmethod
+    def _is_wildcard_pattern(pattern: str) -> bool:
+        """
+        Check if pattern is a wildcard pattern
+        """
+        return pattern.endswith("*")
 
     @staticmethod
     def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
@@ -352,7 +359,8 @@ class RouteChecks:
         # wildcard match route is in allowed_routes
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
-        for allowed_route in allowed_routes:
+        wildcard_allowed_routes = [route for route in allowed_routes if RouteChecks._is_wildcard_pattern(pattern=route)]
+        for allowed_route in wildcard_allowed_routes:
             if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
         
