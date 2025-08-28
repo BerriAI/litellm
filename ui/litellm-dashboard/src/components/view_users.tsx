@@ -29,7 +29,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { updateExistingKeys } from "@/utils/dataUtils"
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer"
 import { isAdminRole } from "@/utils/roles"
-import NotificationManager from "./molecules/notifications_manager"
+import NotificationsManager from "./molecules/notifications_manager"
 
 interface ViewUserDashboardProps {
   accessToken: string | null
@@ -139,16 +139,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
 
   const handleResetPassword = async (userId: string) => {
     if (!accessToken) {
-      NotificationManager.fromBackend("Access token not found")
+      NotificationsManager.fromBackend("Access token not found")
       return
     }
     try {
-      message.success("Generating password reset link...")
+      NotificationsManager.success("Generating password reset link...")
       const data = await invitationCreateCall(accessToken, userId)
       setInvitationLinkData(data)
       setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      NotificationManager.fromBackend("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link")
     }
   }
 
@@ -164,10 +164,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           return { ...previousData, users: updatedUsers }
         })
 
-        message.success("User deleted successfully")
+        NotificationsManager.success("User deleted successfully")
       } catch (error) {
         console.error("Error deleting user:", error)
-        NotificationManager.fromBackend("Failed to delete user")
+        NotificationsManager.fromBackend("Failed to delete user")
       }
     }
     setIsDeleteModalOpen(false)
@@ -205,7 +205,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         return { ...previousData, users: updatedUsers }
       })
 
-      message.success(`User ${editedUser.user_id} updated successfully`)
+      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`)
     } catch (error) {
       console.error("There was an error updating the user", error)
     }
@@ -229,7 +229,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
 
   const handleBulkEdit = () => {
     if (selectedUsers.length === 0) {
-      NotificationManager.fromBackend("Please select users to edit")
+      NotificationsManager.fromBackend("Please select users to edit")
       return
     }
 

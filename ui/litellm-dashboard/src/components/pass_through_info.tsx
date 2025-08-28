@@ -20,7 +20,7 @@ import {
 } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
@@ -88,7 +88,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             ? JSON.parse(values.headers)
             : values.headers;
         } catch (e) {
-          NotificationManager.fromBackend("Invalid JSON format for headers");
+          NotificationsManager.fromBackend("Invalid JSON format for headers");
           return;
         }
       }
@@ -115,7 +115,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error updating endpoint:", error);
-      NotificationManager.fromBackend("Failed to update pass through endpoint");
+      NotificationsManager.fromBackend("Failed to update pass through endpoint");
     }
   };
 
@@ -124,14 +124,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       if (!accessToken || !endpointData?.id) return;
       
       await deletePassThroughEndpointsCall(accessToken, endpointData.id);
-      message.success("Pass through endpoint deleted successfully");
+      NotificationsManager.success("Pass through endpoint deleted successfully");
       onClose();
       if (onEndpointUpdated) {
         onEndpointUpdated();
       }
     } catch (error) {
       console.error("Error deleting endpoint:", error);
-      NotificationManager.fromBackend("Failed to delete pass through endpoint");
+      NotificationsManager.fromBackend("Failed to delete pass through endpoint");
     }
   };
 

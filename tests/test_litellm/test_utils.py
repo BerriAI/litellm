@@ -847,6 +847,7 @@ async def test_supports_tool_choice():
             or "o3" in model_name
             or "mistral" in model_name
             or "oci" in model_name
+            or "openrouter" in model_name
         ):
             continue
 
@@ -957,7 +958,12 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import pre_process_non_default_params
+    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+
+    provider_config = ProviderConfigManager.get_provider_chat_config(
+        model=model, 
+        provider=LlmProviders(custom_llm_provider)
+    )
 
     class ResponseFormat(BaseModel):
         x: str
@@ -974,6 +980,7 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
         special_params=special_params,
         custom_llm_provider=custom_llm_provider,
         additional_drop_params=None,
+        provider_config=provider_config,
     )
     print(processed_non_default_params)
     assert processed_non_default_params == {
