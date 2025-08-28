@@ -124,8 +124,8 @@ tests:
         key: custom.yaml
     asserts:
       - equal:
-          path: spec.template.spec.volumes[?(@.name=="litellm-config")].configMap.name | first
+          path: spec.template.spec.volumes[?(@.name=="litellm-config")][0].configMap.name
           value: my-litellm-config
       - equal:
-          path: spec.template.spec.volumes[?(@.name=="litellm-config")].configMap.items[0].key
+          path: spec.template.spec.volumes[?(@.name=="litellm-config")][0].configMap.items[0].key
           value: custom.yaml
