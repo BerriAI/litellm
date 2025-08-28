@@ -35,33 +35,32 @@ TEST_OCI_PARAMS_KEY_FILE = {
     "oci_key_file": "<private_key.pem as a Path>",
 }
 
-class TestOCIChatConfig:
-    @pytest.mark.parametrize(
-        "optional_params",
-        [TEST_OCI_PARAMS_KEY, TEST_OCI_PARAMS_KEY_FILE],
-    )
-    def test_validate_environment_with_oci_region(self, optional_params):
-        config = OCIChatConfig()
+@pytest.fixture(params=[TEST_OCI_PARAMS_KEY, TEST_OCI_PARAMS_KEY_FILE])
+def supplied_params(request):
+    """Fixture for passing in optional_parameters"""
+    return request.param
 
+
+class TestOCIChatConfig:
+    def test_validate_environment_with_oci_region(self, supplied_params):
+        config = OCIChatConfig()
         headers = {}
 
         result = config.validate_environment(
             headers=headers,
             model=TEST_MODEL,
             messages=TEST_MESSAGES,  # type: ignore
-            optional_params=optional_params,
+            optional_params=supplied_params,
             litellm_params={},
         )
 
         assert result["content-type"] == "application/json"
         assert result["user-agent"] == f"litellm/{version}"
 
-    def test_missing_oci_auth_parameters(self, optional_params):
-        # Start with a copy and remove `oci_region`
-        params = optional_params.copy()
+    def test_missing_oci_auth_parameters(self, supplied_params):
+        params = supplied_params.copy()  # safely copy, no reassignment
         params.pop("oci_region")
 
-        # Remove each remaining param one by one
         for key in list(params.keys()):
             modified_params = params.copy()
             del modified_params[key]
@@ -78,10 +77,7 @@ class TestOCIChatConfig:
                     api_base="https://api.oci.example.com",
                     litellm_params={},
                 )
-
-            assert (
-                "Missing required parameters"
-            ) in str(excinfo.value)
+            assert ("Missing required parameters:") in str(excinfo.value)
 
     def test_transform_request_simple(self):
         """
@@ -278,22 +274,22 @@ class TestOCIChatConfig:
             litellm_params={},
             encoding={},
         )
-        
+
         # General assertions
         assert isinstance(result, ModelResponse)
         assert len(result.choices) == 1
-        
+
         choice = result.choices[0]
         assert isinstance(choice, litellm.Choices)
         assert choice.finish_reason == "stop"
-        
+
         # Message and tool_calls assertions
         message = choice.message
         assert isinstance(message, litellm.Message)
         assert hasattr(message, "tool_calls")
         assert isinstance(message.tool_calls, list)
         assert len(message.tool_calls) == 1
-        
+
         # Specific tool_call assertions
         tool_call = message.tool_calls[0]
         assert isinstance(tool_call, litellm.utils.ChatCompletionMessageToolCall)
@@ -301,7 +297,7 @@ class TestOCIChatConfig:
         assert tool_call.type == "function"
         assert tool_call.function["name"] == "get_weather"
         assert tool_call.function["arguments"] == '{"location": "Vila Velha, BR"}'
-        
+
         # Usage assertions
         assert hasattr(result, "usage")
         usage = result.usage # type: ignore
