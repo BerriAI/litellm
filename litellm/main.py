@@ -183,6 +183,7 @@ from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSp
 from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
+from .llms.volcengine.embedding.handler import VolcEngineEmbeddingHandler
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.common_utils import IBMWatsonXMixin
@@ -500,7 +501,7 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=completion_kwargs.get("base_url", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=completion_kwargs.get("base_url", None)
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -3582,7 +3583,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Embedding ###
     kwargs["aembedding"] = True
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(embedding, *args, **kwargs)
@@ -3592,7 +3593,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=kwargs.get("api_base", None)
         )
 
         # Await normally
@@ -4414,6 +4415,46 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
             )
+        elif custom_llm_provider == "volcengine":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("ARK_API_KEY")
+                or get_secret_str("VOLCENGINE_API_KEY")
+            )
+            if api_key is None:
+                raise ValueError(
+                    "Missing API key for Volcengine. Set ARK_API_KEY or VOLCENGINE_API_KEY environment variable or pass api_key parameter."
+                )
+            
+            handler = VolcEngineEmbeddingHandler()
+            
+            if aembedding:
+                response = handler.async_embedding(
+                    model=model,
+                    input=input,
+                    api_key=api_key,
+                    api_base=api_base,
+                    encoding_format=optional_params.get("encoding_format", "float"),
+                    user=optional_params.get("user"),
+                    timeout=timeout,
+                    extra_headers=optional_params.get("extra_headers"),
+                    litellm_logging_obj=logging,
+                    **optional_params,
+                )
+            else:
+                response = handler.embedding(
+                    model=model,
+                    input=input,
+                    api_key=api_key,
+                    api_base=api_base,
+                    encoding_format=optional_params.get("encoding_format", "float"),
+                    user=optional_params.get("user"),
+                    timeout=timeout,
+                    extra_headers=optional_params.get("extra_headers"),
+                    litellm_logging_obj=logging,
+                    **optional_params,
+                )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
