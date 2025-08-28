@@ -6,6 +6,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -16,6 +17,10 @@ else:
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.AZURE
+
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
@@ -70,8 +75,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
+        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+
         return BaseAzureLLM._get_base_azure_url(
-            api_base=api_base, litellm_params=litellm_params, route="/openai/responses"
+            api_base=api_base,
+            litellm_params=litellm_params,
+            route="/openai/responses",
+            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
     #########################################################

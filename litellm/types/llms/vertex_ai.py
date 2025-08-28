@@ -1,11 +1,12 @@
 import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from typing_extensions import (
     Protocol,
     Required,
     Self,
+    TypedDict,
     TypeGuard,
     get_origin,
     override,
@@ -239,6 +240,17 @@ class UsageMetadata(TypedDict, total=False):
     promptTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
+
+
+class TokenCountDetailsResponse(TypedDict):
+    """
+    Response structure for token count details with modality breakdown.
+    
+    Example:
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+    """
+    totalTokens: int
+    promptTokensDetails: List[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):

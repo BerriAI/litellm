@@ -71,7 +71,14 @@ spec:
                   name: {{ .Values.db.secret.name }}
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
               value: {{ .Values.db.endpoint }}
+              {{- end }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
             - name: DATABASE_URL

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
 import { TextInput } from "@tremor/react";
 import { Tooltip } from "../atoms/index";
+import { Providers } from "../provider_info_helpers";
 
 const ConditionalPublicModelName: React.FC = () => {
   const form = Form.useFormInstance();
@@ -12,13 +13,19 @@ const ConditionalPublicModelName: React.FC = () => {
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
   const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
-
+  const selectedProvider = Form.useWatch('custom_llm_provider', form);
   // Force table to re-render when custom model name changes
   useEffect(() => {
     if (customModelName && selectedModels.includes('custom')) {
       const currentMappings = form.getFieldValue('model_mappings') || [];
       const updatedMappings = currentMappings.map((mapping: any) => {
         if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
+          if (selectedProvider === Providers.Azure) {
+            return {
+              public_name: customModelName,
+              litellm_model: `azure/${customModelName}`
+            };
+          }
           return {
             public_name: customModelName,
             litellm_model: customModelName
@@ -29,7 +36,7 @@ const ConditionalPublicModelName: React.FC = () => {
       form.setFieldValue('model_mappings', updatedMappings);
       setTableKey(prev => prev + 1); // Force table re-render
     }
-  }, [customModelName, selectedModels, form]);
+  }, [customModelName, selectedModels, selectedProvider, form]);
 
   // Initial setup of model mappings when models are selected
   useEffect(() => {
@@ -44,15 +51,30 @@ const ConditionalPublicModelName: React.FC = () => {
             if (model === 'custom') {
               return mapping.litellm_model === 'custom' || mapping.litellm_model === customModelName;
             }
+            if (selectedProvider === Providers.Azure) {
+              return mapping.litellm_model === `azure/${model}`;
+            }
             return mapping.litellm_model === model;
           }));
       
       if (shouldUpdateMappings) {
         const mappings = selectedModels.map((model: string) => {
           if (model === 'custom' && customModelName) {
+            if (selectedProvider === Providers.Azure) {
+              return {
+                public_name: customModelName,
+                litellm_model: `azure/${customModelName}`
+              };
+            }
             return {
               public_name: customModelName,
               litellm_model: customModelName
+            };
+          }
+          if (selectedProvider === Providers.Azure) {
+            return {
+              public_name: model,
+              litellm_model: `azure/${model}`
             };
           }
           return {
@@ -65,7 +87,7 @@ const ConditionalPublicModelName: React.FC = () => {
         setTableKey(prev => prev + 1); // Force table re-render
       }
     }
-  }, [selectedModels, customModelName, form]);
+  }, [selectedModels, customModelName, selectedProvider,form]);
 
   if (!showPublicModelName) return null;
 
