@@ -28,3 +28,17 @@ class TestAzureOpenAIConfig:
         assert not config._is_response_format_supported_model("gpt-3-5-turbo-suffix")
         assert not config._is_response_format_supported_model("gpt-35-turbo-suffix")
         assert not config._is_response_format_supported_model("gpt-35-turbo")
+
+
+def test_map_openai_params_with_preview_api_version():
+    config = AzureOpenAIConfig()
+    non_default_params = {
+        "response_format": {"type": "json_object"},
+    }
+    optional_params = {}
+    model = "azure/gpt-4-1"
+    drop_params = False
+    api_version = "preview"
+    assert config.map_openai_params(
+        non_default_params, optional_params, model, drop_params, api_version
+    )

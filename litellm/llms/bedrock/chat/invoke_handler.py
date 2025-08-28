@@ -831,7 +831,7 @@ class BedrockLLM(BaseAWSLLM):
                     model=model, messages=messages, custom_llm_provider="anthropic_xml"
                 )  # type: ignore
                 ## LOAD CONFIG
-                config = litellm.AmazonAnthropicClaude3Config.get_config()
+                config = litellm.AmazonAnthropicClaudeConfig.get_config()
                 for k, v in config.items():
                     if (
                         k not in inference_params
@@ -1384,7 +1384,9 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": "{}",
                         },
-                        "index": chunk_data["contentBlockIndex"],
+                        "index": self.tool_calls_index
+                        if self.tool_calls_index is not None
+                        else index,
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))

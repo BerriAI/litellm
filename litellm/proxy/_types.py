@@ -16,11 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionRequest,
-    OpenAIFileObject,
-)
+from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.mcp import (
     MCPAuthType,
     MCPSpecVersion,
@@ -380,6 +376,8 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/key/list",
         "/user/filter/ui",
+        "/models",
+        "/v1/models",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -492,6 +490,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/v1/models/{model_id}",
+            "/models/{model_id}",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -513,6 +513,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/model/{model_id}/update",
+        "/prompt/list",
+        "/prompt/info",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -525,9 +527,23 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_update",
     ]
 
+    # Routes accessible by Admin Viewer (read-only admin access)
+    admin_viewer_routes = [
+        "/user/list",
+        "/user/available_users",
+        "/user/available_roles",
+        "/user/daily/activity",
+        "/team/daily/activity",
+        "/tag/daily/activity",
+        "/tag/list",
+    ] + info_routes
+
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
-        org_admin_only_routes + management_routes + self_managed_routes
+        org_admin_only_routes
+        + management_routes
+        + self_managed_routes
+        + admin_viewer_routes
     )
 
 
@@ -570,13 +586,48 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
 
 
 ######### Request Class Definition ######
-class ProxyChatCompletionRequest(ChatCompletionRequest):
+class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
+    """
+    Pydantic model for chat completion requests that includes both OpenAI standard fields
+    and LiteLLM-specific parameters. This replaces the previous TypedDict version.
+    """
+
+    # Required fields (from ChatCompletionRequest)
+    model: str
+    messages: List[AllMessageValues]
+
+    # Standard OpenAI completion parameters (all optional)
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, float]] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = None
+    max_tokens: Optional[int] = None
+    n: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    response_format: Optional[Dict[str, Any]] = None
+    seed: Optional[int] = None
+    service_tier: Optional[str] = None
+    stop: Optional[Union[str, List[str]]] = None
+    stream_options: Optional[Dict[str, Any]] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    parallel_tool_calls: Optional[bool] = None
+    function_call: Optional[Union[str, Dict[str, Any]]] = None
+    functions: Optional[List[Dict[str, Any]]] = None
+    user: Optional[str] = None
+    stream: Optional[bool] = None
+
+    # LiteLLM-specific metadata param (from original ChatCompletionRequest)
+    metadata: Optional[Dict[str, Any]] = None
+
     # Optional LiteLLM params
-    guardrails: Optional[List[str]]
-    caching: Optional[bool]
-    num_retries: Optional[int]
-    context_window_fallback_dict: Optional[Dict[str, str]]
-    fallbacks: Optional[List[str]]
+    guardrails: Optional[List[str]] = None
+    caching: Optional[bool] = None
+    num_retries: Optional[int] = None
+    context_window_fallback_dict: Optional[Dict[str, str]] = None
+    fallbacks: Optional[List[str]] = None
 
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
@@ -683,6 +734,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
@@ -843,7 +895,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -875,7 +927,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -919,6 +971,13 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Health check status
+    status: Optional[str] = Field(
+        default="unknown",
+        description="Health status: 'healthy', 'unhealthy', 'unknown'",
+    )
+    last_health_check: Optional[datetime] = None
+    health_check_error: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1174,9 +1233,16 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
+    )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
     )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
@@ -1221,6 +1287,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_rpm_limit: Optional[int] = None
+    team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
 
 
@@ -1611,7 +1679,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alert_to_webhook_url: Optional[Dict] = Field(
         None,
-        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
     )
     alerting_args: Optional[Dict] = Field(
         None, description="Controllable params for slack alerting - e.g. ttl in cache."
@@ -1713,9 +1781,13 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
-    team_member_spend: Optional[float] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+
+    # Team Member Specific Params
+    team_member_spend: Optional[float] = None
+    team_member_tpm_limit: Optional[int] = None
+    team_member_rpm_limit: Optional[int] = None
 
     # End User Params
     end_user_id: Optional[str] = None
@@ -1849,7 +1921,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -2049,13 +2121,14 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: Optional[str] = None
     messages: Optional[List[dict]] = None
+    """
+    Anthropic token counting endpoint uses /messages
+    """
 
-
-class TokenCountResponse(LiteLLMPydanticObjectBase):
-    total_tokens: int
-    request_model: str
-    model_used: str
-    tokenizer_type: str
+    contents: Optional[List[dict]] = None
+    """
+    Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
+    """
 
 
 class CallInfo(LiteLLMPydanticObjectBase):
@@ -2149,6 +2222,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[
             "LANGFUSE_PUBLIC_KEY",
             "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_HOST",
         ],
     )
 
@@ -2195,7 +2269,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     braintrust: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        litellm_callback_params=["BRAINTRUST_API_KEY", "BRAINTRUST_API_BASE"],
         ui_callback_name="Braintrust",
     )
 
@@ -2249,6 +2323,9 @@ class SpendLogsMetadata(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     usage_object: Optional[dict]
     model_map_information: Optional[StandardLoggingModelInformation]
+    cold_storage_object_key: Optional[
+        str
+    ]  # S3/GCS object key for cold storage retrieval
 
 
 class SpendLogsPayload(TypedDict):
@@ -2571,6 +2648,16 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
+    def safe_get_team_member_rpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.rpm_limit
+        return None
+
+    def safe_get_team_member_tpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.tpm_limit
+        return None
+
 
 #### Organization / Team Member Requests ####
 
@@ -2681,11 +2768,19 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
+    tpm_limit: Optional[int] = Field(
+        default=None, description="Tokens per minute limit for this team member"
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None, description="Requests per minute limit for this team member"
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class TeamModelAddRequest(BaseModel):
@@ -2887,6 +2982,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
     "team_member_key_duration",
+    "prompts",
 ]
 
 
@@ -2934,6 +3030,7 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+    team_membership: Optional[LiteLLM_TeamMembership]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):

@@ -100,7 +100,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
         if server.name == "working_server":
             # Working server returns tools
             tool1 = MagicMock()
@@ -131,7 +131,8 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=None,
                 mcp_servers=None,
-                mcp_server_auth_headers=mcp_server_auth_headers
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_protocol_version=None
             )
             
             # Verify that tools from the working server are returned
@@ -176,7 +177,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
     
@@ -199,7 +200,8 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=None,
                 mcp_servers=None,
-                mcp_server_auth_headers=mcp_server_auth_headers
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_protocol_version=None
             )
             
             # Verify that empty list is returned
@@ -273,3 +275,70 @@ async def test_mcp_server_tool_call_body_with_none_arguments():
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
     assert body["arguments"] == tool_arguments  # Should be None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_initialize_session_managers():
+    """Test that concurrent calls to initialize_session_managers don't cause race conditions."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            initialize_session_managers,
+            _SESSION_MANAGERS_INITIALIZED,
+            _INITIALIZATION_LOCK,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+    
+    # Import the module to reset state
+    import litellm.proxy._experimental.mcp_server.server as mcp_server
+    
+    # Reset state before test
+    original_initialized = mcp_server._SESSION_MANAGERS_INITIALIZED
+    original_session_cm = mcp_server._session_manager_cm
+    original_sse_session_cm = mcp_server._sse_session_manager_cm
+    
+    try:
+        mcp_server._SESSION_MANAGERS_INITIALIZED = False
+        mcp_server._session_manager_cm = None
+        mcp_server._sse_session_manager_cm = None
+        
+        # Mock the session managers to avoid actual MCP initialization
+        with patch('litellm.proxy._experimental.mcp_server.server.session_manager') as mock_session_manager, \
+             patch('litellm.proxy._experimental.mcp_server.server.sse_session_manager') as mock_sse_session_manager, \
+             patch('litellm.proxy._experimental.mcp_server.server.verbose_logger'):
+            
+            # Mock the run() method to return a mock context manager
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__ = AsyncMock()
+            mock_cm.__aexit__ = AsyncMock()
+            
+            mock_session_manager.run.return_value = mock_cm
+            mock_sse_session_manager.run.return_value = mock_cm
+            
+            # Create multiple concurrent tasks that call initialize_session_managers
+            async def init_task():
+                await initialize_session_managers()
+                return "success"
+            
+            # Run 10 concurrent initialization attempts
+            tasks = [init_task() for _ in range(10)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # All tasks should complete successfully (no exceptions)
+            assert all(result == "success" for result in results), f"Some tasks failed: {results}"
+            
+            # session_manager.run() should only be called once due to the lock
+            assert mock_session_manager.run.call_count == 1, f"Expected 1 call to session_manager.run(), got {mock_session_manager.run.call_count}"
+            assert mock_sse_session_manager.run.call_count == 1, f"Expected 1 call to sse_session_manager.run(), got {mock_sse_session_manager.run.call_count}"
+            
+            # The context managers should only be entered once each
+            assert mock_cm.__aenter__.call_count == 2, f"Expected 2 calls to __aenter__ (one for each session manager), got {mock_cm.__aenter__.call_count}"
+            
+            # State should be properly set
+            assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
+            
+    finally:
+        # Restore original state
+        mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
+        mcp_server._session_manager_cm = original_session_cm
+        mcp_server._sse_session_manager_cm = original_sse_session_cm

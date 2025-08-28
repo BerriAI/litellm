@@ -172,7 +172,7 @@ async def gemini_proxy_route(
         request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
-    base_target_url = "https://generativelanguage.googleapis.com"
+    base_target_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -190,7 +190,7 @@ async def gemini_proxy_route(
     )
     if gemini_api_key is None:
         raise Exception(
-            "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
+            "Required 'GEMINI_API_KEY'/'GOOGLE_API_KEY' in environment to make pass-through calls to Google AI Studio."
         )
     # Merge query parameters, giving precedence to those in updated_url
     merged_params = dict(request.query_params)
@@ -231,7 +231,7 @@ async def cohere_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/cohere)
     """
-    base_target_url = "https://api.cohere.com"
+    base_target_url = os.getenv("COHERE_API_BASE") or "https://api.cohere.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -427,7 +427,7 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/anthropic_completion)
     """
-    base_target_url = "https://api.anthropic.com"
+    base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -492,7 +492,12 @@ async def bedrock_llm_proxy_route(
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        model = endpoint.split("/")[1]
+        endpoint_parts = endpoint.split("/")
+        if "application-inference-profile" in endpoint:
+            # For application-inference-profile, include the profile ID part as well
+            model = "/".join(endpoint_parts[1:3])
+        else:
+            model = endpoint_parts[1]
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -500,12 +505,13 @@ async def bedrock_llm_proxy_route(
                 "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
                 + endpoint,
             },
-        )
+        ) 
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
-
+    data["custom_llm_provider"] = "bedrock"
+    
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
@@ -1017,7 +1023,7 @@ async def openai_proxy_route(
 
 
     """
-    base_target_url = "https://api.openai.com/"
+    base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     # Add or update query parameters
     openai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,
