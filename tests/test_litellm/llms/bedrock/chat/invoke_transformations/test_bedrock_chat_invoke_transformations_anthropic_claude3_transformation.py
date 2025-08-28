@@ -10,12 +10,12 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaude3Config,
+    AmazonAnthropicClaudeConfig,
 )
 
 
 def test_get_supported_params_thinking():
-    config = AmazonAnthropicClaude3Config()
+    config = AmazonAnthropicClaudeConfig()
     params = config.get_supported_openai_params(
         model="anthropic.claude-sonnet-4-20250514-v1:0"
     )

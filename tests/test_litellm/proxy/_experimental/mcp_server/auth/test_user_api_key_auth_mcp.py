@@ -119,6 +119,86 @@ class TestMCPRequestHandler:
                     mock_find_unique.assert_not_called()
 
     @pytest.mark.parametrize(
+        "team_servers,key_servers,expected_servers,scenario",
+        [
+            # Test case 1: Key has no permissions, should inherit from team
+            (["server1", "server2"], [], ["server1", "server2"], "inherit_from_team"),
+            # Test case 2: Key has permissions, should use intersection with team
+            (["server1", "server2", "server3"], ["server2", "server4"], ["server2"], "intersection_logic"),
+            # Test case 3: Key has permissions but no overlap with team
+            (["server1", "server2"], ["server3", "server4"], [], "no_overlap"),
+            # Test case 4: Team has no permissions, use key permissions
+            ([], ["server1", "server2"], ["server1", "server2"], "no_team_permissions"),
+            # Test case 5: Both team and key have no permissions
+            ([], [], [], "no_permissions"),
+            # Test case 6: Team has permissions, key has subset
+            (["server1", "server2", "server3"], ["server1", "server3"], ["server1", "server3"], "key_subset"),
+            # Test case 7: Team has permissions, key has superset (intersection should limit)
+            (["server1", "server2"], ["server1", "server2", "server3"], ["server1", "server2"], "key_superset"),
+        ],
+    )
+    async def test_get_allowed_mcp_servers_inheritance_logic(
+        self, team_servers, key_servers, expected_servers, scenario
+    ):
+        """Test the inheritance and intersection logic in get_allowed_mcp_servers"""
+        
+        # Create mock user_api_key_auth
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team" if team_servers else None,
+            object_permission_id="test-permission" if key_servers else None
+        )
+
+        # Mock the helper functions
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key_servers:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team_servers:
+                
+                # Configure mocks to return the test data
+                mock_key_servers.return_value = key_servers
+                mock_team_servers.return_value = team_servers
+                
+                # Call the method
+                result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+                
+                # Assert the result (order-independent comparison)
+                assert sorted(result) == sorted(expected_servers)
+                
+                # Verify the mock functions were called correctly
+                mock_key_servers.assert_called_once_with(user_api_key_auth)
+                mock_team_servers.assert_called_once_with(user_api_key_auth)
+
+    async def test_permission_inheritance_edge_cases(self):
+        """Test edge cases in permission inheritance"""
+        
+        # Test case: None values in database
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.return_value = None
+        mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+        
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+            object_permission_id="test-permission"
+        )
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+            assert result == []
+        
+        # Test case: Exception handling
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.side_effect = Exception("DB Error")
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+            assert result == []  # Should handle exception gracefully
+
+    @pytest.mark.parametrize(
         "headers,expected_api_key,expected_mcp_auth_header,expected_server_auth_headers",
         [
             # Test case 1: x-litellm-api-key header present
@@ -250,7 +330,7 @@ class TestMCPRequestHandler:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == expected_api_key
@@ -260,6 +340,7 @@ class TestMCPRequestHandler:
             assert mcp_server_auth_headers == expected_server_auth_headers
             # For these tests, mcp_servers should be None
             assert mcp_servers is None
+            assert mcp_protocol_version is None
 
     @pytest.mark.parametrize(
         "headers,expected_result",
@@ -418,12 +499,14 @@ class TestMCPRequestHandler:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers_result, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers_result, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
             # For these tests, mcp_server_auth_headers should be empty
             assert mcp_server_auth_headers == {}
+            # For these tests, mcp_protocol_version should be None
+            assert mcp_protocol_version is None
 
 
 class TestMCPCustomHeaderName:
@@ -582,13 +665,14 @@ class TestMCPCustomHeaderName:
                 side_effect=mock_user_api_key_auth,
             ) as mock_auth:
                 # Call the method
-                auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+                auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
 
                 # Assert the results
                 assert auth_result.api_key == "test-api-key"
                 assert mcp_auth_header == "custom-auth-token"
                 assert mcp_servers is None
                 assert mcp_server_auth_headers == {}
+                assert mcp_protocol_version is None
 
                 # Verify the mock was called
                 mock_auth.assert_called_once()
@@ -739,15 +823,14 @@ class TestMCPAccessGroupsE2E:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
-            assert mcp_servers is None
-            # The access groups header should not be parsed as a server auth header
-            # It should be handled separately by the access groups parsing logic
+            assert mcp_servers is None  # x-mcp-access-groups is not parsed as mcp_servers
             assert mcp_server_auth_headers == {}
+            assert mcp_protocol_version is None
 
             # Verify the mock was called
             mock_auth.assert_called_once()
@@ -783,13 +866,14 @@ class TestMCPAccessGroupsE2E:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
             assert mcp_servers == ["server1", "dev_group", "server2"]
             assert mcp_server_auth_headers == {}
+            assert mcp_protocol_version is None
 
             # Verify the mock was called
             mock_auth.assert_called_once()
@@ -806,7 +890,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     async def dummy_handle_request(scope, receive, send):
         """Dummy handler for testing"""
         # Get auth context
-        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers = get_auth_context()
+        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
         
         # Capture the MCP servers for testing
         captured_mcp_servers["servers"] = mcp_servers

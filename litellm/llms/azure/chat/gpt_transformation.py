@@ -159,9 +159,16 @@ class AzureOpenAIConfig(BaseConfig):
         supported_openai_params = self.get_supported_openai_params(model)
 
         api_version_times = api_version.split("-")
-        api_version_year = api_version_times[0]
-        api_version_month = api_version_times[1]
-        api_version_day = api_version_times[2]
+
+        if len(api_version_times) >= 3:
+            api_version_year = api_version_times[0]
+            api_version_month = api_version_times[1]
+            api_version_day = api_version_times[2]
+        else:
+            api_version_year = None
+            api_version_month = None
+            api_version_day = None
+
         for param, value in non_default_params.items():
             if param == "tool_choice":
                 """
@@ -171,47 +178,57 @@ class AzureOpenAIConfig(BaseConfig):
                 """
                 ## check if api version supports this param ##
                 if (
-                    api_version_year < "2023"
-                    or (api_version_year == "2023" and api_version_month < "12")
-                    or (
-                        api_version_year == "2023"
-                        and api_version_month == "12"
-                        and api_version_day < "01"
-                    )
+                    api_version_year is None
+                    or api_version_month is None
+                    or api_version_day is None
                 ):
-                    if litellm.drop_params is True or (
-                        drop_params is not None and drop_params is True
-                    ):
-                        pass
-                    else:
-                        raise UnsupportedParamsError(
-                            status_code=400,
-                            message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
-                        )
-                elif value == "required" and (
-                    api_version_year == "2024" and api_version_month <= "05"
-                ):  ## check if tool_choice value is supported ##
-                    if litellm.drop_params is True or (
-                        drop_params is not None and drop_params is True
-                    ):
-                        pass
-                    else:
-                        raise UnsupportedParamsError(
-                            status_code=400,
-                            message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
-                        )
-                else:
                     optional_params["tool_choice"] = value
+                else:
+                    if (
+                        api_version_year < "2023"
+                        or (api_version_year == "2023" and api_version_month < "12")
+                        or (
+                            api_version_year == "2023"
+                            and api_version_month == "12"
+                            and api_version_day < "01"
+                        )
+                    ):
+                        if litellm.drop_params is True or (
+                            drop_params is not None and drop_params is True
+                        ):
+                            pass
+                        else:
+                            raise UnsupportedParamsError(
+                                status_code=400,
+                                message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
+                            )
+                    elif value == "required" and (
+                        api_version_year == "2024" and api_version_month <= "05"
+                    ):  ## check if tool_choice value is supported ##
+                        if litellm.drop_params is True or (
+                            drop_params is not None and drop_params is True
+                        ):
+                            pass
+                        else:
+                            raise UnsupportedParamsError(
+                                status_code=400,
+                                message=f"Azure does not support '{value}' as a {param} param, for api_version={api_version}. To drop 'tool_choice=required' for calls with this Azure API version, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\nAzure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions",
+                            )
+                    else:
+                        optional_params["tool_choice"] = value
             elif param == "response_format" and isinstance(value, dict):
                 _is_response_format_supported_model = (
                     self._is_response_format_supported_model(model)
                 )
 
-                is_response_format_supported_api_version = (
-                    self._is_response_format_supported_api_version(
-                        api_version_year, api_version_month
+                if api_version_year is None or api_version_month is None:
+                    is_response_format_supported_api_version = True
+                else:
+                    is_response_format_supported_api_version = (
+                        self._is_response_format_supported_api_version(
+                            api_version_year, api_version_month
+                        )
                     )
-                )
                 is_response_format_supported = (
                     is_response_format_supported_api_version
                     and _is_response_format_supported_model

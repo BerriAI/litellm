@@ -24,7 +24,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `replicaCount`                                             | The number of LiteLLM Proxy pods to be deployed                                                                                                                                       | `1`  |
 | `masterkeySecretName`                                      | The name of the Kubernetes Secret that contains the Master API Key for LiteLLM.  If not specified, use the generated secret name.                                                                                                         | N/A  |
 | `masterkeySecretKey`                                      | The key within the Kubernetes Secret that contains the Master API Key for LiteLLM.  If not specified, use `masterkey` as the key.                                                                                                         | N/A  |
-| `masterkey`                                                | The Master API Key for LiteLLM.  If not specified, a random key is generated.                                                                                                         | N/A  |
+| `masterkey`                                                | The Master API Key for LiteLLM.  If not specified, a random key in the `sk-...` format is generated.                                                                                   | N/A  |
 | `environmentSecrets`                                       | An optional array of Secret object names.  The keys and values in these secrets will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
 | `environmentConfigMaps`                                       | An optional array of ConfigMap object names.  The keys and values in these configmaps will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
 | `image.repository`                                         | LiteLLM Proxy image repository                                                                                                                                                        | `ghcr.io/berriai/litellm`  |
@@ -110,6 +110,22 @@ data:
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
 
+### Migration Job Settings
+
+The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
+
+| Name                                                       | Description                                                                                                                                                                           | Value |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `migrationJob.enabled`                                     | Enable or disable the schema migration Job                                                                                                                                           | `true`  |
+| `migrationJob.backoffLimit`                                | Backoff limit for Job restarts                                                                                                                                                       | `4`  |
+| `migrationJob.ttlSecondsAfterFinished`                     | TTL for completed migration jobs                                                                                                                                                      | `120`  |
+| `migrationJob.annotations`                                 | Additional annotations for the migration job pod                                                                                                                                      | `{}`  |
+| `migrationJob.extraContainers`                             | Additional containers to run alongside the migration job                                                                                                                              | `[]`  |
+| `migrationJob.hooks.argocd.enabled`                       | Enable ArgoCD hooks for the migration job (uses PreSync hook with BeforeHookCreation delete policy)                                                                                  | `true`  |
+| `migrationJob.hooks.helm.enabled`                         | Enable Helm hooks for the migration job (uses pre-install,pre-upgrade hooks with before-hook-creation delete policy)                                                                 | `false`  |
+| `migrationJob.hooks.helm.weight`                          | Helm hook execution order (lower weights executed first). Optional - defaults to "1" if not specified.                                                                               | N/A  |
+
+
 ## Accessing the Admin UI
 When browsing to the URL published per the settings in `ingress.*`, you will
 be prompted for **Admin Configuration**.  The **Proxy Endpoint** is the internal
@@ -119,7 +135,7 @@ service, the **Proxy Endpoint** should be set to `http://<RELEASE>-litellm:4000`
 
 The **Proxy Key** is the value specified for `masterkey` or, if a `masterkey`
 was not provided to the helm command line, the `masterkey` is a randomly
-generated string stored in the `<RELEASE>-litellm-masterkey` Kubernetes Secret.
+generated string in the `sk-...` format stored in the `<RELEASE>-litellm-masterkey` Kubernetes Secret.
 
 ```bash
 kubectl -n litellm get secret <RELEASE>-litellm-masterkey -o jsonpath="{.data.masterkey}"

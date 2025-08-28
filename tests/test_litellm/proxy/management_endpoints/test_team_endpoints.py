@@ -762,7 +762,7 @@ async def test_validate_team_member_add_permissions_admin():
     )
 
     # Create admin user
-    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
@@ -787,7 +787,7 @@ async def test_validate_team_member_add_permissions_non_admin():
     # Create non-admin user
     regular_user = UserAPIKeyAuth(
         user_id="regular-user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        user_role=LitellmUserRoles.INTERNAL_USER,
         team_id="different-team",
     )
 
@@ -886,8 +886,8 @@ async def test_process_team_members_multiple_members():
 
     # Create multiple members as dictionaries (they will be converted to Member objects)
     members = [
-        {"user_email": "user1@example.com", "role": "user"},
-        {"user_email": "user2@example.com", "role": "admin"},
+        Member(user_email="user1@example.com", role="user"),
+        Member(user_email="user2@example.com", role="admin"),
     ]
     request_data = TeamMemberAddRequest(
         team_id="test-team-123",
@@ -1055,7 +1055,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
     ), patch(
         "litellm.proxy.auth.auth_checks._cache_team_object"
     ) as mock_cache_team, patch(
-        "litellm.proxy.management_endpoints.team_endpoints._upsert_team_member_budget_table"
+        "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
 
         # Setup mock prisma client
@@ -1082,7 +1082,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, updated_kv, team_member_budget, user_api_key_dict
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1468,3 +1468,241 @@ async def test_bulk_team_member_add_no_db_connection():
 
         assert exc_info.value.status_code == 500
         assert "DB not connected" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_security_check_non_admin_user():
+    """
+    Test that list_team_v2 properly checks route permissions for non-admin users.
+    Non-admin users should only be able to query their own teams.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    # Mock request
+    mock_request = Mock(spec=Request)
+
+    # Test Case 1: Non-admin user trying to query all teams (user_id=None)
+    mock_user_api_key_dict_non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non_admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
+
+        # Should raise HTTPException with 401 status
+        with pytest.raises(HTTPException) as exc_info:
+            await list_team_v2(
+                http_request=mock_request,
+                user_id=None,  # Non-admin trying to query all teams
+                user_api_key_dict=mock_user_api_key_dict_non_admin,
+            )
+
+        assert exc_info.value.status_code == 401
+        assert "Only admin users can query all teams/other teams" in str(
+            exc_info.value.detail
+        )
+        assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_security_check_non_admin_user_other_user():
+    """
+    Test that list_team_v2 properly checks route permissions for non-admin users
+    trying to query other users' teams.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    # Mock request
+    mock_request = Mock(spec=Request)
+
+    # Test Case 2: Non-admin user trying to query another user's teams
+    mock_user_api_key_dict_non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non_admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
+
+        # Should raise HTTPException with 401 status
+        with pytest.raises(HTTPException) as exc_info:
+            await list_team_v2(
+                http_request=mock_request,
+                user_id="other_user_456",  # Non-admin trying to query other user's teams
+                user_api_key_dict=mock_user_api_key_dict_non_admin,
+            )
+
+        assert exc_info.value.status_code == 401
+        assert "Only admin users can query all teams/other teams" in str(
+            exc_info.value.detail
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_security_check_non_admin_user_own_teams():
+    """
+    Test that list_team_v2 allows non-admin users to query their own teams.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    # Mock request
+    mock_request = Mock(spec=Request)
+
+    # Test Case 3: Non-admin user querying their own teams (should be allowed)
+    mock_user_api_key_dict_non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="non_admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        # Mock prisma client and database operations
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock user lookup
+        mock_user_object = Mock()
+        mock_user_object.model_dump.return_value = {
+            "user_id": "non_admin_user_123",
+            "teams": ["team_1", "team_2"],
+        }
+        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
+        
+        # Mock team lookup
+        mock_teams = [
+            Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
+            Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"}),
+        ]
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+
+        # Should NOT raise an exception
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id="non_admin_user_123",  # Non-admin querying their own teams
+            user_api_key_dict=mock_user_api_key_dict_non_admin,
+            team_id=None,
+            page=1,
+            page_size=10,
+        )
+
+        # Should return results without error
+        assert "teams" in result
+        assert "total" in result
+        assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_security_check_admin_user():
+    """
+    Test that list_team_v2 allows admin users to query any teams.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    # Mock request
+    mock_request = Mock(spec=Request)
+
+    # Test Case 4: Admin user querying all teams (should be allowed)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        # Mock prisma client and database operations
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock team lookup
+        mock_teams = [
+            Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
+            Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"}),
+        ]
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+
+        # Should NOT raise an exception
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,  # Admin querying all teams
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+        )
+
+        # Should return results without error
+        assert "teams" in result
+        assert "total" in result
+        assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_auth):
+    """
+    Verify that /team/member_delete removes the corresponding LiteLLM_TeamMembership row
+    so the same user can be re-added without unique constraint issues.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-123"
+    test_user_id = "user@example.com"
+
+    # Mock Team row with the user as a member
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+
+    # Configure DB mocks used by team_member_delete
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team_row)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    # User row to allow removal from user's teams list
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.teams = [test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user_row])
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    # Membership deletion should be called
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+
+    # Execute
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Assert membership cleanup executed
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
+    )

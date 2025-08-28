@@ -2250,6 +2250,41 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     assert called_model_lists[1] == test_model_list_2
 
 
+@pytest.mark.asyncio
+async def test_background_health_check_skip_disabled_models(monkeypatch):
+    """Ensure models with disable_background_health_check are skipped."""
+    import litellm.proxy.proxy_server as proxy_server
+    import copy
+
+    test_model_list = [
+        {"model_name": "model-a"},
+        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+    ]
+    called_model_lists = []
+
+    async def fake_perform_health_check(model_list, details):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return (["healthy"], [])
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list))
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    async def fake_sleep(interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert called_model_lists == [[{"model_name": "model-a"}]]
+
+
 def test_get_timeout_from_request():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 

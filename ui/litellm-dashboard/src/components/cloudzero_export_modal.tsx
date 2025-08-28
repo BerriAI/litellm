@@ -8,6 +8,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import { Modal, Form, Input, message, Spin, Select } from "antd";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface CloudZeroExportModalProps {
   isOpen: boolean;
@@ -68,11 +69,11 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
       } else if (response.status !== 404) {
         // 404 means no settings configured yet, which is fine
         const errorData = await response.json();
-        message.error(`Failed to load existing settings: ${errorData.error || 'Unknown error'}`);
+        NotificationsManager.fromBackend(`Failed to load existing settings: ${errorData.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error("Error loading CloudZero settings:", error);
-      message.error("Failed to load existing settings");
+      NotificationsManager.fromBackend("Failed to load existing settings");
     } finally {
       setSettingsLoading(false);
     }
@@ -80,7 +81,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
 
   const handleSaveCloudZeroSettings = async (values: CloudZeroSettings) => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
 
@@ -107,7 +108,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
       const data = await response.json();
 
       if (response.ok) {
-        message.success(data.message || "CloudZero settings saved successfully");
+        NotificationsManager.success(data.message || "CloudZero settings saved successfully");
         setExistingSettings({
           api_key_masked: values.api_key.substring(0, 4) + "****" + values.api_key.slice(-4),
           connection_id: values.connection_id,
@@ -115,12 +116,12 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
         });
         return true;
       } else {
-        message.error(data.error || "Failed to save CloudZero settings");
+        NotificationsManager.fromBackend(data.error || "Failed to save CloudZero settings");
         return false;
       }
     } catch (error) {
       console.error("Error saving CloudZero settings:", error);
-      message.error("Failed to save CloudZero settings");
+      NotificationsManager.fromBackend("Failed to save CloudZero settings");
       return false;
     } finally {
       setLoading(false);
@@ -129,7 +130,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
 
   const handleExportCloudZero = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
 
@@ -150,14 +151,14 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
       const data = await response.json();
 
       if (response.ok) {
-        message.success(data.message || "Export to CloudZero completed successfully");
+        NotificationsManager.success(data.message || "Export to CloudZero completed successfully");
         onClose();
       } else {
-        message.error(data.error || "Failed to export to CloudZero");
+        NotificationsManager.fromBackend(data.error || "Failed to export to CloudZero");
       }
     } catch (error) {
       console.error("Error exporting to CloudZero:", error);
-      message.error("Failed to export to CloudZero");
+      NotificationsManager.fromBackend("Failed to export to CloudZero");
     } finally {
       setExportLoading(false);
     }
@@ -167,11 +168,11 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({
     setExportLoading(true);
     try {
       // TODO: Implement CSV export functionality
-      message.info("CSV export functionality coming soon!");
+      NotificationsManager.info("CSV export functionality coming soon!");
       onClose();
     } catch (error) {
       console.error("Error exporting CSV:", error);
-      message.error("Failed to export CSV");
+      NotificationsManager.fromBackend("Failed to export CSV");
     } finally {
       setExportLoading(false);
     }

@@ -48,7 +48,19 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith("codestral")
             or model.startswith("jamba")
             or model.startswith("claude")
+            or model.startswith("qwen")
         ):
+            return True
+        return False
+    
+    @staticmethod
+    def should_use_openai_handler(model: str):
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
+            "llama",
+            "deepseek-ai",
+            "qwen",
+        ]
+        if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
         return False
 
@@ -115,7 +127,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model or "deepseek-ai" in model:
+            if self.should_use_openai_handler(model):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -191,7 +203,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,

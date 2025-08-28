@@ -181,6 +181,8 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from fastapi import HTTPException
         
         tool_results = []
         tool_call_id: Optional[str] = None
@@ -194,10 +196,14 @@ class LiteLLM_Proxy_MCP_Handler:
                 
                 parsed_arguments = LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(tool_arguments)
                 
+                # Import here to avoid circular import
+                from litellm.proxy.proxy_server import proxy_logging_obj
+                
                 result = await global_mcp_server_manager.call_tool(
                     name=tool_name,
                     arguments=parsed_arguments,
                     user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 
                 # Format result for inclusion in response
@@ -207,6 +213,27 @@ class LiteLLM_Proxy_MCP_Handler:
                     "result": result_text
                 })
                 
+            except BlockedPiiEntityError as e:
+                verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+                error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {str(e)}"
+                tool_results.append({
+                    "tool_call_id": tool_call_id,
+                    "result": error_message
+                })
+            except GuardrailRaisedException as e:
+                verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+                error_message = f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {str(e)}"
+                tool_results.append({
+                    "tool_call_id": tool_call_id,
+                    "result": error_message
+                })
+            except HTTPException as e:
+                verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+                error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
+                tool_results.append({
+                    "tool_call_id": tool_call_id,
+                    "result": error_message
+                })
             except Exception as e:
                 verbose_logger.exception(f"Error executing MCP tool call: {e}")
                 tool_results.append({

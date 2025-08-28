@@ -462,9 +462,8 @@ def _count_messages(
                     default_token_count,
                 )
             else:
-                raise ValueError(
-                    f"Unsupported type {type(value)} for key {key} in message {message}"
-                )
+                # Skip unsupported keys instead of raising an error
+                continue
     return num_tokens
 
 
@@ -530,7 +529,7 @@ def _get_count_function(
                 encoding = tiktoken.get_encoding("cl100k_base")
 
             def count_tokens(text: str) -> int:
-                return len(encoding.encode(text))
+                return len(encoding.encode(text, disallowed_special=()))
 
         else:
             raise ValueError("Unsupported tokenizer type")

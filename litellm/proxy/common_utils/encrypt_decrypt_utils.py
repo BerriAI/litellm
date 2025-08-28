@@ -11,10 +11,6 @@ def _get_salt_key():
     salt_key = os.getenv("LITELLM_SALT_KEY", None)
 
     if salt_key is None:
-        verbose_proxy_logger.debug(
-            "LITELLM_SALT_KEY is None using master_key to encrypt/decrypt secrets stored in DB"
-        )
-
         salt_key = master_key
 
     return salt_key

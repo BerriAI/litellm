@@ -104,6 +104,52 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
   </Tabs>
 
+  ## Reasoning Effort
+
+  <Tabs>
+  <TabItem value="sdk" label="SDK">
+
+  ```python
+  from litellm import completion
+
+  response = completion(
+      model="hosted_vllm/gpt-oss-120b",
+      messages=[{"role": "user", "content": "whats 2 + 2"}],
+      reasoning_effort="high",
+      api_base="https://hosted-vllm-api.co",
+  )
+  print(response)
+  ```
+  </TabItem>
+  <TabItem value="proxy" label="PROXY">
+
+  1. Setup config.yaml
+
+  ```yaml
+  model_list:
+    - model_name: gpt-oss-120b
+      litellm_params:
+        model: hosted_vllm/gpt-oss-120b
+        api_base: https://hosted-vllm-api.co
+  ```
+
+  2. Start the proxy
+
+  ```bash
+  litellm --config /path/to/config.yaml
+  ```
+
+  3. Test it!
+
+  ```bash
+  curl http://0.0.0.0:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "gpt-oss-120b", "messages": [{"role": "user", "content": "whats 2 + 2"}], "reasoning_effort": "high"}'
+  ```
+
+  </TabItem>
+  </Tabs>
+
 
 ## Embeddings
 

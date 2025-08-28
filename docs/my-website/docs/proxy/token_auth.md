@@ -130,26 +130,55 @@ general_settings:
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
+**Note:** All JWT fields support dot notation to access nested claims (e.g., `"user.sub"`, `"resource_access.client.roles"`).
+
 ```yaml
 general_settings:
   master_key: sk-1234
   enable_jwt_auth: True
   litellm_jwtauth:
     admin_jwt_scope: "litellm-proxy-admin"
-    team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD
-    user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD
-    org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD
-    end_user_id_jwt_field: "customer_id" # 👈 CAN BE ANY FIELD
+    team_id_jwt_field: "client_id" # 👈 CAN BE ANY FIELD (supports dot notation for nested claims)
+    user_id_jwt_field: "sub" # 👈 CAN BE ANY FIELD (supports dot notation for nested claims)
+    org_id_jwt_field: "org_id" # 👈 CAN BE ANY FIELD (supports dot notation for nested claims)
+    end_user_id_jwt_field: "customer_id" # 👈 CAN BE ANY FIELD (supports dot notation for nested claims)
 ```
 
-Expected JWT: 
+Expected JWT (flat structure): 
 
-```
+```json
 {
   "client_id": "my-unique-team",
   "sub": "my-unique-user",
-  "org_id": "my-unique-org",
+  "org_id": "my-unique-org"
 }
+```
+
+**Or with nested structure using dot notation:**
+
+```json
+{
+  "user": {
+    "sub": "my-unique-user",
+    "email": "user@example.com"
+  },
+  "tenant": {
+    "team_id": "my-unique-team"
+  },
+  "organization": {
+    "id": "my-unique-org"
+  }
+}
+```
+
+**Configuration for nested example:**
+
+```yaml
+litellm_jwtauth:
+  user_id_jwt_field: "user.sub"
+  user_email_jwt_field: "user.email"
+  team_id_jwt_field: "tenant.team_id"
+  org_id_jwt_field: "organization.id"
 ```
 
 Now litellm will automatically update the spend for the user/team/org in the db for each call. 
@@ -407,9 +436,15 @@ environment_variables:
   JWT_AUDIENCE: "api://LiteLLM_Proxy" # ensures audience is validated
 ```
 
-- `object_id_jwt_field`: The field in the JWT token that contains the object id. This id can be either a user id or a team id. Use this instead of `user_id_jwt_field` and `team_id_jwt_field`. If the same field could be both. 
+- `object_id_jwt_field`: The field in the JWT token that contains the object id. This id can be either a user id or a team id. Use this instead of `user_id_jwt_field` and `team_id_jwt_field`. If the same field could be both. **Supports dot notation** for nested claims (e.g., `"profile.object_id"`).
 
-- `roles_jwt_field`: The field in the JWT token that contains the roles. This field is a list of roles that the user has. To index into a nested field, use dot notation - eg. `resource_access.litellm-test-client-id.roles`.
+- `roles_jwt_field`: The field in the JWT token that contains the roles. This field is a list of roles that the user has. **Supports dot notation** for nested fields - e.g., `resource_access.litellm-test-client-id.roles`.
+
+**Additional JWT Field Configuration Options:**
+
+- `team_ids_jwt_field`: Field containing team IDs (as a list). **Supports dot notation** (e.g., `"groups"`, `"teams.ids"`).
+- `user_email_jwt_field`: Field containing user email. **Supports dot notation** (e.g., `"email"`, `"user.email"`).
+- `end_user_id_jwt_field`: Field containing end-user ID for cost tracking. **Supports dot notation** (e.g., `"customer_id"`, `"customer.id"`).
 
 - `role_mappings`: A list of role mappings. Map the received role in the JWT token to an internal role on LiteLLM.
 
