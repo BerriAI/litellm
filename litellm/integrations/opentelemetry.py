@@ -675,7 +675,7 @@ class OpenTelemetry(CustomLogger):
         # per-choice events
         for idx, choice in enumerate(response_obj.get("choices", [])):
             attrs = {
-                "event_name": "gen_ai.content.prompt",
+                "event_name": "gen_ai.content.completion",
                 "gen_ai.system": provider,
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
