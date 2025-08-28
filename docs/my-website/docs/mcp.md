@@ -40,7 +40,28 @@ LiteLLM supports the following MCP transports:
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
-### Adding a stdio MCP Server
+<br/>
+<br/>
+
+### Add HTTP MCP Server
+
+This video walks through adding and using an HTTP MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/e2aebce78e8d46beafeb4bacdde31f14" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add SSE MCP Server
+
+This video walks through adding and using an SSE MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/07e04e27f5e74475b9cf8ef8247d2c3e" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add STDIO MCP Server
 
 For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
 
