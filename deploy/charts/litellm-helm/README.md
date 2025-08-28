@@ -36,12 +36,11 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `service.port`                                             | TCP port that the Kubernetes Service will listen on.  Also the TCP port within the Pod that the proxy will listen on.                                                                 | `4000`  |
 | `service.loadBalancerClass`                                | Optional LoadBalancer implementation class (only used when `service.type` is `LoadBalancer`)                                                                                                          | `""`  |
 | `ingress.*`                                                | See [values.yaml](./values.yaml) for example settings                                                                                                                                 | N/A  |
-
-| `proxyConfigMap.create`      | When `true`, render a ConfigMap from `.Values.proxy_config` and mount it.                                 | `true`         |
-| `proxyConfigMap.name`        | When `create=false`, name of the existing ConfigMap to mount.                                             | `""`           |
-| `proxyConfigMap.key`         | Key in the ConfigMap that contains the proxy config file.                                                 | `"config.yaml"`|
-| `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap’s config.yaml only when proxyConfigMap.create=true. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
-| `extraContainers[]`                                        | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.                                                                                             | `[]`  |
+| `proxyConfigMap.create`     | When `true`, render a ConfigMap from `.Values.proxy_config` and mount it.                                                                                                                                      | `true` |
+| `proxyConfigMap.name`       | When `create=false`, name of the existing ConfigMap to mount.                                                                                                                                                  | `""`  |
+| `proxyConfigMap.key`        | Key in the ConfigMap that contains the proxy config file.                                                                                                                                                      | `"config.yaml"` |
+| `proxy_config.*`            | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap’s `config.yaml` only when `proxyConfigMap.create=true`. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples. | `N/A` |
+| `extraContainers[]`         | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.
 
 #### Example `proxy_config` ConfigMap from values (default):
 
