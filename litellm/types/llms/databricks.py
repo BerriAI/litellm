@@ -36,9 +36,10 @@ class DatabricksReasoningSummary(TypedDict):
     signature: str
 
 
-class DatabricksReasoningContent(TypedDict):
+class DatabricksReasoningContent(TypedDict, total=False):
     type: Literal["reasoning"]
-    summary: List[DatabricksReasoningSummary]
+    summary: Required[List[DatabricksReasoningSummary]]
+    citations: Optional[List[Dict[str, Any]]]
 
 
 AllDatabricksContentListValues = Union[
