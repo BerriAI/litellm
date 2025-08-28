@@ -54,7 +54,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
-import NotificationManager from "../molecules/notifications_manager";
+import NotificationsManager from "../molecules/notifications_manager";
 
 export interface TeamMembership {
   user_id: string;
@@ -163,7 +163,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      NotificationManager.fromBackend("Failed to load team information");
+      NotificationsManager.fromBackend("Failed to load team information");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -215,7 +215,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       await teamMemberAddCall(accessToken, teamId, member);
 
-      message.success("Team member added successfully");
+      NotificationsManager.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
 
@@ -239,7 +239,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         errMsg = error.message;
       }
 
-      NotificationManager.fromBackend(errMsg);
+      NotificationsManager.fromBackend(errMsg);
       console.error("Error adding team member:", error);
     }
   };
@@ -263,7 +263,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       await teamMemberUpdateCall(accessToken, teamId, member);
 
-      message.success("Team member updated successfully");
+      NotificationsManager.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
 
       // Fetch updated team info
@@ -288,7 +288,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.destroy(); // Remove all existing toasts
 
-      NotificationManager.fromBackend(errMsg);
+      NotificationsManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
     }
   };
@@ -301,7 +301,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       await teamMemberDeleteCall(accessToken, teamId, member);
 
-      message.success("Team member removed successfully");
+      NotificationsManager.success("Team member removed successfully");
 
       // Fetch updated team info
       const updatedTeamData = await teamInfoCall(accessToken, teamId);
@@ -310,7 +310,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error) {
-      NotificationManager.fromBackend("Failed to remove team member");
+      NotificationsManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
     }
   };
@@ -323,7 +323,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
       } catch (e) {
-        NotificationManager.fromBackend("Invalid JSON in metadata field");
+        NotificationsManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
 
@@ -381,7 +381,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       const response = await teamUpdateCall(accessToken, updateData);
 
-      message.success("Team settings updated successfully");
+      NotificationsManager.success("Team settings updated successfully");
       setIsEditing(false);
       fetchTeamInfo();
     } catch (error) {

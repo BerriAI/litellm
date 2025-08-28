@@ -35,14 +35,14 @@ The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and obs
 |----------|----------|-------------|---------|
 | `LANGFUSE_PUBLIC_KEY` | Yes | Your Langfuse public key | `pk-lf-...` |
 | `LANGFUSE_SECRET_KEY` | Yes | Your Langfuse secret key | `sk-lf-...` |
-| `LANGFUSE_HOST` | No | Langfuse host URL | `https://us.cloud.langfuse.com` (default) |
+| `LANGFUSE_OTEL_HOST` | No | OTEL endpoint host | `https://otel.my-langfuse.com` |
 
 ### Endpoint Resolution
 
-The integration automatically constructs the OTEL endpoint from the `LANGFUSE_HOST`:
+The integration automatically constructs the OTEL endpoint from `LANGFUSE_OTEL_HOST`
 - **Default (US)**: `https://us.cloud.langfuse.com/api/public/otel`
 - **EU Region**: `https://cloud.langfuse.com/api/public/otel`
-- **Self-hosted**: `{LANGFUSE_HOST}/api/public/otel`
+- **Self-hosted**: `{LANGFUSE_OTEL_HOST}/api/public/otel`
 
 ## Usage
 
@@ -77,11 +77,11 @@ os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-..."
 os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-..."
 
 # Use EU region
-os.environ["LANGFUSE_HOST"] = "https://cloud.langfuse.com"  # EU region
-# os.environ["LANGFUSE_HOST"] = "https://us.cloud.langfuse.com"  # US region (default)
+os.environ["LANGFUSE_OTEL_HOST"] = "https://cloud.langfuse.com"  # EU region
+# os.environ["LANGFUSE_OTEL_HOST"] = "https://otel.my-langfuse.company.com"  # custom OTEL endpoint
 
 # Or use self-hosted instance
-# os.environ["LANGFUSE_HOST"] = "https://my-langfuse.company.com"
+# os.environ["LANGFUSE_OTEL_HOST"] = "https://my-langfuse.company.com"
 
 litellm.callbacks = ["langfuse_otel"]
 ```
@@ -98,14 +98,16 @@ import litellm
 # Get keys for your project from the project settings page: https://cloud.langfuse.com
 os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-lf-..." 
 os.environ["LANGFUSE_SECRET_KEY"] = "sk-lf-..." 
-os.environ["LANGFUSE_HOST"] = "https://cloud.langfuse.com" # EU region
-# os.environ["LANGFUSE_HOST"] = "https://us.cloud.langfuse.com" # US region
+os.environ["LANGFUSE_OTEL_HOST"] = "https://cloud.langfuse.com" # EU region
+# os.environ["LANGFUSE_OTEL_HOST"] = "https://us.cloud.langfuse.com" # US region
+# os.environ["LANGFUSE_OTEL_HOST"] = "https://otel.my-langfuse.company.com" # custom OTEL endpoint
 
 LANGFUSE_AUTH = base64.b64encode(
     f"{os.environ.get('LANGFUSE_PUBLIC_KEY')}:{os.environ.get('LANGFUSE_SECRET_KEY')}".encode()
 ).decode()
 
-os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = os.environ.get("LANGFUSE_HOST") + "/api/public/otel"
+host = os.environ.get("LANGFUSE_OTEL_HOST")
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = host + "/api/public/otel"
 os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {LANGFUSE_AUTH}"
 
 litellm.callbacks = ["langfuse_otel"]
@@ -120,7 +122,8 @@ Add the integration to your proxy configuration:
 ```bash
 export LANGFUSE_PUBLIC_KEY="pk-lf-..."
 export LANGFUSE_SECRET_KEY="sk-lf-..."
-export LANGFUSE_HOST="https://us.cloud.langfuse.com"  # Default US region
+export LANGFUSE_OTEL_HOST="https://us.cloud.langfuse.com"  # Default US region
+# export LANGFUSE_OTEL_HOST="https://otel.my-langfuse.company.com"  # custom OTEL endpoint
 ```
 
 2. Setup config.yaml

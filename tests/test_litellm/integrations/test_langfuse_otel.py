@@ -229,6 +229,19 @@ class TestLangfuseOtelIntegration:
         
         # Should return an empty dict
         assert result == {}
+    
+    def test_get_langfuse_otel_config_with_otel_host_priority(self):
+        """LANGFUSE_OTEL_HOST should take priority over LANGFUSE_HOST."""
+        with patch.dict(os.environ, {
+            'LANGFUSE_PUBLIC_KEY': 'test_public_key',
+            'LANGFUSE_SECRET_KEY': 'test_secret_key',
+            'LANGFUSE_HOST': 'https://should-not-be-used.com',
+            'LANGFUSE_OTEL_HOST': 'https://otel-host.com'
+        }, clear=False):
+            _ = LangfuseOtelLogger.get_langfuse_otel_config()
+
+            assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "https://otel-host.com/api/public/otel"
+    
 
 
 if __name__ == "__main__":
