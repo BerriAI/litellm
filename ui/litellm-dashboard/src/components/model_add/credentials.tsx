@@ -23,7 +23,9 @@ import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
 import { credentialListCall, credentialCreateCall, credentialDeleteCall, credentialUpdateCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
+import CredentialDeleteModal from "./CredentialDeleteModal";
 import { Form, message } from "antd";
+import NotificationsManager from "../molecules/notifications_manager";
 interface CredentialsPanelProps {
   accessToken: string | null;
   uploadProps: UploadProps;
@@ -37,6 +39,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
+  const [credentialToDelete, setCredentialToDelete] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const restrictedFields = ['credential_name', 'custom_llm_provider'];
@@ -58,7 +61,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     };
 
     const response = await credentialUpdateCall(accessToken, values.credential_name, newCredential);
-    message.success('Credential updated successfully');
+    NotificationsManager.success('Credential updated successfully');
     setIsUpdateModalOpen(false);
     fetchCredentials(accessToken);
   }
@@ -82,7 +85,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
 
     // Add to list and close modal
     const response = await credentialCreateCall(accessToken, newCredential);
-    message.success('Credential added successfully');
+    NotificationsManager.success('Credential added successfully');
     setIsAddModalOpen(false);
     fetchCredentials(accessToken);
   };
@@ -118,8 +121,17 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
       return;
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
-    message.success('Credential deleted successfully');
+    NotificationsManager.success('Credential deleted successfully');
+    setCredentialToDelete(null);
     fetchCredentials(accessToken);
+  };
+
+  const openDeleteModal = (credentialName: string) => {
+    setCredentialToDelete(credentialName);
+  };
+
+  const closeDeleteModal = () => {
+    setCredentialToDelete(null);
   };
 
   return (
@@ -168,7 +180,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                       icon={TrashIcon}
                       variant="light"
                       size="sm"
-                      onClick={() => handleDeleteCredential(credential.credential_name)}
+                      onClick={() => openDeleteModal(credential.credential_name)}
                     />
                   </TableCell>
                 </TableRow>
@@ -206,6 +218,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
           uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
           addOrEdit="edit"
+        />
+      )}
+      
+      {credentialToDelete && (
+        <CredentialDeleteModal
+          isVisible={true}
+          onCancel={closeDeleteModal}
+          onConfirm={() => handleDeleteCredential(credentialToDelete)}
+          credentialName={credentialToDelete}
         />
       )}
     </div>

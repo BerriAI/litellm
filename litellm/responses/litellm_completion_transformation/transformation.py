@@ -33,7 +33,6 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseTextConfig,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -100,6 +99,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -127,6 +127,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
         }
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
@@ -659,7 +660,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             reasoning=Reasoning(),
             status=getattr(chat_completion_response, "status", "completed"),
-            text=ResponseTextConfig(),
+            text={},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response

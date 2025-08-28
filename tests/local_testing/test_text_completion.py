@@ -4166,6 +4166,7 @@ def test_completion_vllm(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
+@pytest.mark.skip(reason="fireworks is having an active outage")
 def test_completion_fireworks_ai_multiple_choices():
     litellm._turn_on_debug()
     response = litellm.text_completion(

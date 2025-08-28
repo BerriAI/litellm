@@ -3,7 +3,7 @@ import { Button, Callout, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema } from "./types";
 import { Form, Tooltip, message } from "antd";
 import { InfoCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
-
+import NotificationsManager from "../molecules/notifications_manager"; 
 
 export function ToolTestPanel({
   tool,
@@ -143,18 +143,18 @@ export function ToolTestPanel({
   const handleCopyResult = async () => {
     const success = await copyToClipboard(JSON.stringify(result, null, 2));
     if (success) {
-      message.success('Result copied to clipboard');
+      NotificationsManager.success('Result copied to clipboard');
     } else {
-      message.error('Failed to copy result');
+      NotificationsManager.fromBackend('Failed to copy result');
     }
   };
 
   const handleCopyToolName = async () => {
     const success = await copyToClipboard(tool.name);
     if (success) {
-      message.success('Tool name copied to clipboard');
+      NotificationsManager.success('Tool name copied to clipboard');
     } else {
-      message.error('Failed to copy tool name');
+      NotificationsManager.fromBackend('Failed to copy tool name');
     }
   };
 
