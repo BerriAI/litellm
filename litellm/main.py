@@ -2173,8 +2173,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/complete"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/complete"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/complete")
+            ):
                 api_base += "/v1/complete"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix"
+                )
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -2210,8 +2220,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/messages"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/messages"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/messages")
+            ):
                 api_base += "/v1/messages"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
+                )
 
             response = anthropic_chat_completions.completion(
                 model=model,
