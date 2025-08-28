@@ -53,7 +53,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
-    cold_storage_object_key: Optional[str] = None,
+    cold_storage_object_key: Optional[str] = None
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -101,7 +101,7 @@ def _get_spend_logs_metadata(
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
-
+    
     return clean_metadata
 
 
@@ -484,7 +484,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     Truncates strings longer than 1000 characters and handles nested dictionaries.
     """
     from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-
     MAX_STRING_LENGTH = 1000
 
     if visited is None:
@@ -523,21 +522,8 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
-
-            # Check if request body size exceeds truncation threshold
-            max_body_size_before_trunc = litellm_params.get(
-                "max_request_size_before_trunc"
-            )
-            if (
-                max_body_size_before_trunc is None
-                or len(_request_body_json_str) > max_body_size_before_trunc
-            ):
-                _request_body = _sanitize_request_body_for_spend_logs_payload(
-                    _request_body
-                )
-                _request_body_json_str = json.dumps(_request_body, default=str)
-
             return _request_body_json_str
     return "{}"
 
