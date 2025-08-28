@@ -19,6 +19,17 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+:::info
+
+LiteLLM is hiring a **Founding Backend Engineer**, in San Francisco. 
+
+[Apply here](https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer) if you're interested!
+:::
+
+
+
+
+
 ## Deploy this version
 
 :::info
@@ -93,7 +104,7 @@ This release is not live yet.
 
 ## MCP Gateway
 #### Bugs
-- fix StreamableHTTPSessionManager .run() error - https://github.com/BerriAI/litellm/pull/13666
+- fix StreamableHTTPSessionManager .run() error - [PR #13666](https://github.com/BerriAI/litellm/pull/13666)
 
 ## Vector Stores 
 #### Bugs
