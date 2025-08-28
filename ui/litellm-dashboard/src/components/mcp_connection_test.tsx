@@ -2,6 +2,7 @@ import React from 'react';
 import { Typography, Space, Button, Divider, message } from 'antd';
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from '@ant-design/icons';
 import { testMCPConnectionRequest } from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Text } = Typography;
 
@@ -213,7 +214,7 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
                 icon={<CopyOutlined />} 
                 onClick={() => {
                   navigator.clipboard.writeText(formatMCPRequest(rawRequest || {}));
-                  message.success('Copied to clipboard');
+                  NotificationsManager.success('Copied to clipboard');
                 }}
               >
                 Copy Configuration

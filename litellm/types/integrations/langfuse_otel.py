@@ -25,8 +25,8 @@ class LangfuseSpanAttributes(str, Enum):
     MASK_OUTPUT = "langfuse.generation.mask_output"
 
     # ---- Trace-level metadata ----
-    TRACE_USER_ID = "langfuse.trace.user_id"
-    SESSION_ID = "langfuse.trace.session_id"
+    TRACE_USER_ID = "user.id"
+    SESSION_ID = "session.id"
     TAGS = "langfuse.trace.tags"
     TRACE_NAME = "langfuse.trace.name"
     TRACE_ID = "langfuse.trace.id"

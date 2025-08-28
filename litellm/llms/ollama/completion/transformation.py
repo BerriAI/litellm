@@ -24,6 +24,8 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     ProviderField,
+    StreamingChoices,
+    Delta,
 )
 
 from ..common_utils import OllamaError, _convert_image
@@ -260,38 +262,52 @@ class OllamaConfig(BaseConfig):
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
-            response_content = json.loads(response_json["response"])
-
-            # Check if this is a function call format with name/arguments structure
-            if (
-                isinstance(response_content, dict)
-                and "name" in response_content
-                and "arguments" in response_content
-            ):
-                # Handle as function call (original behavior)
-                function_call = response_content
-                message = litellm.Message(
-                    content=None,
-                    tool_calls=[
-                        {
-                            "id": f"call_{str(uuid.uuid4())}",
-                            "function": {
-                                "name": function_call["name"],
-                                "arguments": json.dumps(function_call["arguments"]),
-                            },
-                            "type": "function",
-                        }
-                    ],
-                )
-                model_response.choices[0].message = message  # type: ignore
-                model_response.choices[0].finish_reason = "tool_calls"
-            else:
-                # Handle as regular JSON (new behavior)
-                message = litellm.Message(
-                    content=json.dumps(response_content),
-                )
+            # Check if response field exists and is not empty before parsing JSON
+            response_text = response_json.get("response", "")
+            if not response_text or not response_text.strip():
+                # Handle empty response gracefully - set empty content
+                message = litellm.Message(content="")
                 model_response.choices[0].message = message  # type: ignore
                 model_response.choices[0].finish_reason = "stop"
+            else:
+                try:
+                    response_content = json.loads(response_text)
+
+                    # Check if this is a function call format with name/arguments structure
+                    if (
+                        isinstance(response_content, dict)
+                        and "name" in response_content
+                        and "arguments" in response_content
+                    ):
+                        # Handle as function call (original behavior)
+                        function_call = response_content
+                        message = litellm.Message(
+                            content=None,
+                            tool_calls=[
+                                {
+                                    "id": f"call_{str(uuid.uuid4())}",
+                                    "function": {
+                                        "name": function_call["name"],
+                                        "arguments": json.dumps(function_call["arguments"]),
+                                    },
+                                    "type": "function",
+                                }
+                            ],
+                        )
+                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].finish_reason = "tool_calls"
+                    else:
+                        # Handle as regular JSON (new behavior)
+                        message = litellm.Message(
+                            content=json.dumps(response_content),
+                        )
+                        model_response.choices[0].message = message  # type: ignore
+                        model_response.choices[0].finish_reason = "stop"
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, treat as regular text response
+                    message = litellm.Message(content=response_text)
+                    model_response.choices[0].message = message  # type: ignore
+                    model_response.choices[0].finish_reason = "stop"
         else:
             model_response.choices[0].message.content = response_json["response"]  # type: ignore
         model_response.created = int(time.time())
@@ -423,7 +439,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             if "error" in chunk:
                 raise Exception(f"Ollama Error - {chunk}")
@@ -458,6 +474,17 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     is_finished=is_finished,
                     finish_reason="stop",
                     usage=None,
+                )
+            elif "thinking" in chunk and not chunk["response"]:
+                # Return reasoning content as ModelResponseStream so UIs can render it
+                thinking_content = chunk.get("thinking") or ""
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=thinking_content),
+                        )
+                    ]
                 )
             else:
                 raise Exception(f"Unable to parse ollama chunk - {chunk}")

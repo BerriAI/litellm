@@ -18,6 +18,7 @@ from typing import (
     cast,
 )
 
+from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -453,6 +454,10 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
             filename, file_content, content_type = file_data
         elif len(file_data) == 4:
             filename, file_content, content_type, file_headers = file_data
+    elif isinstance(file_data, InMemoryFile):
+        filename = file_data.name
+        file_content = file_data
+        content_type = file_data.content_type
     else:
         file_content = file_data
     # Convert content to bytes
