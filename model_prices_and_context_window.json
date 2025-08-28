@@ -15626,7 +15626,8 @@
         "output_cost_per_token": 2.18e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1": {
         "max_tokens": 163840,
@@ -15636,7 +15637,8 @@
         "output_cost_per_token": 2.15e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1-0528": {
         "max_tokens": 163840,
@@ -15646,7 +15648,8 @@
         "output_cost_per_token": 2.15e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1-0528-Turbo": {
         "max_tokens": 32768,
@@ -15656,7 +15659,8 @@
         "output_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
         "max_tokens": 131072,
@@ -15666,7 +15670,8 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": {
         "max_tokens": 131072,
@@ -15676,7 +15681,8 @@
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-R1-Turbo": {
         "max_tokens": 163840,
@@ -15686,7 +15692,8 @@
         "output_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-V3": {
         "max_tokens": 163840,
@@ -15696,7 +15703,8 @@
         "output_cost_per_token": 8.9e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-V3-0324": {
         "max_tokens": 163840,
@@ -15706,7 +15714,8 @@
         "output_cost_per_token": 8.8e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-V3-0324-Turbo": {
         "max_tokens": 32768,
@@ -15716,7 +15725,8 @@
         "output_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-V3.1": {
         "max_tokens": 163840,
@@ -15726,7 +15736,8 @@
         "output_cost_per_token": 1e-06,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "supports_reasoning": true
     },
     "deepinfra/google/codegemma-7b-it": {
         "max_tokens": 8192,
