@@ -3,7 +3,7 @@ Volcengine Embedding Handler
 Handles embedding requests to Volcengine's embedding API
 """
 
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union
 
 import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
