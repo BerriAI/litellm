@@ -53,7 +53,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
-    cold_storage_object_key: Optional[str] = None
+    cold_storage_object_key: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -101,7 +101,7 @@ def _get_spend_logs_metadata(
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
-    
+
     return clean_metadata
 
 
