@@ -336,3 +336,100 @@ async def test_spend_report_endpoint():
                 print(f"Total Spend: {total_spend}")
                 print("Metadata: ", metadata)
                 print()
+
+
+# Helper function to generate test request bodies
+def _generate_test_request_bodies():
+    large_content = "x" * 2000  # 2000 characters
+    small_content = "x" * 50    # 50 characters
+    
+    large_request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": large_content}]
+    }
+    
+    small_request_body = {
+        "model": "gpt-3.5-turbo", 
+        "messages": [{"role": "user", "content": small_content}]
+    }
+    
+    return large_request_body, small_request_body, large_content, small_content
+
+
+def _setup_spend_logs_settings():
+    """Helper to mock the settings for storing prompts in spend logs"""
+    import litellm.proxy.proxy_server
+    litellm.proxy.proxy_server.general_settings = {"store_prompts_in_spend_logs": True}
+
+
+def test_large_request_no_truncation_threshold():
+    """Test that large request with no threshold gets truncated"""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    
+    large_request_body, _, _, _ = _generate_test_request_bodies()
+    _setup_spend_logs_settings()
+    
+    litellm_params = {
+        "proxy_server_request": {"body": large_request_body}
+    }
+    
+    result = _get_proxy_server_request_for_spend_logs_payload({}, litellm_params)
+    
+    # Should be truncated (contains truncation indicator)
+    assert "LITELLM_TRUNCATED_PAYLOAD_FIELD" in result
+
+
+def test_large_request_high_truncation_threshold():
+    """Test that large request with high threshold does not get truncated"""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    
+    large_request_body, _, large_content, _ = _generate_test_request_bodies()
+    _setup_spend_logs_settings()
+    
+    litellm_params = {
+        "proxy_server_request": {"body": large_request_body},
+        "max_request_size_before_trunc": 10000  # Higher than request size
+    }
+    
+    result = _get_proxy_server_request_for_spend_logs_payload({}, litellm_params)
+    
+    # Should not be truncated (full content preserved)
+    assert "LITELLM_TRUNCATED_PAYLOAD_FIELD" not in result
+    assert large_content in result
+
+
+def test_large_request_low_truncation_threshold():
+    """Test that large request with low threshold gets truncated"""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    
+    large_request_body, _, _, _ = _generate_test_request_bodies()
+    _setup_spend_logs_settings()
+    
+    litellm_params = {
+        "proxy_server_request": {"body": large_request_body},
+        "max_request_size_before_trunc": 100  # Lower than request size
+    }
+    
+    result = _get_proxy_server_request_for_spend_logs_payload({}, litellm_params)
+    
+    # Should be truncated
+    assert "LITELLM_TRUNCATED_PAYLOAD_FIELD" in result
+
+
+def test_small_request_low_truncation_threshold():
+    """Test that small request with low threshold does not get truncated"""
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    
+    _, small_request_body, _, small_content = _generate_test_request_bodies()
+    _setup_spend_logs_settings()
+    
+    litellm_params = {
+        "proxy_server_request": {"body": small_request_body},
+        "max_request_size_before_trunc": 100  # Higher than small request size
+    }
+    
+    result = _get_proxy_server_request_for_spend_logs_payload({}, litellm_params)
+    
+    # Should not be truncated (content is small enough)
+    assert "LITELLM_TRUNCATED_PAYLOAD_FIELD" not in result
+    assert small_content in result
