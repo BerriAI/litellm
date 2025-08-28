@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from pydantic import BaseModel
 from typing_extensions import (
@@ -24,9 +24,10 @@ class GenericStreamingChunk(TypedDict, total=False):
     usage: Optional[BaseModel]
 
 
-class DatabricksTextContent(TypedDict):
+class DatabricksTextContent(TypedDict, total=False):
     type: Literal["text"]
     text: Required[str]
+    citations: Optional[List[Dict[str, Any]]]
 
 
 class DatabricksReasoningSummary(TypedDict):
