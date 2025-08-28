@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.constants import REDACTED_BY_LITELM_STRING, MAX_STRING_LENGTH_PROMPT_IN_DB
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -481,10 +481,9 @@ def _sanitize_request_body_for_spend_logs_payload(
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
-    Truncates strings longer than 1000 characters and handles nested dictionaries.
+    Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
     from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-    MAX_STRING_LENGTH = 1000
 
     if visited is None:
         visited = set()
@@ -501,8 +500,8 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} {len(value) - MAX_STRING_LENGTH} chars)"
+            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                return f"{value[:MAX_STRING_LENGTH_PROMPT_IN_DB]}... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} {len(value) - MAX_STRING_LENGTH_PROMPT_IN_DB} chars)"
             return value
         return value
 
