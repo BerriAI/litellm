@@ -56,7 +56,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
-        return [
+        supported_openai_params = [
             "stream",
             "frequency_penalty",
             "function_call",
@@ -76,7 +76,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
         if litellm.supports_reasoning(
             model=model,
-            custom_llm_provider_info=self.custom_llm_provider,
+            custom_llm_provider=self.custom_llm_provider,
         ):
             supported_openai_params.append("reasoning_effort")
         return supported_openai_params
