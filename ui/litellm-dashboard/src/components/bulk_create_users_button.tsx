@@ -14,6 +14,7 @@ import Papa from "papaparse"
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline"
 import { CopyToClipboard } from "react-copy-to-clipboard"
 import { InvitationLink } from "./onboarding_link"
+import NotificationsManager from "./molecules/notifications_manager"
 
 interface BulkCreateUsersProps {
   accessToken: string
@@ -110,7 +111,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     // Check file type
     if (file.type !== "text/csv" && !file.name.endsWith(".csv")) {
       setFileError(`Invalid file type: ${file.name}. Please upload a CSV file (.csv extension).`)
-      message.error("Invalid file type. Please upload a CSV file.")
+      NotificationsManager.fromBackend("Invalid file type. Please upload a CSV file.")
       return false
     }
 
@@ -264,7 +265,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               `Found ${userData.length - validData.length} row(s) with errors out of ${userData.length} total rows. Please correct them before proceeding.`,
             )
           } else {
-            message.success(`Successfully parsed ${validData.length} users`)
+            NotificationsManager.success(`Successfully parsed ${validData.length} users`)
           }
         } catch (error: unknown) {
           const errorMessage = error instanceof Error ? error.message : "Unknown error"
@@ -513,7 +514,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                     <span className="text-xs text-gray-500 truncate max-w-[150px]">{record.invitation_link}</span>
                     <CopyToClipboard
                       text={record.invitation_link}
-                      onCopy={() => message.success("Invitation link copied!")}
+                      onCopy={() => NotificationsManager.success("Invitation link copied!")}
                     >
                       <button className="ml-1 text-blue-500 text-xs hover:text-blue-700">Copy</button>
                     </CopyToClipboard>

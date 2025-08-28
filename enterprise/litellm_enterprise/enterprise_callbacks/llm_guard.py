@@ -127,6 +127,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         """

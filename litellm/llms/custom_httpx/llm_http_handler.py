@@ -111,6 +111,7 @@ class BaseLLMHTTPHandler:
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
+
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -1256,6 +1257,10 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.ANTHROPIC
@@ -1269,10 +1274,9 @@ class BaseLLMHTTPHandler:
             Optional[litellm.types.utils.ProviderSpecificHeader],
             kwargs.get("provider_specific_header", None),
         )
-        extra_headers = (
-            provider_specific_header.get("extra_headers", {})
-            if provider_specific_header
-            else {}
+        extra_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=provider_specific_header,
+            custom_llm_provider=custom_llm_provider,
         )
         (
             headers,
@@ -2677,6 +2681,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> Union[
         ImageResponse,
         Coroutine[Any, Any, ImageResponse],
@@ -2701,6 +2706,7 @@ class BaseLLMHTTPHandler:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
+                api_key=api_key,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -2711,8 +2717,9 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            api_key=api_key,
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2763,15 +2770,17 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
 
         return model_response
@@ -2791,6 +2800,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -2804,10 +2814,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            api_key=api_key,
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2858,17 +2868,19 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
-        
+
         return model_response
 
     ###### VECTOR STORE HANDLER ######
@@ -2936,7 +2948,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -3035,7 +3049,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(
@@ -3196,6 +3212,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3221,6 +3238,7 @@ class BaseLLMHTTPHandler:
                 contents=contents,
                 generate_content_provider_config=generate_content_provider_config,
                 generate_content_config_dict=generate_content_config_dict,
+                tools=tools,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -3256,6 +3274,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 
@@ -3317,6 +3336,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3360,6 +3380,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 

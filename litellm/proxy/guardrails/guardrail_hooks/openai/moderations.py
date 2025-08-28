@@ -193,6 +193,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Dict[str, Any]]:
         """
@@ -247,6 +248,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ) -> Optional[Dict[str, Any]]:
         """

@@ -278,3 +278,16 @@ response = litellm.image_generation(
 )
 print(f"response: {response}")
 ```
+
+## Supported Providers
+
+| Provider | Documentation Link |
+|----------|-------------------|
+| OpenAI | [OpenAI Image Generation →](./providers/openai) |
+| Azure OpenAI | [Azure OpenAI Image Generation →](./providers/azure/azure) |
+| Google AI Studio | [Google AI Studio Image Generation →](./providers/google_ai_studio/image_gen) |
+| Vertex AI | [Vertex AI Image Generation →](./providers/vertex_image) |
+| AWS Bedrock | [Bedrock Image Generation →](./providers/bedrock) |
+| Recraft | [Recraft Image Generation →](./providers/recraft#image-generation) |
+| Xinference | [Xinference Image Generation →](./providers/xinference#image-generation) |
+| Nscale | [Nscale Image Generation →](./providers/nscale#image-generation) | 

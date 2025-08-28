@@ -11,7 +11,7 @@ WORKDIR /app
 # Install build dependencies
 USER root
 RUN apk add --no-cache build-base bash \
-    && pip install --no-cache-dir --upgrade pip build
+  && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
 COPY . .
@@ -21,8 +21,8 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build package and wheel dependencies
 RUN rm -rf dist/* && python -m build && \
-    pip install dist/*.whl && \
-    pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+  pip install dist/*.whl && \
+  pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # -----------------
 # Runtime Stage
@@ -33,26 +33,28 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache bash
+  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
+COPY . .
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
-    && rm -f *.whl \
-    && rm -rf /wheels
+  && rm -f *.whl \
+  && rm -rf /wheels
 
-# Install semantic_router without dependencies
-RUN pip install semantic_router --no-deps
+# Install semantic_router and aurelio-sdk using script
+RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
 # Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
-    pip uninstall PyJWT -y && \
-    pip install PyJWT==2.9.0 --no-cache-dir
+  pip uninstall PyJWT -y && \
+  pip install PyJWT==2.9.0 --no-cache-dir
 
 # --- Prisma Handling for Non-Root User ---
 # Set Prisma cache directories
@@ -61,15 +63,31 @@ ENV NPM_CONFIG_CACHE=/.npm
 
 # Install prisma and make entrypoints executable
 RUN pip install --no-cache-dir prisma && \
-    chmod +x docker/entrypoint.sh && \
-    chmod +x docker/prod_entrypoint.sh
+  chmod +x docker/entrypoint.sh && \
+  chmod +x docker/prod_entrypoint.sh
 
 # Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
-    chown -R nobody:nogroup /app && \
-    chown -R nobody:nogroup /nonexistent /.npm && \
-    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
-    chown -R nobody:nogroup $PRISMA_PATH
+  chown -R nobody:nogroup /app && \
+  chown -R nobody:nogroup /nonexistent /.npm && \
+  PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+  chown -R nobody:nogroup $PRISMA_PATH && \
+  LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
+  [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup $LITELLM_PKG_MIGRATIONS_PATH
+
+# --- OpenShift Compatibility: Apply Red Hat recommended pattern ---
+# Get paths for directories that need write access at runtime
+RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+  LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
+  # Set group ownership to 0 (root group) for OpenShift compatibility && \
+  chgrp -R 0 $PRISMA_PATH && \
+  [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
+  # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
+  chmod -R g=u $PRISMA_PATH && \
+  [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
+  # Ensure directories are writable by group && \
+  chmod -R g+w $PRISMA_PATH && \
+  [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user
 USER nobody

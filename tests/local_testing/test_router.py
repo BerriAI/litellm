@@ -2023,14 +2023,13 @@ def test_router_get_model_info(model, base_model, llm_provider):
             deployment=deployment.to_json(), received_model_name=model
         )
     else:
-        try:
-            router.get_router_model_info(
-                deployment=deployment.to_json(), received_model_name=model
-            )
-            pytest.fail("Expected this to raise model not mapped error")
-        except Exception as e:
-            if "This model isn't mapped yet" in str(e):
-                pass
+        # Azure models without base_model now fallback to using the original model name
+        # instead of raising an exception. This should succeed but log a warning.
+        model_info = router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
+        # Verify that model_info is returned (even if it may have default values)
+        assert model_info is not None
 
 
 @pytest.mark.parametrize(
@@ -2133,7 +2132,7 @@ def test_router_correctly_reraise_error():
     """
     User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
     ```
-    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-1.5-flash..
+    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-2.5-flash-lite..
     ```
     What they want? Propagation of the real error.
     """
@@ -2329,7 +2328,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             except litellm.RateLimitError:
                 pass
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(

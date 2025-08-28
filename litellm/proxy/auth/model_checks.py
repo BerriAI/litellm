@@ -75,16 +75,14 @@ async def get_mcp_server_ids(
     if prisma_client is None:
         return []
 
-
     if user_api_key_dict.object_permission_id is None:
         return []
-
 
     # Make a direct SQL query to get just the mcp_servers
     try:
 
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_dict.object_permission_id},
+            where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
             return result.mcp_servers
@@ -177,22 +175,27 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Set[str] = set()
+    unique_models = []
+    def append_unique(models):
+        for model in models:
+            if model not in unique_models:
+                unique_models.append(model)
+
     if key_models:
-        unique_models.update(key_models)
+        append_unique(key_models)
     elif team_models:
-        unique_models.update(team_models)
+        append_unique(team_models)
     else:
-        unique_models.update(proxy_model_list)
+        append_unique(proxy_model_list)
         if include_model_access_groups:
-            unique_models.update(model_access_groups.keys())
+            append_unique(list(model_access_groups.keys())) # TODO: keys order
 
         if user_model:
-            unique_models.add(user_model)
+            append_unique([user_model])
 
         if infer_model_from_keys:
             valid_models = get_valid_models()
-            unique_models.update(valid_models)
+            append_unique(valid_models)
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []
@@ -207,7 +210,7 @@ def get_complete_model_list(
         llm_router=llm_router,
     )
 
-    complete_model_list = list(unique_models) + all_wildcard_models
+    complete_model_list = unique_models + all_wildcard_models
 
     return complete_model_list
 
@@ -229,19 +232,30 @@ def get_known_models_from_wildcard(
         provider = wildcard_provider_prefix
 
     # get all known provider models
+
     wildcard_models = get_provider_models(
         provider=provider, litellm_params=litellm_params
     )
+
     if wildcard_models is None:
         return []
     if wildcard_suffix != "*":
+        ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
         model_prefix = wildcard_suffix.replace("*", "")
-        filtered_wildcard_models = [
-            wc_model
-            for wc_model in wildcard_models
-            if wc_model.startswith(model_prefix)
-        ]
-        wildcard_models = filtered_wildcard_models
+
+        is_partial_filter = any(
+            wc_model.startswith(model_prefix) for wc_model in wildcard_models
+        )
+        if is_partial_filter:
+            filtered_wildcard_models = [
+                wc_model
+                for wc_model in wildcard_models
+                if wc_model.startswith(model_prefix)
+            ]
+            wildcard_models = filtered_wildcard_models
+        else:
+            # add model prefix to wildcard models
+            wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
     suffix_appended_wildcard_models = []
     for model in wildcard_models:
@@ -252,7 +266,7 @@ def get_known_models_from_wildcard(
 
 
 def _get_wildcard_models(
-    unique_models: Set[str],
+    unique_models: List[str],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
 ) -> List[str]:
@@ -298,18 +312,18 @@ def get_all_fallbacks(
 ) -> List[str]:
     """
     Get all fallbacks for a given model from the router's fallback configuration.
-    
+
     Args:
         model: The model name to get fallbacks for
         llm_router: The LiteLLM router instance
         fallback_type: Type of fallback ("general", "context_window", "content_policy")
-    
+
     Returns:
         List of fallback model names. Empty list if no fallbacks found.
     """
     if llm_router is None:
         return []
-    
+
     # Get the appropriate fallback list based on type
     fallbacks_config: list = []
     if fallback_type == "general":
@@ -321,20 +335,19 @@ def get_all_fallbacks(
     else:
         verbose_proxy_logger.warning(f"Unknown fallback_type: {fallback_type}")
         return []
-    
+
     if not fallbacks_config:
         return []
-    
+
     try:
         # Use existing function to get fallback model group
         fallback_model_group, _ = get_fallback_model_group(
-            fallbacks=fallbacks_config, 
-            model_group=model
+            fallbacks=fallbacks_config, model_group=model
         )
-        
+
         if fallback_model_group is None:
             return []
-        
+
         return fallback_model_group
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting fallbacks for model {model}: {e}")

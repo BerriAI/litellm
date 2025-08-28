@@ -33,6 +33,7 @@ expected_env_vars = {
     "LAGO_API_BASE": "mock_base",
     "LAGO_API_EVENT_CODE": "mock_event_code",
     "OPENMETER_API_KEY": "openmeter_api_key",
+    "BRAINTRUST_API_BASE": "braintrust_api_base",
     "BRAINTRUST_API_KEY": "braintrust_api_key",
     "GALILEO_API_KEY": "galileo_api_key",
     "LITERAL_API_KEY": "literal_api_key",

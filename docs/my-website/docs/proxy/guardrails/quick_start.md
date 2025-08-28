@@ -491,6 +491,47 @@ guardrails:
       default_on: true # run on every request
 ```
 
+
+### ✨ Model-level Guardrails
+
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
+
+:::
+
+
+This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+      api_base: https://api.anthropic.com/v1
+      guardrails: ["azure-text-moderation"]
+  - model_name: openai-gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+
+guardrails:
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      mode: "pre_call"
+      presidio_language: "en"  # optional: set default language for PII analysis
+      pii_entities_config:
+        PERSON: "BLOCK"  # Will mask credit card numbers
+  - guardrail_name: azure-text-moderation
+    litellm_params:
+      guardrail: azure/text_moderations
+      mode: "post_call" 
+      api_key: os.environ/AZURE_GUARDRAIL_API_KEY
+      api_base: os.environ/AZURE_GUARDRAIL_API_BASE 
+```
+
 ### ✨ Disable team from turning on/off guardrails
 
 :::info

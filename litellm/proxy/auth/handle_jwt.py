@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -50,6 +51,7 @@ from .auth_checks import (
     get_org_object,
     get_role_based_models,
     get_role_based_routes,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -83,7 +85,7 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-    
+
     @staticmethod
     def is_jwt(token: str):
         parts = token.split(".")
@@ -162,12 +164,13 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        if (
-            self.litellm_jwtauth.team_ids_jwt_field is not None
-            and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
-        ):
-
-            return token[self.litellm_jwtauth.team_ids_jwt_field]
+        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+            team_ids: Optional[List[str]] = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_ids_jwt_field,
+                default=[],
+            )
+            return team_ids or []
 
         return []
 
@@ -176,7 +179,11 @@ class JWTHandler:
     ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.end_user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = None
         except KeyError:
@@ -210,7 +217,21 @@ class JWTHandler:
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.team_id_jwt_field is not None:
-                team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+                # Use a sentinel value to detect if the path actually exists
+                sentinel = object()
+                team_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.team_id_jwt_field,
+                    default=sentinel,
+                )
+                if team_id is sentinel:
+                    # Path doesn't exist, use team_id_default if available
+                    if self.litellm_jwtauth.team_id_default is not None:
+                        return self.litellm_jwtauth.team_id_default
+                    else:
+                        return default_value
+                # At this point, team_id is not the sentinel, so it should be a string
+                return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
             else:
@@ -232,7 +253,11 @@ class JWTHandler:
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = default_value
         except KeyError:
@@ -319,7 +344,11 @@ class JWTHandler:
     ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_email_jwt_field is not None:
-                user_email = token[self.litellm_jwtauth.user_email_jwt_field]
+                user_email = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_email_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_email = None
         except KeyError:
@@ -329,7 +358,11 @@ class JWTHandler:
     def get_object_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.object_id_jwt_field is not None:
-                object_id = token[self.litellm_jwtauth.object_id_jwt_field]
+                object_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.object_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 object_id = default_value
         except KeyError:
@@ -339,7 +372,11 @@ class JWTHandler:
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.org_id_jwt_field is not None:
-                org_id = token[self.litellm_jwtauth.org_id_jwt_field]
+                org_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.org_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 org_id = None
         except KeyError:
@@ -672,6 +709,7 @@ class JWTAuthManager:
             user_id=user_id,
             end_user_id=None,
             org_id=org_id,
+            team_membership=None,
         )
 
     @staticmethod
@@ -728,6 +766,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
+        from litellm.proxy.proxy_server import llm_router
 
         if not team_ids:
             if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
@@ -754,7 +793,7 @@ class JWTAuthManager:
                         or can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
-                            llm_router=None,
+                            llm_router=llm_router,
                             team_model_aliases=None,
                         )
                     ):
@@ -803,16 +842,19 @@ class JWTAuthManager:
         user_email: Optional[str],
         org_id: Optional[str],
         end_user_id: Optional[str],
+        team_id: Optional[str],
         valid_user_email: Optional[bool],
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        route: str,
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
         Optional[LiteLLM_EndUserTable],
+        Optional[LiteLLM_TeamMembership],
     ]:
         """Get user, org, and end user objects"""
         org_object: Optional[LiteLLM_OrganizationTable] = None
@@ -857,12 +899,28 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    route=route,
                 )
                 if end_user_id
                 else None
             )
+        
+        team_membership_object: Optional[LiteLLM_TeamMembership] = None
+        if user_id and team_id:
+            team_membership_object = (
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id and team_id
+                else None
+            )
 
-        return user_object, org_object, end_user_object
+        return user_object, org_object, end_user_object, team_membership_object
 
     @staticmethod
     def validate_object_id(
@@ -1087,17 +1145,19 @@ class JWTAuthManager:
             )
 
         # Get other objects
-        user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
+        user_object, org_object, end_user_object, team_membership_object = await JWTAuthManager.get_objects(
             user_id=user_id,
             user_email=user_email,
             org_id=org_id,
             end_user_id=end_user_id,
+            team_id=team_id,
             valid_user_email=valid_user_email,
             jwt_handler=jwt_handler,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            route=route,
         )
 
         await JWTAuthManager.sync_user_role_and_teams(
@@ -1126,6 +1186,8 @@ class JWTAuthManager:
             is_proxy_admin = True
         else:
             is_proxy_admin = False
+        
+
 
         return JWTAuthBuilderResult(
             is_proxy_admin=is_proxy_admin,
@@ -1138,4 +1200,5 @@ class JWTAuthManager:
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             token=api_key,
+            team_membership=team_membership_object,
         )

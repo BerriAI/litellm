@@ -100,8 +100,8 @@ async def test_create_mcp_server_direct():
     # Mock the database functions directly
     with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
          mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
-         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server") as mock_create, \
-         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server", new_callable=mock.AsyncMock) as mock_create, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server", new_callable=mock.AsyncMock) as mock_get_server, \
          mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager") as mock_manager:
         
         # Import after mocking
@@ -113,6 +113,7 @@ async def test_create_mcp_server_direct():
         
         # Mock server manager
         mock_manager.add_update_server = mock.Mock()
+        mock_manager.reload_servers_from_database = mock.AsyncMock()
         
         # Set up test data
         server_id = str(uuid.uuid4())
@@ -138,7 +139,7 @@ async def test_create_mcp_server_direct():
         
         # Mock the database calls
         mock_get_server.return_value = None  # Server doesn't exist yet
-        # Set up async mock for create_mcp_server
+        # Set up async mock for create_mcp_server using AsyncMock
         mock_create.return_value = expected_response
         
         # Create mock user auth
@@ -174,7 +175,7 @@ async def test_create_duplicate_mcp_server():
     # Mock the database functions directly
     with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
          mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
-         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server:
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server", new_callable=mock.AsyncMock) as mock_get_server:
         
         # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
