@@ -78,6 +78,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.nvidiaNimEmbeddingConfig.get_supported_openai_params()
     elif custom_llm_provider == "cerebras":
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "baseten":
+        return litellm.BasetenConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "xai":
         return litellm.XAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":

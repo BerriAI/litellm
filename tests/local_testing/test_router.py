@@ -2328,7 +2328,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             except litellm.RateLimitError:
                 pass
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(

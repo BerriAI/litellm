@@ -29,7 +29,7 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai"]] = None,
+    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra"]] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
@@ -75,7 +75,15 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy", "hosted_vllm"]
+        Literal[
+            "cohere",
+            "together_ai",
+            "azure_ai",
+            "infinity",
+            "litellm_proxy",
+            "hosted_vllm",
+            "deepinfra",
+        ]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -142,7 +150,7 @@ def rerank(  # noqa: PLR0915
             max_tokens_per_doc=max_tokens_per_doc,
             non_default_params=kwargs,
         )
-
+        verbose_logger.info(f"optional_rerank_params: {optional_rerank_params}")
         if isinstance(optional_params.timeout, str):
             optional_params.timeout = float(optional_params.timeout)
 
@@ -356,18 +364,57 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
+
+        elif _custom_llm_provider == "deepinfra":
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("DEEPINFRA_API_KEY")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("DEEPINFRA_API_BASE")
+            )
+
+            if api_base is None:
+                raise ValueError(
+                    "api_base must be provided for Deepinfra rerank. Set in call or via DEEPINFRA_API_BASE env var."
+                )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
         else:
             # Generic handler for all providers that use base_llm_http_handler
-            # Provider-specific logic (API key validation, URL generation, etc.) 
+            # Provider-specific logic (API key validation, URL generation, etc.)
             # is handled in the respective transformation configs
-            
+
             # Check if the provider is actually supported
             # If rerank_provider_config is a default CohereRerankConfig but the provider is not Cohere or litellm_proxy,
             # it means the provider is not supported
-            if (isinstance(rerank_provider_config, litellm.CohereRerankConfig) or 
-                isinstance(rerank_provider_config, litellm.CohereRerankV2Config)) and _custom_llm_provider != "cohere" and _custom_llm_provider != "litellm_proxy":
+            if (
+                (
+                    isinstance(rerank_provider_config, litellm.CohereRerankConfig)
+                    or isinstance(rerank_provider_config, litellm.CohereRerankV2Config)
+                )
+                and _custom_llm_provider != "cohere"
+                and _custom_llm_provider != "litellm_proxy"
+            ):
                 raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
-                
+
             response = base_llm_http_handler.rerank(
                 model=model,
                 custom_llm_provider=_custom_llm_provider,

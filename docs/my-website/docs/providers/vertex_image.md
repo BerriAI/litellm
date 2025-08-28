@@ -18,7 +18,7 @@ import litellm
 # Generate a single image
 response = await litellm.aimage_generation(
     prompt="An olympic size swimming pool with crystal clear water and modern architecture",
-    model="vertex_ai/imagen-4.0-generate-preview-06-06",
+    model="vertex_ai/imagen-4.0-generate-001",
     vertex_ai_project="your-project-id",
     vertex_ai_location="us-central1",
 )
@@ -34,7 +34,7 @@ print(response.data[0].url)
 model_list:
   - model_name: vertex-imagen
     litellm_params:
-      model: vertex_ai/imagen-4.0-generate-preview-06-06
+      model: vertex_ai/imagen-4.0-generate-001
       vertex_ai_project: "your-project-id"
       vertex_ai_location: "us-central1"
       vertex_ai_credentials: "path/to/service-account.json"  # Optional if using environment auth

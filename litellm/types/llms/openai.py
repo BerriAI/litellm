@@ -974,6 +974,10 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     service_tier: Optional[str]
     safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
+    max_tool_calls: Optional[int]
+    prompt_cache_key: Optional[str]
+    stream_options: Optional[dict]
+    top_logprobs: Optional[int]
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):

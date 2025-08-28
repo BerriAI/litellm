@@ -161,6 +161,8 @@ db:
     name: postgres
     usernameKey: username
     passwordKey: password
+    # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
+    endpointKey: ""
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target

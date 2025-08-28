@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast, overload
+from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
 
 import httpx
 
@@ -335,6 +335,29 @@ def image_generation(  # noqa: PLR0915
                 headers=headers,
                 litellm_params=litellm_params_dict,
             )
+        #########################################################
+        # Providers using llm_http_handler
+        #########################################################
+        elif custom_llm_provider in (
+            litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.AIML,
+            litellm.LlmProviders.GEMINI,
+        ):
+            if image_generation_config is None:
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
+            
+            return llm_http_handler.image_generation_handler(
+                api_key=api_key,
+                model=model,
+                prompt=prompt,
+                image_generation_provider_config=image_generation_config,
+                image_generation_optional_request_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                client=client,
+            )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
@@ -437,27 +460,6 @@ def image_generation(  # noqa: PLR0915
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
                 api_base=api_base,
-                client=client,
-            )
-        #########################################################
-        # Providers using llm_http_handler
-        #########################################################
-        elif custom_llm_provider in (
-            litellm.LlmProviders.RECRAFT,
-            litellm.LlmProviders.GEMINI,
-        ):
-            if image_generation_config is None:
-                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
-            
-            return llm_http_handler.image_generation_handler(
-                model=model,
-                prompt=prompt,
-                image_generation_provider_config=image_generation_config,
-                image_generation_optional_request_params=optional_params,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params_dict,
-                logging_obj=litellm_logging_obj,
-                timeout=timeout,
                 client=client,
             )
         elif (
@@ -675,7 +677,7 @@ def image_variation(
 
 @client
 def image_edit(
-    image: FileTypes,
+    image: Union[FileTypes, List[FileTypes]],
     prompt: str,
     model: Optional[str] = None,
     mask: Optional[str] = None,
@@ -702,6 +704,9 @@ def image_edit(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
+
+        #add images / or return a single image
+        images = image if isinstance(image, list) else [image]
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -751,7 +756,7 @@ def image_edit(
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
-            image=image,
+            image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_request_params=image_edit_request_params,
@@ -777,7 +782,7 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes,
+    image: Union[FileTypes, List[FileTypes]],
     model: str,
     prompt: str,
     mask: Optional[str] = None,
@@ -817,9 +822,11 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
+        images = image if isinstance(image, list) else [image]
+
         func = partial(
             image_edit,
-            image=image,
+            image=images,
             prompt=prompt,
             mask=mask,
             model=model,

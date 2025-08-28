@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Button, Input, Card, Typography, Spin, message, Divider } from "antd";
 import { SendOutlined, DatabaseOutlined, LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
 import { vectorStoreSearchCall } from "../networking";
-import NotificationManager from "../molecules/notifications_manager";
+import NotificationsManager from "../molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;
@@ -67,7 +67,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
       setQuery("");
     } catch (error) {
       console.error("Error searching vector store:", error);
-      NotificationManager.fromBackend("Failed to search vector store");
+      NotificationsManager.fromBackend("Failed to search vector store");
     } finally {
       setIsLoading(false);
     }
@@ -87,7 +87,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
   const clearHistory = () => {
     setSearchHistory([]);
     setExpandedResults({});
-    message.success("Search history cleared");
+    NotificationsManager.success("Search history cleared");
   };
 
   const toggleResultExpansion = (historyIndex: number, resultIndex: number) => {
