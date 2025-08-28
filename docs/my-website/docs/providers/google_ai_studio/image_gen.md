@@ -42,7 +42,7 @@ os.environ["GEMINI_API_KEY"] = "your-api-key-here"
 
 # Generate a single image
 response = litellm.image_generation(
-    model="gemini/imagen-4.0-generate-preview-06-06",
+    model="gemini/imagen-4.0-generate-001",
     prompt="A cute baby sea otter swimming in crystal clear water"
 )
 
@@ -64,7 +64,7 @@ async def generate_image():
     
     # Generate image asynchronously
     response = await litellm.aimage_generation(
-        model="gemini/imagen-4.0-generate-preview-06-06",
+        model="gemini/imagen-4.0-generate-001",
         prompt="A beautiful sunset over mountains with vibrant colors",
         n=1,
     )
@@ -89,7 +89,7 @@ os.environ["GEMINI_API_KEY"] = "your-api-key-here"
 
 # Generate image with additional parameters
 response = litellm.image_generation(
-    model="gemini/imagen-4.0-generate-preview-06-06",
+    model="gemini/imagen-4.0-generate-001",
     prompt="A futuristic cityscape at night with neon lights",
     n=1,
     size="1024x1024",
@@ -112,7 +112,7 @@ for image in response.data:
 model_list:
   - model_name: google-imagen
     litellm_params:
-      model: gemini/imagen-4.0-generate-preview-06-06
+      model: gemini/imagen-4.0-generate-001
       api_key: os.environ/GEMINI_API_KEY
   model_info:
     mode: image_generation
@@ -198,7 +198,7 @@ Google AI Studio Image Generation supports the following OpenAI-compatible param
 | Parameter | Type | Description | Default | Example |
 |-----------|------|-------------|---------|---------|
 | `prompt` | string | Text description of the image to generate | Required | `"A sunset over the ocean"` |
-| `model` | string | The model to use for generation | Required | `"gemini/imagen-4.0-generate-preview-06-06"` |
+| `model` | string | The model to use for generation | Required | `"gemini/imagen-4.0-generate-001"` |
 | `n` | integer | Number of images to generate (1-4) | `1` | `2` |
 | `size` | string | Image dimensions | `"1024x1024"` | `"512x512"`, `"1024x1024"` |
 

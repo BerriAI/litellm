@@ -1291,6 +1291,7 @@ jobs:
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
+            pip install "fastuuid==0.12.0"
             pip install jsonschema
       - setup_litellm_enterprise_pip
       - run:
