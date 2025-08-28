@@ -15,6 +15,7 @@ import { Button, message, Checkbox, Empty } from "antd"
 import { ReloadOutlined, SaveOutlined } from "@ant-design/icons"
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking"
 import { getPermissionInfo } from "./permission_definitions"
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface MemberPermissionsProps {
   teamId: string
@@ -40,7 +41,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
       setSelectedPermissions(teamPermissions)
       setHasChanges(false)
     } catch (error) {
-      message.error("Failed to load permissions")
+      NotificationsManager.fromBackend("Failed to load permissions")
       console.error("Error fetching permissions:", error)
     } finally {
       setLoading(false)
@@ -64,10 +65,10 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
       if (!accessToken) return
       setSaving(true)
       await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions)
-      message.success("Permissions updated successfully")
+      NotificationsManager.success("Permissions updated successfully")
       setHasChanges(false)
     } catch (error) {
-      message.error("Failed to update permissions")
+      NotificationsManager.fromBackend("Failed to update permissions")
       console.error("Error updating permissions:", error)
     } finally {
       setSaving(false)

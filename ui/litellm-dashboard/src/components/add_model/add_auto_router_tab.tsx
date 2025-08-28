@@ -11,6 +11,7 @@ import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
 import RouterConfigBuilder from "./router_config_builder";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAutoRouterTabProps {
   form: FormInstance;
@@ -79,12 +80,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     
     // Check basic required fields first
     if (!currentFormValues.auto_router_name) {
-      message.error("Please enter an Auto Router Name");
+      NotificationManager.fromBackend("Please enter an Auto Router Name");
       return;
     }
     
     if (!currentFormValues.auto_router_default_model) {
-      message.error("Please select a Default Model");
+      NotificationManager.fromBackend("Please select a Default Model");
       return;
     }
 
@@ -98,7 +99,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     
     // Custom validation for router config
     if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
-      message.error("Please configure at least one route for the auto router");
+      NotificationManager.fromBackend("Please configure at least one route for the auto router");
       return;
     }
 
@@ -108,7 +109,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     );
     
     if (invalidRoutes.length > 0) {
-      message.error("Please ensure all routes have a target model, description, and at least one utterance");
+      NotificationManager.fromBackend("Please ensure all routes have a target model, description, and at least one utterance");
       return;
     }
 
@@ -139,9 +140,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             };
             return friendlyNames[fieldName] || fieldName;
           });
-          message.error(`Please fill in the following required fields: ${missingFields.join(', ')}`);
+          NotificationManager.fromBackend(`Please fill in the following required fields: ${missingFields.join(', ')}`);
         } else {
-          message.error("Please fill in all required fields");
+          NotificationManager.fromBackend("Please fill in all required fields");
         }
       });
   };

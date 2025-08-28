@@ -18,12 +18,20 @@ class OutputMeta(TypedDict):
     messages: List[Any]
 
 
-class Meta(TypedDict):
+class DDLLMObsError(TypedDict, total=False):
+    """Error information on the span according to DD LLM Obs API spec"""
+    message: str  # The error message
+    stack: Optional[str]  # The stack trace
+    type: Optional[str]  # The error type
+
+
+class Meta(TypedDict, total=False):
     # The span kind: "agent", "workflow", "llm", "tool", "task", "embedding", or "retrieval".
     kind: Literal["llm", "tool", "task", "embedding", "retrieval"]
-    input: InputMeta  # The span’s input information.
-    output: OutputMeta  # The span’s output information.
+    input: InputMeta  # The span's input information.
+    output: OutputMeta  # The span's output information.
     metadata: Dict[str, Any]
+    error: Optional[DDLLMObsError]  # Error information on the span
 
 
 class LLMMetrics(TypedDict, total=False):
@@ -35,7 +43,7 @@ class LLMMetrics(TypedDict, total=False):
     total_cost: float
 
 
-class LLMObsPayload(TypedDict):
+class LLMObsPayload(TypedDict, total=False):
     parent_id: str
     trace_id: str
     span_id: str
@@ -45,6 +53,7 @@ class LLMObsPayload(TypedDict):
     duration: int
     metrics: LLMMetrics
     tags: List
+    status: Literal["ok", "error"] # Error status ("ok" or "error"). Defaults to "ok".
 
 
 class DDSpanAttributes(TypedDict):
@@ -63,3 +72,9 @@ class DatadogLLMObsInitParams(StandardCustomLoggerInitParams):
     Params for initializing a DatadogLLMObs logger on litellm
     """
     pass
+
+
+class DDLLMObsLatencyMetrics(TypedDict, total=False):
+    time_to_first_token_ms: float
+    litellm_overhead_time_ms: float
+    guardrail_overhead_time_ms: float

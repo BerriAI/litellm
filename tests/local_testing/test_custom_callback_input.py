@@ -1652,9 +1652,10 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
             )
 
             built_response = stream_chunk_builder(chunks=chunks)
+            print(f"built_response: {built_response}")
             assert (
                 built_response.usage.total_tokens
-                != standard_logging_object["total_tokens"]
+                == standard_logging_object["total_tokens"]
             )
             print(f"standard_logging_object usage: {built_response.usage}")
     except litellm.InternalServerError:

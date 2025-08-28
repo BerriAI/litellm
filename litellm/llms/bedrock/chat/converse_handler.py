@@ -119,6 +119,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=headers,
         )
         data = json.dumps(request_data)
 
@@ -185,8 +186,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=headers,
         )
         data = json.dumps(request_data)
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -390,8 +393,10 @@ class BedrockConverseLLM(BaseAWSLLM):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            headers=extra_headers,
         )
         data = json.dumps(_data)
+        
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
