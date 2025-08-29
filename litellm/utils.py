@@ -32,7 +32,6 @@ import textwrap
 import threading
 import time
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -41,6 +40,7 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
+import fastuuid as uuid
 import httpx
 import openai
 import tiktoken
