@@ -354,7 +354,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   console.log("All cookies after redirect:", document.cookie)
   return (
     <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-2 w-full mt-2">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
