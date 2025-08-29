@@ -57,9 +57,10 @@ class LoggingWorker:
                 finally:
                     self._queue.task_done()
                     
-        except asyncio.CancelledError as e:
-            verbose_logger.exception(f"LoggingWorker cancelled: {e}")
-            pass
+        except asyncio.CancelledError:
+            verbose_logger.debug("LoggingWorker cancelled during shutdown")
+            # Attempt to clear remaining items to prevent "never awaited" warnings
+            await self.clear_queue()
     
     def enqueue(self, coroutine: Coroutine) -> None:
         """
