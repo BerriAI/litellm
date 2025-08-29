@@ -482,6 +482,7 @@ const sidebars = {
         "providers/dashscope",
         "providers/bytez",
         "providers/oci",
+        "providers/datarobot",  
       ],
     },
     {
