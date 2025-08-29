@@ -1,7 +1,6 @@
 import asyncio
 import json
 import traceback
-import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +13,7 @@ from typing import (
     Union,
 )
 
+import fastuuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
