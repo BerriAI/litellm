@@ -514,6 +514,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "alibaba",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -665,6 +666,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://portal.qwen.ai/v1",
 ]
 
 
