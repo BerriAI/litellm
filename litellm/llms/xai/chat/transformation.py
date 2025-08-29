@@ -83,7 +83,14 @@ class XAIChatConfig(OpenAIGPTConfig):
         return True
     
     def _supports_frequency_penalty(self, model: str) -> bool:
+        """
+        From manual testing grok-4 does not support `frequency_penalty`
+
+        When sent the model fails from xAI API
+        """
         if "grok-4" in model:
+            return False
+        if "grok-code-fast" in model:
             return False
         return True
 
