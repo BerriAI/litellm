@@ -97,22 +97,27 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        if completion_tokens > 0:
-                            final_value = float(
-                                response_ms.total_seconds() / completion_tokens
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_seconds
+
+                        if time_to_first_token_response_time is not None:
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
-                            if time_to_first_token_response_time is not None:
-                                time_to_first_token = float(
-                                    time_to_first_token_response_time.total_seconds()
-                                    / completion_tokens
-                                )
-                        else:  # completion_tokens is 0 or less
-                            # final_value remains response_ms (a timedelta), will be converted before storage
-                            if time_to_first_token_response_time is not None:
-                                # Store as float if completion_tokens is 0
-                                time_to_first_token = time_to_first_token_response_time.total_seconds()
-                    # else if _usage is None, final_value remains response_ms (timedelta)
-                    # and time_to_first_token remains None (as it was initialized)
 
                 # ------------
                 # Update usage
@@ -314,22 +319,27 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        if completion_tokens > 0:
-                            final_value = float(
-                                response_ms.total_seconds() / completion_tokens
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_ms
+
+                        if time_to_first_token_response_time is not None:
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
-                            if time_to_first_token_response_time is not None:
-                                time_to_first_token = float(
-                                    time_to_first_token_response_time.total_seconds()
-                                    / completion_tokens
-                                )
-                        else:  # completion_tokens is 0 or less
-                            # final_value remains response_ms (a timedelta), will be converted before storage
-                            if time_to_first_token_response_time is not None:
-                                # Store as float if completion_tokens is 0
-                                time_to_first_token = time_to_first_token_response_time.total_seconds()
-                    # else if _usage is None, final_value remains response_ms (timedelta)
-                    # and time_to_first_token remains None (as it was initialized)
                 # ------------
                 # Update usage
                 # ------------
