@@ -93,6 +93,14 @@ masterkeySecretName: ""
 # if set, use this secret key for the master key; otherwise, use the default key
 masterkeySecretKey: ""
 
+proxyConfigMap:
+  # when true, creates a new configmap
+  create: true
+  # if create is false and name is set, use existing ConfigMap
+  # create: false
+  # name: ""
+  # key: "config.yaml"
+
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
 #  Reference: https://docs.litellm.ai/docs/proxy/configs
