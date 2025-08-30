@@ -5658,6 +5658,11 @@ class Router:
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
+                
+                # Get mode from database model_info if available, otherwise default to "chat"
+                db_model_info = model.get("model_info", {})
+                mode = db_model_info.get("mode", "chat")
+                
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
@@ -5666,7 +5671,7 @@ class Router:
                     input_cost_per_token=0,
                     output_cost_per_token=0,
                     litellm_provider=llm_provider,
-                    mode="chat",
+                    mode=mode,
                     supported_openai_params=supported_openai_params,
                     supports_system_messages=None,
                 )
