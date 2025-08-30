@@ -600,6 +600,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/chat/completions",
                             "/v1/completions",
                             "/v1/images/generations",
+                            "/v1/realtime",
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
