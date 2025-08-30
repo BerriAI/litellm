@@ -10,6 +10,7 @@ from typing import List, Literal, Optional, Tuple, Union, cast, overload
 import httpx
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -322,7 +323,6 @@ class AmazonConverseConfig(BaseConfig):
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
-        schema_name: str = "json_tool_call",
         description: Optional[str] = None,
     ) -> ChatCompletionToolParam:
         """
@@ -347,7 +347,7 @@ class AmazonConverseConfig(BaseConfig):
             _input_schema = json_schema
 
         tool_param_function_chunk = ChatCompletionToolParamFunctionChunk(
-            name=schema_name, parameters=_input_schema
+            name=RESPONSE_FORMAT_TOOL_NAME, parameters=_input_schema
         )
         if description:
             tool_param_function_chunk["description"] = description
@@ -391,14 +391,11 @@ class AmazonConverseConfig(BaseConfig):
                     continue
 
                 json_schema: Optional[dict] = None
-                schema_name: str = ""
                 description: Optional[str] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
                     description = value["json_schema"].get("description")
 
                 if "type" in value and value["type"] == "text":
@@ -414,7 +411,6 @@ class AmazonConverseConfig(BaseConfig):
                 """
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
-                    schema_name=schema_name if schema_name != "" else "json_tool_call",
                     description=description,
                 )
                 optional_params = self._add_tools_to_optional_params(
@@ -430,7 +426,7 @@ class AmazonConverseConfig(BaseConfig):
 
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
-                            name=schema_name if schema_name != "" else "json_tool_call"
+                            name=RESPONSE_FORMAT_TOOL_NAME
                         )
                     )
                 optional_params["json_mode"] = True
@@ -1119,8 +1115,7 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if json_mode is True and tools is not None and len(tools) == 1:
-            # to support 'json_schema' logic on bedrock models
+        if json_mode is True and tools is not None and len(tools) == 1 and tools[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME:
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
                 chat_completion_message["content"] = json_mode_content_str
