@@ -1,6 +1,5 @@
 import json
 import time
-import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +13,7 @@ from typing import (
     Union,
 )
 
+import fastuuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
@@ -51,6 +51,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
+    ImageURLObject,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -572,6 +573,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    image: Optional[ImageURLObject] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -588,6 +590,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        image: Optional[ImageURLObject] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
@@ -621,6 +624,9 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
+        if image is not None:
+            init_values["image"] = image
+
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
 
@@ -640,6 +646,10 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             if hasattr(self, "audio"):
                 del self.audio
+        
+        if image is None:
+            if hasattr(self, "image"):
+                del self.image
 
         if annotations is None:
             # ensure default response matches OpenAI spec
@@ -693,6 +703,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        image: Optional[ImageURLObject] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[
@@ -710,6 +721,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.image: Optional[ImageURLObject] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
@@ -729,6 +741,11 @@ class Delta(OpenAIObject):
             self.annotations = annotations
         else:
             del self.annotations
+        
+        if image is not None:
+            self.image = image
+        else:
+            del self.image
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -887,6 +904,10 @@ class Usage(CompletionUsage):
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
     server_tool_use: Optional[ServerToolUse] = None
+    cost: Optional[float] = None
+
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    """Breakdown of tokens used in a completion."""
 
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
@@ -904,6 +925,7 @@ class Usage(CompletionUsage):
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
+        cost: Optional[float] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -974,6 +996,11 @@ class Usage(CompletionUsage):
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
+
+        if cost is not None:
+            self.cost = cost
+        else:
+            del self.cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
@@ -1608,7 +1635,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     usage: Optional[ImageUsage] = None  # type: ignore
     """
-    Users might use litellm with older python versions, we don't want this to break for them. 
+    Users might use litellm with older python versions, we don't want this to break for them.
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
@@ -1900,6 +1927,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
+    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2313,11 +2341,15 @@ class LlmProviders(str, Enum):
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
+    GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    AIML = "aiml"
+    COMETAPI = "cometapi"
+    OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
@@ -2340,6 +2372,17 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class TokenCountResponse(LiteLLMPydanticObjectBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    original_response: Optional[dict] = None
+    """
+    Original Response from upstream API call - if an API call was made for token counting
+    """
 
 
 class CustomHuggingfaceTokenizer(TypedDict):

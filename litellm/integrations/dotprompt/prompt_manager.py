@@ -49,9 +49,16 @@ class PromptManager:
     - Model configuration
     """
 
-    def __init__(self, prompt_directory: str):
-        self.prompt_directory = Path(prompt_directory)
+    def __init__(
+        self,
+        prompt_id: Optional[str] = None,
+        prompt_directory: Optional[str] = None,
+        prompt_data: Optional[Dict[str, Dict[str, Any]]] = None,
+        prompt_file: Optional[str] = None,
+    ):
+        self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: Dict[str, PromptTemplate] = {}
+        self.prompt_file = prompt_file
         self.jinja_env = Environment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
@@ -64,12 +71,24 @@ class PromptManager:
             comment_end_string="#}",
         )
 
-        # Load all prompts in the directory
-        self._load_prompts()
+        # Load prompts from directory if provided
+        if self.prompt_directory:
+            self._load_prompts()
+
+        if self.prompt_file:
+            if not prompt_id:
+                raise ValueError("prompt_id is required when prompt_file is provided")
+
+            template = self._load_prompt_file(self.prompt_file, prompt_id)
+            self.prompts[prompt_id] = template
+
+        # Load prompts from JSON data if provided
+        if prompt_data:
+            self._load_prompts_from_json(prompt_data, prompt_id)
 
     def _load_prompts(self) -> None:
         """Load all .prompt files from the prompt directory."""
-        if not self.prompt_directory.exists():
+        if not self.prompt_directory or not self.prompt_directory.exists():
             raise ValueError(
                 f"Prompt directory does not exist: {self.prompt_directory}"
             )
@@ -86,8 +105,51 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt file {prompt_file}")
                 pass
 
-    def _load_prompt_file(self, file_path: Path, prompt_id: str) -> PromptTemplate:
+    def _load_prompts_from_json(
+        self, prompt_data: Dict[str, Dict[str, Any]], prompt_id: Optional[str] = None
+    ) -> None:
+        """Load prompts from JSON data structure.
+
+        Expected format:
+        {
+            "prompt_id": {
+                "content": "template content",
+                "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
+            }
+        }
+
+        or
+
+        {
+            "content": "template content",
+            "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
+        } + prompt_id
+        """
+        if prompt_id:
+            prompt_data = {prompt_id: prompt_data}
+
+        for prompt_id, prompt_info in prompt_data.items():
+            try:
+                content = prompt_info.get("content", "")
+                metadata = prompt_info.get("metadata", {})
+
+                template = PromptTemplate(
+                    content=content,
+                    metadata=metadata,
+                    template_id=prompt_id,
+                )
+                self.prompts[prompt_id] = template
+            except Exception:
+                # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
+                pass
+
+    def _load_prompt_file(
+        self, file_path: Union[str, Path], prompt_id: str
+    ) -> PromptTemplate:
         """Load and parse a single .prompt file."""
+        if isinstance(file_path, str):
+            file_path = Path(file_path)
+
         content = file_path.read_text(encoding="utf-8")
 
         # Split frontmatter and content
@@ -206,9 +268,10 @@ class PromptManager:
         return template.metadata if template else None
 
     def reload_prompts(self) -> None:
-        """Reload all prompts from the directory."""
+        """Reload all prompts from the directory (if directory was provided)."""
         self.prompts.clear()
-        self._load_prompts()
+        if self.prompt_directory:
+            self._load_prompts()
 
     def add_prompt(
         self, prompt_id: str, content: str, metadata: Optional[Dict[str, Any]] = None
@@ -218,3 +281,63 @@ class PromptManager:
             content=content, metadata=metadata or {}, template_id=prompt_id
         )
         self.prompts[prompt_id] = template
+
+    def prompt_file_to_json(self, file_path: Union[str, Path]) -> Dict[str, Any]:
+        """Convert a .prompt file to JSON format.
+
+        Args:
+            file_path: Path to the .prompt file
+
+        Returns:
+            Dictionary with 'content' and 'metadata' keys
+        """
+        file_path = Path(file_path)
+        content = file_path.read_text(encoding="utf-8")
+
+        # Parse frontmatter and content
+        frontmatter, template_content = self._parse_frontmatter(content)
+
+        return {"content": template_content.strip(), "metadata": frontmatter}
+
+    def json_to_prompt_file(self, prompt_data: Dict[str, Any]) -> str:
+        """Convert JSON prompt data to .prompt file format.
+
+        Args:
+            prompt_data: Dictionary with 'content' and 'metadata' keys
+
+        Returns:
+            String content in .prompt file format
+        """
+        content = prompt_data.get("content", "")
+        metadata = prompt_data.get("metadata", {})
+
+        if not metadata:
+            # No metadata, return just the content
+            return content
+
+        # Convert metadata to YAML frontmatter
+        import yaml
+
+        frontmatter_yaml = yaml.dump(metadata, default_flow_style=False)
+
+        return f"---\n{frontmatter_yaml}---\n{content}"
+
+    def get_all_prompts_as_json(self) -> Dict[str, Dict[str, Any]]:
+        """Get all loaded prompts in JSON format.
+
+        Returns:
+            Dictionary mapping prompt_id to prompt data
+        """
+        result = {}
+        for prompt_id, template in self.prompts.items():
+            result[prompt_id] = {
+                "content": template.content,
+                "metadata": template.metadata,
+            }
+        return result
+
+    def load_prompts_from_json_data(
+        self, prompt_data: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Load additional prompts from JSON data (merges with existing prompts)."""
+        self._load_prompts_from_json(prompt_data)

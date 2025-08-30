@@ -1,6 +1,7 @@
 """
 Unit Tests for the max parallel request limiter v3 for the proxy
 """
+
 import asyncio
 import os
 import sys
@@ -515,3 +516,421 @@ async def test_async_log_failure_event_v3():
     assert op["key"] == f"{{api_key:{_api_key}}}:max_parallel_requests"
     assert op["increment_value"] == -1
     assert op["ttl"] == 60  # default window size
+
+
+@pytest.mark.asyncio
+async def test_should_rate_limit_only_called_when_limits_exist_v3():
+    """
+    Test that should_rate_limit is only called when actual rate limits are configured.
+    This verifies the optimization that avoids unnecessary rate limit checks.
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to track if it's called
+    should_rate_limit_called = False
+
+    async def mock_should_rate_limit(*args, **kwargs):
+        nonlocal should_rate_limit_called
+        should_rate_limit_called = True
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test 1: No rate limits configured - should_rate_limit should NOT be called
+    should_rate_limit_called = False
+    user_api_key_dict_no_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="test_user",
+        team_id="test_team",
+        end_user_id="test_end_user",
+        # No rpm_limit, tpm_limit, max_parallel_requests, etc.
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_no_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        not should_rate_limit_called
+    ), "should_rate_limit should not be called when no rate limits are configured"
+
+    # Test 2: API key rate limits configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_api_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        rpm_limit=100,  # Rate limit configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_api_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when API key rate limits are configured"
+
+    # Test 3: User rate limits configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_user_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        user_id="test_user",
+        user_tpm_limit=1000,  # User rate limit configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_user_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when user rate limits are configured"
+
+    # Test 4: Team rate limits configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_team_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id="test_team",
+        team_rpm_limit=500,  # Team rate limit configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_team_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when team rate limits are configured"
+
+    # Test 5: End user rate limits configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_end_user_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        end_user_id="test_end_user",
+        end_user_rpm_limit=200,  # End user rate limit configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_end_user_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when end user rate limits are configured"
+
+    # Test 6: Max parallel requests configured - should_rate_limit SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_parallel_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        max_parallel_requests=5,  # Max parallel requests configured
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_parallel_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when max parallel requests are configured"
+
+
+@pytest.mark.asyncio
+async def test_model_specific_rate_limits_only_called_when_configured_v3():
+    """
+    Test that model-specific rate limits only trigger should_rate_limit when actually configured for the requested model.
+    """
+    from litellm.proxy.auth.auth_utils import (
+        get_key_model_rpm_limit,
+        get_key_model_tpm_limit,
+    )
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to track if it's called
+    should_rate_limit_called = False
+
+    async def mock_should_rate_limit(*args, **kwargs):
+        nonlocal should_rate_limit_called
+        should_rate_limit_called = True
+        return {"overall_code": "OK", "statuses": []}
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test 1: Model-specific rate limits configured but for different model - should NOT be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_model_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        metadata={
+            "model_tpm_limit": {"gpt-4": 1000}
+        },  # Rate limit for gpt-4, not gpt-3.5-turbo
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_model_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},  # Requesting different model
+        call_type="",
+    )
+
+    assert (
+        not should_rate_limit_called
+    ), "should_rate_limit should not be called when model-specific limits don't match requested model"
+
+    # Test 2: Model-specific rate limits configured for requested model - SHOULD be called
+    should_rate_limit_called = False
+    user_api_key_dict_with_matching_model_limits = UserAPIKeyAuth(
+        api_key=_api_key,
+        metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000}
+        },  # Rate limit for requested model
+    )
+
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict_with_matching_model_limits,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},  # Requesting same model
+        call_type="",
+    )
+
+    assert (
+        should_rate_limit_called
+    ), "should_rate_limit should be called when model-specific limits match requested model"
+
+
+@pytest.mark.asyncio
+async def test_tpm_api_key_rate_limits_v3():
+
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+    model = "gpt-3.5-turbo"
+    rpm_limit = 2
+    tpm_limit = 2
+
+    rpms = {model: rpm_limit}
+    tpms = {model: tpm_limit}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        key_alias=_api_key,
+        rpm_limit_per_model=rpms,
+        tpm_limit_per_model=tpms,
+        models=[],
+    )
+    
+    user_api_key_dict.metadata["model_tpm_limit"] = tpms
+    user_api_key_dict.metadata["model_rpm_limit"] = rpms
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to capture the descriptors
+    captured_descriptors = None
+    original_should_rate_limit = parallel_request_handler.should_rate_limit
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        # Return Error response to ensure HTTPException
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [{'code': 'OK', 'current_limit': 2, 'limit_remaining': 1, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
+                         {'code': 'OVER_LIMIT', 'current_limit': 2, 'limit_remaining': -18, 'rate_limit_type': 'tokens', 'descriptor_key': 'model_per_key'}]
+        }
+        
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+    
+    # Test the pre-call hook
+    error = None
+    try:
+       await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": model},
+            call_type="",
+        )
+    except HTTPException as e:
+        error=e
+        assert e.status_code == 429
+        assert "rate_limit_type" in e.headers
+        assert e.headers.get("rate_limit_type") == "tokens"
+        assert "retry-after" in e.headers
+        
+    
+    assert error is not None, "An Exception must be thrown"
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    
+    model_per_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "model_per_key":
+            model_per_key_descriptor = descriptor
+            break
+
+    assert model_per_key_descriptor is not None, "Api-Key descriptor should be present"
+    assert model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}", "Api-Key value should combine api_key and model"
+    assert model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit, "Api-Key RPM limit should be set"
+    assert model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit, "Api-Key TPM limit should be set"
+
+
+@pytest.mark.asyncio
+async def test_rpm_api_key_rate_limits_v3():
+
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+    model = "gpt-3.5-turbo"
+    rpm_limit = 2
+    tpm_limit = 2
+
+    rpms = {model: rpm_limit}
+    tpms = {model: tpm_limit}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        key_alias=_api_key,
+        rpm_limit_per_model=rpms,
+        tpm_limit_per_model=tpms,
+        models=[],
+    )
+    
+    user_api_key_dict.metadata["model_tpm_limit"] = tpms
+    user_api_key_dict.metadata["model_rpm_limit"] = rpms
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to capture the descriptors
+    captured_descriptors = None
+    original_should_rate_limit = parallel_request_handler.should_rate_limit
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        # Return Error response to ensure HTTPException
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [{'code': 'OVER_LIMIT', 'current_limit': 2, 'limit_remaining': -2, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
+                         {'code': 'OK', 'current_limit': 2, 'limit_remaining': 2, 'rate_limit_type': 'tokens', 'descriptor_key': 'model_per_key'}]
+        }
+        
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+    
+    # Test the pre-call hook
+    error = None
+    try:
+       await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": model},
+            call_type="",
+        )
+    except HTTPException as e:
+        error=e
+        assert e.status_code == 429
+        assert "rate_limit_type" in e.headers
+        assert e.headers.get("rate_limit_type") == "requests"
+        assert "retry-after" in e.headers
+    
+    assert error is not None, "An Exception must be thrown"
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    
+    model_per_key_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "model_per_key":
+            model_per_key_descriptor = descriptor
+            break
+
+    assert model_per_key_descriptor is not None, "Api-Key descriptor should be present"
+    assert model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}", "Api-Key value should combine api_key and model"
+    assert model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit, "Api-Key RPM limit should be set"
+    assert model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit, "Api-Key TPM limit should be set"
+
+@pytest.mark.asyncio
+async def test_team_member_rate_limits_v3():
+    """
+    Test that team member RPM/TPM rate limits are properly applied for team member combinations.
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _team_id = "team_123"
+    _user_id = "user_456"
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id=_team_id,
+        user_id=_user_id,
+        team_member_rpm_limit=10,
+        team_member_tpm_limit=1000,
+    )
+    
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to capture the descriptors
+    captured_descriptors = None
+    original_should_rate_limit = parallel_request_handler.should_rate_limit
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        # Return OK response to avoid HTTPException
+        return {
+            "overall_code": "OK",
+            "statuses": []
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test the pre-call hook
+    
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    # Verify team member descriptor was created
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    
+    team_member_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "team_member":
+            team_member_descriptor = descriptor
+            break
+    
+    assert team_member_descriptor is not None, "Team member descriptor should be present"
+    assert team_member_descriptor["value"] == f"{_team_id}:{_user_id}", "Team member value should combine team_id and user_id"
+    assert team_member_descriptor["rate_limit"]["requests_per_unit"] == 10, "Team member RPM limit should be set"
+    assert team_member_descriptor["rate_limit"]["tokens_per_unit"] == 1000, "Team member TPM limit should be set"

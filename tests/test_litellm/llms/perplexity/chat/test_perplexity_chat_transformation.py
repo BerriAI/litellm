@@ -407,3 +407,304 @@ class TestPerplexityChatTransformation:
         web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
         
         assert web_search_requests == 4 
+
+    # Tests for citation annotations functionality
+    def test_add_citations_as_annotations_basic(self):
+        """Test basic citation annotation creation."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has citations[1][2] in the text.", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with citations and search results
+        raw_response_json = {
+            "citations": [
+                "https://example.com/page1",
+                "https://example.com/page2"
+            ],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"},
+                {"title": "Example Page 2", "url": "https://example.com/page2"}
+            ]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that annotations were created
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is not None
+        assert len(annotations) == 2
+        
+        # Check first annotation
+        annotation1 = annotations[0]
+        assert annotation1['type'] == 'url_citation'
+        url_citation1 = annotation1['url_citation']
+        assert url_citation1['url'] == "https://example.com/page1"
+        assert url_citation1['title'] == "Example Page 1"
+        # Check that start_index and end_index are valid positions
+        assert url_citation1['start_index'] >= 0
+        assert url_citation1['end_index'] > url_citation1['start_index']
+        # Verify the positions correspond to [1] in the text
+        assert message.content[url_citation1['start_index']:url_citation1['end_index']] == "[1]"
+        
+        # Check second annotation
+        annotation2 = annotations[1]
+        assert annotation2['type'] == 'url_citation'
+        url_citation2 = annotation2['url_citation']
+        assert url_citation2['url'] == "https://example.com/page2"
+        assert url_citation2['title'] == "Example Page 2"
+        # Check that start_index and end_index are valid positions
+        assert url_citation2['start_index'] >= 0
+        assert url_citation2['end_index'] > url_citation2['start_index']
+        # Verify the positions correspond to [2] in the text
+        assert message.content[url_citation2['start_index']:url_citation2['end_index']] == "[2]"
+        
+        # Check backward compatibility
+        assert hasattr(model_response, 'citations')
+        assert hasattr(model_response, 'search_results')
+        assert model_response.citations == raw_response_json['citations']
+        assert model_response.search_results == raw_response_json['search_results']
+
+    def test_add_citations_as_annotations_empty_citations(self):
+        """Test handling of empty citations array."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has citations[1][2] but no citations array.", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with empty citations
+        raw_response_json = {
+            "citations": [],
+            "search_results": []
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that no annotations were created
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is None or len(annotations) == 0
+
+    def test_add_citations_as_annotations_no_citation_patterns(self):
+        """Test handling when text has no citation patterns."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content without citation patterns
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has no citation markers in the text.", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with citations
+        raw_response_json = {
+            "citations": [
+                "https://example.com/page1",
+                "https://example.com/page2"
+            ],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"},
+                {"title": "Example Page 2", "url": "https://example.com/page2"}
+            ]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that no annotations were created
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is None or len(annotations) == 0
+
+    def test_add_citations_as_annotations_mismatched_numbers(self):
+        """Test handling of citation numbers that don't match available citations."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has citations[1][5] but only 3 citations available.", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with only 3 citations
+        raw_response_json = {
+            "citations": [
+                "https://example.com/page1",
+                "https://example.com/page2",
+                "https://example.com/page3"
+            ],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"},
+                {"title": "Example Page 2", "url": "https://example.com/page2"},
+                {"title": "Example Page 3", "url": "https://example.com/page3"}
+            ]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that only one annotation was created (for [1])
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is not None
+        assert len(annotations) == 1
+        
+        # Check the annotation
+        annotation = annotations[0]
+        assert annotation['type'] == 'url_citation'
+        url_citation = annotation['url_citation']
+        assert url_citation['url'] == "https://example.com/page1"
+        assert url_citation['title'] == "Example Page 1"
+
+    def test_add_citations_as_annotations_missing_titles(self):
+        """Test handling when search results don't have titles."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has citations[1][2] with search results but no titles.", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with missing titles
+        raw_response_json = {
+            "citations": [
+                "https://example.com/page1",
+                "https://example.com/page2"
+            ],
+            "search_results": [
+                {"url": "https://example.com/page1"},  # No title
+                {"title": "Example Page 2", "url": "https://example.com/page2"}
+            ]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that annotations were created
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is not None
+        assert len(annotations) == 2
+        
+        # Check first annotation (no title)
+        annotation1 = annotations[0]
+        url_citation1 = annotation1['url_citation']
+        assert url_citation1['title'] == ""  # Empty title for missing title
+        
+        # Check second annotation (has title)
+        annotation2 = annotations[1]
+        url_citation2 = annotation2['url_citation']
+        assert url_citation2['title'] == "Example Page 2"
+
+    def test_add_citations_as_annotations_non_numeric_patterns(self):
+        """Test handling of non-numeric citation patterns."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with content containing non-numeric patterns
+        from litellm.types.utils import Choices, Message
+        message = Message(content="This response has patterns: [a] [b] [1] [c] [2].", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with citations
+        raw_response_json = {
+            "citations": [
+                "https://example.com/page1",
+                "https://example.com/page2"
+            ],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"},
+                {"title": "Example Page 2", "url": "https://example.com/page2"}
+            ]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that only numeric patterns were processed
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is not None
+        assert len(annotations) == 2  # Only [1] and [2] should be processed
+        
+        # Check that the annotations correspond to [1] and [2]
+        urls = [ann['url_citation']['url'] for ann in annotations]
+        assert "https://example.com/page1" in urls
+        assert "https://example.com/page2" in urls
+
+    def test_add_citations_as_annotations_empty_content(self):
+        """Test handling of empty content."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with empty content
+        from litellm.types.utils import Choices, Message
+        message = Message(content="", role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with citations
+        raw_response_json = {
+            "citations": ["https://example.com/page1"],
+            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}]
+        }
+        
+        # Add citations as annotations
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that no annotations were created
+        annotations = getattr(message, 'annotations', None)
+        assert annotations is None or len(annotations) == 0
+
+    def test_add_citations_as_annotations_no_choices(self):
+        """Test handling when model_response has no choices."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse without choices
+        model_response = ModelResponse()
+        model_response.choices = []  # Explicitly set empty choices
+        
+        # Mock raw response with citations
+        raw_response_json = {
+            "citations": ["https://example.com/page1"],
+            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}]
+        }
+        
+        # Should not raise an error
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # No annotations should be created since choices is empty
+        assert len(model_response.choices) == 0
+
+    def test_add_citations_as_annotations_no_message(self):
+        """Test handling when choice has no message."""
+        config = PerplexityChatConfig()
+        
+        # Create a ModelResponse with choice but no message
+        from litellm.types.utils import Choices
+        choice = Choices(finish_reason="stop", index=0, message=None)
+        model_response = ModelResponse()
+        model_response.choices = [choice]
+        
+        # Mock raw response with citations
+        raw_response_json = {
+            "citations": ["https://example.com/page1"],
+            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}]
+        }
+        
+        # Should not raise an error
+        config._add_citations_as_annotations(model_response, raw_response_json)
+        
+        # Check that no annotations were created (message content is None)
+        assert choice.message.content is None
+        # No annotations should be created since content is None
+        assert not hasattr(choice.message, 'annotations') or choice.message.annotations is None

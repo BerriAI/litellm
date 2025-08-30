@@ -1,10 +1,15 @@
-from typing import Callable, List, Set, Type, Union
+from typing import TYPE_CHECKING, Callable, List, Optional, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import CallbacksByType
+
+if TYPE_CHECKING:
+    from litellm import _custom_logger_compatible_callbacks_literal
+else:
+    _custom_logger_compatible_callbacks_literal = str
 
 
 class LoggingCallbackManager:
@@ -343,3 +348,26 @@ class LoggingCallbackManager:
         elif callable(callback):
             return getattr(callback, "__name__", str(callback))
         return str(callback)
+    
+
+    def get_active_custom_logger_for_callback_name(
+        self,
+        callback_name: _custom_logger_compatible_callbacks_literal,
+    ) -> Optional[CustomLogger]:
+        """
+        Get the active custom logger for a given callback name
+        """
+        from litellm.litellm_core_utils.custom_logger_registry import (
+            CustomLoggerRegistry,
+        )
+
+        # get the custom logger class type
+        custom_logger_class_type = CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+
+        # get the active custom logger
+        custom_logger = self.get_custom_loggers_for_type(custom_logger_class_type)
+
+        if len(custom_logger) == 0:
+            raise ValueError(f"No active custom logger found for callback name: {callback_name}")
+
+        return custom_logger[0]

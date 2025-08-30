@@ -465,10 +465,10 @@ class ProxyInitializationHelpers:
     help="Ciphers to use for the SSL setup.",
 )
 @click.option(
-    "--use_prisma_migrate",
+    "--use_prisma_db_push",
     is_flag=True,
-    default=True,
-    help="Use prisma migrate instead of prisma db push for database schema updates",
+    default=False,
+    help="Use prisma db push instead of prisma migrate for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 @click.option(
@@ -519,7 +519,7 @@ def run_server(  # noqa: PLR0915
     ssl_certfile_path,
     ciphers,
     log_config,
-    use_prisma_migrate,
+    use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
 ):
@@ -687,6 +687,7 @@ def run_server(  # noqa: PLR0915
             if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Use helper function to construct DATABASE_URL from individual variables
                 from litellm.proxy.utils import construct_database_url_from_env_vars
+
                 database_url = construct_database_url_from_env_vars()
                 if database_url:
                     os.environ["DATABASE_URL"] = database_url
@@ -716,14 +717,19 @@ def run_server(  # noqa: PLR0915
         if config is None and os.getenv("DATABASE_URL") is None:
             # Use helper function to construct DATABASE_URL from individual variables
             from litellm.proxy.utils import construct_database_url_from_env_vars
+
             database_url = construct_database_url_from_env_vars()
             if database_url:
                 os.environ["DATABASE_URL"] = database_url
 
         # Set default values for connection pool settings when no config is used
         if config is None:
-            db_connection_pool_limit = LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
-            db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+            db_connection_pool_limit = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
+            )
+            db_connection_timeout = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+            )
 
         if (
             os.getenv("DATABASE_URL", None) is not None
@@ -771,7 +777,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

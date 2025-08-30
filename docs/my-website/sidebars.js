@@ -40,6 +40,7 @@ const sidebars = {
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
+          "proxy/guardrails/noma_security",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -65,6 +66,7 @@ const sidebars = {
       label: "[Beta] Prompt Management",
       items: [
         "proxy/prompt_management",
+        "proxy/native_litellm_prompt",
         "proxy/custom_prompt_management"
       ].sort()
     },
@@ -78,14 +80,15 @@ const sidebars = {
         "tutorials/litellm_qwen_code_cli",
         "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
+        "tutorials/cost_tracking_coding",
       ]
     },
-    
+
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    
+
     {
       type: "category",
       label: "LiteLLM Proxy Server",
@@ -106,6 +109,7 @@ const sidebars = {
           type: "category",
           label: "Setup & Deployment",
           items: [
+            "proxy/quick_start",
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
@@ -212,7 +216,7 @@ const sidebars = {
             "proxy/dynamic_logging"
           ],
         },
-        
+
         {
           type: "category",
           label: "Secret Managers",
@@ -370,7 +374,14 @@ const sidebars = {
             "providers/azure/azure_embedding",
           ]
         },
-        "providers/azure_ai",
+        {
+          type: "category",
+          label: "Azure AI",
+          items: [
+            "providers/azure_ai",
+            "providers/azure_ai_img",
+          ]
+        },
         {
           type: "category",
           label: "Vertex AI",
@@ -466,10 +477,13 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
+        "providers/gradient_ai",
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
-        "providers/bytez"
+        "providers/bytez",
+        "providers/oci",
+        "providers/datarobot",  
       ],
     },
     {
@@ -481,11 +495,13 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "completion/audio",
+        "completion/image_generation_chat",
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
         "completion/json_mode",
         "reasoning_content",
+        "completion/computer_use",
         "completion/prompt_caching",
         "completion/predict_outputs",
         "completion/knowledgebase",
@@ -502,7 +518,7 @@ const sidebars = {
 
       ]
     },
-    
+
     {
       type: "category",
       label: "Routing, Loadbalancing & Fallbacks",
@@ -533,7 +549,7 @@ const sidebars = {
         },
       ],
     },
-    
+
     {
       type: "category",
       label: "Load Testing",

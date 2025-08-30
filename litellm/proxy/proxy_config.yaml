@@ -1,6 +1,4 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: xai/*
     litellm_params:
-      model: vertex_ai/*
-
-
+      model: xai/*

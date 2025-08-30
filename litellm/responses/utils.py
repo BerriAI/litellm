@@ -1,5 +1,5 @@
 import base64
-from typing import Any, Dict, Optional, Union, cast, get_type_hints
+from typing import Any, Dict, List, Optional, Union, cast, get_type_hints, overload
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,10 +17,37 @@ class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 
     @staticmethod
+    def _check_valid_arg(
+        supported_params: Optional[List[str]],
+        non_default_params: Dict,
+        drop_params: Optional[bool],
+        custom_llm_provider: Optional[str],
+        model: str,
+    ):
+
+        if supported_params is None:
+            return
+        unsupported_params = {}
+        for k in non_default_params.keys():
+            if k not in supported_params:
+                unsupported_params[k] = non_default_params[k]
+        if unsupported_params:
+            if litellm.drop_params is True or (
+                drop_params is not None and drop_params is True
+            ):
+                pass
+            else:
+                raise litellm.UnsupportedParamsError(
+                    status_code=500,
+                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                )
+
+    @staticmethod
     def get_optional_params_responses_api(
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        allowed_openai_params: Optional[List[str]] = None,
     ) -> Dict:
         """
         Get optional parameters for the responses API.
@@ -33,31 +60,36 @@ class ResponsesAPIRequestUtils:
         Returns:
             A dictionary of supported parameters for the responses API
         """
-        # Remove None values and internal parameters
+        from litellm.utils import _apply_openai_param_overrides
 
+        # Remove None values and internal parameters
         # Get supported parameters for the model
         supported_params = responses_api_provider_config.get_supported_openai_params(
             model
         )
 
+        non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
-        unsupported_params = [
-            param
-            for param in response_api_optional_params
-            if param not in supported_params
-        ]
-
-        if unsupported_params:
-            raise litellm.UnsupportedParamsError(
-                model=model,
-                message=f"The following parameters are not supported for model {model}: {', '.join(unsupported_params)}",
-            )
+        ResponsesAPIRequestUtils._check_valid_arg(
+            supported_params=supported_params + (allowed_openai_params or []),
+            non_default_params=non_default_params,
+            drop_params=litellm.drop_params,
+            custom_llm_provider=responses_api_provider_config.custom_llm_provider,
+            model=model,
+        )
 
         # Map parameters to provider-specific format
         mapped_params = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
             drop_params=litellm.drop_params,
+        )
+
+        # add any allowed_openai_params to the mapped_params
+        mapped_params = _apply_openai_param_overrides(
+            optional_params=mapped_params,
+            non_default_params=non_default_params,
+            allowed_openai_params=allowed_openai_params or [],
         )
 
         return mapped_params
@@ -75,48 +107,93 @@ class ResponsesAPIRequestUtils:
         Returns:
             ResponsesAPIOptionalRequestParams instance with only the valid parameters
         """
+        from litellm.utils import PreProcessNonDefaultParams
+
         valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        custom_llm_provider = params.pop("custom_llm_provider", None)
+        special_params = params.pop("kwargs", {})
+
+        additional_drop_params = params.pop("additional_drop_params", None)
+        non_default_params = (
+            PreProcessNonDefaultParams.base_pre_process_non_default_params(
+                passed_params=params,
+                special_params=special_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=additional_drop_params,
+                default_param_values={k: None for k in valid_keys},
+                additional_endpoint_specific_params=["input"],
+            )
+        )
 
         # decode previous_response_id if it's a litellm encoded id
-        if "previous_response_id" in filtered_params:
+        if "previous_response_id" in non_default_params:
             decoded_previous_response_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                filtered_params["previous_response_id"]
+                non_default_params["previous_response_id"]
             )
-            filtered_params["previous_response_id"] = decoded_previous_response_id
+            non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        if "metadata" in filtered_params:
+        if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            filtered_params["metadata"] = add_openai_metadata(
-                filtered_params["metadata"]
+            non_default_params["metadata"] = add_openai_metadata(
+                non_default_params["metadata"]
             )
 
-        return cast(ResponsesAPIOptionalRequestParams, filtered_params)
+        return cast(ResponsesAPIOptionalRequestParams, non_default_params)
 
+    # fmt: off
+    @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: Optional[str],
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> ResponsesAPIResponse:
-        """
-        Update the responses_api_response_id with model_id and custom_llm_provider
+    ) -> ResponsesAPIResponse: 
+        ...
 
-        This builds a composite ID containing the custom LLM provider, model ID, and original response ID
+    @overload
+    @staticmethod
+    def _update_responses_api_response_id_with_model_id(
+        responses_api_response: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]: 
+        ...
+
+    # fmt: on
+
+    @staticmethod
+    def _update_responses_api_response_id_with_model_id(
+        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        """Update the responses_api_response_id with model_id and custom_llm_provider.
+
+        Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
+        by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
+
+        # access the response id based on the object type
+        response_id = (
+            responses_api_response["id"]
+            if isinstance(responses_api_response, dict)
+            else responses_api_response.id
+        )
+
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
-            response_id=responses_api_response.id,
+            response_id=response_id,
         )
 
-        responses_api_response.id = updated_id
+        if isinstance(responses_api_response, dict):
+            responses_api_response["id"] = updated_id
+        else:
+            responses_api_response.id = updated_id
         return responses_api_response
 
     @staticmethod

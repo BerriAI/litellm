@@ -1,5 +1,6 @@
 import copy
 import json
+import mimetypes
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -13,8 +14,10 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
@@ -2351,7 +2354,6 @@ def stringify_json_tool_call_content(messages: List) -> List:
 ###### AMAZON BEDROCK #######
 
 import base64
-import mimetypes
 from email.message import Message
 
 import httpx
@@ -2479,20 +2481,11 @@ class BedrockImageProcessor:
         )
 
         if is_document:
-            potential_extensions = mimetypes.guess_all_extensions(mime_type)
-            valid_extensions = [
-                ext[1:]
-                for ext in potential_extensions
-                if ext[1:] in supported_doc_formats
-            ]
+            return BedrockImageProcessor._get_document_format(
+                mime_type=mime_type,
+                supported_doc_formats=supported_doc_formats
+            )
 
-            if not valid_extensions:
-                raise ValueError(
-                    f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
-                )
-
-            # Use first valid extension instead of provided image_format
-            return valid_extensions[0]
         else:
             #########################################################
             # Check if image_format is an image or video
@@ -2502,6 +2495,60 @@ class BedrockImageProcessor:
                     f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
+    
+    @staticmethod
+    def _get_document_format(
+        mime_type: str,
+        supported_doc_formats: List[str]
+        ) -> str:
+        """
+        Get the document format from the mime type
+
+        - Primary method - uses `mimetypes.guess_all_extensions`
+        - Fallback method - uses `get_file_extension_from_mime_type`
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/12260
+
+        `mimetypes` is not available in docker containers, so we fallback to `get_file_extension_from_mime_type`
+
+        Args:
+            mime_type: The mime type of the document
+            supported_doc_formats: The supported document formats for the current model
+
+        Returns:
+            The document format
+        """
+        valid_extensions: Optional[List[str]] = None
+        potential_extensions = mimetypes.guess_all_extensions(
+            mime_type, strict=False
+        )
+        valid_extensions = [
+            ext[1:]
+            for ext in potential_extensions
+            if ext[1:] in supported_doc_formats
+        ]
+
+        # Fallback to types/files.py if mimetypes doesn't return valid extensions
+        #################
+        # litellm runs on docker containers and `mimetypes` depends on the installed mimetypes of the OS
+        # we fallback to well known mime types in types/files.py if mimetypes doesn't return valid extensions
+        if not valid_extensions:
+            try:
+                fallback_extension = get_file_extension_from_mime_type(mime_type)
+                if fallback_extension in supported_doc_formats:
+                    valid_extensions = [fallback_extension]
+            except ValueError:
+                # Neither mimetypes nor files.py could handle this MIME type
+                # get_file_extension_from_mime_type raises ValueError if the mime type is not supported
+                pass
+
+        if not valid_extensions:
+            raise ValueError(
+                f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
+            )
+
+        # Use first valid extension instead of provided image_format
+        return valid_extensions[0]
 
     @staticmethod
     def _create_bedrock_block(
@@ -2639,6 +2686,11 @@ def _convert_to_bedrock_tool_call_invoke(
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
+                
+                # Check for cache_control and add a separate cachePoint block
+                if tool.get("cache_control", None) is not None:
+                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                    _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -2699,6 +2751,7 @@ def _convert_to_bedrock_tool_call_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+    
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
@@ -2707,6 +2760,7 @@ def _convert_to_bedrock_tool_call_result(
         content=[tool_result_content_block],
         toolUseId=id,
     )
+    
     content_block = BedrockContentBlock(toolResult=tool_result)
 
     return content_block
@@ -2950,7 +3004,10 @@ def process_empty_text_blocks(
         ]
 
     modified_message = message.copy()
-    modified_message["content"] = modified_content_block
+    modified_message["content"] = cast(
+        Union[List[ChatCompletionTextObject], List[ChatCompletionThinkingBlock]],
+        modified_content_block,
+    )
     return modified_message
 
 
@@ -3136,9 +3193,30 @@ class BedrockConverseMessagesProcessor:
             ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
             tool_content: List[BedrockContentBlock] = []
             while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
-                tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
+                current_message = messages[msg_i]
+                tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
+                            
+                # Check if we need to add a separate cachePoint block
+                has_cache_control = False
+                
+                # Check for message-level cache_control
+                if current_message.get("cache_control", None) is not None:
+                    has_cache_control = True
+                # Check for content-level cache_control in list content
+                elif isinstance(current_message.get("content"), list):
+                    for content_element in current_message["content"]:
+                        if (isinstance(content_element, dict) and 
+                            content_element.get("cache_control", None) is not None):
+                            has_cache_control = True
+                            break
+                
+                # Add a separate cachePoint block if cache_control is present
+                if has_cache_control:
+                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                    tool_content.append(cache_point_block)
+            
+
                 msg_i += 1
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3218,13 +3296,29 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url
                                 )
                                 assistants_parts.append(assistants_part)
+                                                        # Add cache point block for assistant content elements
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
-                elif _assistant_content is not None and isinstance(
-                    _assistant_content, str
-                ):
-                    assistant_content.append(
-                        BedrockContentBlock(text=_assistant_content)
+                elif _assistant_content is not None and isinstance(_assistant_content, str):
+                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                    # Add cache point block for assistant string content
+                    _cache_point_block = (
+                        litellm.AmazonConverseConfig()._get_cache_point_block(
+                            assistant_message_block, block_type="content_block"
+                        )
                     )
+                    if _cache_point_block is not None:
+                        assistant_content.append(_cache_point_block)
+
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
                     assistant_content.extend(
@@ -3467,8 +3561,30 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         tool_content: List[BedrockContentBlock] = []
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
+            current_message = messages[msg_i]
+            
+            # Add the tool result first
             tool_content.append(tool_call_result)
+            
+            # Check if we need to add a separate cachePoint block
+            has_cache_control = False
+            
+            # Check for message-level cache_control
+            if current_message.get("cache_control", None) is not None:
+                has_cache_control = True
+            # Check for content-level cache_control in list content
+            elif isinstance(current_message.get("content"), list):
+                for content_element in current_message["content"]:
+                    if (isinstance(content_element, dict) and 
+                        content_element.get("cache_control", None) is not None):
+                        has_cache_control = True
+                        break
+            
+            # Add a separate cachePoint block if cache_control is present
+            if has_cache_control:
+                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                tool_content.append(cache_point_block)
+            
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3540,9 +3656,28 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
+                        # Add cache point block for assistant content elements
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # Add cache point block for assistant string content
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        assistant_message_block, block_type="content_block"
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
@@ -3711,7 +3846,13 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f""" {function_prompt}"""
+            if isinstance(message["content"], str):
+                message["content"] += f""" {function_prompt}"""
+            else:
+                message["content"].append({
+                    "type": "text",
+                    "text": f""" {function_prompt}"""
+                })
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:
