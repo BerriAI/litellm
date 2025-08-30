@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -704,3 +704,75 @@ class TestVertexBase:
             vertex_base.get_api_base(api_base=api_base, vertex_location=vertex_location)
             == expected
         ), f"Expected {expected} with api_base {api_base} and vertex_location {vertex_location}"
+
+    @pytest.mark.asyncio
+    async def test_aclose_with_async_handler(self):
+        """Test that aclose properly closes the async_handler"""
+        vertex_base = VertexBase()
+        
+        # Create and set a mock async handler
+        mock_handler = MagicMock()
+        mock_handler.close = AsyncMock()
+        vertex_base.async_handler = mock_handler
+        
+        # Call aclose
+        await vertex_base.aclose()
+        
+        # Verify handler.close was called
+        mock_handler.close.assert_called_once()
+        
+        # Verify async_handler was set to None
+        assert vertex_base.async_handler is None
+
+    @pytest.mark.asyncio
+    async def test_aclose_without_async_handler(self):
+        """Test that aclose works when no async_handler is set"""
+        vertex_base = VertexBase()
+        
+        # Ensure no async handler is set
+        assert vertex_base.async_handler is None
+        
+        # Should not raise any exceptions
+        await vertex_base.aclose()
+        
+        # Should still be None
+        assert vertex_base.async_handler is None
+
+    @pytest.mark.asyncio
+    async def test_aclose_with_handler_exception(self):
+        """Test that aclose handles exceptions during handler close gracefully"""
+        vertex_base = VertexBase()
+        
+        # Create mock handler that raises exception on close
+        mock_handler = MagicMock()
+        mock_handler.close = AsyncMock(side_effect=Exception("Close error"))
+        vertex_base.async_handler = mock_handler
+        
+        # Should not raise exception
+        await vertex_base.aclose()
+        
+        # Handler.close should have been called
+        mock_handler.close.assert_called_once()
+        
+        # async_handler should still be set to None even if close failed
+        assert vertex_base.async_handler is None
+
+    @pytest.mark.asyncio
+    async def test_aclose_multiple_calls(self):
+        """Test that multiple calls to aclose are safe"""
+        vertex_base = VertexBase()
+        
+        # Create and set a mock async handler
+        mock_handler = MagicMock()
+        mock_handler.close = AsyncMock()
+        vertex_base.async_handler = mock_handler
+        
+        # Call aclose multiple times
+        await vertex_base.aclose()
+        await vertex_base.aclose()
+        
+        # Handler.close should only have been called once
+        mock_handler.close.assert_called_once()
+        
+        # async_handler should be None
+        assert vertex_base.async_handler is None
