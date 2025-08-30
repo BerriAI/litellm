@@ -481,6 +481,7 @@ const sidebars = {
         "providers/nebius",
         "providers/dashscope",
         "providers/bytez",
+        "providers/heroku",
         "providers/oci",
         "providers/datarobot",  
       ],

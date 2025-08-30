@@ -2347,6 +2347,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    HEROKU = "heroku"
     AIML = "aiml"
     COMETAPI = "cometapi"
     OCI = "oci"

@@ -234,6 +234,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -508,6 +509,7 @@ azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
 infinity_models: Set = set()
+heroku_models: Set = set() 
 databricks_models: Set = set()
 cloudflare_models: Set = set()
 codestral_models: Set = set()
@@ -726,6 +728,8 @@ def add_known_models():
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "heroku":
+            heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -835,6 +839,7 @@ model_list = list(
     | recraft_models
     | cometapi_models
     | oci_models
+    | heroku_models
 )
 
 model_list_set = set(model_list)
@@ -899,6 +904,7 @@ models_by_provider: dict = {
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
+    "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
@@ -1221,6 +1227,7 @@ from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
