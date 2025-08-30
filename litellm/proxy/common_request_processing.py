@@ -1,7 +1,7 @@
 import asyncio
 import json
+import logging
 import traceback
-import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -13,6 +13,8 @@ from typing import (
     Tuple,
     Union,
 )
+
+import fastuuid as uuid
 
 # line_profiler import with fallback
 try:
@@ -393,11 +395,12 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(
-                json.dumps(self.data, indent=4, default=str)
-            ),
-        )
+        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n{}".format(
+                    json.dumps(self.data, indent=4, default=str)
+                ),
+            )
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,

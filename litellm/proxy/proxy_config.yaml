@@ -1,5 +1,5 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: xai/*
     litellm_params:
       model: anthropic/*
       api_key: os.environ/OPENAI_API_KEY_IJ

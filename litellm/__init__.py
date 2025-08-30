@@ -226,6 +226,7 @@ vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
@@ -542,6 +543,7 @@ hyperbolic_models: Set = set()
 recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
+vercel_ai_gateway_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -599,6 +601,8 @@ def add_known_models():
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.add(key)
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -835,6 +839,7 @@ model_list = list(
     | recraft_models
     | cometapi_models
     | oci_models
+    | vercel_ai_gateway_models
 )
 
 model_list_set = set(model_list)
@@ -853,6 +858,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
     "ai21": ai21_models,
@@ -1247,6 +1253,7 @@ from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1278,7 +1285,6 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
-from .vector_stores import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
