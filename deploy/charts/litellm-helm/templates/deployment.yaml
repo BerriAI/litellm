@@ -16,7 +16,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.proxyConfigMap.create }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -183,9 +185,13 @@ spec:
         {{- end }}
         - name: litellm-config
           configMap:
+            {{- if .Values.proxyConfigMap.create }}
             name: {{ include "litellm.fullname" . }}-config
+            {{- else }}
+            name: {{ .Values.proxyConfigMap.name }}
+            {{- end }}
             items:
-              - key: "config.yaml"
+              - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
                 path: "config.yaml"
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

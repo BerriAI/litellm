@@ -39,6 +39,23 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [tools, setTools] = useState<any[]>([])
   const [transportType, setTransportType] = useState<string>("sse")
   const [searchValue, setSearchValue] = useState<string>("")
+  const [urlWarning, setUrlWarning] = useState<string>("")
+
+  // Function to check URL format based on transport type
+  const checkUrlFormat = (url: string, transport: string) => {
+    if (!url) {
+      setUrlWarning("")
+      return
+    }
+
+    if (transport === "sse" && !url.endsWith("/sse")) {
+      setUrlWarning("Typically MCP SSE URLs end with /sse. You can add this url but this is a warning.")
+    } else if (transport === "http" && !url.endsWith("/mcp")) {
+      setUrlWarning("Typically MCP HTTP URLs end with /mcp. You can add this url but this is a warning.")
+    } else {
+      setUrlWarning("")
+    }
+  }
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true)
@@ -110,6 +127,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         form.resetFields()
         setCostConfig({})
         setTools([])
+        setUrlWarning("")
         setModalVisible(false)
         onCreateSuccess(response)
       }
@@ -125,6 +143,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     form.resetFields()
     setCostConfig({})
     setTools([])
+    setUrlWarning("")
     setModalVisible(false)
   }
 
@@ -133,8 +152,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
       form.setFieldsValue({ url: undefined, auth_type: undefined })
+      setUrlWarning("")
     } else {
       form.setFieldsValue({ command: undefined, args: undefined, env: undefined })
+      // Check URL format for the new transport type
+      const currentUrl = form.getFieldValue("url")
+      if (currentUrl) {
+        checkUrlFormat(currentUrl, value)
+      }
     }
   }
 
@@ -310,10 +335,18 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <TextInput
-                  placeholder="https://your-mcp-server.com"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
+                <div>
+                  <TextInput
+                    placeholder="https://your-mcp-server.com"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    onChange={(e) => checkUrlFormat(e.target.value, transportType)}
+                  />
+                  {urlWarning && (
+                    <div className="mt-1 text-red-500 text-sm font-medium">
+                      {urlWarning}
+                    </div>
+                  )}
+                </div>
               </Form.Item>
             )}
 

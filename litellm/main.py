@@ -2173,8 +2173,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/complete"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/complete"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/complete")
+            ):
                 api_base += "/v1/complete"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix"
+                )
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -2210,8 +2220,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/messages"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/messages"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/messages")
+            ):
                 api_base += "/v1/messages"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
+                )
 
             response = anthropic_chat_completions.completion(
                 model=model,
@@ -2637,6 +2657,70 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 custom_llm_provider="openrouter",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=openai.api_key, original_response=response
+            )
+        elif custom_llm_provider == "vercel_ai_gateway":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
+                or "https://ai-gateway.vercel.sh/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret("VERCEL_AI_GATEWAY_API_KEY")
+            )
+
+            vercel_site_url = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+            vercel_app_name = get_secret("VERCEL_APP_NAME") or "liteLLM"
+
+            vercel_headers = {
+                "http-referer": vercel_site_url,
+                "x-title": vercel_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                vercel_headers.update(_headers)
+
+            headers = vercel_headers
+            
+            ## Load Config
+            config = litellm.VercelAIGatewayConfig.get_config()
+            for k, v in config.items():
+                if k == "extra_body":
+                    # we use openai 'extra_body' to pass vercel specific params - providerOptions
+                    if "extra_body" in optional_params:
+                        optional_params[k].update(v)
+                    else:
+                        optional_params[k] = v
+                elif k not in optional_params:
+                    optional_params[k] = v
+
+            data = {"model": model, "messages": messages, **optional_params}
+
+            ## COMPLETION CALL
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="vercel_ai_gateway",
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,

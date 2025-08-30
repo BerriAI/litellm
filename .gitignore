@@ -95,5 +95,4 @@ test.py
 litellm_config.yaml
 .cursor
 .vscode/launch.json
-*.whl
 litellm/proxy/to_delete_loadtest_work/*
