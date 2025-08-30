@@ -2194,6 +2194,7 @@ class Router:
             kwargs["model"] = model
             kwargs["file"] = file
             kwargs["original_function"] = self._atranscription
+            kwargs["duration"] = kwargs.get("duration", False)
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = await self.async_function_with_fallbacks(**kwargs)
 
@@ -2267,6 +2268,7 @@ class Router:
                 response = await response
 
             self.success_calls[model_name] += 1
+            response.duration = kwargs.get("duration")
             verbose_router_logger.info(
                 f"litellm.atranscription(model={model_name})\033[32m 200 OK\033[0m"
             )

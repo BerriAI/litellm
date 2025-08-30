@@ -1158,6 +1158,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: Optional[bool] = None,
         litellm_model_name: Optional[str] = None,
         router_model_id: Optional[str] = None,
+        **kwargs
     ) -> Optional[float]:
         """
         Calculate response cost using result + logging object variables.
@@ -1210,6 +1211,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
+                "duration": kwargs.get("duration","")
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
