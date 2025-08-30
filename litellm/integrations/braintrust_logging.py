@@ -170,6 +170,7 @@ class BraintrustLogger(CustomLogger):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
+            standard_logging_object = kwargs.get("standard_logging_object", {})
             prompt = {"messages": kwargs.get("messages")}
             output = None
             choices = []
@@ -193,33 +194,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = response_obj["data"]
 
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
-            metadata = self.add_metadata_from_header(litellm_params, metadata)
-            clean_metadata = {}
-            try:
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except Exception:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                metadata = new_metadata
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            dynamic_metadata = litellm_params.get("dynamic_metadata", {}) or {}
 
             # Get project_id from metadata or create default if needed
-            project_id = metadata.get("project_id")
+            project_id = dynamic_metadata.get("project_id")
             if project_id is None:
-                project_name = metadata.get("project_name")
+                project_name = dynamic_metadata.get("project_name")
                 project_id = (
                     self.get_project_id_sync(project_name) if project_name else None
                 )
@@ -230,8 +211,8 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             tags = []
-            if isinstance(metadata, dict):
-                for key, value in metadata.items():
+            if isinstance(dynamic_metadata, dict):
+                for key, value in dynamic_metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -240,25 +221,7 @@ class BraintrustLogger(CustomLogger):
                     ):
                         tags.append(f"{key}:{value}")
 
-                    # clean litellm metadata before logging
-                    if key in [
-                        "headers",
-                        "endpoint",
-                        "caching_groups",
-                        "previous_models",
-                    ]:
-                        continue
-                    else:
-                        clean_metadata[key] = value
-
             cost = kwargs.get("response_cost", None)
-            if cost is not None:
-                clean_metadata["litellm_response_cost"] = cost
-
-            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
-            litellm_model = kwargs.get("model", None)
-            if litellm_model is not None:
-                clean_metadata["model"] = litellm_model
 
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
@@ -276,12 +239,12 @@ class BraintrustLogger(CustomLogger):
                 }
 
             # Allow metadata override for span name
-            span_name = metadata.get("span_name", "Chat Completion")
+            span_name = dynamic_metadata.get("span_name", "Chat Completion")
 
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
-                "metadata": clean_metadata,
+                "metadata": standard_logging_object,
                 "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
