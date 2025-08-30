@@ -379,6 +379,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                         thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
 
+    @staticmethod
+    def extract_citations(
+        content: Optional[AllDatabricksContentValues],
+    ) -> Optional[List[Any]]:
+        if content is None:
+            return None
+        citations: Optional[List[Any]] = None
+        if isinstance(content, list):
+            for item in content:
+                if item.get("citations") is not None:
+                    if citations is None:
+                        citations = []
+                    citations.append(item["citations"])
+        return citations
+
     def _transform_dbrx_choices(
         self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
     ) -> List[Choices]:
@@ -427,12 +442,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     choice["message"].get("content")
                 )
 
+                citations = DatabricksConfig.extract_citations(
+                    choice["message"].get("content")
+                )
+
                 translated_message = Message(
                     role="assistant",
                     content=content_str,
                     reasoning_content=reasoning_content,
                     thinking_blocks=thinking_blocks,
                     tool_calls=choice["message"].get("tool_calls"),
+                    provider_specific_fields={"citations": citations}
+                    if citations is not None
+                    else None,
                 )
 
             if finish_reason is None:
@@ -561,6 +583,12 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
+                citation = choice["delta"].get("citation")
+                if citation is not None:
+                    choice["delta"].setdefault("provider_specific_fields", {})[
+                        "citation"
+                    ] = citation
+                    choice["delta"].pop("citation", None)
                 # extract the content str
                 content_str = DatabricksConfig.extract_content_str(
                     choice["delta"].get("content")
