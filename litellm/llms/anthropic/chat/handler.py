@@ -743,8 +743,6 @@ class ModelResponseIterator:
                 )
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
-            if type_chunk:
-                provider_specific_fields["chunk_type"] = type_chunk
 
             returned_chunk = ModelResponseStream(
                 choices=[
