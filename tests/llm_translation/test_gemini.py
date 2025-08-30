@@ -329,7 +329,7 @@ def test_gemini_thinking_budget_0():
             "thinking": {"type": "enabled", "budget_tokens": 0},
         },
     )
-    print(raw_request)
+    print(json.dumps(raw_request, indent=4, default=str))
     assert "0" in json.dumps(raw_request["raw_request_body"])
 
 

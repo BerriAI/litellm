@@ -465,7 +465,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             params["includeThoughts"] = True
         if thinking_budget is not None and isinstance(thinking_budget, int):
             params["thinkingBudget"] = thinking_budget
-
         return params
 
     def map_response_modalities(self, value: list) -> list:
@@ -618,7 +617,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
-        if supports_reasoning(model):
+        
+        ######################################################################################
+        # If the model supports reasoning and `thinkingConfig` is not set as yet 
+        # we should set it to includeThoughts
+        ######################################################################################
+        if supports_reasoning(model) and "thinkingConfig" not in optional_params:
             optional_params["thinkingConfig"] = (
                 VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
                     non_default_params.get("reasoning_effort")
