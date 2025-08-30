@@ -166,6 +166,7 @@ db:
   database: litellm
   url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
   secret:
+    enabled: true
     name: postgres
     usernameKey: username
     passwordKey: password
