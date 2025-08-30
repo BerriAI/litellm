@@ -119,7 +119,7 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
         assert response.choices[0].message.content is not None
-
+    
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
         base_completion_call_args = self.get_base_completion_call_args()

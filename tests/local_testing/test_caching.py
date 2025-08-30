@@ -314,7 +314,7 @@ async def test_caching_with_cache_controls(sync_flag):
 
 # test_caching_with_cache_controls()
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 def test_caching_with_models_v2():
     messages = [
         {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}

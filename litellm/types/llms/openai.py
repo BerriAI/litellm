@@ -1038,7 +1038,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     parallel_tool_calls: bool
     temperature: Optional[float]
     tool_choice: ToolChoice
-    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
     top_p: Optional[float]
     max_output_tokens: Optional[int]
     previous_response_id: Optional[str]
