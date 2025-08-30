@@ -33,6 +33,7 @@ interface ModelDataTableProps<TData, TValue> {
   isLoading?: boolean;
   table: any; // Add table prop to access column visibility controls
   defaultSorting?: SortingState;
+  selectedModels?: Set<string>; // Add selectedModels prop
 }
 
 export function ModelDataTable<TData, TValue>({
@@ -40,7 +41,8 @@ export function ModelDataTable<TData, TValue>({
   columns,
   isLoading = false,
   table,
-  defaultSorting = []
+  defaultSorting = [],
+  selectedModels = new Set() // Add selectedModels with default
 }: ModelDataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
@@ -164,27 +166,37 @@ export function ModelDataTable<TData, TValue>({
                   </TableCell>
                 </TableRow>
               ) : tableInstance.getRowModel().rows.length > 0 ? (
-                tableInstance.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        className={`py-0.5 ${
-                          cell.column.id === 'actions'
-                            ? 'sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-20 w-[120px] ml-8'
-                            : ''
-                        } ${cell.column.columnDef.meta?.className || ''}`}
-                        style={{
-                          width: cell.column.id === 'actions' ? 120 : cell.column.getSize(),
-                          position: cell.column.id === 'actions' ? 'sticky' : 'relative',
-                          right: cell.column.id === 'actions' ? 0 : 'auto',
-                        }}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
+                tableInstance.getRowModel().rows.map((row) => {
+                  // Check if this row is selected
+                  const isSelected = selectedModels.has((row.original as any).model_info?.id);
+                  
+                  return (
+                    <TableRow 
+                      key={row.id}
+                      className={isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell
+                          key={cell.id}
+                          className={`py-0.5 ${
+                            cell.column.id === 'actions'
+                              ? `sticky right-0 shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-20 w-[120px] ml-8 ${
+                                  isSelected ? 'bg-blue-50' : 'bg-white'
+                                }`
+                              : ''
+                          } ${cell.column.columnDef.meta?.className || ''}`}
+                          style={{
+                            width: cell.column.id === 'actions' ? 120 : cell.column.getSize(),
+                            position: cell.column.id === 'actions' ? 'sticky' : 'relative',
+                            right: cell.column.id === 'actions' ? 0 : 'auto',
+                          }}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  );
+                })
               ) : (
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-8 text-center">
