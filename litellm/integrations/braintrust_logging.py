@@ -12,6 +12,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.safe_json_dumps import filter_json_serializable
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -45,9 +46,9 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[
-            str, str
-        ] = {}  # Cache mapping project names to IDs
+        self._project_id_cache: Dict[str, str] = (
+            {}
+        )  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -276,7 +277,7 @@ class BraintrustLogger(CustomLogger):
 
             # Allow metadata override for span name
             span_name = metadata.get("span_name", "Chat Completion")
-            
+
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
@@ -431,12 +432,12 @@ class BraintrustLogger(CustomLogger):
 
             # Allow metadata override for span name
             span_name = metadata.get("span_name", "Chat Completion")
-            
+
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,
-                "metadata": clean_metadata,
+                "metadata": filter_json_serializable(clean_metadata),
                 "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
