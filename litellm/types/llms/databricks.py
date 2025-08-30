@@ -49,7 +49,7 @@ AllDatabricksContentValues = Union[str, List[AllDatabricksContentListValues]]
 
 class DatabricksFunction(TypedDict, total=False):
     name: Required[str]
-    description: dict
+    description: dict | str
     parameters: dict
     strict: bool
 
