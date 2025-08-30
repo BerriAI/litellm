@@ -170,12 +170,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if tool is None:
             return None
 
+        kwags = {
+            "name":tool["name"],
+            "parameters":cast(dict, tool.get("input_schema") or {})
+        }
+
+        if tool.get("description"):
+            kwags["description"] = tool.get("description")
+
         return DatabricksTool(
             type="function",
-            function=DatabricksFunction(
-                name=tool["name"],
-                parameters=cast(dict, tool.get("input_schema") or {}),
-            ),
+            function=DatabricksFunction(**kwags),
         )
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
