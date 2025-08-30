@@ -209,6 +209,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         unpack_defs(value, defs)
     unpack_defs(parameters, defs)
 
+    # Convert type arrays to anyOf format and convert lowercase to uppercase
+    _convert_schema_types(parameters)
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
@@ -395,6 +398,53 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     items = schema.get("items", None)
     if items is not None:
         convert_anyof_null_to_nullable(items, depth=depth + 1)
+
+
+def _convert_schema_types(schema, depth=0):
+    """
+    Convert type arrays and lowercase types for Vertex AI compatibility.
+    
+    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays 
+    like ["string", "number"] to anyOf format and converting all types to uppercase.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    
+    if not isinstance(schema, dict):
+        return
+    
+    # Simple type mapping
+    type_map = {"string": "STRING", "integer": "INTEGER", "number": "NUMBER", 
+                "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT"}
+    
+    # Handle type field
+    if "type" in schema:
+        type_val = schema["type"]
+        if isinstance(type_val, list) and len(type_val) > 1:
+            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
+            schema["anyOf"] = [{"type": type_map.get(t, t.upper())} for t in type_val if isinstance(t, str)]
+            schema.pop("type")
+        elif isinstance(type_val, list) and len(type_val) == 1:
+            # Convert ["string"] -> "STRING"
+            schema["type"] = type_map.get(type_val[0], type_val[0].upper())
+        elif isinstance(type_val, str):
+            # Convert "string" -> "STRING"
+            schema["type"] = type_map.get(type_val, type_val.upper())
+    
+    # Recursively process nested properties, items, and anyOf
+    for key in ["properties", "items", "anyOf"]:
+        if key in schema:
+            value = schema[key]
+            if key == "properties" and isinstance(value, dict):
+                for prop_schema in value.values():
+                    _convert_schema_types(prop_schema, depth + 1)
+            elif key == "items":
+                _convert_schema_types(value, depth + 1)
+            elif key == "anyOf" and isinstance(value, list):
+                for anyof_schema in value:
+                    _convert_schema_types(anyof_schema, depth + 1)
 
 
 def add_object_type(schema):
