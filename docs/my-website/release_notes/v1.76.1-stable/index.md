@@ -50,6 +50,9 @@ pip install litellm==1.76.1
 - **Enhanced Provider Support** - DeepSeek-v3.1 pricing on Fireworks AI, Vercel AI Gateway, and improved Anthropic/GitHub Copilot integration
 - **MCP Improvements** - Better connection testing and SSE MCP tools bug fixes
 
+## Major Changes 
+- Added support for using Gemini 2.5 Flash Image Preview with /chat/completions. **🚨 Warning** If you were using `gemini-2.0-flash-exp-image-generation` please follow this migration guide.
+  [Gemini Image Generation Migration Guide](../../docs/extras/gemini_img_migration)
 ---
 
 ## Performance Improvements
