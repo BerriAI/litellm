@@ -90,3 +90,31 @@ def test_transform_choices_without_signature():
     thinking_block = choices[0].message.thinking_blocks[0]
     assert thinking_block["type"] == "thinking"
     assert thinking_block["thinking"] == "i'm thinking without signature."
+
+def test_convert_anthropic_tool_to_databricks_tool_with_description():
+    config = DatabricksConfig()
+    anthropic_tool = {
+        "name": "test_tool",
+        "description": "test description",
+        "input_schema": {"type": "object", "properties": {"test": {"type": "string"}}}
+    }
+
+    databricks_tool = config.convert_anthropic_tool_to_databricks_tool(anthropic_tool)
+
+    assert databricks_tool is not None
+    assert databricks_tool["type"] == "function"
+    assert databricks_tool["function"]["description"] == "test description"
+
+
+def test_convert_anthropic_tool_to_databricks_tool_without_description():
+    config = DatabricksConfig()
+    anthropic_tool = {
+        "name": "test_tool",
+        "input_schema": {"type": "object", "properties": {"test": {"type": "string"}}}
+    }
+
+    databricks_tool = config.convert_anthropic_tool_to_databricks_tool(anthropic_tool)
+
+    assert databricks_tool is not None
+    assert databricks_tool["type"] == "function"
+    assert databricks_tool["function"].get("description") is None
