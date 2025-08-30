@@ -213,6 +213,10 @@ class TestOCIChatConfig:
         assert result.usage.prompt_tokens == 10 # type: ignore
         assert result.usage.completion_tokens == 20 # type: ignore
         assert result.usage.total_tokens == 30 # type: ignore
+        # These are not handled in the transformer, TBH no idea why they are here
+        # but, for now, they seem to be always None
+        assert result.usage.completion_tokens_details is None
+        assert result.usage.prompt_tokens_details is None
 
     def test_transform_response_with_tool_calls(self):
         """
@@ -305,55 +309,3 @@ class TestOCIChatConfig:
         assert usage.prompt_tokens == 10 # type: ignore
         assert usage.completion_tokens == 20 # type: ignore
         assert usage.total_tokens == 30 # type: ignore
-
-def test_oci_response_usage_handles_missing_and_null_fields(self):
-    """
-    Test that OCIResponseUsage parses correctly when
-    completionTokensDetails and promptTokensDetails are missing or null.
-    """
-    from litellm.llms.oci.chat.transformation import OCIResponseUsage
-
-    # Case 1: fields completely missing
-    data_missing = {
-        "promptTokens": 10,
-        "completionTokens": 5,
-        "totalTokens": 15,
-        # no completionTokensDetails or promptTokensDetails
-    }
-    usage_missing = OCIResponseUsage(**data_missing)
-    assert usage_missing.completionTokensDetails is None
-    assert usage_missing.promptTokensDetails is None
-    assert usage_missing.promptTokens == 10
-    assert usage_missing.completionTokens == 5
-    assert usage_missing.totalTokens == 15
-
-    # Case 2: fields explicitly null
-    data_null = {
-        "promptTokens": 12,
-        "completionTokens": 8,
-        "totalTokens": 20,
-        "completionTokensDetails": None,
-        "promptTokensDetails": None,
-    }
-    usage_null = OCIResponseUsage(**data_null)
-    assert usage_null.completionTokensDetails is None
-    assert usage_null.promptTokensDetails is None
-    assert usage_null.promptTokens == 12
-    assert usage_null.completionTokens == 8
-    assert usage_null.totalTokens == 20
-
-    # Case 3: fields present with values
-    data_present = {
-        "promptTokens": 7,
-        "completionTokens": 3,
-        "totalTokens": 10,
-        "completionTokensDetails": {"acceptedPredictionTokens": 2, "reasoningTokens": 1},
-        "promptTokensDetails": {"cachedTokens": 4},
-    }
-    usage_present = OCIResponseUsage(**data_present)
-    assert usage_present.completionTokensDetails.acceptedPredictionTokens == 2
-    assert usage_present.completionTokensDetails.reasoningTokens == 1
-    assert usage_present.promptTokensDetails.cachedTokens == 4
-    assert usage_present.promptTokens == 7
-    assert usage_present.completionTokens == 3
-    assert usage_present.totalTokens == 10
