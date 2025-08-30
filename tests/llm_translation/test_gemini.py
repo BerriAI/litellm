@@ -624,3 +624,22 @@ async def test_gemini_image_generation_async_stream():
     assert model_response_image is not None
     assert model_response_image["url"].startswith("data:image/png;base64,")
     
+
+def test_system_message_with_no_user_message():
+        """
+        Test that the system message is translated correctly for non-OpenAI providers.
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": "Be a good bot!",
+            },
+        ]
+
+        response = litellm.completion(
+            model="gemini/gemini-2.5-flash",
+            messages=messages,
+        )
+        assert response is not None
+
+        assert response.choices[0].message.content is not None
