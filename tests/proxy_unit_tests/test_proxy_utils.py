@@ -213,6 +213,46 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
     # )
 
 
+def test_spend_logs_metadata_header_processing_function():
+    """
+    Test the add_request_spend_logs_metadata_to_metadata function directly.
+    """
+    import json
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    # Test 1: Valid JSON header
+    headers = {"x-litellm-spend-logs-metadata": json.dumps({"project": "test", "env": "dev"})}
+    data = {}
+    result = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(headers, data)
+    expected = {"project": "test", "env": "dev"}
+    assert result == expected
+
+    # Test 2: Invalid JSON header
+    headers = {"x-litellm-spend-logs-metadata": "invalid-json"}
+    data = {}
+    result = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(headers, data)
+    assert result is None
+
+    # Test 3: Body takes precedence over header
+    headers = {"x-litellm-spend-logs-metadata": json.dumps({"from": "header"})}
+    data = {"metadata": {"spend_logs_metadata": {"from": "body"}}}
+    result = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(headers, data)
+    expected = {"from": "body"}
+    assert result == expected
+
+    # Test 4: No header or body
+    headers = {}
+    data = {}
+    result = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(headers, data)
+    assert result is None
+
+    # Test 5: Non-dict JSON in header
+    headers = {"x-litellm-spend-logs-metadata": json.dumps(["not", "a", "dict"])}
+    data = {}
+    result = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(headers, data)
+    assert result is None
+
+
 @pytest.mark.parametrize(
     "callback_vars",
     [
