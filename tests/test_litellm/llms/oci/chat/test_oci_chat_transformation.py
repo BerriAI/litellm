@@ -305,3 +305,79 @@ class TestOCIChatConfig:
         assert usage.prompt_tokens == 10 # type: ignore
         assert usage.completion_tokens == 20 # type: ignore
         assert usage.total_tokens == 30 # type: ignore
+
+def test_transform_response_with_missing_usage_details(self):
+    """
+    Tests that usage details default to None if they are missing or null in the API response.
+    """
+    config = OCIChatConfig()
+    created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Case 1: usage fields completely missing
+    mock_oci_response_missing = {
+        "modelId": TEST_MODEL_NAME,
+        "modelVersion": "1.0",
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [],
+            "timeCreated": created_time,
+            "usage": {
+                "promptTokens": 5,
+                "completionTokens": 8,
+                "totalTokens": 13,
+                # missing completionTokensDetails and promptTokensDetails
+            },
+        },
+    }
+
+    response_missing = httpx.Response(status_code=200, json=mock_oci_response_missing)
+    result_missing = config.transform_response(
+        model=TEST_MODEL_NAME,
+        raw_response=response_missing,
+        model_response=ModelResponse(),
+        logging_obj={},
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding={},
+    )
+
+    usage_missing = result_missing.usage  # type: ignore
+    assert usage_missing.completionTokensDetails is None
+    assert usage_missing.promptTokensDetails is None
+
+    # Case 2: usage fields explicitly null
+    mock_oci_response_null = {
+        "modelId": TEST_MODEL_NAME,
+        "modelVersion": "1.0",
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [],
+            "timeCreated": created_time,
+            "usage": {
+                "promptTokens": 5,
+                "completionTokens": 8,
+                "totalTokens": 13,
+                "completionTokensDetails": None,
+                "promptTokensDetails": None,
+            },
+        },
+    }
+
+    response_null = httpx.Response(status_code=200, json=mock_oci_response_null)
+    result_null = config.transform_response(
+        model=TEST_MODEL_NAME,
+        raw_response=response_null,
+        model_response=ModelResponse(),
+        logging_obj={},
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding={},
+    )
+
+    usage_null = result_null.usage  # type: ignore
+    assert usage_null.completionTokensDetails is None
+    assert usage_null.promptTokensDetails is None

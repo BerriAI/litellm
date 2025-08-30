@@ -121,7 +121,7 @@ class OCICompletionTokenDetails(BaseModel):
     reasoningTokens: int
 
 
-class OCIPropmtTokensDetails(BaseModel):
+class OCIPromptTokensDetails(BaseModel):
     """Prompt token details in the OCI response."""
 
     cachedTokens: int
@@ -133,8 +133,8 @@ class OCIResponseUsage(BaseModel):
     promptTokens: int
     completionTokens: int
     totalTokens: int
-    completionTokensDetails: OCICompletionTokenDetails
-    promptTokensDetails: OCIPropmtTokensDetails
+    completionTokensDetails: Optional[OCICompletionTokenDetails] = None
+    promptTokensDetails: Optional[OCIPromptTokensDetails] = None
 
 
 class OCIResponseChoice(BaseModel):
