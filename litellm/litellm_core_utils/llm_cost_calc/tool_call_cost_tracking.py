@@ -580,7 +580,9 @@ class StandardBuiltInToolCostTracking:
             return WebSearchOptions(**kwargs.get("web_search_options", {}))
 
         tools = StandardBuiltInToolCostTracking._get_tools_from_kwargs(
-            kwargs, "web_search_preview"
+            kwargs=kwargs, tool_type="web_search_preview"
+        ) or StandardBuiltInToolCostTracking._get_tools_from_kwargs(
+            kwargs=kwargs, tool_type="web_search"
         )
         if tools:
             # Look for web search tool in the tools array
@@ -611,6 +613,8 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _is_web_search_tool_call(tool: Dict) -> bool:
         if tool.get("type", None) == "web_search_preview":
+            return True
+        if tool.get("type", None) == "web_search":
             return True
         if "search_context_size" in tool:
             return True
