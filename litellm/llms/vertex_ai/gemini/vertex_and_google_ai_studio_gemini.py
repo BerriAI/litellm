@@ -420,10 +420,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
-        reasoning_effort: Optional[str],
+        reasoning_effort: str,
     ) -> GeminiThinkingConfig:
-        if not reasoning_effort:
-            return { "includeThoughts": True }
         if reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -617,17 +615,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
-        
-        ######################################################################################
-        # If the model supports reasoning and `thinkingConfig` is not set as yet 
-        # we should set it to includeThoughts
-        ######################################################################################
-        if supports_reasoning(model) and "thinkingConfig" not in optional_params:
-            optional_params["thinkingConfig"] = (
-                VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                    non_default_params.get("reasoning_effort")
-                )
-            )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
