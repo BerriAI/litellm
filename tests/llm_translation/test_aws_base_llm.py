@@ -88,6 +88,7 @@ def test_auth_with_aws_role(mock_boto3_client, base_aws_llm):
     credentials, ttl = base_aws_llm._auth_with_aws_role(
         aws_access_key_id="test_access",
         aws_secret_access_key="test_secret",
+        aws_session_token="test_token",
         aws_role_name="test_role",
         aws_session_name="test_session",
     )

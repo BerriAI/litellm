@@ -93,9 +93,6 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
-from litellm.router_utils.forward_clientside_headers_by_model_group import (
-    ForwardClientSideHeadersByModelGroup,
-)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -406,6 +403,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
+        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
+            {}
+        )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
@@ -621,9 +621,7 @@ class Router:
         Apply the default settings to the router.
         """
 
-        default_pre_call_checks: OptionalPreCallChecks = [
-            "forward_client_headers_by_model_group",
-        ]
+        default_pre_call_checks: OptionalPreCallChecks = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
 
@@ -889,8 +887,6 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
-                elif pre_call_check == "forward_client_headers_by_model_group":
-                    _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
                     if self.optional_callbacks is None:
                         self.optional_callbacks = []
@@ -1207,7 +1203,7 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
-                    raise fallback_error 
+                    raise fallback_error
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
@@ -1403,7 +1399,7 @@ class Router:
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
-        self, deployment: dict, kwargs: dict
+        self, deployment: dict, kwargs: dict, function_name: Optional[str] = None
     ) -> Deployment:
         """
         Handle clientside credential
@@ -1413,8 +1409,11 @@ class Router:
         dynamic_litellm_params = get_dynamic_litellm_params(
             litellm_params=litellm_params, request_kwargs=kwargs
         )
-        metadata = kwargs.get("metadata", {})
-        model_group = cast(str, metadata.get("model_group"))
+        # Use deployment model_name as model_group for generating model_id
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name=function_name,
+        )
+        model_group = kwargs.get(metadata_variable_name, {}).get("model_group")
         _model_id = self._generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
@@ -1448,7 +1447,7 @@ class Router:
         deployment_model_name = deployment["model_name"]
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
-                deployment=deployment, kwargs=kwargs
+                deployment=deployment, kwargs=kwargs, function_name=function_name
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
@@ -4302,6 +4301,8 @@ class Router:
         """
         Track remaining tpm/rpm quota for model in model_list
         """
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
@@ -4314,12 +4315,55 @@ class Router:
                 deployment_name = kwargs["litellm_params"]["metadata"].get(
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
-                model_group = standard_logging_object.get("model_group", None)
-                id = standard_logging_object.get("model_id", None)
+                # Get model_group and id from kwargs like the sync version does
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
+                model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+                id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
                     id = str(id)
+
+                ## get deployment info
+                deployment_info = self.get_deployment(model_id=id)
+
+                if deployment_info is None:
+                    return
+                else:
+                    deployment_model_info = self.get_router_model_info(
+                        deployment=deployment_info.model_dump(),
+                        received_model_name=model_group,
+                    )
+                    # get tpm/rpm from deployment info
+                    tpm = deployment_info.get("tpm", None)
+                    rpm = deployment_info.get("rpm", None)
+
+                    ## check tpm/rpm in litellm_params
+                    tpm_litellm_params = deployment_info.litellm_params.tpm
+                    rpm_litellm_params = deployment_info.litellm_params.rpm
+
+                    ## check tpm/rpm in model_info
+                    tpm_model_info = deployment_model_info.get("tpm", None)
+                    rpm_model_info = deployment_model_info.get("rpm", None)
+
+                # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
+                increment_deployment_successes_for_current_minute(
+                    litellm_router_instance=self,
+                    deployment_id=id,
+                )
+
+                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                if (
+                    tpm is None
+                    and rpm is None
+                    and tpm_litellm_params is None
+                    and rpm_litellm_params is None
+                    and tpm_model_info is None
+                    and rpm_model_info is None
+                ):
+                    return
 
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
@@ -4339,29 +4383,32 @@ class Router:
                 # Update usage
                 # ------------
                 # update cache
+                pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
                 ## TPM
-                await self.cache.async_increment_cache(
-                    key=tpm_key,
-                    value=total_tokens,
-                    parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=tpm_key,
+                        increment_value=total_tokens,
+                        ttl=RoutingArgs.ttl.value,
+                    )
                 )
 
                 ## RPM
                 rpm_key = RouterCacheEnum.RPM.value.format(
                     id=id, current_minute=current_minute, model=deployment_name
                 )
-                await self.cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
-                    parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=rpm_key,
+                        increment_value=1,
+                        ttl=RoutingArgs.ttl.value,
+                    )
                 )
 
-                increment_deployment_successes_for_current_minute(
-                    litellm_router_instance=self,
-                    deployment_id=id,
+                await self.cache.async_increment_cache_pipeline(
+                    increment_list=pipeline_operations,
+                    parent_otel_span=parent_otel_span,
                 )
 
                 return tpm_key
@@ -5109,6 +5156,19 @@ class Router:
             if deployment.model_info.id:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
+        _team_id = deployment.model_info.get("team_id")
+        _team_public_model_name = deployment.model_info.get("team_public_model_name")
+        if (
+            _team_id is not None
+            and _team_public_model_name is not None
+            and "*" in _team_public_model_name
+        ):
+            if _team_id not in self.team_pattern_routers:
+                self.team_pattern_routers[_team_id] = PatternMatchRouter()
+            self.team_pattern_routers[_team_id].add_pattern(
+                _team_public_model_name, deployment.to_json(exclude_none=True)
+            )
+
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []
 
@@ -5411,6 +5471,11 @@ class Router:
                         pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
+        if model is None:
+            # Handle case where base_model is None (e.g., Azure models without base_model set)
+            # Use the original model from litellm_params
+            model = _model
+
         if not model.startswith("{}/".format(custom_llm_provider)):
             model_info_name = "{}/{}".format(custom_llm_provider, model)
         else:
@@ -5474,6 +5539,23 @@ class Router:
 
         try:
             litellm_model_name_model_info = litellm.get_model_info(model=model_name)
+        except Exception:
+            pass
+
+        ## check for base model
+        try:
+            if custom_model_info is not None:
+                base_model = custom_model_info.get("base_model", None)
+                if base_model is not None:
+                    ## update litellm model info with base model info
+                    base_model_info = litellm.get_model_info(model=base_model)
+                    if base_model_info is not None:
+                        custom_model_info = custom_model_info or {}
+                        # Base model provides defaults, custom model info overrides
+                        custom_model_info = _update_dictionary(
+                            cast(dict, base_model_info),
+                            custom_model_info,
+                        )
         except Exception:
             pass
 
@@ -5920,19 +6002,17 @@ class Router:
         Map a team model name to a team-specific model name.
 
         Returns:
-        - team_model_name: str - the team-specific model name
+        - deployment id: str - the deployment id of the team-specific model
         - None: if no team-specific model name is found
         """
-        for model in self.model_list:
-            model_team_id = model["model_info"].get("team_id")
-            model_team_public_model_name = model["model_info"].get(
-                "team_public_model_name"
-            )
-            if (
-                model_team_id == team_id
-                and model_team_public_model_name == team_model_name
-            ):
-                return model["model_name"]
+        models = self.get_model_list(model_name=team_model_name, team_id=team_id)
+        if not models:
+            return None
+        for model in models:
+            if model.get("model_info", {}).get("team_id") == team_id:
+                return model.get("model_name")
+
+        ## wildcard models
         return None
 
     def should_include_deployment(
@@ -6073,6 +6153,7 @@ class Router:
 
         if team_id specified, returns matching team-specific models
         """
+
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
@@ -6087,7 +6168,17 @@ class Router:
                 )
 
             if len(returned_models) == 0:  # check if wildcard route
-                potential_wildcard_models = self.pattern_router.route(model_name)
+                potential_wildcard_models = self.pattern_router.route(model_name) or []
+
+                ## check for team-specific wildcard models
+                if team_id is not None and team_id in self.team_pattern_routers:
+                    potential_team_only_wildcard_models = (
+                        self.team_pattern_routers[team_id].route(model_name) or []
+                    )
+                    potential_wildcard_models.extend(
+                        potential_team_only_wildcard_models
+                    )
+
                 if model_name is not None and potential_wildcard_models is not None:
                     for m in potential_wildcard_models:
                         deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
@@ -6519,6 +6610,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ) -> Tuple[str, Union[List, Dict]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
@@ -6530,6 +6622,14 @@ class Router:
         - List, if multiple models chosen
         - Dict, if specific model chosen
         """
+
+        request_team_id: Optional[str] = None
+        if request_kwargs is not None:
+            metadata = request_kwargs.get("metadata") or {}
+            litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+            request_team_id = metadata.get(
+                "user_api_key_team_id"
+            ) or litellm_metadata.get("user_api_key_team_id")
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
@@ -6552,8 +6652,21 @@ class Router:
             pattern_deployments = self.pattern_router.get_deployments_by_pattern(
                 model=model,
             )
+
             if pattern_deployments:
                 return model, pattern_deployments
+
+            if (
+                request_team_id is not None
+                and request_team_id in self.team_pattern_routers
+            ):
+                pattern_deployments = self.team_pattern_routers[
+                    request_team_id
+                ].get_deployments_by_pattern(
+                    model=model,
+                )
+                if pattern_deployments:
+                    return model, pattern_deployments
 
             # check if default deployment is set
             if self.default_deployment is not None:
@@ -6622,6 +6735,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )  # type: ignore
 
         # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM

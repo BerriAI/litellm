@@ -28,6 +28,7 @@ import GuardrailOptionalParams from "./guardrail_optional_params"
 import { ArrowLeftIcon } from "@heroicons/react/outline"
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
+import NotificationsManager from "../molecules/notifications_manager"
 
 export interface GuardrailInfoProps {
   guardrailId: string
@@ -104,7 +105,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         setSelectedPiiActions({})
       }
     } catch (error) {
-      message.error("Failed to load guardrail information")
+      NotificationsManager.fromBackend("Failed to load guardrail information")
       console.error("Error fetching guardrail info:", error)
     } finally {
       setLoading(false)
@@ -285,18 +286,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       // Only proceed with update if there are actual changes
       if (Object.keys(updateData).length === 0) {
-        message.info("No changes detected")
+        NotificationsManager.info("No changes detected")
         setIsEditing(false)
         return
       }
 
       await updateGuardrailCall(accessToken, guardrailId, updateData)
-      message.success("Guardrail updated successfully")
+      NotificationsManager.success("Guardrail updated successfully")
       fetchGuardrailInfo()
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating guardrail:", error)
-      message.error("Failed to update guardrail")
+      NotificationsManager.fromBackend("Failed to update guardrail")
     }
   }
 

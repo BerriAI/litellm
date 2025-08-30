@@ -28,6 +28,7 @@ from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
 from .dual_cache import DualCache  # noqa
+from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
@@ -92,6 +93,9 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
+        gcs_bucket_name: Optional[str] = None,
+        gcs_path_service_account: Optional[str] = None,
+        gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
@@ -102,6 +106,9 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        # GCP IAM authentication parameters
+        gcp_service_account: Optional[str] = None,
+        gcp_ssl_ca_certs: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -140,6 +147,11 @@ class Cache:
             s3_aws_session_token (str, optional): The aws session token for the s3 cache. Defaults to None.
             s3_config (dict, optional): The config for the s3 cache. Defaults to None.
 
+            # GCS Cache Args
+            gcs_bucket_name (str, optional): The bucket name for the gcs cache. Defaults to None.
+            gcs_path_service_account (str, optional): Path to the service account json.
+            gcs_path (str, optional): Folder path inside the bucket to store cache files.
+
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
             **kwargs: Additional keyword arguments for redis.Redis() cache
@@ -152,14 +164,21 @@ class Cache:
         """
         if type == LiteLLMCacheType.REDIS:
             if redis_startup_nodes:
-                self.cache: BaseCache = RedisClusterCache(
-                    host=host,
-                    port=port,
-                    password=password,
-                    redis_flush_size=redis_flush_size,
-                    startup_nodes=redis_startup_nodes,
+                # Only pass GCP parameters if they are provided
+                cluster_kwargs = {
+                    "host": host,
+                    "port": port,
+                    "password": password,
+                    "redis_flush_size": redis_flush_size,
+                    "startup_nodes": redis_startup_nodes,
                     **kwargs,
-                )
+                }
+                if gcp_service_account is not None:
+                    cluster_kwargs["gcp_service_account"] = gcp_service_account
+                if gcp_ssl_ca_certs is not None:
+                    cluster_kwargs["gcp_ssl_ca_certs"] = gcp_ssl_ca_certs
+
+                self.cache: BaseCache = RedisClusterCache(**cluster_kwargs)
             else:
                 self.cache = RedisCache(
                     host=host,
@@ -203,6 +222,12 @@ class Cache:
                 s3_config=s3_config,
                 s3_path=s3_path,
                 **kwargs,
+            )
+        elif type == LiteLLMCacheType.GCS:
+            self.cache = GCSCache(
+                bucket_name=gcs_bucket_name,
+                path_service_account=gcs_path_service_account,
+                gcs_path=gcs_path,
             )
         elif type == LiteLLMCacheType.AZURE_BLOB:
             self.cache = AzureBlobCache(
@@ -456,7 +481,7 @@ class Cache:
             return cached_response
         return cached_result
 
-    def get_cache(self, **kwargs):
+    def get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
 
@@ -482,8 +507,12 @@ class Cache:
                     or cache_control_args.get("s-max-age")
                     or float("inf")
                 )
-                cached_result = self.cache.get_cache(cache_key, messages=messages)
-                cached_result = self.cache.get_cache(cache_key, messages=messages)
+                if dynamic_cache_object is not None:
+                    cached_result = dynamic_cache_object.get_cache(
+                        cache_key, messages=messages
+                    )
+                else:
+                    cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
@@ -491,7 +520,9 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(self, **kwargs):
+    async def async_get_cache(
+        self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
+    ):
         """
         Async get cache implementation.
 
@@ -512,7 +543,14 @@ class Cache:
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
-                cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                if dynamic_cache_object is not None:
+                    cached_result = await dynamic_cache_object.async_get_cache(
+                        cache_key, **kwargs
+                    )
+                else:
+                    cached_result = await self.cache.async_get_cache(
+                        cache_key, **kwargs
+                    )
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
@@ -571,7 +609,9 @@ class Cache:
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    async def async_add_cache(self, result, **kwargs):
+    async def async_add_cache(
+        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
+    ):
         """
         Async implementation of add_cache
         """
@@ -585,12 +625,18 @@ class Cache:
                 cache_key, cached_data, kwargs = self._add_cache_logic(
                     result=result, **kwargs
                 )
-
-                await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+                if dynamic_cache_object is not None:
+                    await dynamic_cache_object.async_set_cache(
+                        cache_key, cached_data, **kwargs
+                    )
+                else:
+                    await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    def _convert_to_cached_embedding(self, embedding_response: Any, model: Optional[str]) -> CachedEmbedding:
+    def _convert_to_cached_embedding(
+        self, embedding_response: Any, model: Optional[str]
+    ) -> CachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
@@ -602,7 +648,7 @@ class Cache:
                     "object": embedding_response.get("object"),
                     "model": model,
                 }
-            elif hasattr(embedding_response, 'model_dump'):
+            elif hasattr(embedding_response, "model_dump"):
                 data = embedding_response.model_dump()
                 return {
                     "embedding": data.get("embedding"),
@@ -621,7 +667,6 @@ class Cache:
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
-
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -632,18 +677,22 @@ class Cache:
         preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
-        
+
         # Always convert to properly typed CachedEmbedding
         model_name = result.model
-        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(embedding_response, model_name)
-            
+        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
+            embedding_response, model_name
+        )
+
         cache_key, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
             **kwargs,
         )
         return cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(self, result, **kwargs):
+    async def async_add_cache_pipeline(
+        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
+    ):
         """
         Async implementation of add_cache for Embedding calls
 
@@ -672,14 +721,14 @@ class Cache:
                 )
                 cache_list.append((cache_key, cached_data))
 
-            await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
-            # if async_set_cache_pipeline:
-            #     await async_set_cache_pipeline(cache_list=cache_list, **kwargs)
-            # else:
-            #     tasks = []
-            #     for val in cache_list:
-            #         tasks.append(self.cache.async_set_cache(val[0], val[1], **kwargs))
-            #     await asyncio.gather(*tasks)
+            if dynamic_cache_object is not None:
+                await dynamic_cache_object.async_set_cache_pipeline(
+                    cache_list=cache_list, **kwargs
+                )
+            else:
+                await self.cache.async_set_cache_pipeline(
+                    cache_list=cache_list, **kwargs
+                )
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
@@ -725,11 +774,9 @@ class Cache:
         """
         Internal method to check if the cache type supports async get/set operations
 
-        Only S3 Cache Does NOT support async operations
+        All cache types now support async operations
 
         """
-        if self.type and self.type == LiteLLMCacheType.S3:
-            return False
         return True
 
 

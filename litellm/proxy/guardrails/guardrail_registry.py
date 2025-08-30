@@ -415,6 +415,7 @@ class InMemoryGuardrailHandler:
             litellm_params.api_base = str(get_secret(litellm_params.api_base))
 
         guardrail_type = litellm_params.guardrail
+
         if guardrail_type is None:
             raise ValueError("guardrail_type is required")
 

@@ -225,6 +225,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""
