@@ -580,7 +580,7 @@ def test_gemini_tool_use():
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async():
-    #litellm._turn_on_debug()
+    litellm._turn_on_debug()
     response = await litellm.acompletion(
         messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
         model="gemini/gemini-2.5-flash-image-preview",
