@@ -45,7 +45,7 @@ pip install litellm==1.76.1
 
 ## Key Highlights
 
-- **Major Performance Improvements** - 6.5x (+80 RPS) faster LiteLLM Python SDK completion with fastuuid integration.
+- **Major Performance Improvements** - 6.5x faster LiteLLM Python SDK completion with fastuuid integration.
 - **New Model Support** - Gemini 2.5 Flash Image Preview, Grok Code Fast, and GPT Realtime models
 - **Enhanced Provider Support** - DeepSeek-v3.1 pricing on Fireworks AI, Vercel AI Gateway, and improved Anthropic/GitHub Copilot integration
 - **MCP Improvements** - Better connection testing and SSE MCP tools bug fixes
