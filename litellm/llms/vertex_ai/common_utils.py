@@ -363,7 +363,8 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     if anyof is not None:
         contains_null = False
         for atype in anyof:
-            if atype == {"type": "null"}:
+            # Handle both lowercase "null" and uppercase "NULL" types
+            if atype == {"type": "null"} or atype == {"type": "NULL"}:
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True

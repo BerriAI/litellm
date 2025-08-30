@@ -214,8 +214,8 @@ def test_build_vertex_schema():
         "properties": {
             "state": {
                 "properties": {
-                    "messages": {"items": {"type": "object"}, "type": "array"},
-                    "conversation_id": {"type": "string"},
+                    "messages": {"items": {"type": "object"}, "type": "ARRAY"},
+                    "conversation_id": {"type": "STRING"},
                 },
                 "required": ["messages", "conversation_id"],
                 "type": "object",
@@ -223,25 +223,25 @@ def test_build_vertex_schema():
             "config": {
                 "description": "Configuration for a Runnable.",
                 "properties": {
-                    "tags": {"items": {"type": "string"}, "type": "array"},
-                    "metadata": {"type": "object"},
+                    "tags": {"items": {"type": "STRING"}, "type": "ARRAY"},
+                    "metadata": {"type": "OBJECT"},
                     "callbacks": {
                         "anyOf": [
-                            {"type": "array", "nullable": True},
+                            {"items": {"type": "object"}, "type": "ARRAY", "nullable": True},
                             {"type": "object", "nullable": True},
                         ]
                     },
-                    "run_name": {"type": "string"},
+                    "run_name": {"type": "STRING"},
                     "max_concurrency": {
-                        "anyOf": [{"type": "integer", "nullable": True}]
+                        "anyOf": [{"type": "INTEGER", "nullable": True}]
                     },
-                    "recursion_limit": {"type": "integer"},
-                    "configurable": {"type": "object"},
-                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
+                    "recursion_limit": {"type": "INTEGER"},
+                    "configurable": {"type": "OBJECT"},
+                    "run_id": {"anyOf": [{"type": "STRING", "nullable": True}]},
                 },
                 "type": "object",
             },
-            "kwargs": {"default": None, "type": "object"},
+            "kwargs": {"default": None, "type": "OBJECT"},
         },
         "required": ["state", "config"],
         "type": "object",
@@ -456,7 +456,7 @@ def test_vertex_ai_complex_response_schema():
 
     # Check field3 structure (array of objects)
     field3 = transformed_schema["properties"]["field3"]
-    assert field3["type"] == "array"
+    assert field3["type"] == "ARRAY"
 
     # Check field3 items structure
     field3_items = field3["items"]
@@ -467,7 +467,7 @@ def test_vertex_ai_complex_response_schema():
 
     # Check subfield2 structure (array of objects)
     subfield2 = field3_items["properties"]["subfield2"]
-    assert subfield2["type"] == "array"
+    assert subfield2["type"] == "ARRAY"
 
     # Check subfield2 items structure
     subfield2_items = subfield2["items"]
@@ -498,7 +498,7 @@ def test_vertex_ai_complex_response_schema():
 
     # Check nested items in Type3's prop3
     type3_prop3 = type3["properties"]["prop3"]
-    assert type3_prop3["type"] == "array"
+    assert type3_prop3["type"] == "ARRAY"
     type3_prop3_items = type3_prop3["items"]
     assert type3_prop3_items["type"] == "object"
     assert "propertyOrdering" in type3_prop3_items
@@ -677,3 +677,208 @@ def test_vertex_filter_format_uri():
     )
 
     assert "uri" not in json.dumps(new_parameters)
+
+
+def test_convert_schema_types_type_array_conversion():
+    """
+    Test _convert_schema_types function handles type arrays and case conversion.
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+    would raise an exception in Vertex AI schema validation.
+    """
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Input: OpenAI-style schema with type array (the problematic case from test_gemini.py)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "type": ["string", "number"],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+    
+    # Expected output: Vertex AI compatible schema with anyOf and uppercase types
+    expected_output = {
+        "type": "OBJECT",
+        "properties": {
+            "studio": {
+                "anyOf": [
+                    {"type": "STRING"}, 
+                    {"type": "NUMBER"}
+                ],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+    
+    # Apply the transformation
+    _convert_schema_types(input_schema)
+    
+    # Verify the transformation
+    assert input_schema == expected_output
+    
+    # Verify specific transformations:
+    # 1. Root level type converted to uppercase
+    assert input_schema["type"] == "OBJECT"
+    
+    # 2. Type array converted to anyOf format
+    assert "anyOf" in input_schema["properties"]["studio"]
+    assert "type" not in input_schema["properties"]["studio"]
+    
+    # 3. Individual types in anyOf are uppercase
+    anyof_types = input_schema["properties"]["studio"]["anyOf"]
+    assert anyof_types[0]["type"] == "STRING"
+    assert anyof_types[1]["type"] == "NUMBER"
+    
+    # 4. Other properties preserved
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert input_schema["required"] == ["studio"]
+
+
+def test_convert_schema_types_single_type_conversion():
+    """Test _convert_schema_types with single type strings (lowercase to uppercase)."""
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Test single lowercase types
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "score": {"type": "number"},
+            "active": {"type": "boolean"},
+            "tags": {"type": "array"},
+            "metadata": {"type": "object"}
+        }
+    }
+    
+    _convert_schema_types(schema)
+    
+    # Verify all types converted to uppercase
+    assert schema["type"] == "OBJECT"
+    assert schema["properties"]["name"]["type"] == "STRING"
+    assert schema["properties"]["age"]["type"] == "INTEGER"
+    assert schema["properties"]["score"]["type"] == "NUMBER"
+    assert schema["properties"]["active"]["type"] == "BOOLEAN"
+    assert schema["properties"]["tags"]["type"] == "ARRAY"
+    assert schema["properties"]["metadata"]["type"] == "OBJECT"
+
+
+def test_convert_schema_types_single_element_array():
+    """Test _convert_schema_types with single-element type arrays."""
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+    
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": ["string"]}
+        }
+    }
+    
+    _convert_schema_types(schema)
+    
+    # Single element array should become a single type
+    assert schema["properties"]["value"]["type"] == "STRING"
+    assert "anyOf" not in schema["properties"]["value"]
+
+
+def test_convert_schema_types_nested_properties():
+    """Test _convert_schema_types with nested properties and items."""
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+    
+    schema = {
+        "type": "object",
+        "properties": {
+            "user": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": ["string", "number"]},
+                    "profile": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"}
+                        }
+                    }
+                }
+            },
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": ["integer", "string"]}
+                    }
+                }
+            }
+        }
+    }
+    
+    _convert_schema_types(schema)
+    
+    # Check nested type array conversion
+    user_id = schema["properties"]["user"]["properties"]["id"]
+    assert "anyOf" in user_id
+    assert user_id["anyOf"] == [{"type": "STRING"}, {"type": "NUMBER"}]
+    
+    # Check deeply nested type conversion
+    assert schema["properties"]["user"]["properties"]["profile"]["properties"]["name"]["type"] == "STRING"
+    
+    # Check array items type conversion
+    items_value = schema["properties"]["items"]["items"]["properties"]["value"]
+    assert "anyOf" in items_value
+    assert items_value["anyOf"] == [{"type": "INTEGER"}, {"type": "STRING"}]
+
+
+def test_convert_schema_types_with_existing_anyof():
+    """Test _convert_schema_types preserves and processes existing anyOf structures."""
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+    
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "object", "properties": {"nested": {"type": "integer"}}}
+                ]
+            }
+        }
+    }
+    
+    _convert_schema_types(schema)
+    
+    # Check that existing anyOf is processed for type conversion
+    anyof = schema["properties"]["value"]["anyOf"]
+    assert anyof[0]["type"] == "STRING"
+    assert anyof[1]["type"] == "OBJECT"
+    assert anyof[1]["properties"]["nested"]["type"] == "INTEGER"
+
+
+def test_convert_schema_types_max_depth_protection():
+    """Test _convert_schema_types respects max depth limit."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Create deeply nested schema
+    schema = {"type": "object", "properties": {}}
+    current = schema
+    for i in range(DEFAULT_MAX_RECURSE_DEPTH + 2):
+        current["properties"] = {
+            f"nested_{i}": {
+                "type": "object", 
+                "properties": {}
+            }
+        }
+        current = current["properties"][f"nested_{i}"]
+    
+    # Should raise ValueError for excessive depth
+    with pytest.raises(ValueError, match="Max depth.*exceeded"):
+        _convert_schema_types(schema)
