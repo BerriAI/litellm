@@ -635,6 +635,7 @@ class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     num_retries: Optional[int] = None
     context_window_fallback_dict: Optional[Dict[str, str]] = None
     fallbacks: Optional[List[str]] = None
+    spend_logs_metadata: Optional[Dict[str, Any]] = None
 
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):

@@ -795,6 +795,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: List
     user: str
     metadata: dict  # litellm specific param
+    spend_logs_metadata: dict  # litellm specific param
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):

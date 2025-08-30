@@ -601,6 +601,58 @@ class LiteLLMProxyRequestSetup:
 
         return tags
 
+    @staticmethod
+    def add_request_spend_logs_metadata_to_metadata(
+        headers: dict,
+        data: dict,
+    ) -> Optional[dict]:
+        """
+        Extract spend_logs_metadata from request headers or body.
+        
+        Header format: x-litellm-spend-logs-metadata should contain JSON string
+        Body format: spend_logs_metadata should be a dict
+        
+        Args:
+            headers: Request headers
+            data: Request body data
+            
+        Returns:
+            Optional[dict]: Parsed spend_logs_metadata or None
+        """
+        spend_logs_metadata = None
+
+        # Check request headers for spend_logs_metadata
+        if "x-litellm-spend-logs-metadata" in headers:
+            header_value = headers["x-litellm-spend-logs-metadata"]
+            if isinstance(header_value, str):
+                try:
+                    import json
+                    spend_logs_metadata = json.loads(header_value)
+                    if not isinstance(spend_logs_metadata, dict):
+                        verbose_proxy_logger.warning(
+                            f"x-litellm-spend-logs-metadata header must contain a JSON object. Received: {header_value}"
+                        )
+                        spend_logs_metadata = None
+                except json.JSONDecodeError:
+                    verbose_proxy_logger.warning(
+                        f"Failed to parse x-litellm-spend-logs-metadata header as JSON: {header_value}"
+                    )
+                    spend_logs_metadata = None
+            elif isinstance(header_value, dict):
+                spend_logs_metadata = header_value
+
+        # Check request body for spend_logs_metadata (body takes precedence over header)
+        # Check both top-level and metadata.spend_logs_metadata
+        if "spend_logs_metadata" in data and isinstance(data["spend_logs_metadata"], dict):
+            spend_logs_metadata = data["spend_logs_metadata"]
+        elif ("metadata" in data and 
+              isinstance(data["metadata"], dict) and 
+              "spend_logs_metadata" in data["metadata"] and 
+              isinstance(data["metadata"]["spend_logs_metadata"], dict)):
+            spend_logs_metadata = data["metadata"]["spend_logs_metadata"]
+
+        return spend_logs_metadata
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -828,6 +880,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     if tags is not None:
         data[_metadata_variable_name]["tags"] = tags
+
+    # Check if using header-based spend_logs_metadata
+    spend_logs_metadata = LiteLLMProxyRequestSetup.add_request_spend_logs_metadata_to_metadata(
+        headers=dict(request.headers),
+        data=data,
+    )
+
+    if spend_logs_metadata is not None:
+        # Only set if not already present in metadata (body/metadata takes precedence)
+        if "spend_logs_metadata" not in data[_metadata_variable_name]:
+            data[_metadata_variable_name]["spend_logs_metadata"] = spend_logs_metadata
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
