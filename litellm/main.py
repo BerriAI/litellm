@@ -82,7 +82,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import RawRequestTypedDict
+from litellm.types.utils import LlmProvidersSet, RawRequestTypedDict
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -1187,9 +1187,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
