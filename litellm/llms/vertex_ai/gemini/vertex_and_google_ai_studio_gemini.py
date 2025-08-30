@@ -1278,10 +1278,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "audio"
                     ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                elif image_response is not None:
+                if image_response is not None:
                     # Handle image response - combine with text content into structured format
                     cast(Dict[str, Any], chat_completion_message)["image"] = image_response
-                elif content is not None:
+                if content is not None:
                     chat_completion_message["content"] = content
 
                 if reasoning_content is not None:
