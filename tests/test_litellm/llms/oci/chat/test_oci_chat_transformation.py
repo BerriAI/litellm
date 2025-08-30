@@ -306,78 +306,54 @@ class TestOCIChatConfig:
         assert usage.completion_tokens == 20 # type: ignore
         assert usage.total_tokens == 30 # type: ignore
 
-def test_transform_response_with_missing_usage_details(self):
+def test_oci_response_usage_handles_missing_and_null_fields(self):
     """
-    Tests that usage details default to None if they are missing or null in the API response.
+    Test that OCIResponseUsage parses correctly when
+    completionTokensDetails and promptTokensDetails are missing or null.
     """
-    config = OCIChatConfig()
-    created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    from litellm.llms.oci.chat.transformation import OCIResponseUsage
 
-    # Case 1: usage fields completely missing
-    mock_oci_response_missing = {
-        "modelId": TEST_MODEL_NAME,
-        "modelVersion": "1.0",
-        "chatResponse": {
-            "apiFormat": "GENERIC",
-            "choices": [],
-            "timeCreated": created_time,
-            "usage": {
-                "promptTokens": 5,
-                "completionTokens": 8,
-                "totalTokens": 13,
-                # missing completionTokensDetails and promptTokensDetails
-            },
-        },
+    # Case 1: fields completely missing
+    data_missing = {
+        "promptTokens": 10,
+        "completionTokens": 5,
+        "totalTokens": 15,
+        # no completionTokensDetails or promptTokensDetails
     }
-
-    response_missing = httpx.Response(status_code=200, json=mock_oci_response_missing)
-    result_missing = config.transform_response(
-        model=TEST_MODEL_NAME,
-        raw_response=response_missing,
-        model_response=ModelResponse(),
-        logging_obj={},
-        request_data={},
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        encoding={},
-    )
-
-    usage_missing = result_missing.usage  # type: ignore
+    usage_missing = OCIResponseUsage(**data_missing)
     assert usage_missing.completionTokensDetails is None
     assert usage_missing.promptTokensDetails is None
+    assert usage_missing.promptTokens == 10
+    assert usage_missing.completionTokens == 5
+    assert usage_missing.totalTokens == 15
 
-    # Case 2: usage fields explicitly null
-    mock_oci_response_null = {
-        "modelId": TEST_MODEL_NAME,
-        "modelVersion": "1.0",
-        "chatResponse": {
-            "apiFormat": "GENERIC",
-            "choices": [],
-            "timeCreated": created_time,
-            "usage": {
-                "promptTokens": 5,
-                "completionTokens": 8,
-                "totalTokens": 13,
-                "completionTokensDetails": None,
-                "promptTokensDetails": None,
-            },
-        },
+    # Case 2: fields explicitly null
+    data_null = {
+        "promptTokens": 12,
+        "completionTokens": 8,
+        "totalTokens": 20,
+        "completionTokensDetails": None,
+        "promptTokensDetails": None,
     }
-
-    response_null = httpx.Response(status_code=200, json=mock_oci_response_null)
-    result_null = config.transform_response(
-        model=TEST_MODEL_NAME,
-        raw_response=response_null,
-        model_response=ModelResponse(),
-        logging_obj={},
-        request_data={},
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        encoding={},
-    )
-
-    usage_null = result_null.usage  # type: ignore
+    usage_null = OCIResponseUsage(**data_null)
     assert usage_null.completionTokensDetails is None
     assert usage_null.promptTokensDetails is None
+    assert usage_null.promptTokens == 12
+    assert usage_null.completionTokens == 8
+    assert usage_null.totalTokens == 20
+
+    # Case 3: fields present with values
+    data_present = {
+        "promptTokens": 7,
+        "completionTokens": 3,
+        "totalTokens": 10,
+        "completionTokensDetails": {"acceptedPredictionTokens": 2, "reasoningTokens": 1},
+        "promptTokensDetails": {"cachedTokens": 4},
+    }
+    usage_present = OCIResponseUsage(**data_present)
+    assert usage_present.completionTokensDetails.acceptedPredictionTokens == 2
+    assert usage_present.completionTokensDetails.reasoningTokens == 1
+    assert usage_present.promptTokensDetails.cachedTokens == 4
+    assert usage_present.promptTokens == 7
+    assert usage_present.completionTokens == 3
+    assert usage_present.totalTokens == 10
