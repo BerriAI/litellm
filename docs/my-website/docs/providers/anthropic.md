@@ -55,7 +55,28 @@ import os
 
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
+# os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
+
+### Custom API Base
+
+When using a custom API base for Anthropic (e.g., a proxy or custom endpoint), LiteLLM automatically appends the appropriate suffix (`/v1/messages` or `/v1/complete`) to your base URL.
+
+If your custom endpoint already includes the full path or doesn't follow Anthropic's standard URL structure, you can disable this automatic suffix appending:
+
+```python
+import os
+
+os.environ["ANTHROPIC_API_BASE"] = "https://my-custom-endpoint.com/custom/path"
+os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true"  # Prevents automatic suffix
+```
+
+Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
+- Base URL `https://my-proxy.com` → `https://my-proxy.com/v1/messages`
+- Base URL `https://my-proxy.com/api` → `https://my-proxy.com/api/v1/messages`
+
+With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
+- Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
 
 ## Usage
 

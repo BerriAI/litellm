@@ -1,23 +1,4 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: xai/*
     litellm_params:
-      model: anthropic/*
-      api_key: os.environ/OPENAI_API_KEY_IJ
-  - model_name: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
-    litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
-  - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
-    litellm_params:
-      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
-
-router_settings:
-  fallbacks: [
-    {"anthropic/claude-opus-4-20250514": 
-      {
-        "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
-      }
-    }
-  ]
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-
+      model: xai/*

@@ -464,6 +464,7 @@ const sidebars = {
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/vercel_ai_gateway",
         "providers/morph",
         "providers/lambda_ai",
         "providers/novita",
@@ -482,6 +483,7 @@ const sidebars = {
         "providers/dashscope",
         "providers/bytez",
         "providers/oci",
+        "providers/datarobot",  
       ],
     },
     {
@@ -493,6 +495,7 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "completion/audio",
+        "completion/image_generation_chat",
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
