@@ -453,20 +453,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _map_thinking_param(
-        thinking_param: AnthropicThinkingParam,
+        thinking_param: Union[AnthropicThinkingParam, bool],
     ) -> GeminiThinkingConfig:
-        thinking_enabled = thinking_param.get("type") == "enabled"
-        thinking_budget = thinking_param.get("budget_tokens")
+        if isinstance(thinking_param, bool) and thinking_param is True:
+            return {"includeThoughts": True}
 
-        params: GeminiThinkingConfig = {}
-        if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
-            thinking_budget
-        ):
-            params["includeThoughts"] = True
-        if thinking_budget is not None and isinstance(thinking_budget, int):
-            params["thinkingBudget"] = thinking_budget
+        if isinstance(thinking_param, dict):
+            thinking_enabled = thinking_param.get("type") == "enabled"
+            thinking_budget = thinking_param.get("budget_tokens")
 
-        return params
+            params: GeminiThinkingConfig = {}
+            if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
+                thinking_budget
+            ):
+                params["includeThoughts"] = True
+            if thinking_budget is not None and isinstance(thinking_budget, int):
+                params["thinkingBudget"] = thinking_budget
+
+            return params
+        return {}
 
     def map_response_modalities(self, value: list) -> list:
         response_modalities = []
@@ -607,7 +612,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "thinking":
                 optional_params["thinkingConfig"] = (
                     VertexGeminiConfig._map_thinking_param(
-                        cast(AnthropicThinkingParam, value)
+                        cast(Union[AnthropicThinkingParam, bool], value)
                     )
                 )
             elif param == "modalities" and isinstance(value, list):
@@ -887,6 +892,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         function=_function_chunk,
                         index=cumulative_tool_call_idx,
                     )
+                    if "thoughtSignature" in part:
+                        _tool_response_chunk["thought_signature"] = part[
+                            "thoughtSignature"
+                        ]
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
@@ -1211,7 +1220,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
-    ) -> Tuple[List[dict], List[dict], List, List]:
+    ) -> Tuple[List[dict], List[dict], List, List, List]:
         """
         Helper method to process candidates and extract metadata
 
@@ -1220,6 +1229,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
+            signatures: List
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1231,6 +1241,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         image_response: Optional[ImageURLObject] = None
         safety_ratings: List = []
         citation_metadata: List = []
+        signatures: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
@@ -1255,6 +1266,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             citation_metadata.extend(candidate_citation_metadata)
 
             if "parts" in candidate["content"]:
+                for part in candidate["content"]["parts"]:
+                    if "thoughtSignature" in part:
+                        signatures.append(part["thoughtSignature"])
                 (
                     content,
                     reasoning_content,
@@ -1335,6 +1349,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             url_context_metadata,
             safety_ratings,
             citation_metadata,
+            signatures,
         )
 
     def transform_response(
@@ -1435,6 +1450,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    signatures,
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, logging_obj.optional_params
                 )
@@ -1469,6 +1485,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+
+            ## ADD THOUGHT SIGNATURES ##
+            setattr(model_response, "vertex_ai_thought_signatures", signatures)
+            model_response._hidden_params["vertex_ai_thought_signatures"] = signatures
 
         except Exception as e:
             raise VertexAIError(
@@ -2049,12 +2069,14 @@ class ModelResponseIterator:
             url_context_metadata: List[dict] = []
             safety_ratings: List[dict] = []
             citation_metadata: List[dict] = []
+            signatures: List[dict] = []
             if _candidates:
                 (
                     grounding_metadata,
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
+                    signatures,
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, self.logging_obj.optional_params
                 )
@@ -2063,6 +2085,9 @@ class ModelResponseIterator:
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
                 setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+                setattr(
+                    model_response, "vertex_ai_thought_signatures", signatures
+                )  # type: ignore
 
             if "usageMetadata" in processed_chunk:
                 usage = VertexGeminiConfig._calculate_usage(

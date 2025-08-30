@@ -119,6 +119,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     contents: List[ContentType] = []
 
     last_message_with_tool_calls = None
+    # Map tool_call_id to its signature
+    signatures_map: Dict[str, bytes] = {}
 
     msg_i = 0
     tool_call_responses = []
@@ -230,7 +232,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
-                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
+                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[
+                        msg_i
+                    ].model_dump()  # type: ignore
                 else:
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
@@ -258,14 +262,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
-                if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
-                ):  # support assistant tool invoke conversion
+                tool_calls = assistant_msg.get("tool_calls")
+                if tool_calls is not None:
                     assistant_content.extend(
                         convert_to_gemini_tool_call_invoke(assistant_msg)
                     )
                     last_message_with_tool_calls = assistant_msg
+                    # Store signatures from this message's tool calls
+                    for tc in tool_calls:
+                        if "thought_signature" in tc:
+                            signatures_map[tc["id"]] = tc["thought_signature"]
 
                 msg_i += 1
 
@@ -278,16 +284,22 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i < len(messages)
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
+                tool_msg = messages[msg_i]
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    tool_msg, last_message_with_tool_calls  # type: ignore
                 )
+                # Look up and attach the corresponding signature
+                tool_call_id = tool_msg.get("tool_call_id")
+                if tool_call_id and tool_call_id in signatures_map:
+                    _part["thought_signature"] = signatures_map[tool_call_id]
+
                 msg_i += 1
                 tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
                 if len(tool_call_responses) > 0:
-                    contents.append(ContentType(parts=tool_call_responses))
+                    contents.append(ContentType(role="tool", parts=tool_call_responses))
                     tool_call_responses = []
 
             if msg_i == init_msg_i:  # prevent infinite loops
@@ -297,7 +309,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 )
         if len(tool_call_responses) > 0:
-            contents.append(ContentType(parts=tool_call_responses))
+            contents.append(ContentType(role="tool", parts=tool_call_responses))
         return contents
     except Exception as e:
         raise e
