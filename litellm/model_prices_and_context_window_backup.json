@@ -19775,6 +19775,848 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
+    "vercel_ai_gateway/alibaba/qwen3-coder": {
+        "max_tokens": 262144,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.6e-06,
+        "max_output_tokens": 66536,
+        "max_input_tokens": 262144,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/codestral-embed": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-2.5-pro": {
+        "max_tokens": 1048576,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 65536,
+        "max_input_tokens": 1048576,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/deepseek/deepseek-v3": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 9e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/amazon/nova-lite": {
+        "max_tokens": 300000,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.4e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 300000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-4-scout": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-1b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-small": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 32000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-2.5-flash": {
+        "max_tokens": 1000000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.5e-06,
+        "max_output_tokens": 65536,
+        "max_input_tokens": 1000000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/inception/mercury-coder-small": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-3-small": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/xai/grok-2-vision": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-2": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 7.5e-07,
+        "output_cost_per_token": 9.9e-07,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.1-70b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-235b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3-fast": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 2.5e-05,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/vercel/v0-1.5-md": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o4-mini": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.1e-06,
+        "output_cost_per_token": 4.4e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/magistral-medium": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 5e-06,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/amazon/titan-embed-text-v2": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-30b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/zai/glm-4.5-air": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 1.1e-06,
+        "max_output_tokens": 96000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4-turbo": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 3e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-large": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 32000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-pro": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 200000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-90b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3-8b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 8e-08,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/text-embedding-005": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2.5e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/mistral/pixtral-large": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3.5-sonnet": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/amazon/nova-micro": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3.5e-08,
+        "output_cost_per_token": 1.4e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-r": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/morph/morph-v3-large": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 1.9e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": {
+        "max_tokens": 65536,
+        "input_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 1.2e-06,
+        "max_output_tokens": 2048,
+        "max_input_tokens": 65536,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-4": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 256000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.1-8b": {
+        "max_tokens": 131000,
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 8e-08,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3-opus": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/zai/glm-4.5": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.2e-06,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4o": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 128000,
+        "cache_read_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o3-mini": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.1e-06,
+        "output_cost_per_token": 4.4e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/ministral-8b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o3": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/vercel/v0-1.0-md": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/text-multilingual-embedding-002": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2.5e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/amazon/nova-pro": {
+        "max_tokens": 300000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 3.2e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 300000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/morph/morph-v3-fast": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 1.2e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-3.5-turbo": {
+        "max_tokens": 16385,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 16385,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/codestral": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 9e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-11b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.6e-07,
+        "output_cost_per_token": 1.6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3-70b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 5.9e-07,
+        "output_cost_per_token": 7.9e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3-mini-fast": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 4e-06,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-3-large": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/google/gemini-2.0-flash-lite": {
+        "max_tokens": 1048576,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/ministral-3b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 4e-08,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-reasoning-pro": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-embedding-001": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/anthropic/claude-3-haiku": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1.25e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3e-07,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o1": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 6e-05,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 7.5e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/deepseek/deepseek-r1": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 5.5e-07,
+        "output_cost_per_token": 2.19e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-embed": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1-mini": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.6e-06,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4o-mini": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 128000,
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-14b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 8e-08,
+        "output_cost_per_token": 2.4e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-4-opus": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "max_output_tokens": 32000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-saba-24b": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 7.9e-07,
+        "output_cost_per_token": 7.9e-07,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-reasoning": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3.5-haiku": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 8e-08,
+        "cache_creation_input_token_cost": 1e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-a": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemma-2-9b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-3b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1-nano": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 4e-07,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-4-sonnet": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 1e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-4-maverick": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-ada-002": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/xai/grok-3-mini": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 5e-07,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/embed-v4.0": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.2e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.3-70b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-r-plus": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 2e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/devstral-small": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 2.8e-07,
+        "max_output_tokens": 128000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3.7-sonnet": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-2.0-flash": {
+        "max_tokens": 1048576,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/pixtral-12b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/magistral-small": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/moonshotai/kimi-k2": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 5.5e-07,
+        "output_cost_per_token": 2.2e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-32b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
     "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": {
         "max_tokens": 512000,
         "max_input_tokens": 512000,
