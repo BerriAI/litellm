@@ -21,6 +21,7 @@ import {
   PlusCircleOutlined
 } from "@ant-design/icons";
 import { parseErrorMessage } from "./shared/errorUtils";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface SCIMConfigProps {
   accessToken: string | null;
@@ -51,7 +52,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   
   const handleCreateSCIMToken = async (values: any) => {
     if (!accessToken || !userID) {
-      message.error("You need to be logged in to create a SCIM token");
+      NotificationsManager.fromBackend("You need to be logged in to create a SCIM token");
       return;
     }
     
@@ -67,10 +68,10 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
       
       const response = await keyCreateCall(accessToken, userID, formData);
       setTokenData(response);
-      message.success("SCIM token created successfully");
+      NotificationsManager.success("SCIM token created successfully");
     } catch (error: any) {
       console.error("Error creating SCIM token:", error);
-      message.error("Failed to create SCIM token: " + parseErrorMessage(error));
+      NotificationsManager.fromBackend("Failed to create SCIM token: " + parseErrorMessage(error));
     } finally {
       setIsCreatingToken(false);
     }
@@ -111,7 +112,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
               />
               <CopyToClipboard
                 text={scimBaseUrl}
-                onCopy={() => message.success("URL copied to clipboard")}
+                onCopy={() => NotificationsManager.success("URL copied to clipboard")}
               >
                 <TremorButton variant="primary" className="ml-2 flex items-center">
                   <CopyOutlined className="h-4 w-4 mr-1" />
@@ -182,7 +183,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                   />
                   <CopyToClipboard
                     text={tokenData.key}
-                    onCopy={() => message.success("Token copied to clipboard")}
+                    onCopy={() => NotificationsManager.success("Token copied to clipboard")}
                   >
                     <TremorButton variant="primary" className="flex items-center">
                       <CopyOutlined className="h-4 w-4 mr-1" />

@@ -118,16 +118,16 @@ def _should_run_cooldown_logic(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
         return False
-    
+
     #########################################################
     # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
     #########################################################
     if time_to_cooldown is not None and math.isclose(
-        a=time_to_cooldown, 
-        b=0.0, 
-        abs_tol=1e-9
+        a=time_to_cooldown, b=0.0, abs_tol=1e-9
     ):
-        verbose_router_logger.debug("Should Not Run Cooldown Logic: time_to_cooldown is effectively 0")
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: time_to_cooldown is effectively 0"
+        )
         return False
 
     if litellm_router_instance.disable_cooldowns:
@@ -275,8 +275,8 @@ def _set_cooldown_deployments(
     if (
         _should_run_cooldown_logic(
             litellm_router_instance=litellm_router_instance,
-            deployment=deployment, 
-            exception_status=exception_status, 
+            deployment=deployment,
+            exception_status=exception_status,
             original_exception=original_exception,
             time_to_cooldown=time_to_cooldown,
         )
@@ -290,9 +290,9 @@ def _set_cooldown_deployments(
     verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
 
     if _should_cooldown_deployment(
-        litellm_router_instance=litellm_router_instance, 
-        deployment=deployment, 
-        exception_status=exception_status, 
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        exception_status=exception_status,
         original_exception=original_exception,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(

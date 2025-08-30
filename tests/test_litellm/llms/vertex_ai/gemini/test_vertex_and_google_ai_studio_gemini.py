@@ -442,6 +442,82 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     }
 
 
+def test_vertex_ai_reasoning_effort_mapping():
+    """
+    Test that reasoning_effort is mapped to thinkingConfig correctly for models that support it.
+    - A default thinking config is applied if reasoning_effort is not specified.
+    - reasoning_effort correctly maps to thinkingConfig.
+    - No thinkingConfig is applied for models that do not support reasoning.
+    - reasoning_effort is prioritized over thinking param.
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+
+    # Case 1: Model supports reasoning, no reasoning_effort provided
+    # Should apply default thinkingConfig
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
+        return_value=True,
+    ):
+        result_params = v.map_openai_params(
+            non_default_params={},
+            optional_params=deepcopy(optional_params),
+            model="gemini-2.5-pro",
+            drop_params=False,
+        )
+        assert "thinkingConfig" in result_params
+        assert result_params["thinkingConfig"] == {"includeThoughts": True}
+
+    # Case 2: Model supports reasoning, reasoning_effort is 'low'
+    # Should apply thinkingConfig with budget
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
+        return_value=True,
+    ):
+        result_params_with_effort = v.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params=deepcopy(optional_params),
+            model="gemini-2.5-pro",
+            drop_params=False,
+        )
+        assert "thinkingConfig" in result_params_with_effort
+        assert result_params_with_effort["thinkingConfig"]["includeThoughts"] is True
+        assert "thinkingBudget" in result_params_with_effort["thinkingConfig"]
+
+    # Case 3: Model does not support reasoning
+    # Should not apply thinkingConfig
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
+        return_value=False,
+    ):
+        result_params_no_support = v.map_openai_params(
+            non_default_params={},
+            optional_params=deepcopy(optional_params),
+            model="gemini-pro",
+            drop_params=False,
+        )
+        assert "thinkingConfig" not in result_params_no_support
+
+    # Case 4: Model supports reasoning, but reasoning_effort is set, should be prioritized over thinking
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
+        return_value=True,
+    ):
+        result_params_with_effort = v.map_openai_params(
+            non_default_params={
+                "reasoning_effort": "low",
+                "thinking": {"type": "enabled", "budget_tokens": 1000},
+            },
+            optional_params=deepcopy(optional_params),
+            model="gemini-2.5-pro",
+            drop_params=False,
+        )
+        assert "thinkingConfig" in result_params_with_effort
+        assert result_params_with_effort["thinkingConfig"]["includeThoughts"] is True
+        assert "thinkingBudget" in result_params_with_effort["thinkingConfig"]
+        assert result_params_with_effort["thinkingConfig"]["thinkingBudget"] != 1000
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     tools = v._map_function(value=[{"code_execution": {}}])
@@ -495,6 +571,36 @@ def test_vertex_ai_map_tool_with_anyof():
     ] == {
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+
+    new_value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "git_create_branch",
+                "description": "Creates a new branch from an optional base branch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"title": "Repo Path", "type": "string"},
+                        "branch_name": {"title": "Branch Name", "type": "string"},
+                        "base_branch": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "default": None,
+                        },
+                    },
+                    "required": ["repo_path", "branch_name"],
+                    "title": "GitCreateBranch",
+                },
+            },
+        }
+    ]
+    new_tools = v._map_function(value=new_value)
+
+    assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
+        "base_branch"
+    ] == {
+        "anyOf": [{"type": "string", "nullable": True}]
+    }, f"Expected only anyOf field and its contents to be kept, but got {new_tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
 
 def test_vertex_ai_streaming_usage_calculation():

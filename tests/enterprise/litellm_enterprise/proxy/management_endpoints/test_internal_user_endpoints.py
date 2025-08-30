@@ -159,27 +159,3 @@ class TestAvailableEnterpriseUsers:
                 CommonProxyErrors.db_not_connected_error.value
                 in response.json()["detail"]["error"]
             )
-
-    @pytest.mark.asyncio
-    async def test_available_users_not_premium_user(
-        self, client, mock_user_api_key_auth
-    ):
-        """Test when premium_user is None (not a premium user)"""
-        from litellm.proxy._types import CommonProxyErrors
-
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-            "litellm.proxy.proxy_server.premium_user",
-            None,
-        ):
-            # Override the dependency
-            client.app.dependency_overrides[mock_user_api_key_auth] = lambda: {
-                "user_id": "test_user"
-            }
-
-            response = client.get("/user/available_users")
-
-            assert response.status_code == 500
-            assert (
-                CommonProxyErrors.not_premium_user.value
-                in response.json()["detail"]["error"]
-            )

@@ -1,7 +1,7 @@
 import asyncio
 import json
+import logging
 import traceback
-import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +14,7 @@ from typing import (
     Union,
 )
 
+import fastuuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -328,10 +329,6 @@ class ProxyBaseLLMRequestProcessing:
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
-        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
-        )
-
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
         logging_obj, self.data = litellm.utils.function_setup(
@@ -342,6 +339,13 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
+        )
+
+        if "messages" in self.data and self.data["messages"]:
+            logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
 
@@ -382,11 +386,12 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(
-                json.dumps(self.data, indent=4, default=str)
-            ),
-        )
+        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n{}".format(
+                    json.dumps(self.data, indent=4, default=str)
+                ),
+            )
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,

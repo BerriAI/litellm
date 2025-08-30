@@ -10,6 +10,7 @@ from typing import List, Literal, Optional, Tuple, Union, cast, overload
 import httpx
 
 import litellm
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -25,6 +26,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -47,7 +49,15 @@ from litellm.types.utils import (
 )
 from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
 
-from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
+from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name, get_anthropic_beta_from_headers
+
+# Computer use tool prefixes supported by Bedrock
+BEDROCK_COMPUTER_USE_TOOLS = [
+    "computer_use_preview",
+    "computer_",
+    "bash_",
+    "text_editor_"
+]
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -218,10 +228,101 @@ class AmazonConverseConfig(BaseConfig):
             + self.get_supported_video_types()
         )
 
+    def is_computer_use_tool_used(
+        self, tools: Optional[List[OpenAIChatCompletionToolParam]], model: str
+    ) -> bool:
+        """Check if computer use tools are being used in the request."""
+        if tools is None:
+            return False
+        
+        for tool in tools:
+            if "type" in tool:
+                tool_type = tool["type"]
+                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                    if tool_type.startswith(computer_use_prefix):
+                        return True
+        return False
+
+    def _transform_computer_use_tools(
+        self, computer_use_tools: List[OpenAIChatCompletionToolParam]
+    ) -> List[dict]:
+        """Transform computer use tools to Bedrock format."""
+        transformed_tools: List[dict] = []
+        
+        for tool in computer_use_tools:
+            tool_type = tool.get("type", "")
+            
+            # Check if this is a computer use tool with the startswith method
+            is_computer_use_tool = False
+            for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                if tool_type.startswith(computer_use_prefix):
+                    is_computer_use_tool = True
+                    break
+            
+            transformed_tool: dict = {}
+            if is_computer_use_tool:
+                if tool_type.startswith("computer_") and "function" in tool:
+                    # Computer use tool with function format
+                    func = tool["function"]
+                    transformed_tool = {
+                        "type": tool_type,
+                        "name": func.get("name", "computer"),
+                        **func.get("parameters", {})
+                    }
+                else:
+                    # Direct tools - just need to ensure name is present
+                    transformed_tool = dict(tool)
+                    if "name" not in transformed_tool:
+                        if tool_type.startswith("bash_"):
+                            transformed_tool["name"] = "bash"
+                        elif tool_type.startswith("text_editor_"):
+                            transformed_tool["name"] = "str_replace_editor"
+            else:
+                # Pass through other tools as-is
+                transformed_tool = dict(tool)
+                
+            transformed_tools.append(transformed_tool)
+            
+        return transformed_tools
+
+    def _separate_computer_use_tools(
+        self, tools: List[OpenAIChatCompletionToolParam], model: str
+    ) -> Tuple[List[OpenAIChatCompletionToolParam], List[OpenAIChatCompletionToolParam]]:
+        """
+        Separate computer use tools from regular function tools.
+        
+        Args:
+            tools: List of tools to separate
+            model: The model name to check if it supports computer use
+            
+        Returns:
+            Tuple of (computer_use_tools, regular_tools)
+        """
+        computer_use_tools = []
+        regular_tools = []
+        
+        for tool in tools:
+            if "type" in tool:
+                tool_type = tool["type"]
+                is_computer_use_tool = False
+                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                    if tool_type.startswith(computer_use_prefix):
+                        is_computer_use_tool = True
+                        break
+                if is_computer_use_tool:
+                    computer_use_tools.append(tool)
+                else:
+                    regular_tools.append(tool)
+            else:
+                regular_tools.append(tool)
+            
+        return computer_use_tools, regular_tools
+
+
+
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
-        schema_name: str = "json_tool_call",
         description: Optional[str] = None,
     ) -> ChatCompletionToolParam:
         """
@@ -246,7 +347,7 @@ class AmazonConverseConfig(BaseConfig):
             _input_schema = json_schema
 
         tool_param_function_chunk = ChatCompletionToolParamFunctionChunk(
-            name=schema_name, parameters=_input_schema
+            name=RESPONSE_FORMAT_TOOL_NAME, parameters=_input_schema
         )
         if description:
             tool_param_function_chunk["description"] = description
@@ -290,14 +391,11 @@ class AmazonConverseConfig(BaseConfig):
                     continue
 
                 json_schema: Optional[dict] = None
-                schema_name: str = ""
                 description: Optional[str] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
                     description = value["json_schema"].get("description")
 
                 if "type" in value and value["type"] == "text":
@@ -313,7 +411,6 @@ class AmazonConverseConfig(BaseConfig):
                 """
                 _tool = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
-                    schema_name=schema_name if schema_name != "" else "json_tool_call",
                     description=description,
                 )
                 optional_params = self._add_tools_to_optional_params(
@@ -329,7 +426,7 @@ class AmazonConverseConfig(BaseConfig):
 
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
-                            name=schema_name if schema_name != "" else "json_tool_call"
+                            name=RESPONSE_FORMAT_TOOL_NAME
                         )
                     )
                 optional_params["json_mode"] = True
@@ -405,6 +502,7 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
@@ -417,6 +515,7 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
         ],
         block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
@@ -428,6 +527,7 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
         ],
         block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
@@ -493,12 +593,14 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
+
     def _transform_request_helper(
         self,
         model: str,
         system_content_blocks: List[SystemContentBlock],
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
+        headers: Optional[dict] = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -546,9 +648,48 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
-        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
-            inference_params.pop("tools", [])
-        )
+        original_tools = inference_params.pop("tools", [])
+        
+        # Initialize bedrock_tools
+        bedrock_tools: List[ToolBlock] = []
+        
+        # Collect anthropic_beta values from user headers
+        anthropic_beta_list = []
+        if headers:
+            user_betas = get_anthropic_beta_from_headers(headers)
+            anthropic_beta_list.extend(user_betas)
+        
+        # Only separate tools if computer use tools are actually present
+        if original_tools and self.is_computer_use_tool_used(original_tools, model):
+            # Separate computer use tools from regular function tools
+            computer_use_tools, regular_tools = self._separate_computer_use_tools(
+                original_tools, model
+            )
+            
+            # Process regular function tools using existing logic
+            bedrock_tools = _bedrock_tools_pt(regular_tools)
+            
+            # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
+            if computer_use_tools:
+                anthropic_beta_list.append("computer-use-2024-10-22")
+                # Transform computer use tools to proper Bedrock format
+                transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
+                additional_request_params["tools"] = transformed_computer_tools
+        else:
+            # No computer use tools, process all tools as regular tools
+            bedrock_tools = _bedrock_tools_pt(original_tools)
+        
+        # Set anthropic_beta in additional_request_params if we have any beta features
+        if anthropic_beta_list:
+            # Remove duplicates while preserving order
+            unique_betas = []
+            seen = set()
+            for beta in anthropic_beta_list:
+                if beta not in seen:
+                    unique_betas.append(beta)
+                    seen.add(beta)
+            additional_request_params["anthropic_beta"] = unique_betas
+        
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
@@ -586,6 +727,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
+        headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
@@ -595,6 +737,7 @@ class AmazonConverseConfig(BaseConfig):
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
+            headers=headers,
         )
 
         bedrock_messages = (
@@ -625,6 +768,7 @@ class AmazonConverseConfig(BaseConfig):
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                headers=headers,
             ),
         )
 
@@ -634,6 +778,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
+        headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
 
@@ -642,6 +787,7 @@ class AmazonConverseConfig(BaseConfig):
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
+            headers=headers,
         )
 
         ## TRANSFORMATION ##
@@ -969,8 +1115,7 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if json_mode is True and tools is not None and len(tools) == 1:
-            # to support 'json_schema' logic on bedrock models
+        if json_mode is True and tools is not None and len(tools) == 1 and tools[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME:
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
                 chat_completion_message["content"] = json_mode_content_str
@@ -1032,3 +1177,37 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> bool:
+        """
+        Returns True if the model/provider should fake stream
+        """
+        ###################################################################
+        # If an upstream method already set fake_stream to True, return True
+        ###################################################################
+        if fake_stream is True:
+            return True
+
+        ###################################################################
+        # Bedrock Converse Specific Logic
+        ###################################################################
+        if stream is True:
+            if model is not None:
+                ###################################################################
+                # GPT-OSS models do not support streaming
+                ###################################################################
+                if "gpt-oss" in model:
+                    return True
+                ###################################################################
+                # AI21 models do not support streaming
+                ###################################################################
+                if "ai21" in model:
+                    return True
+        return False

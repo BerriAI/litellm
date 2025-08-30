@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 sys.path.insert(
@@ -182,6 +183,127 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
             == mock_method.call_args.kwargs["prompt"]
         )
         assert "dall-e-3" == mock_method.call_args.kwargs["model"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_litellm_gateway_image_generation_direct(is_async):
+    """Test image generation using the litellm_proxy provider directly."""
+    litellm._turn_on_debug()
+
+    # Create mock response that matches OpenAI's response structure
+    mock_openai_response = MagicMock()
+    mock_openai_response.model_dump.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/image.png"}],
+    }
+
+    if is_async:
+        # Mock the AsyncOpenAI client that gets created inside _get_openai_client
+        mock_async_client = AsyncMock()
+        mock_async_client.images.generate = AsyncMock(return_value=mock_openai_response)
+        
+        with patch("litellm.llms.openai.openai.AsyncOpenAI", return_value=mock_async_client) as mock_async_constructor:
+            response = await litellm.aimage_generation(
+                model="litellm_proxy/dall-e-3",
+                prompt="A beautiful sunset over mountains",
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            
+            # Verify the AsyncOpenAI client constructor was called with correct parameters
+            mock_async_constructor.assert_called_once()
+            constructor_kwargs = mock_async_constructor.call_args.kwargs
+            print("KWARGS to Async OpenAI constructor=", constructor_kwargs)
+            assert constructor_kwargs["api_key"] == "sk-1234"
+            assert constructor_kwargs["base_url"] == "http://my-proxy"
+            
+            # Verify the AsyncOpenAI client was called correctly
+            mock_async_client.images.generate.assert_awaited_once()
+            call_kwargs = mock_async_client.images.generate.call_args.kwargs
+            assert call_kwargs["model"] == "dall-e-3"
+            assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
+    else:
+        # Mock the sync OpenAI client that gets created inside _get_openai_client
+        mock_sync_client = MagicMock()
+        mock_sync_client.images.generate.return_value = mock_openai_response
+        
+        with patch("litellm.llms.openai.openai.OpenAI", return_value=mock_sync_client) as mock_sync_constructor:
+            response = litellm.image_generation(
+                model="litellm_proxy/dall-e-3",
+                prompt="A beautiful sunset over mountains",
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            
+            # Verify the OpenAI client constructor was called with correct parameters
+            mock_sync_constructor.assert_called_once()
+            constructor_kwargs = mock_sync_constructor.call_args.kwargs
+            assert constructor_kwargs["api_key"] == "sk-1234"
+            assert constructor_kwargs["base_url"] == "http://my-proxy"
+            
+            # Verify the OpenAI client was called correctly
+            mock_sync_client.images.generate.assert_called_once()
+            call_kwargs = mock_sync_client.images.generate.call_args.kwargs
+            assert call_kwargs["model"] == "dall-e-3"
+            assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
+
+    # Verify the response structure
+    assert response is not None
+    assert hasattr(response, 'data') or isinstance(response, dict)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_image_edit(is_async):
+    litellm._turn_on_debug()
+
+    mock_response = {
+        "created": 1,
+        "data": [{"b64_json": ""}],
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    image_file = BytesIO(b"fake-image")
+
+    if is_async:
+        mock_post = AsyncMock(return_value=MockResponse(mock_response, 200))
+        patch_target = "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    else:
+        mock_post = MagicMock(return_value=MockResponse(mock_response, 200))
+        patch_target = "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+
+    with patch(patch_target, new=mock_post):
+        if is_async:
+            await litellm.aimage_edit(
+                model="litellm_proxy/gpt-image-1",
+                prompt="A test prompt",
+                image=[image_file],
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            mock_post.assert_awaited_once()
+        else:
+            litellm.image_edit(
+                model="litellm_proxy/gpt-image-1",
+                prompt="A test prompt",
+                image=[image_file],
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            mock_post.assert_called_once()
+
+    called_kwargs = mock_post.call_args.kwargs
+    assert called_kwargs["url"] == "http://my-proxy/images/edits"
+    assert called_kwargs["headers"]["Authorization"] == "Bearer sk-1234"
 
 
 @pytest.mark.parametrize("is_async", [False, True])
@@ -452,7 +574,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 
 
 def test_litellm_gateway_from_sdk_with_thinking_param():
-    try: 
+    try:
         response = litellm.completion(
             model="litellm_proxy/anthropic.claude-3-7-sonnet-20250219-v1:0",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -464,4 +586,3 @@ def test_litellm_gateway_from_sdk_with_thinking_param():
         pytest.fail("Expected an error to be raised")
     except Exception as e:
         assert "Connection error." in str(e)
-    

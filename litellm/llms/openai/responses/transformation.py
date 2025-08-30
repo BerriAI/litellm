@@ -1,17 +1,21 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _safe_convert_created_field,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import _safe_convert_created_field
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -22,36 +26,28 @@ else:
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.OPENAI
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
         """
-        return [
-            "input",
-            "model",
-            "include",
-            "instructions",
-            "max_output_tokens",
-            "metadata",
-            "parallel_tool_calls",
-            "previous_response_id",
-            "reasoning",
-            "store",
-            "background",
-            "stream",
-            "prompt",
-            "temperature",
-            "text",
-            "tool_choice",
-            "tools",
-            "top_p",
-            "truncation",
-            "user",
-            "extra_headers",
-            "extra_query",
-            "extra_body",
-            "timeout",
-        ]
+        supported_params = get_type_hints(ResponsesAPIRequestParams).keys()
+        return list(
+            set(
+                [
+                    "input",
+                    "model",
+                    "extra_headers",
+                    "extra_query",
+                    "extra_body",
+                    "timeout",
+                ]
+                + list(supported_params)
+            )
+        )
 
     def map_openai_params(
         self,
@@ -71,11 +67,36 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         headers: dict,
     ) -> Dict:
         """No transform applied since inputs are in OpenAI spec already"""
-        return dict(
+
+        input = self._validate_input_param(input)
+        final_request_params = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
             )
         )
+
+        return final_request_params
+
+    def _validate_input_param(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Ensure all input fields if pydantic are converted to dict
+
+        OpenAI API Fails when we try to JSON dumps specific input pydantic fields.
+        This function ensures all input fields are converted to dict.
+        """
+        if isinstance(input, list):
+            validated_input = []
+            for item in input:
+                # if it's pydantic, convert to dict
+                if isinstance(item, BaseModel):
+                    validated_input.append(item.model_dump(exclude_none=True))
+                else:
+                    validated_input.append(item)
+            return validated_input
+        # Input is expected to be either str or List, no single BaseModel expected
+        return input
 
     def transform_response_api_response(
         self,
@@ -86,7 +107,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """No transform applied since outputs are in OpenAI spec already"""
         try:
             raw_response_json = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            raw_response_json["created_at"] = _safe_convert_created_field(
+                raw_response_json["created_at"]
+            )
         except Exception:
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
