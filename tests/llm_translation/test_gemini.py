@@ -643,39 +643,3 @@ def test_system_message_with_no_user_message():
         assert response is not None
 
         assert response.choices[0].message.content is not None
-
-
-def test_gemini_tool_call():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model = "gemini/gemini-2.5-pro",
-        messages = [
-            {
-            "role": "user",
-            "content": "Tell me if the shoe brand Air Jordan has more models than the shoe brand Nike."
-            }
-        ],    
-        tools = [
-            {
-            "type": "function",
-            "function": {
-                "name": "shoe_get_id",
-                "description": "Get information about a show by its ID or name",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "shoe_id": {
-                            "type": ["STRING", "NUMBER"],
-                            "description": "The shoe ID or name"
-                        }
-                    },
-                    "required": ["shoe_id"],
-                    "additionalProperties": False,
-                    "$schema": "http://json-schema.org/draft-07/schema#"
-                }
-            }
-            },
-        ]
-    )
-    print(response)
-    print(json.dumps(response, indent=4, default=str))
