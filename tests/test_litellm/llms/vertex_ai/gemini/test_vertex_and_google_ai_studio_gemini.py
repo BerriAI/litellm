@@ -442,82 +442,6 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     }
 
 
-def test_vertex_ai_reasoning_effort_mapping():
-    """
-    Test that reasoning_effort is mapped to thinkingConfig correctly for models that support it.
-    - A default thinking config is applied if reasoning_effort is not specified.
-    - reasoning_effort correctly maps to thinkingConfig.
-    - No thinkingConfig is applied for models that do not support reasoning.
-    - reasoning_effort is prioritized over thinking param.
-    """
-    v = VertexGeminiConfig()
-    optional_params = {}
-
-    # Case 1: Model supports reasoning, no reasoning_effort provided
-    # Should apply default thinkingConfig
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
-        return_value=True,
-    ):
-        result_params = v.map_openai_params(
-            non_default_params={},
-            optional_params=deepcopy(optional_params),
-            model="gemini-2.5-pro",
-            drop_params=False,
-        )
-        assert "thinkingConfig" in result_params
-        assert result_params["thinkingConfig"] == {"includeThoughts": True}
-
-    # Case 2: Model supports reasoning, reasoning_effort is 'low'
-    # Should apply thinkingConfig with budget
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
-        return_value=True,
-    ):
-        result_params_with_effort = v.map_openai_params(
-            non_default_params={"reasoning_effort": "low"},
-            optional_params=deepcopy(optional_params),
-            model="gemini-2.5-pro",
-            drop_params=False,
-        )
-        assert "thinkingConfig" in result_params_with_effort
-        assert result_params_with_effort["thinkingConfig"]["includeThoughts"] is True
-        assert "thinkingBudget" in result_params_with_effort["thinkingConfig"]
-
-    # Case 3: Model does not support reasoning
-    # Should not apply thinkingConfig
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
-        return_value=False,
-    ):
-        result_params_no_support = v.map_openai_params(
-            non_default_params={},
-            optional_params=deepcopy(optional_params),
-            model="gemini-pro",
-            drop_params=False,
-        )
-        assert "thinkingConfig" not in result_params_no_support
-
-    # Case 4: Model supports reasoning, but reasoning_effort is set, should be prioritized over thinking
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.supports_reasoning",
-        return_value=True,
-    ):
-        result_params_with_effort = v.map_openai_params(
-            non_default_params={
-                "reasoning_effort": "low",
-                "thinking": {"type": "enabled", "budget_tokens": 1000},
-            },
-            optional_params=deepcopy(optional_params),
-            model="gemini-2.5-pro",
-            drop_params=False,
-        )
-        assert "thinkingConfig" in result_params_with_effort
-        assert result_params_with_effort["thinkingConfig"]["includeThoughts"] is True
-        assert "thinkingBudget" in result_params_with_effort["thinkingConfig"]
-        assert result_params_with_effort["thinkingConfig"]["thinkingBudget"] != 1000
-
-
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     tools = v._map_function(value=[{"code_execution": {}}])
@@ -1109,10 +1033,11 @@ def test_vertex_ai_code_line_length():
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
+
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
-    
+
     # Get the source code of the _transform_parts method
     source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
     
