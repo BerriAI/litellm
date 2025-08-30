@@ -295,6 +295,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   }
 
   const fetchUserSpendData = useCallback(async () => {
+    console.log("HEREEEEE");
     if (!accessToken || !dateValue.from || !dateValue.to) return
 
     setLoading(true)
@@ -314,8 +315,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
       }
 
       const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime)
-
+      console.log("tries firstPageData******************************:", firstPageData);
       if (firstPageData.metadata.total_pages <= 1) {
+        console.log("firstPageData******************************:", firstPageData);
         setUserSpendData(firstPageData)
         return
       }

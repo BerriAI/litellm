@@ -286,6 +286,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
     });
   });
 
+  console.log("totalMetrics******************************:", totalMetrics);
   // Convert daily_data object to array and sort by date
   const sortedDailyData = Object.entries(totalMetrics.daily_data)
     .map(([date, metrics]) => ({ date, metrics }))
@@ -412,7 +413,7 @@ const formatKeyLabel = (
 // Process data function
 export const processActivityData = (dailyActivity: { results: DailyData[] }, key: "models" | "api_keys" | "mcp_servers"): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
-
+  console.log("dailyActivity******************************:", dailyActivity);
   dailyActivity.results.forEach((day) => {
     Object.entries(day.breakdown[key] || {}).forEach(([model, modelData]) => {
       if (!modelMetrics[model]) {
@@ -428,7 +429,7 @@ export const processActivityData = (dailyActivity: { results: DailyData[] }, key
           prompt_tokens: 0,
           completion_tokens: 0,
           total_spend: 0,
-          total_cache_read_input_tokens: 0,
+          total_cache_read_input_tokens: 0, 
           total_cache_creation_input_tokens: 0,
           top_api_keys: [],
           daily_data: []
