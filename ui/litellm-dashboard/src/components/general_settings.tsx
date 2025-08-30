@@ -380,44 +380,47 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     const updatedVariables = Object.fromEntries(
       Object.entries(router_settings)
         .map(([key, value]) => {
-          if (key !== "routing_strategy_args" && key !== "routing_strategy") {
-            return [
-              key,
-              (
-                document.querySelector(
-                  `input[name="${key}"]`
-                ) as HTMLInputElement
-              )?.value || value,
-            ];
-          } else if (key == "routing_strategy") {
-            return [key, selectedStrategy];
-          } else if (
-            key == "routing_strategy_args" &&
-            selectedStrategy == "latency-based-routing"
-          ) {
+          // 1. Special handling for routing_strategy_args
+          if (key === "routing_strategy_args" && selectedStrategy === "latency-based-routing") {
             let setRoutingStrategyArgs: routingStrategyArgs = {};
-
             const lowestLatencyBufferElement = document.querySelector(
               `input[name="lowest_latency_buffer"]`
             ) as HTMLInputElement;
             const ttlElement = document.querySelector(
               `input[name="ttl"]`
             ) as HTMLInputElement;
-
             if (lowestLatencyBufferElement?.value) {
               setRoutingStrategyArgs["lowest_latency_buffer"] = Number(
                 lowestLatencyBufferElement.value
               );
             }
-
             if (ttlElement?.value) {
               setRoutingStrategyArgs["ttl"] = Number(ttlElement.value);
             }
-
             console.log(`setRoutingStrategyArgs: ${setRoutingStrategyArgs}`);
-            return ["routing_strategy_args", setRoutingStrategyArgs];
+            return [key, setRoutingStrategyArgs];
           }
-          return null;
+          // 2. Special handling for routing_strategy
+          if (key === "routing_strategy") {
+            return [key, selectedStrategy];
+          }
+          // 3. For other fields, prefer input value
+          let inputValue = (
+            document.querySelector(
+              `input[name="${key}"]`
+            ) as HTMLInputElement
+          )?.value ?? value;
+          // 3.1 model_group_alias should be parsed to object if string
+          if (key === "model_group_alias") {
+            try {
+              if (typeof inputValue === "string") {
+                inputValue = JSON.parse(inputValue);
+              }
+            } catch (e) {
+              // If parsing fails, keep original value
+            }
+          }
+          return [key, inputValue];
         })
         .filter((entry) => entry !== null && entry !== undefined) as Iterable<
         [string, unknown]
