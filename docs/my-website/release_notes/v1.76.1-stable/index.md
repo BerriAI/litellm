@@ -72,9 +72,17 @@ This release includes significant performance optimizations:
 
 | Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
 | ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | -------- |
-| Google | `gemini-2.5-flash-image-preview` | - | - | - | Chat completions + image generation |
-| X.AI | `xai/grok-code-fast` | - | - | - | Code generation |
-| OpenAI | `gpt-realtime` | - | - | - | Real-time conversation |
+| Google | `gemini-2.5-flash-image-preview` | 1M | $0.30 | $2.50 | Chat completions + image generation ($0.039/image) |
+| X.AI | `xai/grok-code-fast` | 256K | $0.20 | $1.50 | Code generation |
+| OpenAI | `gpt-realtime` | 32K | $4.00 | $16.00 | Real-time conversation + audio |
+| Vercel AI Gateway | `vercel_ai_gateway/openai/o3` | 200K | $2.00 | $8.00 | Advanced reasoning |
+| Vercel AI Gateway | `vercel_ai_gateway/openai/o3-mini` | 200K | $1.10 | $4.40 | Efficient reasoning |
+| Vercel AI Gateway | `vercel_ai_gateway/openai/o4-mini` | 200K | $1.10 | $4.40 | Latest mini model |
+| DeepInfra | `deepinfra/zai-org/GLM-4.5` | 131K | $0.55 | $2.00 | Chat completions |
+| Perplexity | `perplexity/codellama-34b-instruct` | 16K | $0.35 | $1.40 | Code generation |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/deepseek-v3p1` | 128K | $0.56 | $1.68 | Chat completions |
+
+**Additional Models Added:** Various other Vercel AI Gateway models were added too. See [models.litellm.ai](https://models.litellm.ai) for the full list.
 
 #### Features
 
