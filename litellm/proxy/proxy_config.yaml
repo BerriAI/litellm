@@ -1,9 +1,6 @@
 model_list:
-  - model_name: xai/*
-    litellm_params:
-      model: anthropic/*
-      api_key: os.environ/OPENAI_API_KEY_IJ
   - model_name: db-openai-endpoint
     litellm_params:
       model: openai/*
       api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+      mock_response: "hi"
