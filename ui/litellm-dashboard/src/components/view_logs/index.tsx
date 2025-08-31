@@ -654,7 +654,7 @@ export default function SpendLogsTable({
                       </div>
 
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-700 min-w-[220px]">
+                        <span className="text-sm text-gray-700 whitespace-nowrap">
                           Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
                           {logs.isLoading
                             ? "..."
