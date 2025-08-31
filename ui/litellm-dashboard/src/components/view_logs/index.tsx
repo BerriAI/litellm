@@ -518,10 +518,10 @@ export default function SpendLogsTable({
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden box-border">
-                  <div className="border-b px-6 py-4 w-full max-w-full overflow-hidden box-border">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full overflow-hidden box-border">
-                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full overflow-hidden box-border">
+                <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+                  <div className="border-b px-6 py-4 w-full max-w-full box-border">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
+                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full box-border">
                         <div className="relative w-64 min-w-0 flex-shrink-0">
                           <input
                             type="text"
@@ -546,7 +546,7 @@ export default function SpendLogsTable({
                         </div>
 
                         <div className="flex items-center gap-2 min-w-0 flex-shrink">
-                          <div className="relative" ref={quickSelectRef}>
+                          <div className="relative z-[9999]" ref={quickSelectRef}>
                             <button
                               onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                               className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
@@ -563,7 +563,7 @@ export default function SpendLogsTable({
                             </button>
 
                             {quickSelectOpen && (
-                              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-[9999]">
                                 <div className="space-y-1">
                                   {quickSelectOptions.map((option) => (
                                     <button
@@ -654,7 +654,7 @@ export default function SpendLogsTable({
                       </div>
 
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-700 min-w-[180px]">
+                        <span className="text-sm text-gray-700 min-w-[220px]">
                           Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
                           {logs.isLoading
                             ? "..."
