@@ -592,7 +592,7 @@ def test_nonstream_reasoning_summary_added_to_chat_message():
         model="gpt-5",
         raw_response=raw,
         model_response=base,
-        logging_obj=litellm.Logging(),
+        logging_obj=None,
         request_data={},
         messages=[{"role": "user", "content": "hi"}],
         optional_params={},
