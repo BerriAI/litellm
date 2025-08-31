@@ -465,7 +465,7 @@ export default function SpendLogsTable({
   const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label
 
   return (
-    <div className="w-full p-6">
+    <div className="w-full p-6 max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100vw', boxSizing: 'border-box', overflowX: 'hidden'}}>
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>
@@ -518,11 +518,11 @@ export default function SpendLogsTable({
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow">
-                  <div className="border-b px-6 py-4">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative w-64">
+                <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100vw', boxSizing: 'border-box'}}>
+                  <div className="border-b px-6 py-4 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
+                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
+                        <div className="relative w-64 min-w-0 flex-shrink-0">
                           <input
                             type="text"
                             placeholder="Search by Request ID"
@@ -545,7 +545,7 @@ export default function SpendLogsTable({
                           </svg>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-shrink">
                           <div className="relative" ref={quickSelectRef}>
                             <button
                               onClick={() => setQuickSelectOpen(!quickSelectOpen)}
@@ -801,13 +801,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const totalMaskedEntities = getTotalMaskedEntities()
 
   return (
-    <div className="p-6 bg-gray-50 space-y-6">
+    <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
       {/* Combined Info Card */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="p-4 border-b">
           <h3 className="text-lg font-medium">Request Details</h3>
         </div>
-        <div className="grid grid-cols-2 gap-4 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 w-full max-w-full overflow-hidden">
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
@@ -916,15 +916,17 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <ConfigInfoMessage show={missingData} />
 
       {/* Request/Response Panel */}
-      <RequestResponsePanel
-        row={row}
-        hasMessages={hasMessages}
-        hasResponse={hasResponse}
-        hasError={hasError}
-        errorInfo={errorInfo}
-        getRawRequest={getRawRequest}
-        formattedResponse={formattedResponse}
-      />
+      <div className="w-full max-w-full overflow-hidden">
+        <RequestResponsePanel
+          row={row}
+          hasMessages={hasMessages}
+          hasResponse={hasResponse}
+          hasError={hasError}
+          errorInfo={errorInfo}
+          getRawRequest={getRawRequest}
+          formattedResponse={formattedResponse}
+        />
+      </div>
 
       {/* Guardrail Data - Show only if present */}
       {hasGuardrailData && <GuardrailViewer data={row.original.metadata!.guardrail_information} />}
