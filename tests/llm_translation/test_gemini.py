@@ -436,7 +436,10 @@ def test_gemini_with_empty_function_call_arguments():
 async def test_claude_tool_use_with_gemini():
     response = await litellm.anthropic.messages.acreate(
         messages=[
-            {"role": "user", "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?"}
+            {
+                "role": "user",
+                "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?",
+            }
         ],
         model="gemini/gemini-2.5-flash",
         stream=True,
@@ -578,11 +581,17 @@ def test_gemini_tool_use():
     assert stop_reason is not None
     assert stop_reason == "tool_calls"
 
+
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async():
     litellm._turn_on_debug()
     response = await litellm.acompletion(
-        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        messages=[
+            {
+                "role": "user",
+                "content": "Generate an image of a banana wearing a costume that says LiteLLM",
+            }
+        ],
         model="gemini/gemini-2.5-flash-image-preview",
     )
 
@@ -597,12 +606,16 @@ async def test_gemini_image_generation_async():
     assert IMAGE_URL["url"].startswith("data:image/png;base64,")
 
 
-
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async_stream():
-    #litellm._turn_on_debug()
+    # litellm._turn_on_debug()
     response = await litellm.acompletion(
-        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        messages=[
+            {
+                "role": "user",
+                "content": "Generate an image of a banana wearing a costume that says LiteLLM",
+            }
+        ],
         model="gemini/gemini-2.5-flash-image-preview",
         stream=True,
     )
@@ -611,35 +624,72 @@ async def test_gemini_image_generation_async_stream():
     model_response_image = None
     async for chunk in response:
         print("CHUNK: ", chunk)
-        if hasattr(chunk.choices[0].delta, "image") and chunk.choices[0].delta.image is not None:
+        if (
+            hasattr(chunk.choices[0].delta, "image")
+            and chunk.choices[0].delta.image is not None
+        ):
             model_response_image = chunk.choices[0].delta.image
             print("MODEL_RESPONSE_IMAGE: ", model_response_image)
             assert model_response_image is not None
             assert model_response_image["url"].startswith("data:image/png;base64,")
             break
-    
+
     #########################################################
     # Important: Validate we did get an image in the response
     #########################################################
     assert model_response_image is not None
     assert model_response_image["url"].startswith("data:image/png;base64,")
-    
+
 
 def test_system_message_with_no_user_message():
-        """
-        Test that the system message is translated correctly for non-OpenAI providers.
-        """
-        messages = [
-            {
-                "role": "system",
-                "content": "Be a good bot!",
+    """
+    Test that the system message is translated correctly for non-OpenAI providers.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": "Be a good bot!",
+        },
+    ]
+
+    response = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=messages,
+    )
+    assert response is not None
+
+    assert response.choices[0].message.content is not None
+
+
+def test_gemini_with_thinking():
+    from litellm import completion
+
+    litellm._turn_on_debug()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
             },
-        ]
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
-        response = litellm.completion(
-            model="gemini/gemini-2.5-flash",
-            messages=messages,
-        )
-        assert response is not None
-
-        assert response.choices[0].message.content is not None
+    result = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=messages,
+        tools=tools,
+    )
+    print(f"result: {result}")
