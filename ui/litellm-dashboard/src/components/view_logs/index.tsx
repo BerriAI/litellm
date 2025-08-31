@@ -465,7 +465,7 @@ export default function SpendLogsTable({
   const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label
 
   return (
-    <div className="w-full p-6 max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100vw', boxSizing: 'border-box', overflowX: 'hidden'}}>
+    <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>
@@ -518,10 +518,10 @@ export default function SpendLogsTable({
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100vw', boxSizing: 'border-box'}}>
-                  <div className="border-b px-6 py-4 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
-                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
+                <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden box-border">
+                  <div className="border-b px-6 py-4 w-full max-w-full overflow-hidden box-border">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full overflow-hidden box-border">
+                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full overflow-hidden box-border">
                         <div className="relative w-64 min-w-0 flex-shrink-0">
                           <input
                             type="text"
@@ -801,7 +801,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const totalMaskedEntities = getTotalMaskedEntities()
 
   return (
-    <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden" style={{width: '100%', maxWidth: '100%', boxSizing: 'border-box'}}>
+    <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
       {/* Combined Info Card */}
       <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="p-4 border-b">
