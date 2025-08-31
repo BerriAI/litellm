@@ -2897,9 +2897,9 @@ def test_gemini_function_call_parameter_in_messages():
                                 "type": "object",
                                 "properties": {
                                     "queries": {
-                                        "type": "array",
+                                        "type": "ARRAY",
                                         "description": "A list of queries to search for.",
-                                        "items": {"type": "string"},
+                                        "items": {"type": "STRING"},
                                     }
                                 },
                                 "required": ["queries"],
