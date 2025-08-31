@@ -43,6 +43,7 @@ interface KeyInfoViewProps {
   teams: any[] | null
   premiumUser: boolean
   setAccessToken?: (token: string) => void
+  backButtonText?: string
 }
 
 export default function KeyInfoView({
@@ -57,6 +58,7 @@ export default function KeyInfoView({
   onDelete,
   premiumUser,
   setAccessToken,
+  backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [form] = Form.useForm()
@@ -92,7 +94,7 @@ export default function KeyInfoView({
     return (
       <div className="p-4">
         <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-          Back to Keys
+          {backButtonText}
         </Button>
         <Text>Key not found</Text>
       </div>
@@ -261,7 +263,7 @@ export default function KeyInfoView({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            Back to Keys
+            {backButtonText}
           </Button>
           <Title>{currentKeyData.key_alias || "API Key"}</Title>
 
