@@ -163,7 +163,7 @@ class BaseLLMChatTest(ABC):
                         "type": "object",
                         "properties": {
                             "shoe_id": {
-                                "type": ["STRING", "NUMBER"],
+                                "type": ["string", "number"],
                                 "description": "The shoe ID or name"
                             }
                         },
