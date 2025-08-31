@@ -1370,6 +1370,46 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
 
+        # Optional routing heuristic: if reasoning requested or supported, prefer Responses API for OpenAI/Azure
+        try:
+            wants_reasoning = reasoning_effort is not None
+            supports_reasoning = bool(model_info.get("supports_reasoning"))
+            is_azure_o_series = False
+            if custom_llm_provider == "azure":
+                try:
+                    is_azure_o_series = litellm.AzureOpenAIO1Config().is_o_series_model(
+                        model=model
+                    )
+                except Exception:
+                    is_azure_o_series = False
+            if (
+                custom_llm_provider in ("openai", "azure")
+                and (wants_reasoning or supports_reasoning)
+                and not is_azure_o_series
+            ):
+                from litellm.completion_extras import responses_api_bridge
+
+                return responses_api_bridge.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )
+        except Exception:
+            # Do not block normal flow if heuristic check fails
+            pass
+
         if custom_llm_provider == "azure":
             # azure configs
             ## check dynamic params ##

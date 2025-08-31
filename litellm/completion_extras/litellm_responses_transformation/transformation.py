@@ -240,9 +240,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         choices: List[Choices] = []
         index = 0
+        reasoning_text: Optional[str] = None
         for item in raw_response.output:
             if isinstance(item, ResponseReasoningItem):
-                pass  # ignore for now.
+                # Attempt to capture reasoning text from item content; fall back later to response.reasoning.summary
+                try:
+                    segments: List[str] = []
+                    for content in getattr(item, "content", []) or []:
+                        segments.append(getattr(content, "text", ""))
+                    candidate = "".join(segments).strip()
+                    if candidate:
+                        reasoning_text = candidate
+                except Exception:
+                    pass
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
@@ -288,6 +298,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raise ValueError(
                     f"Unknown items in responses API response: {raw_response.output}"
                 )
+
+        # If not captured from items, try overall response-level reasoning summary
+        if reasoning_text is None:
+            try:
+                summary = getattr(getattr(raw_response, "reasoning", None), "summary", None)
+                if isinstance(summary, str) and summary.strip():
+                    reasoning_text = summary.strip()
+            except Exception:
+                pass
+
+        # Attach reasoning_content to first assistant message, if available
+        if reasoning_text and len(choices) > 0 and getattr(choices[0], "message", None):
+            try:
+                if getattr(choices[0].message, "role", "assistant") == "assistant":
+                    choices[0].message.reasoning_content = reasoning_text
+            except Exception:
+                pass
 
         setattr(model_response, "choices", choices)
 
