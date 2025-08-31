@@ -661,10 +661,33 @@ def test_system_message_with_no_user_message():
     assert response.choices[0].message.content is not None
 
 
+def get_current_weather(location, unit="fahrenheit"):
+    """Get the current weather in a given location"""
+    if "tokyo" in location.lower():
+        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
+    elif "san francisco" in location.lower():
+        return json.dumps(
+            {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
+        )
+    elif "paris" in location.lower():
+        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
+    else:
+        return json.dumps({"location": location, "temperature": "unknown"})
+
+
 def test_gemini_with_thinking():
     from litellm import completion
 
     litellm._turn_on_debug()
+    litellm.modify_params = True
+    model = "gemini/gemini-2.5-flash"
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        }
+    ]
+
     tools = [
         {
             "type": "function",
@@ -676,20 +699,69 @@ def test_gemini_with_thinking():
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
+                            "description": "The city and state",
                         },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
                     },
                     "required": ["location"],
                 },
             },
         }
     ]
-    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
-
-    result = completion(
-        model="gemini/gemini-2.5-flash",
+    response = litellm.completion(
+        model=model,
         messages=messages,
         tools=tools,
+        tool_choice="auto",  # auto is default, but we'll be explicit
+        reasoning_effort="low",
     )
-    print(f"result: {result}")
+    print("Response\n", response)
+    response_message = response.choices[0].message
+    tool_calls = response_message.tool_calls
+
+    print("Expecting there to be 3 tool calls")
+    assert len(tool_calls) > 0  # this has to call the function for SF, Tokyo and paris
+
+    # Step 2: check if the model wanted to call a function
+    print(f"tool_calls: {tool_calls}")
+    if tool_calls:
+        # Step 3: call the function
+        # Note: the JSON response may not always be valid; be sure to handle errors
+        available_functions = {
+            "get_current_weather": get_current_weather,
+        }  # only one function in this example, but you can have multiple
+        messages.append(response_message)  # extend conversation with assistant's reply
+        print("Response message\n", response_message)
+        # Step 4: send the info for each function call and function response to the model
+        for tool_call in tool_calls:
+            function_name = tool_call.function.name
+            if function_name not in available_functions:
+                # the model called a function that does not exist in available_functions - don't try calling anything
+                return
+            function_to_call = available_functions[function_name]
+            function_args = json.loads(tool_call.function.arguments)
+            function_response = function_to_call(
+                location=function_args.get("location"),
+                unit=function_args.get("unit"),
+            )
+            messages.append(
+                {
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": function_response,
+                }
+            )  # extend conversation with function response
+        print(f"messages: {messages}")
+        second_response = litellm.completion(
+            model=model,
+            messages=messages,
+            seed=22,
+            reasoning_effort="low",
+            tools=tools,
+            drop_params=True,
+        )  # get a new response from the model where it can see the function response
+        print("second response\n", second_response)

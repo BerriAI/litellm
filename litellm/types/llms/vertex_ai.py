@@ -41,6 +41,7 @@ class PartType(TypedDict, total=False):
     function_call: FunctionCall
     function_response: FunctionResponse
     thought: bool
+    thoughtSignature: str
 
 
 class HttpxFunctionCall(TypedDict):
