@@ -10,7 +10,7 @@ import litellm.litellm_core_utils.prompt_templates
 import litellm.litellm_core_utils.prompt_templates.factory
 
 load_dotenv()
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -60,12 +60,12 @@ def test_completion_pydantic_obj_2():
                     "events": {
                         "items": {
                             "properties": {
-                                "name": {"title": "Name", "type": "string"},
-                                "date": {"title": "Date", "type": "string"},
+                                "name": {"title": "Name", "type": "STRING"},
+                                "date": {"title": "Date", "type": "STRING"},
                                 "participants": {
-                                    "items": {"type": "string"},
+                                    "items": {"type": "STRING"},
                                     "title": "Participants",
-                                    "type": "array",
+                                    "type": "ARRAY",
                                 },
                             },
                             "propertyOrdering": [
@@ -78,7 +78,7 @@ def test_completion_pydantic_obj_2():
                             "type": "object",
                         },
                         "title": "Events",
-                        "type": "array",
+                        "type": "ARRAY",
                     }
                 },
                 "propertyOrdering": ["events"],
@@ -89,8 +89,28 @@ def test_completion_pydantic_obj_2():
         },
     }
     client = HTTPHandler()
-    with patch.object(client, "post", new=MagicMock()) as mock_post:
-        mock_post.return_value = expected_request_body
+    
+    # Create a proper mock response object
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "test response"}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 3,
+            "totalTokenCount": 13,
+        },
+    }
+    mock_response.status_code = 200
+    
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
             response = litellm.completion(
                 model="gemini/gemini-1.5-pro",
