@@ -2403,6 +2403,7 @@ async def list_keys(
     ),
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
     key_alias: Optional[str] = Query(None, description="Filter keys by key alias"),
+    user_email: Optional[str] = Query(None, description="Filter keys by user email"),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
@@ -2466,6 +2467,7 @@ async def list_keys(
             team_id=team_id,
             key_alias=key_alias,
             key_hash=key_hash,
+            user_email=user_email,
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
@@ -2541,6 +2543,7 @@ async def _list_key_helper(
     organization_id: Optional[str],
     key_alias: Optional[str],
     key_hash: Optional[str],
+    user_email: Optional[str],
     exclude_team_id: Optional[str] = None,
     return_full_object: bool = False,
     admin_team_ids: Optional[
@@ -2591,6 +2594,11 @@ async def _list_key_helper(
         user_condition["organization_id"] = organization_id
     if key_hash and isinstance(key_hash, str):
         user_condition["token"] = key_hash
+    if user_email and isinstance(user_email, str):
+        user_condition["litellm_user_table"] = {
+            "user_email": {"contains": user_email, "mode": "insensitive"}
+        }
+
 
     if user_condition:
         or_conditions.append(user_condition)
@@ -2631,7 +2639,7 @@ async def _list_key_helper(
                 {"token": "desc"},  # fallback sort
             ]
         ),
-        include={"object_permission": True},
+        include={"object_permission": True, "litellm_user_table": True},
     )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
@@ -2650,6 +2658,13 @@ async def _list_key_helper(
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
         key_dict = key.dict()
+        
+        # Extract user_email from the related user table if available
+        if hasattr(key, 'litellm_user_table') and key.litellm_user_table:
+            key_dict['user_email'] = key.litellm_user_table.user_email
+        else:
+            key_dict['user_email'] = None
+        
         # Attach object_permission if object_permission_id is set
         key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
         if return_full_object is True:

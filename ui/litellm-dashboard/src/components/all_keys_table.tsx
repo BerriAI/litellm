@@ -525,6 +525,11 @@ export function AllKeysTable({
       label: "Key Hash",
       isSearchable: false,
     },
+    {
+      name: "User Email",
+      label: "User Email",
+      isSearchable: false,
+    }
   ]
 
   console.log(`keys: ${JSON.stringify(keys)}`)

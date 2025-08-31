@@ -150,6 +150,7 @@ model LiteLLM_UserTable {
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    litellm_verification_token_table LiteLLM_VerificationToken[]
 }
 
 model LiteLLM_ObjectPermissionTable {
@@ -225,6 +226,7 @@ model LiteLLM_VerificationToken {
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    litellm_user_table LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id]) 
 }
 
 model LiteLLM_EndUserTable {

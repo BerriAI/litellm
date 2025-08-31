@@ -129,7 +129,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "User ID",
     "End User",
     "Key Hash",
-    "Model"
+    "Model",
+    "User Email"
   ];
 
   return (

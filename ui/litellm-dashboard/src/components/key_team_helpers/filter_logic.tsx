@@ -12,6 +12,7 @@ export interface FilterState {
   'Team ID': string;
   'Organization ID': string;
   'Key Alias': string;
+  'User Email': string;
   [key: string]: string;
   'User ID': string;
   'Sort By': string;
@@ -35,6 +36,7 @@ export function useFilterLogic({
     'Team ID': '',
     'Organization ID': '',
     'Key Alias': '',
+    'User Email': '',
     'User ID': '',
     'Sort By': 'created_at',
     'Sort Order': 'desc'
@@ -62,6 +64,7 @@ export function useFilterLogic({
           filters["Key Alias"] || null,
           filters["User ID"] || null,
           filters["Key Hash"] || null,
+          filters["User Email"] || null,
           1, // Reset to first page when searching
           defaultPageSize,
           filters["Sort By"] || null,
@@ -164,6 +167,7 @@ export function useFilterLogic({
       'Organization ID': newFilters['Organization ID'] || '',
       'Key Alias': newFilters['Key Alias'] || '',
       'User ID': newFilters['User ID'] || '',
+      'User Email': newFilters['User Email'] || '',
       'Sort By': newFilters['Sort By'] || 'created_at',
       'Sort Order': newFilters['Sort Order'] || 'desc'
     });
