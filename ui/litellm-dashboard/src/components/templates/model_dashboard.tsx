@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect, useRef, useMemo } from "react"
 import {
   Card,
   Title,
@@ -61,7 +61,7 @@ import HealthCheckComponent from "../model_dashboard/HealthCheckComponent";
 import PassThroughSettings from "../pass_through_settings";
 import ModelGroupAliasSettings from "../model_group_alias_settings";
 import { all_admin_roles } from "@/utils/roles";
-import { Table as TableInstance } from "@tanstack/react-table";
+import { Table as TableInstance, PaginationState } from "@tanstack/react-table";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface ModelDashboardProps {
@@ -200,6 +200,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const dropdownRef = useRef<HTMLDivElement>(null)
   const tableRef = useRef<TableInstance<any>>(null)
+  
+  // Pagination state
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 50,
+  })
   const [selectedTabIndex, setSelectedTabIndex] = useState(0)
 
   const handleCreateNewModelClick = () => {
@@ -215,7 +221,56 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setSelectedModelAccessGroupFilter(null)
     setCurrentTeam("personal")
     setModelViewMode("current_team")
+    setPagination({ pageIndex: 0, pageSize: 50 })
   }
+
+  // Memoize filtered data to prevent unnecessary re-calculations
+  const filteredData = useMemo(() => {
+    if (!modelData || !modelData.data || modelData.data.length === 0) {
+      return [];
+    }
+    
+    return modelData.data.filter((model: any) => {
+      const searchMatch =
+        modelNameSearch === "" ||
+        model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase())
+
+      const modelNameMatch =
+        selectedModelGroup === "all" ||
+        model.model_name === selectedModelGroup ||
+        !selectedModelGroup ||
+        (selectedModelGroup === "wildcard" && model.model_name?.includes("*"))
+      
+      const accessGroupMatch =
+        selectedModelAccessGroupFilter === "all" ||
+        model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
+        !selectedModelAccessGroupFilter
+      
+      let teamAccessMatch = true
+      if (modelViewMode === "current_team") {
+        if (currentTeam === "personal") {
+          teamAccessMatch = model.model_info?.direct_access === true
+        } else {
+          teamAccessMatch =
+            model.model_info?.access_via_team_ids?.includes(currentTeam) === true
+        }
+      }
+
+      return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch
+    });
+  }, [modelData, modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
+
+  // Memoize paginated data
+  const paginatedData = useMemo(() => {
+    const startIndex = pagination.pageIndex * pagination.pageSize;
+    const endIndex = startIndex + pagination.pageSize;
+    return filteredData.slice(startIndex, endIndex);
+  }, [filteredData, pagination.pageIndex, pagination.pageSize]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setPagination(prev => ({ ...prev, pageIndex: 0 }))
+  }, [modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode])
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap)
@@ -1208,40 +1263,45 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               </div>
                             )}
 
-                            {/* Results Count */}
+                            {/* Results Count and Pagination Controls */}
                             <div className="flex justify-between items-center">
                               <span className="text-sm text-gray-700">
-                                Showing{" "}
-                                {modelData && modelData.data.length > 0
-                                  ? modelData.data.filter((model: any) => {
-                                      const searchMatch =
-                                        modelNameSearch === "" ||
-                                        model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase())
-
-                                      const modelNameMatch =
-                                        selectedModelGroup === "all" ||
-                                        model.model_name === selectedModelGroup ||
-                                        !selectedModelGroup ||
-                                        (selectedModelGroup === "wildcard" && model.model_name?.includes("*"))
-                                      const accessGroupMatch =
-                                        selectedModelAccessGroupFilter === "all" ||
-                                        model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
-                                        !selectedModelAccessGroupFilter
-                                      let teamAccessMatch = true
-                                      if (modelViewMode === "current_team") {
-                                        if (currentTeam === "personal") {
-                                          teamAccessMatch = model.model_info?.direct_access === true
-                                        } else {
-                                          teamAccessMatch =
-                                            model.model_info?.access_via_team_ids?.includes(currentTeam) === true
-                                        }
-                                      }
-
-                                      return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch
-                                    }).length
-                                  : 0}{" "}
-                                results
+                                {filteredData.length > 0 ? (
+                                  `Showing ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(
+                                    (pagination.pageIndex + 1) * pagination.pageSize,
+                                    filteredData.length
+                                  )} of ${filteredData.length} results`
+                                ) : (
+                                  "Showing 0 results"
+                                )}
                               </span>
+                              
+                              {/* Pagination Controls */}
+                              {filteredData.length > pagination.pageSize && (
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => setPagination(prev => ({ ...prev, pageIndex: prev.pageIndex - 1 }))}
+                                    disabled={pagination.pageIndex === 0}
+                                    className={`px-3 py-1 text-sm border rounded-md ${
+                                      pagination.pageIndex === 0 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
+                                    }`}
+                                  >
+                                    Previous
+                                  </button>
+                                  
+                                  <button
+                                    onClick={() => setPagination(prev => ({ ...prev, pageIndex: prev.pageIndex + 1 }))}
+                                    disabled={pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1}
+                                    className={`px-3 py-1 text-sm border rounded-md ${
+                                      pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1
+                                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                        : "hover:bg-gray-50"
+                                    }`}
+                                  >
+                                    Next
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1260,38 +1320,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             expandedRows,
                             setExpandedRows,
                           )}
-                          data={modelData.data.filter((model: any) => {
-                            // Model name search filter
-                            const searchMatch =
-                              modelNameSearch === "" ||
-                              model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase())
-
-                            // Model name filter
-                            const modelNameMatch =
-                              selectedModelGroup === "all" ||
-                              model.model_name === selectedModelGroup ||
-                              !selectedModelGroup ||
-                              (selectedModelGroup === "wildcard" && model.model_name?.includes("*"))
-                            // Model access group filter
-                            const accessGroupMatch =
-                              selectedModelAccessGroupFilter === "all" ||
-                              model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
-                              !selectedModelAccessGroupFilter
-                            // Team access filter based on current team and view mode
-                            let teamAccessMatch = true
-                            if (modelViewMode === "current_team") {
-                              if (currentTeam === "personal") {
-                                // Show only models with direct access
-                                teamAccessMatch = model.model_info?.direct_access === true
-                              } else {
-                                // Show only models accessible by the current team
-                                teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true
-                              }
-                            }
-                            // For 'all' mode, show all models (teamAccessMatch remains true)
-
-                            return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch
-                          })}
+                          data={paginatedData}
                           isLoading={false}
                           table={tableRef}
                         />
