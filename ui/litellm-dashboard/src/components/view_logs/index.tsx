@@ -654,7 +654,7 @@ export default function SpendLogsTable({
                       </div>
 
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-700">
+                        <span className="text-sm text-gray-700 min-w-[180px]">
                           Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
                           {logs.isLoading
                             ? "..."
@@ -664,7 +664,7 @@ export default function SpendLogsTable({
                           of {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
                         </span>
                         <div className="flex items-center space-x-2">
-                          <span className="text-sm text-gray-700">
+                          <span className="text-sm text-gray-700 min-w-[90px]">
                             Page {logs.isLoading ? "..." : currentPage} of{" "}
                             {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
                           </span>
