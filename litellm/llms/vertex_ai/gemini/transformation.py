@@ -105,6 +105,64 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         raise e
 
 
+def _snake_to_camel(snake_str: str) -> str:
+    """Convert snake_case to camelCase"""
+    components = snake_str.split("_")
+    return components[0] + "".join(x.capitalize() for x in components[1:])
+
+
+def _camel_to_snake(camel_str: str) -> str:
+    """Convert camelCase to snake_case"""
+    import re
+
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
+
+
+def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
+    """
+    Get the equivalent key from available keys, checking both camelCase and snake_case variants
+    """
+    if key in available_keys:
+        return key
+
+    # Try camelCase version
+    camel_key = _snake_to_camel(key)
+    if camel_key in available_keys:
+        return camel_key
+
+    # Try snake_case version
+    snake_key = _camel_to_snake(key)
+    if snake_key in available_keys:
+        return snake_key
+
+    return None
+
+
+def check_if_part_exists_in_parts(
+    parts: List[PartType], part: PartType, excluded_keys: List[str] = []
+) -> bool:
+    """
+    Check if a part exists in a list of parts
+    Handles both camelCase and snake_case key variations (e.g., function_call vs functionCall)
+    """
+    keys_to_compare = set(part.keys()) - set(excluded_keys)
+    for p in parts:
+        p_keys = set(p.keys())
+        # Check if all keys in part have equivalent values in p
+        match_found = True
+        for key in keys_to_compare:
+            equivalent_key = _get_equivalent_key(key, p_keys)
+            if equivalent_key is None or p.get(equivalent_key, None) != part.get(
+                key, None
+            ):
+                match_found = False
+                break
+
+        if match_found:
+            return True
+    return False
+
+
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
 ) -> List[ContentType]:
@@ -236,10 +294,33 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
+                thinking_blocks = assistant_msg.get("thinking_blocks")
                 if reasoning_content is not None:
                     assistant_content.append(
                         PartType(thought=True, text=reasoning_content)
                     )
+                if thinking_blocks is not None:
+                    for block in thinking_blocks:
+                        block_thinking_str = block.get("thinking")
+                        block_signature = block.get("signature")
+                        if (
+                            block_thinking_str is not None
+                            and block_signature is not None
+                        ):
+                            try:
+                                assistant_content.append(
+                                    PartType(
+                                        thoughtSignature=block_signature,
+                                        **json.loads(block_thinking_str),
+                                    )
+                                )
+                            except Exception:
+                                assistant_content.append(
+                                    PartType(
+                                        thoughtSignature=block_signature,
+                                        text=block_thinking_str,
+                                    )
+                                )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -262,9 +343,17 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     assistant_msg.get("tool_calls", []) is not None
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
-                    assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(assistant_msg)
+                    gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
+                        assistant_msg
                     )
+                    ## check if gemini_tool_call already exists in assistant_content
+                    for gemini_tool_call_part in gemini_tool_call_parts:
+                        if not check_if_part_exists_in_parts(
+                            assistant_content,
+                            gemini_tool_call_part,
+                            excluded_keys=["thoughtSignature"],
+                        ):
+                            assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
 
                 msg_i += 1
@@ -476,6 +565,7 @@ async def async_transform_request_body(
         optional_params=optional_params,
     )
 
+
 def _default_user_message_when_system_message_passed() -> ChatCompletionUserMessage:
     """
     Returns a default user message when a "system" message is passed in gemini fails.
@@ -483,6 +573,7 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     This adds a blank user message to the messages list, to ensure that gemini doesn't fail the request.
     """
     return ChatCompletionUserMessage(content=".", role="user")
+
 
 def _transform_system_message(
     supports_system_message: bool, messages: List[AllMessageValues]
