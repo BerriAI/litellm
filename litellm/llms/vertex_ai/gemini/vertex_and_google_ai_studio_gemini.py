@@ -420,10 +420,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
-        reasoning_effort: Optional[str],
+        reasoning_effort: str,
     ) -> GeminiThinkingConfig:
-        if not reasoning_effort:
-            return { "includeThoughts": True }
         if reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -465,7 +463,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             params["includeThoughts"] = True
         if thinking_budget is not None and isinstance(thinking_budget, int):
             params["thinkingBudget"] = thinking_budget
-
         return params
 
     def map_response_modalities(self, value: list) -> list:
@@ -618,12 +615,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
-        if supports_reasoning(model):
-            optional_params["thinkingConfig"] = (
-                VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                    non_default_params.get("reasoning_effort")
-                )
-            )
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 
@@ -1278,10 +1269,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "audio"
                     ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                elif image_response is not None:
+                if image_response is not None:
                     # Handle image response - combine with text content into structured format
                     cast(Dict[str, Any], chat_completion_message)["image"] = image_response
-                elif content is not None:
+                if content is not None:
                     chat_completion_message["content"] = content
 
                 if reasoning_content is not None:
