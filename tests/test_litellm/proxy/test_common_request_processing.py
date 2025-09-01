@@ -115,6 +115,9 @@ class TestProxyBaseLLMRequestProcessing:
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {"x-litellm-stream-timeout": "45.0"}
         mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.client = None
         
         # Create a minimal mock with just the required attributes
         mock_user_api_key_dict = MagicMock()
@@ -123,10 +126,22 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        mock_user_api_key_dict.allowed_model_region = ""
+        mock_user_api_key_dict.allowed_model_region = None
         mock_user_api_key_dict.key_alias = None
         mock_user_api_key_dict.user_id = None
         mock_user_api_key_dict.team_id = None
+        mock_user_api_key_dict.metadata = {}  # Prevent enterprise feature check
+        mock_user_api_key_dict.team_metadata = None
+        mock_user_api_key_dict.org_id = None
+        mock_user_api_key_dict.team_alias = None
+        mock_user_api_key_dict.end_user_id = None
+        mock_user_api_key_dict.user_email = None
+        mock_user_api_key_dict.request_route = None
+        mock_user_api_key_dict.team_max_budget = None
+        mock_user_api_key_dict.team_spend = None
+        mock_user_api_key_dict.model_max_budget = None
+        mock_user_api_key_dict.parent_otel_span = None
+        mock_user_api_key_dict.team_model_aliases = None
         
         general_settings = {}
         mock_proxy_config = MagicMock()
