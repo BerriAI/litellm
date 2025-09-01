@@ -349,11 +349,31 @@ class OllamaChatConfig(BaseConfig):
 
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
+        response_json_message = response_json.get("message")
+        if response_json_message is not None:
+            if "thinking" in response_json_message:
+                # remap 'thinking' to 'reasoning_content'
+                response_json_message["reasoning_content"] = response_json_message[
+                    "thinking"
+                ]
+                del response_json_message["thinking"]
+            elif response_json_message.get("content") is not None:
+                # parse reasoning content from content
+                from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                    _parse_content_for_reasoning,
+                )
+
+                reasoning_content, content = _parse_content_for_reasoning(
+                    response_json_message["content"]
+                )
+                response_json_message["reasoning_content"] = reasoning_content
+                response_json_message["content"] = content
+
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
         ):
-            function_call = json.loads(response_json["message"]["content"])
+            function_call = json.loads(response_json_message["content"])
             message = litellm.Message(
                 content=None,
                 tool_calls=[
@@ -370,11 +390,13 @@ class OllamaChatConfig(BaseConfig):
                         "type": "function",
                     }
                 ],
+                reasoning_content=response_json_message.get("reasoning_content"),
             )
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message = litellm.Message(**response_json["message"])
+
+            _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
