@@ -144,6 +144,14 @@ class BaseLLMChatTest(ABC):
     
     def test_tool_call_with_property_type_array(self):
         litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
         base_completion_call_args = self.get_base_completion_call_args()
         response = self.completion_function(
             **base_completion_call_args,
