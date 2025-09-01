@@ -40,6 +40,8 @@ if TYPE_CHECKING:
         OpenAIMessageContentListBlock,
     )
     from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+    # Needed for type annotations used as forward references
+    from litellm.types.utils import Choices
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -224,7 +226,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.utils import Choices
 
         if not isinstance(raw_response, ResponsesAPIResponse):
             raise ValueError(f"Unexpected response type: {type(raw_response)}")
@@ -331,7 +332,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if reasoning_text is not None:
             return reasoning_text
         try:
-            summary = getattr(getattr(raw_response, "reasoning", None), "summary", None)
+            reasoning_obj = getattr(raw_response, "reasoning", None)
+            if isinstance(reasoning_obj, dict):
+                summary = reasoning_obj.get("summary")
+            else:
+                summary = getattr(reasoning_obj, "summary", None)
             if isinstance(summary, str) and summary.strip():
                 return summary.strip()
         except Exception:
