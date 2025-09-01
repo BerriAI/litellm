@@ -369,11 +369,6 @@ class InMemoryGuardrailHandler:
         """
         Guardrail id to CustomGuardrail object mapping
         """
-        
-        self.virtual_key_to_guardrails: Dict[str, List[str]] = {}
-        """
-        Virtual key id to list of guardrail ids mapping
-        """
 
     def initialize_guardrail(
         self,
@@ -543,31 +538,6 @@ class InMemoryGuardrailHandler:
         Get a guardrail by its ID from memory
         """
         return self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
-    
-    def associate_guardrail_with_virtual_key(self, virtual_key_id: str, guardrail_id: str) -> None:
-        """
-        Associate a guardrail with a virtual key
-        """
-        if virtual_key_id not in self.virtual_key_to_guardrails:
-            self.virtual_key_to_guardrails[virtual_key_id] = []
-        
-        if guardrail_id not in self.virtual_key_to_guardrails[virtual_key_id]:
-            self.virtual_key_to_guardrails[virtual_key_id].append(guardrail_id)
-    
-    def disassociate_guardrail_from_virtual_key(self, virtual_key_id: str, guardrail_id: str) -> None:
-        """
-        Disassociate a guardrail from a virtual key
-        """
-        if virtual_key_id in self.virtual_key_to_guardrails:
-            if guardrail_id in self.virtual_key_to_guardrails[virtual_key_id]:
-                self.virtual_key_to_guardrails[virtual_key_id].remove(guardrail_id)
-    
-    def get_guardrails_for_virtual_key(self, virtual_key_id: str) -> List[Guardrail]:
-        """
-        Get all guardrails associated with a virtual key
-        """
-        guardrail_ids = self.virtual_key_to_guardrails.get(virtual_key_id, [])
-        return [self.IN_MEMORY_GUARDRAILS[gid] for gid in guardrail_ids if gid in self.IN_MEMORY_GUARDRAILS]
 
 
 ########################################################
