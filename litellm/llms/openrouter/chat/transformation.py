@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     ImageURLObject,
 )
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import Choices, ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
@@ -131,14 +131,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
         )
 
         for choice in model_response.choices:
-            images = getattr(choice.message, "provider_specific_fields", {}).get(
-                "images", None
-            )
-            if images is not None:
-                for image in images:
-                    url = image.get("image_url", None)
-                    if url is not None:
-                        choice.message.image = ImageURLObject(url)
+            if isinstance(choice, Choices):
+                images = getattr(choice.message, "provider_specific_fields", {}).get(
+                    "images", None
+                )
+                if images is not None:
+                    for image in images:
+                        url = image.get("image_url", None)
+                        if url is not None:
+                            choice.message.image = ImageURLObject(url=url, detail=None)
 
         return model_response
 
