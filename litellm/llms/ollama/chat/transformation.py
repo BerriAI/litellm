@@ -437,6 +437,9 @@ class OllamaChatConfig(BaseConfig):
 
 
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
+    started_reasoning_content: bool = False
+    finished_reasoning_content: bool = False
+
     def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
         if isinstance(function_args, dict):
             return True
@@ -490,8 +493,49 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                         if is_function_call_complete:
                             tool_call["id"] = str(uuid.uuid4())
 
+            # PROCESS REASONING CONTENT
+            reasoning_content: Optional[str] = None
+            content: Optional[str] = None
+            if chunk["message"].get("thinking") is not None:
+                if self.started_reasoning_content is False:
+                    reasoning_content = chunk["message"].get("thinking")
+                    self.started_reasoning_content = True
+                elif self.finished_reasoning_content is False:
+                    reasoning_content = chunk["message"].get("thinking")
+                    self.finished_reasoning_content = True
+            elif chunk["message"].get("content") is not None:
+                if "<think>" in chunk["message"].get("content"):
+                    reasoning_content = (
+                        chunk["message"].get("content").replace("<think>", "")
+                    )
+
+                    self.started_reasoning_content = True
+
+                if (
+                    "</think>" in chunk["message"].get("content")
+                    and self.started_reasoning_content
+                ):
+                    reasoning_content = chunk["message"].get("content")
+                    remaining_content = (
+                        chunk["message"].get("content").split("</think>")
+                    )
+                    if len(remaining_content) > 1:
+                        content = remaining_content[1]
+                    self.finished_reasoning_content = True
+
+                if (
+                    self.started_reasoning_content is True
+                    and self.finished_reasoning_content is False
+                ):
+                    reasoning_content = (
+                        chunk["message"].get("content").replace("<think>", "")
+                    )
+                else:
+                    content = chunk["message"].get("content")
+
             delta = Delta(
-                content=chunk["message"].get("content", ""),
+                content=content,
+                reasoning_content=reasoning_content,
                 tool_calls=tool_calls,
             )
 
