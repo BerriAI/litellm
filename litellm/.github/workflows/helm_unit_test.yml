@@ -1,0 +1,27 @@
+name: Helm unit test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Helm 3.11.1
+        uses: azure/setup-helm@v1
+        with:
+          version: '3.11.1'
+
+      - name: Install Helm Unit Test Plugin
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4
+
+      - name: Run unit tests
+        run:
+          helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm

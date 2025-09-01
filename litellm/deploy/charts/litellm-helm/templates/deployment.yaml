@@ -1,0 +1,210 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+  {{- toYaml .Values.deploymentAnnotations | nindent 4 }}
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "litellm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- if .Values.proxyConfigMap.create }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "litellm.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "litellm.name" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: HOST
+              value: "{{ .Values.listen | default "0.0.0.0" }}"
+            - name: PORT
+              value: {{ .Values.service.port | quote}}
+            {{- if .Values.db.deployStandalone }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: password
+            - name: DATABASE_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DATABASE_NAME
+              value: litellm
+            {{- else if .Values.db.useExisting }}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.usernameKey }}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.passwordKey }}
+            - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
+              value: {{ .Values.db.endpoint }}
+              {{- end }}
+            - name: DATABASE_NAME
+              value: {{ .Values.db.database }}
+            - name: DATABASE_URL
+              value: {{ .Values.db.url | quote }}
+            {{- end }}
+            - name: PROXY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" .)) }}
+                  key: {{ .Values.masterkeySecretKey | default "masterkey" }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_HOST
+              value: {{ include "litellm.redis.serviceName" . }}
+            - name: REDIS_PORT
+              value: {{ include "litellm.redis.port" . | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "redis.secretName" .Subcharts.redis }}
+                  key: {{include "redis.secretPasswordKey" .Subcharts.redis }}
+            {{- end }}
+            {{- if .Values.envVars }}
+            {{- range $key, $val := .Values.envVars }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.separateHealthApp }}
+            - name: SEPARATE_HEALTH_APP
+              value: "1"
+            - name: SEPARATE_HEALTH_PORT
+              value: {{ .Values.separateHealthPort | default "8081" | quote }}
+            {{- end }}
+            {{- with .Values.extraEnvVars }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+          {{- range .Values.environmentSecrets }}
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          {{- range .Values.environmentConfigMaps }}
+            - configMapRef:
+                name: {{ . }}
+          {{- end }}
+          args:
+            - --config
+            - /etc/litellm/config.yaml
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            {{- if .Values.separateHealthApp }}
+            - name: health
+              containerPort: {{ .Values.separateHealthPort | default 8081 }}
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+          startupProbe:
+            httpGet:
+              path: /health/readiness
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+            failureThreshold: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: litellm-config
+              mountPath: /etc/litellm/
+          {{ if .Values.securityContext.readOnlyRootFilesystem }}
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /.cache
+            - name: npm
+              mountPath: /.npm
+          {{- end }}
+          {{- with .Values.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{ if .Values.securityContext.readOnlyRootFilesystem }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: npm
+          emptyDir:
+            sizeLimit: 500Mi
+        {{- end }}
+        - name: litellm-config
+          configMap:
+            {{- if .Values.proxyConfigMap.create }}
+            name: {{ include "litellm.fullname" . }}-config
+            {{- else }}
+            name: {{ .Values.proxyConfigMap.name }}
+            {{- end }}
+            items:
+              - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
+                path: "config.yaml"
+      {{- with .Values.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

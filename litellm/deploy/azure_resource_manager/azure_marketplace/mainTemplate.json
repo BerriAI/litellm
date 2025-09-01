@@ -1,0 +1,63 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "imageName": {
+        "type": "string",
+        "defaultValue": "ghcr.io/berriai/litellm:main-latest"
+      },
+      "containerName": {
+        "type": "string",
+        "defaultValue": "litellm-container"
+      },
+      "dnsLabelName": {
+        "type": "string",
+        "defaultValue": "litellm"
+      },
+      "portNumber": {
+        "type": "int",
+        "defaultValue": 4000
+      }
+    },
+    "resources": [
+      {
+        "type": "Microsoft.ContainerInstance/containerGroups",
+        "apiVersion": "2021-03-01",
+        "name": "[parameters('containerName')]",
+        "location": "[resourceGroup().location]",
+        "properties": {
+          "containers": [
+            {
+              "name": "[parameters('containerName')]",
+              "properties": {
+                "image": "[parameters('imageName')]",
+                "resources": {
+                  "requests": {
+                    "cpu": 1,
+                    "memoryInGB": 2
+                  }
+                },
+                "ports": [
+                  {
+                    "port": "[parameters('portNumber')]"
+                  }
+                ]
+              }
+            }
+          ],
+          "osType": "Linux",
+          "restartPolicy": "Always",
+          "ipAddress": {
+            "type": "Public",
+            "ports": [
+              {
+                "protocol": "tcp",
+                "port": "[parameters('portNumber')]"
+              }
+            ],
+            "dnsNameLabel": "[parameters('dnsLabelName')]"
+          }
+        }
+      }
+    ]
+  }
