@@ -500,6 +500,7 @@ export default function SpendLogsTable({
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 premiumUser={premiumUser}
+                backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
               <div className="bg-white rounded-lg shadow">
