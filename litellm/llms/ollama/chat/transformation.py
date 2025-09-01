@@ -504,34 +504,23 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                     reasoning_content = chunk["message"].get("thinking")
                     self.finished_reasoning_content = True
             elif chunk["message"].get("content") is not None:
-                if "<think>" in chunk["message"].get("content"):
-                    reasoning_content = (
-                        chunk["message"].get("content").replace("<think>", "")
-                    )
+                message_content = chunk["message"].get("content")
+                if "<think>" in message_content:
+                    message_content = message_content.replace("<think>", "")
 
                     self.started_reasoning_content = True
 
-                if (
-                    "</think>" in chunk["message"].get("content")
-                    and self.started_reasoning_content
-                ):
-                    reasoning_content = chunk["message"].get("content")
-                    remaining_content = (
-                        chunk["message"].get("content").split("</think>")
-                    )
-                    if len(remaining_content) > 1:
-                        content = remaining_content[1]
+                if "</think>" in message_content and self.started_reasoning_content:
+                    message_content = message_content.replace("</think>", "")
                     self.finished_reasoning_content = True
 
                 if (
-                    self.started_reasoning_content is True
-                    and self.finished_reasoning_content is False
+                    self.started_reasoning_content
+                    and not self.finished_reasoning_content
                 ):
-                    reasoning_content = (
-                        chunk["message"].get("content").replace("<think>", "")
-                    )
+                    reasoning_content = message_content
                 else:
-                    content = chunk["message"].get("content")
+                    content = message_content
 
             delta = Delta(
                 content=content,
