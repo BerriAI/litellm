@@ -137,6 +137,7 @@ class OllamaChatConfig(BaseConfig):
             "tool_choice",
             "functions",
             "response_format",
+            "reasoning_effort",
         ]
 
     def map_openai_params(
@@ -175,6 +176,8 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
+            if param == "reasoning_effort" and value is not None:
+                optional_params["think"] = True
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:
@@ -212,9 +215,9 @@ class OllamaChatConfig(BaseConfig):
                     litellm.add_function_to_prompt = (
                         True  # so that main.py adds the function call to the prompt
                     )
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.get("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.get("functions")
+                    )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
