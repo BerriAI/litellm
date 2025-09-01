@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
     # Needed for type annotations used as forward references
     from litellm.types.utils import Choices
+    # Use concrete Responses API type for mypy
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -271,7 +273,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return model_response
 
     def _extract_choices_and_reasoning(
-        self, raw_response: "BaseModel"
+        self, raw_response: "ResponsesAPIResponse"
     ) -> Tuple[List["Choices"], Optional[str]]:
         from openai.types.responses import (
             ResponseFunctionToolCall,
