@@ -48,6 +48,36 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
             "extra_headers",
         ]
 
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        Get the complete URL for volcengine embedding API calls.
+        
+        Args:
+            api_base: Optional custom API base URL
+            api_key: API key (not used for URL construction)
+            model: Model name (not used for URL construction)
+            optional_params: Optional parameters (not used for URL construction)
+            litellm_params: LiteLLM parameters (not used for URL construction)
+            stream: Stream parameter (not used for URL construction)
+            
+        Returns:
+            Complete URL for the embedding API endpoint
+        """
+        base_url = get_volcengine_base_url(api_base)
+        # Construct the complete URL with /embeddings endpoint
+        if base_url.endswith("/api/v3"):
+            return f"{base_url}/embeddings"
+        else:
+            return f"{base_url}/api/v3/embeddings"
+
     def map_openai_params(
         self,
         non_default_params: Dict[str, Any],
@@ -114,13 +144,14 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Dict containing url, headers, and data for the request
         """
-        # Get base URL
-        base_url = get_volcengine_base_url(api_base)
-        # Avoid duplicate /api/v3 if base_url already contains it
-        if base_url.endswith("/api/v3"):
-            url = f"{base_url}/embeddings"
-        else:
-            url = f"{base_url}/api/v3/embeddings"
+        # Get complete URL using the centralized method
+        url = self.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params={},
+            litellm_params={},
+        )
 
         # Get headers
         headers = get_volcengine_headers(api_key, extra_headers)
@@ -188,13 +219,24 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         """Transform embedding request to Volcengine format"""
-        # Use existing transform_request method
-        return self.transform_request(
-            model=model,
-            input=input,
-            api_key="",  # api_key will be in headers
-            **optional_params,
-        )
+        # Prepare request data (only the JSON body, not the full request)
+        data = {
+            "model": model,
+            "input": input if isinstance(input, list) else [input],
+        }
+
+        # Add optional parameters from optional_params
+        if "encoding_format" in optional_params:
+            encoding_format = optional_params["encoding_format"]
+            if encoding_format is not None:
+                data["encoding_format"] = encoding_format
+
+        if "user" in optional_params:
+            user = optional_params["user"]
+            if user is not None:
+                data["user"] = user
+
+        return data
 
     def transform_embedding_response(
         self,

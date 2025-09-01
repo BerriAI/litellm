@@ -183,7 +183,6 @@ from .llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSp
 from .llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from .llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
 from .llms.vertex_ai.vertex_model_garden.main import VertexAIModelGardenModels
-from .llms.volcengine.embedding.handler import VolcEngineEmbeddingHandler
 from .llms.vllm.completion import handler as vllm_handler
 from .llms.watsonx.chat.handler import WatsonXChatHandler
 from .llms.watsonx.common_utils import IBMWatsonXMixin
@@ -4416,45 +4415,35 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "volcengine":
-            api_key = (
+            volcengine_key = (
                 api_key
                 or litellm.api_key
                 or get_secret_str("ARK_API_KEY")
                 or get_secret_str("VOLCENGINE_API_KEY")
             )
-            if api_key is None:
+            if volcengine_key is None:
                 raise ValueError(
                     "Missing API key for Volcengine. Set ARK_API_KEY or VOLCENGINE_API_KEY environment variable or pass api_key parameter."
                 )
-            
-            handler = VolcEngineEmbeddingHandler()
-            
-            if aembedding:
-                response = handler.async_embedding(
-                    model=model,
-                    input=input,
-                    api_key=api_key,
-                    api_base=api_base,
-                    encoding_format=optional_params.get("encoding_format", "float"),
-                    user=optional_params.get("user"),
-                    timeout=timeout,
-                    extra_headers=optional_params.get("extra_headers"),
-                    litellm_logging_obj=logging,
-                    **optional_params,
-                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
             else:
-                response = handler.embedding(
-                    model=model,
-                    input=input,
-                    api_key=api_key,
-                    api_base=api_base,
-                    encoding_format=optional_params.get("encoding_format", "float"),
-                    user=optional_params.get("user"),
-                    timeout=timeout,
-                    extra_headers=optional_params.get("extra_headers"),
-                    litellm_logging_obj=logging,
-                    **optional_params,
-                )
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=volcengine_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
+            )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
