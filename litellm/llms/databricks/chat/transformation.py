@@ -382,20 +382,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> Optional[List[Any]]:
         if content is None:
             return None
-        citations: Optional[List[Any]] = None
+        citations = []
         if isinstance(content, list):
             for item in content:
                 text = item.get("text", None)
-                if item.get("citations") is not None:
-                    if citations is None:
-                        citations = []
+                if citations_item := item.get("citations"):
                     citations.append(
                         [
                             {**citation, "supported_text": text}
-                            for citation in item["citations"]
+                            for citation in citations_item
                         ]
                     )
-        return citations
+        return citations or None
 
     def _transform_dbrx_choices(
         self, choices: List[DatabricksChoice], json_mode: Optional[bool] = None
