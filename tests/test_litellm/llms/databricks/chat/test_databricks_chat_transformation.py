@@ -88,7 +88,7 @@ def test_transform_choices_without_signature():
     assert choices[0].message.reasoning_content == "i'm thinking without signature."
     assert choices[0].message.thinking_blocks is not None
     assert len(choices[0].message.thinking_blocks) == 1
-    
+
     # Verify the thinking block was created successfully without signature
     thinking_block = choices[0].message.thinking_blocks[0]
     assert thinking_block["type"] == "thinking"
@@ -104,8 +104,17 @@ def test_transform_choices_with_citations():
                 "content": [
                     {
                         "type": "text",
-                        "text": "Paris",
-                        "citations": [{"source": "wiki"}],
+                        "text": "Blue",
+                        "citations": [
+                            {
+                                "type": "char_location",
+                                "cited_text": "The sky is blue.",
+                                "document_index": 0,
+                                "document_title": "My Document",
+                                "start_char_index": 0,
+                                "end_char_index": 50,
+                            }
+                        ],
                     }
                 ],
             },
@@ -117,7 +126,19 @@ def test_transform_choices_with_citations():
     choices = config._transform_dbrx_choices(choices=databricks_choices)
 
     assert choices[0].message.provider_specific_fields == {
-        "citations": [[{"source": "wiki"}]]
+        "citations": [
+            [
+                {
+                    "type": "char_location",
+                    "cited_text": "The sky is blue.",
+                    "document_index": 0,
+                    "document_title": "My Document",
+                    "start_char_index": 0,
+                    "end_char_index": 50,
+                    "supported_text": "Blue",
+                }
+            ]
+        ]
     }
 
 
@@ -130,7 +151,24 @@ def test_chunk_parser_with_citation():
         "model": "test",
         "choices": [
             {
-                "delta": {"citation": {"source": "wiki"}},
+                "delta": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "",
+                            "citations": [
+                                {
+                                    "type": "char_location",
+                                    "cited_text": "The sky is blue.",
+                                    "document_index": 0,
+                                    "document_title": "My Document",
+                                    "start_char_index": 0,
+                                    "end_char_index": 50,
+                                }
+                            ],
+                        }
+                    ],
+                },
                 "index": 0,
                 "finish_reason": None,
             }
@@ -139,5 +177,12 @@ def test_chunk_parser_with_citation():
 
     parsed = iterator.chunk_parser(chunk)
     assert parsed.choices[0].delta.provider_specific_fields == {
-        "citation": {"source": "wiki"}
+        "citation": {
+            "type": "char_location",
+            "cited_text": "The sky is blue.",
+            "document_index": 0,
+            "document_title": "My Document",
+            "start_char_index": 0,
+            "end_char_index": 50,
+        }
     }
