@@ -97,7 +97,9 @@ async def get_guardrails_for_virtual_key(
     """
     Get all guardrails associated with a virtual key
     """
+    verbose_proxy_logger.debug(f"Getting guardrails for virtual key: {virtual_key_id}")
     guardrails = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrails_for_virtual_key(virtual_key_id)
+    verbose_proxy_logger.debug(f"Found {len(guardrails)} guardrails for virtual key {virtual_key_id}")
     
     return VirtualKeyGuardrailsResponse(
         virtual_key_id=virtual_key_id,
