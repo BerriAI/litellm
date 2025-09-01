@@ -6,18 +6,38 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolParam,
+    ImageURLObject,
+)
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -81,6 +101,46 @@ class OpenrouterConfig(OpenAIGPTConfig):
         )
         response.update(extra_body)
         return response
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        for choice in model_response.choices:
+            images = getattr(choice.message, "provider_specific_fields", {}).get(
+                "images", None
+            )
+            if images is not None:
+                for image in images:
+                    url = image.get("image_url", None)
+                    if url is not None:
+                        choice.message.image = ImageURLObject(url)
+
+        return model_response
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
