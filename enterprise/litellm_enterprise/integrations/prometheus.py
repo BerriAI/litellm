@@ -110,15 +110,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_spend_metric = self._counter_factory(
                 "litellm_spend_metric",
                 "Total spend on LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=self.get_labels_for_metric("litellm_spend_metric"),
             )
 
             # Counter for total_output_tokens
@@ -321,6 +313,7 @@ class PrometheusLogger(CustomLogger):
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=self.get_labels_for_metric("litellm_requests_metric"),
             )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
