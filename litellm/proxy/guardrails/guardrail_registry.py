@@ -567,6 +567,7 @@ class InMemoryGuardrailHandler:
         Get all guardrails associated with a virtual key
         """
         guardrail_ids = self.virtual_key_to_guardrails.get(virtual_key_id, [])
+        verbose_proxy_logger.debug(f"Getting guardrails for virtual key {virtual_key_id}: {guardrail_ids}")
         return [self.IN_MEMORY_GUARDRAILS[gid] for gid in guardrail_ids if gid in self.IN_MEMORY_GUARDRAILS]
 
 
