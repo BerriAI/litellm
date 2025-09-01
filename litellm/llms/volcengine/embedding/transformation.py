@@ -117,99 +117,7 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
 
         return optional_params
 
-    def transform_request(
-        self,
-        model: str,
-        input: Union[str, List[str]],
-        api_key: str,
-        api_base: Optional[str] = None,
-        encoding_format: Optional[str] = "float",
-        user: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """
-        Transform OpenAI embedding request to Volcengine format.
 
-        Args:
-            model: Model ID (e.g., "doubao-embedding-text-240715")
-            input: Text or list of texts to embed
-            api_key: Volcengine API key
-            api_base: Optional custom API base URL
-            encoding_format: Response format (float, base64, null)
-            user: Optional user identifier
-            extra_headers: Optional additional headers
-            **kwargs: Additional parameters
-
-        Returns:
-            Dict containing url, headers, and data for the request
-        """
-        # Get complete URL using the centralized method
-        url = self.get_complete_url(
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
-            optional_params={},
-            litellm_params={},
-        )
-
-        # Get headers
-        headers = get_volcengine_headers(api_key, extra_headers)
-
-        # Prepare request data
-        data = {
-            "model": model,
-            "input": input if isinstance(input, list) else [input],
-        }
-
-        # Add optional parameters
-        if encoding_format is not None:
-            data["encoding_format"] = encoding_format
-
-        return {
-            "url": url,
-            "headers": headers,
-            "data": data,
-        }
-
-    def transform_response(
-        self,
-        response: httpx.Response,
-        model: str,
-        input: Union[str, List[str]],
-        encoding: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Transform Volcengine embedding response to OpenAI format.
-
-        Args:
-            response: The HTTP response from Volcengine
-            model: The model used
-            input: The input that was embedded
-            encoding: The encoding format requested
-
-        Returns:
-            OpenAI-compatible embedding response
-        """
-        try:
-            response_json = response.json()
-        except Exception as e:
-            raise ValueError(f"Failed to parse Volcengine response as JSON: {str(e)}")
-
-        # Volcengine response format matches OpenAI format closely
-        # Just need to ensure all required fields are present
-        transformed_response = {
-            "object": "list",
-            "data": response_json.get("data", []),
-            "model": response_json.get("model", model),
-            "usage": response_json.get("usage", {}),
-        }
-
-        # Add id if present
-        if "id" in response_json:
-            transformed_response["id"] = response_json["id"]
-
-        return transformed_response
 
     def transform_embedding_request(
         self,
@@ -250,12 +158,23 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         """Transform Volcengine response to EmbeddingResponse"""
-        # Use existing transform_response method
-        transformed_response = self.transform_response(
-            response=raw_response,
-            model=model,
-            input=request_data.get("input", []),
-        )
+        try:
+            response_json = raw_response.json()
+        except Exception as e:
+            raise ValueError(f"Failed to parse Volcengine response as JSON: {str(e)}")
+
+        # Volcengine response format matches OpenAI format closely
+        # Just need to ensure all required fields are present
+        transformed_response = {
+            "object": "list",
+            "data": response_json.get("data", []),
+            "model": response_json.get("model", model),
+            "usage": response_json.get("usage", {}),
+        }
+
+        # Add id if present
+        if "id" in response_json:
+            transformed_response["id"] = response_json["id"]
         
         # Create EmbeddingResponse from transformed data
         return EmbeddingResponse(**transformed_response)
@@ -272,6 +191,8 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict:
         """Validate environment and return headers"""
         # Get Volcengine headers
+        if api_key is None:
+            raise ValueError("api_key is required for Volcengine authentication")
         volcengine_headers = get_volcengine_headers(api_key)
         return {**headers, **volcengine_headers}
 
@@ -280,6 +201,9 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
     ) -> BaseLLMException:
         """Get error class for Volcengine errors"""
         from ..common_utils import VolcEngineError
+        # Convert dict to httpx.Headers if needed
+        if isinstance(headers, dict):
+            headers = httpx.Headers(headers)
         return VolcEngineError(
             status_code=status_code,
             message=error_message,
