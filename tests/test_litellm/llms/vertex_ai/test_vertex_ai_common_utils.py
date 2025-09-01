@@ -677,3 +677,68 @@ def test_vertex_filter_format_uri():
     )
 
     assert "uri" not in json.dumps(new_parameters)
+
+def test_convert_schema_types_type_array_conversion():
+    """
+    Test _convert_schema_types function handles type arrays and case conversion.
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
+    would raise an exception in Vertex AI schema validation.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14091
+    """
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    # Input: OpenAI-style schema with type array (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "type": ["string", "number"],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Expected output: Vertex AI compatible schema with anyOf and uppercase types
+    expected_output = {
+        "type": "object",
+        "properties": {
+            "studio": {
+                "anyOf": [
+                    {"type": "string"}, 
+                    {"type": "number"}
+                ],
+                "description": "The studio ID or name"
+            }
+        },
+        "required": ["studio"],
+        "additionalProperties": False,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+
+    # Apply the transformation
+    _convert_schema_types(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Root level type converted to uppercase
+    assert input_schema["type"] == "object"
+
+    # 2. Type array converted to anyOf format
+    assert "anyOf" in input_schema["properties"]["studio"]
+    assert "type" not in input_schema["properties"]["studio"]
+
+    # 3. Individual types in anyOf are uppercase
+    anyof_types = input_schema["properties"]["studio"]["anyOf"]
+    assert anyof_types[0]["type"] == "string"
+    assert anyof_types[1]["type"] == "number"
+
+    # 4. Other properties preserved
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
+    assert input_schema["required"] == ["studio"]
