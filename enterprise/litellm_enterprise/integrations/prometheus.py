@@ -244,14 +244,6 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["api_provider"],
             )
 
-            # Get all keys
-            _logged_llm_labels = [
-                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
-                UserAPIKeyLabelNames.MODEL_ID.value,
-                UserAPIKeyLabelNames.API_BASE.value,
-                UserAPIKeyLabelNames.API_PROVIDER.value,
-            ]
-
             # Metric for deployment state
             self.litellm_deployment_state = self._gauge_factory(
                 "litellm_deployment_state",
