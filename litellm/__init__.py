@@ -1261,6 +1261,7 @@ from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
+    ImageFetchError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
