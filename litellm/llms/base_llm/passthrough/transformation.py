@@ -31,30 +31,26 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         Args:
             endpoint: str - the endpoint to add to the url
             base_target_url: str - the base url to add the endpoint to
-            request_query_params: dict - the query params to add to the url
+            request_query_params: Optional[dict] - the query params to add to the url
         Returns:
-            str - the formatted url
+            httpx.URL - the formatted url
         """
         from urllib.parse import urlencode
 
         import httpx
 
-        encoded_endpoint = httpx.URL(endpoint).path
+        base = base_target_url.rstrip('/')
+        endpoint = endpoint.lstrip('/')
+        full_url = f"{base}/{endpoint}"
 
-        # Ensure endpoint starts with '/' for proper URL construction
-        if not encoded_endpoint.startswith("/"):
-            encoded_endpoint = "/" + encoded_endpoint
-
-        # Construct the full target URL using httpx
-        base_url = httpx.URL(base_target_url)
-        updated_url = base_url.copy_with(path=encoded_endpoint)
+        url = httpx.URL(full_url)
 
         if request_query_params:
-            # Create a new URL with the merged query params
-            updated_url = updated_url.copy_with(
+            url = url.copy_with(
                 query=urlencode(request_query_params).encode("ascii")
             )
-        return updated_url
+
+        return url
 
     @abstractmethod
     def get_complete_url(
