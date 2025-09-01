@@ -31,6 +31,8 @@ class QdrantSemanticCache(BaseCache):
         quantization_config=None,
         embedding_model="text-embedding-ada-002",
         host_type=None,
+        embedding_dimensions=None,
+        distance_metric="Cosine",
     ):
         import os
 
@@ -53,6 +55,8 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_dimensions = embedding_dimensions
+        self.distance_metric = distance_metric
         headers = {}
 
         # check if defined as os.environ/ variable
@@ -88,6 +92,10 @@ class QdrantSemanticCache(BaseCache):
         self.async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.Caching
         )
+
+        # Auto-detect embedding dimensions if not provided
+        if self.embedding_dimensions is None:
+            self.embedding_dimensions = self._get_embedding_dimensions()
 
         if quantization_config is None:
             print_verbose(
@@ -138,7 +146,7 @@ class QdrantSemanticCache(BaseCache):
             new_collection_status = self.sync_client.put(
                 url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
                 json={
-                    "vectors": {"size": QDRANT_VECTOR_SIZE, "distance": "Cosine"},
+                    "vectors": {"size": self.embedding_dimensions, "distance": self.distance_metric},
                     "quantization_config": quantization_params,
                 },
                 headers=self.headers,
@@ -154,6 +162,43 @@ class QdrantSemanticCache(BaseCache):
                 )
             else:
                 raise Exception("Error while creating new collection")
+
+    def _get_embedding_dimensions(self):
+        """
+        Auto-detect embedding dimensions by making a test call to the embedding model.
+        """
+        try:
+            print_verbose(
+                f"Auto-detecting embedding dimensions for model: {self.embedding_model}"
+            )
+            
+            # Make a test embedding call with a simple prompt
+            test_embedding_response = cast(
+                EmbeddingResponse,
+                litellm.embedding(
+                    model=self.embedding_model,
+                    input="Hello World",
+                    cache={"no-store": True, "no-cache": True},
+                ),
+            )
+            
+            # Extract dimensions from the response
+            embedding = test_embedding_response["data"][0]["embedding"]
+            dimensions = len(embedding)
+            
+            print_verbose(
+                f"Auto-detected embedding dimensions: {dimensions} for model: {self.embedding_model}"
+            )
+            
+            return dimensions
+            
+        except Exception as e:
+            print_verbose(
+                f"Failed to auto-detect embedding dimensions for model {self.embedding_model}: {e}. "
+                f"Falling back to default size {QDRANT_VECTOR_SIZE}"
+            )
+            # Fall back to the default size if auto-detection fails
+            return QDRANT_VECTOR_SIZE
 
     def _get_cache_logic(self, cached_response: Any):
         if cached_response is None:
