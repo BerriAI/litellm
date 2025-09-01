@@ -67,7 +67,7 @@ def test_get_complete_model_list_order(key_models, team_models, proxy_model_list
 @pytest.mark.parametrize(
     "wildcard_model,litellm_params,expected_models",
     [
-        # Test case 1: litellm_params is None (the main bug we fixed)
+        # Test case 1: litellm_params is None (the main bug fixed in https://github.com/BerriAI/litellm/pull/14125)
         (
             "openai/*",
             None,
