@@ -95,13 +95,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
                 "litellm_llm_api_time_to_first_token_metric",
                 "Time to first token for a models LLM API call",
-                labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
-                ],
+                # labelnames=[
+                #     "model",
+                #     "hashed_api_key",
+                #     "api_key_alias",
+                #     "team",
+                #     "team_alias",
+                # ],
+                labelnames=self.get_labels_for_metric("litellm_llm_api_time_to_first_token_metric"),
                 buckets=LATENCY_BUCKETS,
             )
 
@@ -255,13 +256,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_state = self._gauge_factory(
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
-                labelnames=_logged_llm_labels,
+                labelnames=self.get_labels_for_metric("litellm_deployment_state")
             )
 
             self.litellm_deployment_cooled_down = self._counter_factory(
                 "litellm_deployment_cooled_down",
                 "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
-                labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                # labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                labelnames=self.get_labels_for_metric("litellm_deployment_cooled_down")
             )
 
             self.litellm_deployment_success_responses = self._counter_factory(
