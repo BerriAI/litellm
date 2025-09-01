@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    handle_messages_with_content_list_to_str_conversion,
     strip_name_from_messages,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -301,7 +300,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Databricks does not support:
-        - content in list format.
         - 'name' in user message.
         """
         new_messages = []
@@ -311,7 +309,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 _message = message
             new_messages.append(_message)
-        new_messages = handle_messages_with_content_list_to_str_conversion(new_messages)
         new_messages = strip_name_from_messages(new_messages)
 
         if is_async:
@@ -388,10 +385,16 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         citations: Optional[List[Any]] = None
         if isinstance(content, list):
             for item in content:
+                text = item.get("text", None)
                 if item.get("citations") is not None:
                     if citations is None:
                         citations = []
-                    citations.append(item["citations"])
+                    citations.append(
+                        [
+                            {**citation, "supported_text": text}
+                            for citation in item["citations"]
+                        ]
+                    )
         return citations
 
     def _transform_dbrx_choices(
@@ -583,12 +586,17 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     for _tc in tool_calls:
                         if _tc.get("function", {}).get("arguments") == "{}":
                             _tc["function"]["arguments"] = ""  # avoid invalid json
-                citation = choice["delta"].get("citation")
-                if citation is not None:
-                    choice["delta"].setdefault("provider_specific_fields", {})[
-                        "citation"
-                    ] = citation
-                    choice["delta"].pop("citation", None)
+                if isinstance(choice["delta"]["content"], list) and (
+                    content := choice["delta"]["content"]
+                ):
+                    if citations := content[0].get("citations"):
+                        # TODO: Databricks delta does not include supported text or chunk type.
+                        # Add either here once Databricks supports it to enable citation linkage.
+                        choice["delta"].setdefault("provider_specific_fields", {})[
+                            "citation"
+                        ] = citations[
+                            0
+                        ]  # Databricks Content item always has citation as a list of list
                 # extract the content str
                 content_str = DatabricksConfig.extract_content_str(
                     choice["delta"].get("content")
