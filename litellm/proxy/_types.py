@@ -2904,6 +2904,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    stream_timeout: Optional[float]
     user: Optional[str]
     num_retries: Optional[int]
 
