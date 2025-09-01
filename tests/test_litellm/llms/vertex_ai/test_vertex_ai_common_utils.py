@@ -742,3 +742,62 @@ def test_convert_schema_types_type_array_conversion():
     # 4. Other properties preserved
     assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
     assert input_schema["required"] == ["studio"]
+
+
+def test_fix_enum_empty_strings():
+    """
+    Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
+    
+    This test verifies the fix for the issue where Gemini rejects tool definitions 
+    with empty strings in enum values, causing API failures.
+
+    Relevant issue: Gemini does not accept empty strings in enum values
+    """
+    from litellm.llms.vertex_ai.common_utils import _fix_enum_empty_strings
+
+    # Input: Schema with empty string in enum (the problematic case)
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "user_agent_type": {
+                "enum": ["", "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Expected output: Empty strings replaced with None
+    expected_output = {
+        "type": "object", 
+        "properties": {
+            "user_agent_type": {
+                "enum": [None, "desktop", "mobile", "tablet"],
+                "type": "string",
+                "description": "Device type for user agent"
+            }
+        },
+        "required": ["user_agent_type"]
+    }
+
+    # Apply the transformation
+    _fix_enum_empty_strings(input_schema)
+
+    # Verify the transformation
+    assert input_schema == expected_output
+
+    # Verify specific transformations:
+    # 1. Empty string replaced with None
+    enum_values = input_schema["properties"]["user_agent_type"]["enum"]
+    assert "" not in enum_values
+    assert None in enum_values
+
+    # 2. Other enum values preserved
+    assert "desktop" in enum_values
+    assert "mobile" in enum_values
+    assert "tablet" in enum_values
+
+    # 3. Other properties preserved
+    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
+    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
