@@ -664,3 +664,54 @@ async def test_openai_gpt5_reasoning():
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
+
+
+@pytest.mark.asyncio
+async def test_openai_safety_identifier_parameter():
+    """Test that safety_identifier parameter is accepted by the async completion function."""
+    
+    # Test that the function accepts the safety_identifier parameter without error
+    # This is a basic smoke test to ensure the parameter is recognized
+    try:
+        # This should not raise a TypeError about unexpected keyword argument
+        response = await litellm.acompletion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            safety_identifier="user_code_123456",
+        )
+        
+        # If we get here, the parameter was accepted
+        assert response is not None
+        print("✅ safety_identifier parameter accepted successfully in async completion")
+        
+    except TypeError as e:
+        if "unexpected keyword argument" in str(e) and "safety_identifier" in str(e):
+            pytest.fail(f"safety_identifier parameter not accepted: {e}")
+        else:
+            # Other TypeError, re-raise
+            raise
+
+
+def test_openai_safety_identifier_parameter_sync():
+    """Test that safety_identifier parameter is accepted by the completion function."""
+    
+    # Test that the function accepts the safety_identifier parameter without error
+    # This is a basic smoke test to ensure the parameter is recognized
+    try:
+        # This should not raise a TypeError about unexpected keyword argument
+        response = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            safety_identifier="user_code_123456",
+        )
+        
+        # If we get here, the parameter was accepted
+        assert response is not None
+        print("✅ safety_identifier parameter accepted successfully")
+        
+    except TypeError as e:
+        if "unexpected keyword argument" in str(e) and "safety_identifier" in str(e):
+            pytest.fail(f"safety_identifier parameter not accepted: {e}")
+        else:
+            # Other TypeError, re-raise
+            raise
