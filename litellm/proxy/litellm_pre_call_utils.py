@@ -291,6 +291,17 @@ class LiteLLMProxyRequestSetup:
         if num_retries_header is not None:
             return int(num_retries_header)
         return None
+    
+    @staticmethod
+    def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
+        """
+        Get the `spend_logs_metadata` from the request headers.
+        """
+        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+        spend_logs_metadata_header = headers.get("x-litellm-spend-logs-metadata", None)
+        if spend_logs_metadata_header is not None:
+            return safe_json_loads(spend_logs_metadata_header)
+        return None
 
     @staticmethod
     def _get_forwardable_headers(
@@ -457,6 +468,10 @@ class LiteLLMProxyRequestSetup:
         num_retries = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
+
+        spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
+        if spend_logs_metadata is not None:
+            data["spend_logs_metadata"] = spend_logs_metadata
 
         return data
 
