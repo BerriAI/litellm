@@ -2212,15 +2212,38 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        if isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
-        ):
-            upload_response = sync_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=transformed_request,
+        if isinstance(transformed_request, dict) and "method" in transformed_request:
+            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            upload_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
+                url=transformed_request["url"],
+                headers=transformed_request["headers"],
+                data=transformed_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
+            # Handle traditional file uploads
+            # Ensure transformed_request is a string for httpx compatibility
+            if isinstance(transformed_request, bytes):
+                transformed_request = transformed_request.decode('utf-8')
+            
+            # Use the HTTP method specified by the provider config
+            http_method = provider_config.file_upload_http_method.upper()
+            if http_method == "PUT":
+                upload_response = sync_httpx_client.put(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+            else:  # Default to POST
+                upload_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
         else:
             try:
                 # Step 1: Initial request to get upload URL
@@ -2281,15 +2304,38 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        if isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
-        ):
-            upload_response = await async_httpx_client.post(
-                url=api_base,
-                headers=headers,
-                data=transformed_request,
+        if isinstance(transformed_request, dict) and "method" in transformed_request:
+            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            upload_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
+                url=transformed_request["url"],
+                headers=transformed_request["headers"],
+                data=transformed_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
+            # Handle traditional file uploads
+            # Ensure transformed_request is a string for httpx compatibility
+            if isinstance(transformed_request, bytes):
+                transformed_request = transformed_request.decode('utf-8')
+            
+            # Use the HTTP method specified by the provider config
+            http_method = provider_config.file_upload_http_method.upper()
+            if http_method == "PUT":
+                upload_response = await async_httpx_client.put(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+            else:  # Default to POST
+                upload_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
         else:
             try:
                 # Step 1: Initial request to get upload URL

@@ -306,7 +306,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params: dict,
     ) -> Union[bytes, str, dict]:
         """
-        Transform file request and sign it for S3 upload
+        Transform file request and return a pre-signed request for S3.
+        This keeps the HTTP handler clean by doing all the signing here.
         """
         file_data = create_file_data.get("file")
         if file_data is None:
@@ -314,7 +315,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
         
-        # Get the file content
+        # Get and transform the file content
         if (
             create_file_data.get("purpose") == "batch"
             and extracted_file_data.get("content_type") == "application/jsonl"
@@ -340,19 +341,37 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         else:
             raise ValueError("Unsupported file content type")
         
-        return file_content
+        # Get the S3 URL for upload
+        api_base = self.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            data=create_file_data,
+        )
+        
+        # Sign the request and return a pre-signed request object
+        signed_headers, signed_body = self._sign_s3_request(
+            content=file_content,
+            api_base=api_base,
+            optional_params=optional_params,
+        )
+        
+        # Return a dict that tells the HTTP handler exactly what to do
+        return {
+            "method": "PUT",
+            "url": api_base,
+            "headers": signed_headers,
+            "data": signed_body or file_content,
+        }
 
-    def sign_request(
+    def _sign_s3_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: Union[dict, str],  # Files can be strings, unlike other APIs
+        content: str,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        optional_params: dict,
+    ) -> Tuple[dict, str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
         Reuses the exact pattern from litellm/integrations/s3_v2.py
@@ -368,7 +387,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # Get AWS credentials using existing methods
         aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params, model=model
+            optional_params=optional_params, model=""
         )
         credentials = self.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
@@ -381,9 +400,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
         )
-
-        # Convert content to string if needed
-        content = request_data if isinstance(request_data, str) else json.dumps(request_data)
         
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -395,10 +411,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             "Content-Language": "en",
             "Cache-Control": "private, immutable, max-age=31536000, s-maxage=0",
         }
-        
-        # Merge with any existing headers
-        if headers:
-            request_headers.update(headers)
 
         # Use requests.Request to prepare the request (same pattern as s3_v2.py)
         req = requests.Request("PUT", api_base, data=content, headers=request_headers)
@@ -420,7 +432,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         SigV4Auth(credentials, "s3", signing_region).add_auth(aws_request)
 
         # Return signed headers and body
-        return dict(aws_request.headers), aws_request.body
+        signed_body = aws_request.body
+        if isinstance(signed_body, bytes):
+            signed_body = signed_body.decode('utf-8')
+        elif signed_body is None:
+            signed_body = content  # Fallback to original content
+        
+        return dict(aws_request.headers), signed_body
 
     def transform_create_file_response(
         self,
