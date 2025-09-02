@@ -625,10 +625,11 @@ async def test_gemini_image_generation_async_stream():
     async for chunk in response:
         print("CHUNK: ", chunk)
         if (
-            hasattr(chunk.choices[0].delta, "image")
-            and chunk.choices[0].delta.image is not None
+            hasattr(chunk.choices[0].delta, "images")
+            and chunk.choices[0].delta.images is not None
+            and len(chunk.choices[0].delta.images) > 0
         ):
-            model_response_image = chunk.choices[0].delta.image
+            model_response_image = chunk.choices[0].delta.images[0]
             print("MODEL_RESPONSE_IMAGE: ", model_response_image)
             assert model_response_image is not None
             assert model_response_image["url"].startswith("data:image/png;base64,")
