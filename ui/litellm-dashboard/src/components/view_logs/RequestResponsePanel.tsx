@@ -72,9 +72,9 @@ export function RequestResponsePanel({
   };
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 w-full max-w-full overflow-hidden box-border">
       {/* Request Side */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">Request</h3>
           <button 
@@ -88,13 +88,13 @@ export function RequestResponsePanel({
             </svg>
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96">
-          <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(getRawRequest(), null, 2)}</pre>
+        <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(getRawRequest(), null, 2)}</pre>
         </div>
       </div>
 
       {/* Response Side */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">
             Response
@@ -116,9 +116,9 @@ export function RequestResponsePanel({
             </svg>
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96 bg-gray-50">
+        <div className="p-4 overflow-auto max-h-96 bg-gray-50 w-full max-w-full box-border">
           {hasResponse ? (
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(formattedResponse(), null, 2)}</pre>
           ) : (
             <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
           )}
