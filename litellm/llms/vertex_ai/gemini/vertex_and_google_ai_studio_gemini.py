@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
+    ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
 )
@@ -792,11 +793,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     content_str += _content_str
 
         return content_str, reasoning_content_str
-    
+
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
-    ) -> Optional[ImageURLObject]:
+    ) -> Optional[List[ImageURLListItem]]:
         """Extract image response from parts if present"""
+        images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
                 mime_type = part["inlineData"]["mimeType"]
@@ -804,11 +806,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
-                    return ImageURLObject(
-                        url=data_uri,
-                        detail="auto"
+                    images.append(
+                        ImageURLListItem(
+                            image_url=ImageURLObject(url=data_uri, detail="auto"),
+                            index=0,
+                            type="image_url",
+                        )
                     )
-        return None
+        return images
 
     def _extract_audio_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -1127,7 +1132,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif web_search_queries:
                     web_search_requests = len(grounding_metadata)
         return web_search_requests
-    
+
     @staticmethod
     def _create_streaming_choice(
         chat_completion_message: ChatCompletionResponseMessage,
@@ -1136,7 +1141,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]],
         functions: Optional[ChatCompletionToolCallFunctionChunk],
         chat_completion_logprobs: Optional[ChoiceLogprobs],
-        image_response: Optional[ImageURLObject],
+        image_response: Optional[List[ImageURLListItem]],
     ) -> StreamingChoices:
         """
         Helper method to create a streaming choice object for Vertex AI
@@ -1151,11 +1156,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             index=candidate.get("index", idx),
             delta=Delta(
                 content=chat_completion_message.get("content"),
-                reasoning_content=chat_completion_message.get(
-                    "reasoning_content"
-                ),
+                reasoning_content=chat_completion_message.get("reasoning_content"),
                 tool_calls=tools,
-                image=image_response,
+                images=image_response,
                 function_call=functions,
             ),
             logprobs=chat_completion_logprobs,
@@ -1164,13 +1167,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return choice
 
     @staticmethod
-    def _extract_candidate_metadata(candidate: Candidates) -> Tuple[List[dict], List[dict], List, List]:
+    def _extract_candidate_metadata(
+        candidate: Candidates,
+    ) -> Tuple[List[dict], List[dict], List, List]:
         """
         Extract metadata from a single candidate response.
-        
+
         Returns:
             grounding_metadata: List[dict]
-            url_context_metadata: List[dict] 
+            url_context_metadata: List[dict]
             safety_ratings: List
             citation_metadata: List
         """
@@ -1178,7 +1183,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         url_context_metadata: List[dict] = []
         safety_ratings: List = []
         citation_metadata: List = []
-        
+
         if "groundingMetadata" in candidate:
             if isinstance(candidate["groundingMetadata"], list):
                 grounding_metadata.extend(candidate["groundingMetadata"])  # type: ignore
@@ -1194,8 +1199,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if "urlContextMetadata" in candidate:
             # Add URL context metadata to grounding metadata
             url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
-            
-        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
+
+        return (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+        )
 
     @staticmethod
     def _process_candidates(
@@ -1219,7 +1229,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: List[dict] = []
         url_context_metadata: List[dict] = []
-        image_response: Optional[ImageURLObject] = None
+        image_response: Optional[List[ImageURLListItem]] = None
         safety_ratings: List = []
         citation_metadata: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
@@ -1239,7 +1249,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 candidate_safety_ratings,
                 candidate_citation_metadata,
             ) = VertexGeminiConfig._extract_candidate_metadata(candidate)
-            
+
             grounding_metadata.extend(candidate_grounding_metadata)
             url_context_metadata.extend(candidate_url_context_metadata)
             safety_ratings.extend(candidate_safety_ratings)
@@ -1271,7 +1281,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     chat_completion_message["content"] = None  # OpenAI spec
                 if image_response is not None:
                     # Handle image response - combine with text content into structured format
-                    cast(Dict[str, Any], chat_completion_message)["image"] = image_response
+                    cast(Dict[str, Any], chat_completion_message)[
+                        "images"
+                    ] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -1301,12 +1313,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
                     chat_completion_message=chat_completion_message,
-                    candidate=candidate, 
-                    idx=idx, 
-                    tools=tools, 
-                    functions=functions, 
+                    candidate=candidate,
+                    idx=idx,
+                    tools=tools,
+                    functions=functions,
                     chat_completion_logprobs=chat_completion_logprobs,
-                    image_response=image_response
+                    image_response=image_response,
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
