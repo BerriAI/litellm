@@ -837,14 +837,12 @@ async def _client_async_logging_helper(
         # Async Logging Worker
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine = logging_obj.async_success_handler(
-                result=result,
-                start_time=start_time, 
-                end_time=end_time
+            async_coroutine=logging_obj.async_success_handler(
+                result=result, start_time=start_time, end_time=end_time
             )
         )
-
 
         ################################################
         # Sync Logging Worker
@@ -3304,6 +3302,7 @@ def get_optional_params(  # noqa: PLR0915
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    safety_identifier: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()

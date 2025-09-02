@@ -14,7 +14,9 @@ DEFAULT_S3_BATCH_SIZE = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS = int(
     os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 )
-DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 4))
+DEFAULT_NUM_WORKERS_LITELLM_PROXY = int(
+    os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 4)
+)
 DEFAULT_SQS_BATCH_SIZE = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION = "SendMessage"
 SQS_API_VERSION = "2012-11-05"
@@ -395,6 +397,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "safety_identifier": None,
 }
 
 openai_compatible_endpoints: List = [

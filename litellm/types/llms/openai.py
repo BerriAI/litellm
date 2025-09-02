@@ -788,6 +788,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     response_format: dict
     seed: int
     service_tier: str
+    safety_identifier: str
     stop: Union[str, List[str]]
     stream_options: dict
     temperature: float
