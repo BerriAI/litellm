@@ -202,6 +202,7 @@ class BaseAWSLLM:
                 credentials, _cache_ttl = self._auth_with_aws_role(
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
                     aws_role_name=aws_role_name,
                     aws_session_name=aws_session_name,
                 )
@@ -554,6 +555,7 @@ class BaseAWSLLM:
         self,
         aws_access_key_id: Optional[str],
         aws_secret_access_key: Optional[str],
+        aws_session_token: Optional[str],
         aws_role_name: str,
         aws_session_name: str,
     ) -> Tuple[Credentials, Optional[int]]:
@@ -614,6 +616,7 @@ class BaseAWSLLM:
                     "sts",
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
                 )
 
         sts_response = sts_client.assume_role(
