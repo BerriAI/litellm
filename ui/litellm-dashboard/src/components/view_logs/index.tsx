@@ -193,6 +193,7 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
+        undefined,
         selectedStatus,
         selectedModel,
       )
