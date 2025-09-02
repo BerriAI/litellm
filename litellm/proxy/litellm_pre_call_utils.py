@@ -477,9 +477,15 @@ class LiteLLMProxyRequestSetup:
         data: dict,
         _metadata_variable_name: str,
     ) -> dict:
+        from litellm.proxy._types import LitellmMetadataFromRequestHeaders
+        metadata_from_headers = LitellmMetadataFromRequestHeaders()
         spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
-            data[_metadata_variable_name]["spend_logs_metadata"] = spend_logs_metadata
+            metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
+        
+        ###################
+        # Finally update the requests metadata with the `metadata_from_headers`
+        data[_metadata_variable_name].update(metadata_from_headers)
         return data
 
     @staticmethod

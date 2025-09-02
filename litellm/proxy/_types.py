@@ -2902,40 +2902,17 @@ class SpecialHeaders(enum.Enum):
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
-    """
-    Dict of the headers
-    """
-
     organization: str
-    """
-    organization id for this request
-    """
-
     timeout: Optional[float]
-    """
-    timeout in seconds for this request
-    """
-
     stream_timeout: Optional[float]
-    """
-    stream timeout in seconds for this request
-    """
-
     user: Optional[str]
-    """
-    user id for this request
-    """
-
-
     num_retries: Optional[int]
-    """
-    number of retries for this request
-    """
 
+class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
+    """
+    Headers a user can pass that will get added to litellm metadata for the request
+    """
     spend_logs_metadata: Optional[dict]
-    """
-    Dict of the spend logs metadata
-    """
 
 
 class JWTKeyItem(TypedDict, total=False):
