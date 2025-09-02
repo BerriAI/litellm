@@ -4,7 +4,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 
 export async function makeOpenAIImageEditsRequest(
-  imageFile: File,
+  imageFiles: File | File[],
   prompt: string,
   updateUI: (imageUrl: string, model: string) => void,
   selectedModel: string,
@@ -28,34 +28,60 @@ export async function makeOpenAIImageEditsRequest(
   });
 
   try {
-    const response = await client.images.edit({
-      model: selectedModel,
-      image: imageFile,
-      prompt: prompt,
-    }, { signal });
-
-    console.log(response.data);
+    // handle single and multiple images
+    const imagesToProcess = Array.isArray(imageFiles) ? imageFiles : [imageFiles];
     
-    if (response.data && response.data[0]) {
-      // Handle either URL or base64 data from response
-      if (response.data[0].url) {
-        // Use the URL directly
-        updateUI(response.data[0].url, selectedModel);
-      } else if (response.data[0].b64_json) {
-        // Convert base64 to data URL format
-        const base64Data = response.data[0].b64_json;
-        updateUI(`data:image/png;base64,${base64Data}`, selectedModel);
-      } else {
-        throw new Error("No image data found in response");
+    // For multiple images, we'll make separate API calls for each image
+    // since OpenAI's edit endpoint processes one image at a time
+    const results = [];
+    
+    for (let i = 0; i < imagesToProcess.length; i++) {
+      const image = imagesToProcess[i];
+      console.log(`Processing image ${i + 1} of ${imagesToProcess.length}`);
+      
+      const response = await client.images.edit({
+        model: selectedModel,
+        image: image,
+        prompt: prompt,
+      }, { signal });
+
+      console.log(`Response for image ${i + 1}:`, response.data);
+      
+      if (response.data && response.data[0]) {
+        // Handle either URL or base64 data from response
+        if (response.data[0].url) {
+          // Use the URL directly
+          updateUI(response.data[0].url, selectedModel);
+          results.push(response.data[0].url);
+        } else if (response.data[0].b64_json) {
+          // Convert base64 to data URL format
+          const base64Data = response.data[0].b64_json;
+          const dataUrl = `data:image/png;base64,${base64Data}`;
+          updateUI(dataUrl, selectedModel);
+          results.push(dataUrl);
+        }
       }
-    } else {
-      throw new Error("Invalid response format");
     }
-  } catch (error) {
+    
+    if (results.length > 1) {
+      NotificationManager.success(`Successfully processed ${results.length} images`);
+    }
+    
+  } catch (error: any) {
+    console.error("Error making image edit request:", error);
+    
     if (signal?.aborted) {
       console.log("Image edits request was cancelled");
     } else {
-      NotificationManager.fromBackend(`Error occurred while editing image. Please try again. Error: ${error}`);
+      let errorMessage = "Failed to edit image(s)";
+      
+      if (error?.error?.message) {
+        errorMessage = error.error.message;
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      NotificationManager.fromBackend(`Image edit failed: ${errorMessage}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

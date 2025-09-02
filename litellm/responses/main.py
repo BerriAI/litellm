@@ -455,6 +455,7 @@ def responses(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 
