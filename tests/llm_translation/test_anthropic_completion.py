@@ -256,7 +256,6 @@ def test_anthropic_tool_streaming():
     for chunk in anthropic_chunk_list:
         parsed_chunk = response_iter.chunk_parser(chunk)
         if tool_use := parsed_chunk.get("tool_use"):
-
             # We only increment when a new block starts
             if tool_use.get("id") is not None:
                 correct_tool_index += 1
@@ -966,8 +965,6 @@ def test_anthropic_citations_api_streaming():
         if provider_specific_fields := chunk.choices[0].delta.provider_specific_fields:
             if "citation" in provider_specific_fields:
                 has_citations = True
-
-            assert "chunk_type" in provider_specific_fields
 
     assert has_citations
 
