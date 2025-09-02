@@ -573,7 +573,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
-    image: Optional[ImageURLObject] = None
+    images: Optional[List[ImageURLObject]] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -646,7 +646,7 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             if hasattr(self, "audio"):
                 del self.audio
-        
+
         if image is None:
             if hasattr(self, "image"):
                 del self.image
@@ -703,7 +703,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        image: Optional[ImageURLObject] = None,
+        images: Optional[List[ImageURLObject]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[
@@ -721,7 +721,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.image: Optional[ImageURLObject] = None
+        self.images: Optional[List[ImageURLObject]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
@@ -741,9 +741,9 @@ class Delta(OpenAIObject):
             self.annotations = annotations
         else:
             del self.annotations
-        
-        if image is not None:
-            self.image = image
+
+        if images is not None:
+            self.images = images
         else:
             del self.image
 
@@ -1927,7 +1927,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
-    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
+    cold_storage_object_key: Optional[
+        str
+    ]  # S3/GCS object key for cold storage retrieval
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2353,6 +2355,7 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
