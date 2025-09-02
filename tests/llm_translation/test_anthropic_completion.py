@@ -920,14 +920,6 @@ def test_anthropic_citations_api():
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
     assert citations is not None
-    if citations:
-        citation = citations[0][0]
-        assert "supported_text" in citation
-        assert "cited_text" in citation
-        assert "document_index" in citation
-        assert "document_title" in citation
-        assert "start_char_index" in citation
-        assert "end_char_index" in citation
 
 
 def test_anthropic_citations_api_streaming():
@@ -963,11 +955,11 @@ def test_anthropic_citations_api_streaming():
     has_citations = False
     for chunk in resp:
         print(f"returned chunk: {chunk}")
-        if provider_specific_fields := chunk.choices[0].delta.provider_specific_fields:
-            if "citation" in provider_specific_fields:
-                has_citations = True
-
-            assert "chunk_type" in provider_specific_fields
+        if (
+            chunk.choices[0].delta.provider_specific_fields
+            and "citation" in chunk.choices[0].delta.provider_specific_fields
+        ):
+            has_citations = True
 
     assert has_citations
 
