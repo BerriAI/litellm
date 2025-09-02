@@ -981,8 +981,8 @@ class TestProxyFunctionCalling:
             (
                 "groq/llama-3.3-70b-versatile",
                 "litellm_proxy/groq/llama-3.3-70b-versatile",
-                False,
-            ),  # This model doesn't support function calling
+                True,
+            ),
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
