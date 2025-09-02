@@ -968,6 +968,8 @@ async def test_add_litellm_metadata_from_request_headers():
     """
     Test that add_litellm_metadata_from_request_headers properly adds litellm metadata from request headers,
     makes an LLM request using base_process_llm_request, sleeps for 3 seconds, and checks standard_logging_payload has spend_logs_metadata from headers
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/14008
     """
     # Set up test logger
     litellm._turn_on_debug()
