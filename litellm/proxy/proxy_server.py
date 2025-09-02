@@ -3490,7 +3490,15 @@ class ProxyStartupEvent:
     ):
         """Initializes scheduled background jobs"""
         global store_model_in_db
-        scheduler = AsyncIOScheduler()
+        
+        # Configure scheduler with memory leak prevention settings
+        # Based on Memray analysis showing APScheduler's normalize() causing memory issues
+        scheduler = AsyncIOScheduler(job_defaults={
+            "coalesce": True,           # collapse many missed runs into one
+            "misfire_grace_time": 120,  # drop runs older than 2 minutes
+            "max_instances": 1,         # prevent concurrent job instances
+        })
+        
         interval = random.randint(
             proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time
         )  # random interval, so multiple workers avoid resetting budget at the same time
@@ -3509,6 +3517,9 @@ class ProxyStartupEvent:
                 budget_reset_job.reset_budget,
                 "interval",
                 seconds=interval,
+                jitter=30,  # add jitter to prevent synchronized execution
+                id="reset_budget_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
 
         ### UPDATE SPEND ###
@@ -3516,7 +3527,10 @@ class ProxyStartupEvent:
             update_spend,
             "interval",
             seconds=batch_writing_interval,
+            jitter=3,  # add jitter to prevent synchronized execution
             args=[prisma_client, db_writer_client, proxy_logging_obj],
+            id="update_spend_job",
+            replace_existing=True,  # prevent duplicate jobs on restart
         )
 
         ### ADD NEW MODELS ###
@@ -3529,7 +3543,10 @@ class ProxyStartupEvent:
                 proxy_config.add_deployment,
                 "interval",
                 seconds=10,
+                jitter=2,  # add jitter to prevent synchronized execution
                 args=[prisma_client, proxy_logging_obj],
+                id="add_deployment_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
 
             # this will load all existing models on proxy startup
@@ -3542,7 +3559,10 @@ class ProxyStartupEvent:
                 proxy_config.get_credentials,
                 "interval",
                 seconds=10,
+                jitter=2,  # add jitter to prevent synchronized execution
                 args=[prisma_client],
+                id="get_credentials_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
         if (
@@ -3564,19 +3584,26 @@ class ProxyStartupEvent:
                     "spend_report_frequency must be specified in days, e.g., '1d', '7d'"
                 )
 
+            from datetime import datetime, timedelta
+            
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report,
                 "interval",
                 days=days,
+                jitter=3600,  # add up to 1 hour jitter for daily/weekly reports
                 next_run_time=datetime.now()
                 + timedelta(seconds=10),  # Start 10 seconds from now
                 args=[spend_report_frequency],
+                id="weekly_spend_report_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
 
             scheduler.add_job(
                 proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report,
                 "cron",
                 day=1,
+                id="monthly_spend_report_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
 
             # Beta Feature - only used when prometheus api is in .env
@@ -3589,6 +3616,8 @@ class ProxyStartupEvent:
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
+                    id="prometheus_fallback_stats_job",
+                    replace_existing=True,  # prevent duplicate jobs on restart
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
@@ -3607,7 +3636,10 @@ class ProxyStartupEvent:
                     spend_log_cleanup.cleanup_old_spend_logs,
                     "interval",
                     seconds=interval_seconds,
+                    jitter=300,  # add up to 5 minutes jitter for cleanup jobs
                     args=[prisma_client],
+                    id="spend_log_cleanup_job",
+                    replace_existing=True,  # prevent duplicate jobs on restart
                 )
             except ValueError:
                 verbose_proxy_logger.error(
@@ -3629,6 +3661,9 @@ class ProxyStartupEvent:
                     check_batch_cost_job.check_batch_cost,
                     "interval",
                     seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
+                    jitter=30,  # add jitter to prevent synchronized execution
+                    id="check_batch_cost_job",
+                    replace_existing=True,  # prevent duplicate jobs on restart
                 )
 
             except Exception:
@@ -3637,6 +3672,18 @@ class ProxyStartupEvent:
                 )
                 pass
 
+        # Reset all job next_run_time to "now" to prevent processing huge backlogs
+        # This prevents the APScheduler memory leak from computing missed runs
+        # Based on Memray analysis showing memory issues in normalize() and get_next_fire_time()
+        from datetime import datetime, timezone
+        
+        for job in scheduler.get_jobs():
+            try:
+                job.modify(next_run_time=datetime.now(timezone.utc))
+                verbose_proxy_logger.debug(f"Reset job {job.id} next_run_time to now")
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Could not reset job {job.id} next_run_time: {e}")
+        
         scheduler.start()
 
     @classmethod

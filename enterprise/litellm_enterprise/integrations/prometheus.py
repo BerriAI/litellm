@@ -2186,6 +2186,9 @@ class PrometheusLogger(CustomLogger):
                 prometheus_logger.initialize_remaining_budget_metrics,
                 "interval",
                 minutes=PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+                jitter=60,  # add up to 1 minute jitter to prevent synchronized execution
+                id="prometheus_budget_metrics_job",
+                replace_existing=True,  # prevent duplicate jobs on restart
             )
 
     @staticmethod
