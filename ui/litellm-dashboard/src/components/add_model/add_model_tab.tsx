@@ -157,9 +157,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               <AntdSelect
                 showSearch={true}
                 value={selectedProvider}
-                onChange={(value) => {
+                onChange={async (value) => {
                   setSelectedProvider(value);
-                  setProviderModelsFn(value);
+                  await setProviderModelsFn(value);
                   form.setFieldsValue({ 
                     model: [],
                     model_name: undefined 
@@ -276,6 +276,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     <ProviderSpecificFields
                       selectedProvider={selectedProvider}
                       uploadProps={uploadProps}
+                      accessToken={accessToken}
                     />
                   );
                 }

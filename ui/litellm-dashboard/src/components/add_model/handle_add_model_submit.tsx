@@ -187,5 +187,3 @@ export const handleAddModelSubmit = async (
       NotificationManager.fromBackend("Failed to add model: " + error);
     }
   };
-
-     

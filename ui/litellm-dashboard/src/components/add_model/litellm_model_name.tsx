@@ -6,13 +6,15 @@ import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: Providers;
-  providerModels: string[];
+  providerModels: any[];
+  providerModelsLoading?: boolean;
   getPlaceholder: (provider: Providers) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
-  providerModels, 
+  providerModels,
+  providerModelsLoading = false,
   getPlaceholder,
 }) => {
   const form = Form.useFormInstance();
@@ -20,7 +22,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
     const values = Array.isArray(value) ? value : [value];
-    
+
     // If "all-wildcard" is selected, clear the model_name field
     if (values.includes("all-wildcard")) {
       form.setFieldsValue({ model_name: undefined, model_mappings: [] });
@@ -72,11 +74,13 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   };
 
   // Handle custom model name changes
-  const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCustomModelNameChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const customName = e.target.value;
 
     // Immediately update the model mappings
-    const currentMappings = form.getFieldValue('model_mappings') || [];
+    const currentMappings = form.getFieldValue("model_mappings") || [];
     const updatedMappings = currentMappings.map((mapping: any) => {
       if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
         if (selectedProvider === Providers.Azure) {
@@ -87,12 +91,12 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         }
         return {
           public_name: customName,
-          litellm_model: customName
+          litellm_model: customName,
         };
       }
       return mapping;
     });
-    
+
     form.setFieldsValue({ model_mappings: updatedMappings });
   };
 
@@ -124,25 +128,55 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               showSearch
               placeholder="Select models"
               onChange={handleModelChange}
+              loading={providerModelsLoading}
+              notFoundContent={
+                providerModelsLoading ? "Fetching models..." : undefined
+              }
               optionFilterProp="children"
               filterOption={(input, option) =>
-                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                (option?.label ?? "")
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
               }
-              options={[
-                {
-                  label: 'Custom Model Name (Enter below)',
-                  value: 'custom'
-                },
-                {
-                  label: `All ${selectedProvider} Models (Wildcard)`,
-                  value: 'all-wildcard'
-                },
-                ...providerModels.map(model => ({
-                  label: model,
-                  value: model
-                }))
-              ]}
-              style={{ width: '100%' }}
+              options={(() => {
+                const isPhoton = selectedProvider.includes("Photon");
+                const base =
+                  providerModelsLoading && providerModels.length === 0
+                    ? [
+                        {
+                          label: "Fetching models...",
+                          value: "__loading",
+                          disabled: true,
+                        },
+                      ]
+                    : isPhoton
+                      ? providerModels.map((m: any) => {
+                          const looksLikeGenerated =
+                            typeof m?.name === "string" && m.name.startsWith("model_");
+                          const idLooksHuman =
+                            typeof m?.id === "string" && !m.id.startsWith("model_");
+                          const label = looksLikeGenerated && idLooksHuman ? m.id : m.name;
+                          // Use the display label as the value so downstream fields get the readable name
+                          return { label, value: label };
+                        })
+                      : providerModels.map((model: any) => ({
+                          label: model,
+                          value: model,
+                        }));
+                if (isPhoton) {
+                  // Photon: show only fetched models (remove custom/wildcard rows)
+                  return base;
+                }
+                return [
+                  { label: "Custom Model Name (Enter below)", value: "custom" },
+                  {
+                    label: `All ${selectedProvider} Models (Wildcard)`,
+                    value: "all-wildcard",
+                  },
+                  ...base,
+                ];
+              })()}
+              style={{ width: "100%" }}
             />
           ) : (
             <TextInput placeholder={getPlaceholder(selectedProvider)} />
@@ -152,7 +186,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         {/* Custom Model Name field */}
         <Form.Item
           noStyle
-          shouldUpdate={(prevValues, currentValues) => 
+          shouldUpdate={(prevValues, currentValues) =>
             prevValues.model !== currentValues.model
           }
         >

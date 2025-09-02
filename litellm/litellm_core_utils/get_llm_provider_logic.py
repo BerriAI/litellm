@@ -85,6 +85,47 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def handle_photon_model_custom_llm_provider(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
+    """
+    Handle Photon provider model mapping.
+    
+    Photon models are OpenAI or Anthropic compatible endpoints.
+    We need to determine the backend provider based on the model name.
+    
+    Args:
+        model: The model name, potentially with photon/ prefix
+        custom_llm_provider: The custom provider if already specified
+
+    Returns:
+        Tuple of (model, custom_llm_provider)
+    """
+    # If custom_llm_provider is already set, don't override it
+    if custom_llm_provider and custom_llm_provider != "photon":
+        return model, custom_llm_provider
+        
+    if "/" in model:
+        _custom_llm_provider, _model = model.split("/", 1)
+        if _custom_llm_provider == "photon":
+            # Determine the backend provider based on model name patterns
+            model_lower = _model.lower()
+            
+            # Anthropic models (Claude series)
+            if any(claude_pattern in model_lower for claude_pattern in ["claude", "sonnet", "haiku", "opus"]):
+                return _model, "anthropic"
+            
+            # OpenAI models (GPT series)
+            elif any(openai_pattern in model_lower for openai_pattern in ["gpt", "text-davinci", "text-curie", "text-babbage", "text-ada"]):
+                return _model, "openai"
+            
+            # Default to OpenAI for unknown Photon models (most compatible)
+            else:
+                return _model, "openai"
+    
+    return model, custom_llm_provider
+
+
 def get_llm_provider(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
@@ -133,6 +174,11 @@ def get_llm_provider(  # noqa: PLR0915
         )
 
         model, custom_llm_provider = handle_anthropic_text_model_custom_llm_provider(
+            model, custom_llm_provider
+        )
+        
+        ### Handle Photon provider models
+        model, custom_llm_provider = handle_photon_model_custom_llm_provider(
             model, custom_llm_provider
         )
 

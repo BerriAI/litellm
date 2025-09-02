@@ -39,6 +39,7 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  fetchPhotonModels,
 } from "../networking"
 import { BarChart, AreaChart } from "@tremor/react"
 import { Popover, Form, InputNumber, message } from "antd"
@@ -206,10 +207,90 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setSelectedTabIndex(1)
   }
 
-  const setProviderModelsFn = (provider: Providers) => {
-    const _providerModels = getProviderModels(provider, modelMap)
-    setProviderModels(_providerModels)
-    console.log(`providerModels: ${_providerModels}`)
+  const setProviderModelsFn = async (provider: Providers) => {
+    console.log(`setProviderModelsFn called with provider: ${provider}`);
+    
+    // Check if this is a Photon provider that needs dynamic model fetching
+    // Handle both enum key (e.g., "PhotonAnthropic") and enum value (e.g., "Photon (Anthropic Compatible)")
+    const isPhotonProvider = provider === Providers.PhotonOpenAI || 
+                            provider === Providers.PhotonAnthropic ||
+                            provider === "PhotonOpenAI" || 
+                            provider === "PhotonAnthropic";
+    
+    if (isPhotonProvider) {
+      console.log(`Fetching models for Photon provider: ${provider}`);
+      try {
+        if (accessToken) {
+          const photonModelsResponse = await fetchPhotonModels(accessToken);
+          console.log('Photon models fetched:', photonModelsResponse);
+          
+          // Extract model names from response - handle various response formats
+          let modelNames: string[] = [];
+          
+          // Helper function to extract model names from an array that might contain strings or objects
+          const extractModelNames = (items: any[]): string[] => {
+            if (!Array.isArray(items)) return [];
+            
+            return items.map(item => {
+              // If item is already a string, use it directly
+              if (typeof item === 'string') {
+                return item;
+              }
+              // If item is an object, try common model name properties
+              if (typeof item === 'object' && item !== null) {
+                return item.model || item.model_name || item.name || item.id || JSON.stringify(item);
+              }
+              // Fallback to string conversion
+              return String(item);
+            }).filter(name => name && name.trim().length > 0); // Filter out empty names
+          };
+          
+          // Try different response structures
+          if (Array.isArray(photonModelsResponse)) {
+            modelNames = extractModelNames(photonModelsResponse);
+          } else if (photonModelsResponse && photonModelsResponse.models && Array.isArray(photonModelsResponse.models)) {
+            modelNames = extractModelNames(photonModelsResponse.models);
+          } else if (photonModelsResponse && photonModelsResponse.data && Array.isArray(photonModelsResponse.data)) {
+            modelNames = extractModelNames(photonModelsResponse.data);
+          } else if (photonModelsResponse && typeof photonModelsResponse === 'object') {
+            // If response is an object, look for any array property that might contain models
+            const possibleArrays = Object.values(photonModelsResponse).filter(Array.isArray);
+            if (possibleArrays.length > 0) {
+              modelNames = extractModelNames(possibleArrays[0] as any[]);
+            }
+          }
+          
+          // For Photon providers, the LiteLLMModelNameField expects objects with name/id properties
+          // but we have string array, so we need to convert them to the expected format
+          const photonModelObjects = modelNames.map(modelName => ({
+            name: modelName,
+            id: modelName,
+            // Use the model name as both name and id for consistency
+          }));
+          
+          console.log(`About to set Photon models:`, photonModelObjects.slice(0, 3));
+          setProviderModels(photonModelObjects);
+          console.log(`Photon provider models set (${photonModelObjects.length} models):`, photonModelObjects.slice(0, 5));
+          
+          // Return early to avoid running the regular provider logic
+          return;
+        } else {
+          console.warn('No access token available for fetching Photon models');
+          setProviderModels([]);
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to fetch Photon models:', error);
+        setProviderModels([]);
+        return;
+      }
+    } else {
+      // Regular provider - use existing logic
+      console.log(`Processing regular provider: ${provider}`);
+      const _providerModels = getProviderModels(provider, modelMap)
+      setProviderModels(_providerModels)
+      console.log(`Regular provider models set: ${_providerModels}`)
+    }
   }
 
   const updateModelMetrics = async (
