@@ -15,6 +15,7 @@ import TabItem from '@theme/TabItem';
 | Mistral | `vertex_ai/mistral-*` | [Vertex AI - Mistral Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral) |
 | AI21 (Jamba) | `vertex_ai/jamba-*` | [Vertex AI - AI21 Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/ai21) |
 | Qwen | `vertex_ai/qwen/*` | [Vertex AI - Qwen Models](https://cloud.google.com/vertex-ai/generative-ai/docs/maas/qwen) |
+| OpenAI (GPT-OSS) | `vertex_ai/openai/gpt-oss-*` | [Vertex AI - GPT-OSS Models](https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/) |
 | Model Garden | `vertex_ai/openai/{MODEL_ID}` or `vertex_ai/{MODEL_ID}` | [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 
 ## Vertex AI - Anthropic (Claude)
@@ -657,6 +658,141 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+
+## VertexAI GPT-OSS Models
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/openai/{MODEL}` |
+| Vertex Documentation | [Vertex AI - GPT-OSS Models](https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/) |
+
+**LiteLLM Supports all Vertex AI GPT-OSS Models.** Ensure you use the `vertex_ai/openai/` prefix for all Vertex AI GPT-OSS models.
+
+| Model Name       | Usage                        |
+|------------------|------------------------------|
+| vertex_ai/openai/gpt-oss-20b-maas | `completion('vertex_ai/openai/gpt-oss-20b-maas', messages)` |
+
+#### Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+
+model = "openai/gpt-oss-20b-maas"
+
+vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
+vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
+
+response = completion(
+    model="vertex_ai/" + model,
+    messages=[{"role": "user", "content": "hi"}],
+    vertex_ai_project=vertex_ai_project,
+    vertex_ai_location=vertex_ai_location,
+)
+print("\nModel Response", response)
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml
+model_list:
+    - model_name: gpt-oss
+      litellm_params:
+        model: vertex_ai/openai/gpt-oss-20b-maas
+        vertex_ai_project: "my-test-project"
+        vertex_ai_location: "us-central1"
+```
+
+**2. Start proxy**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+      --header 'Authorization: Bearer sk-1234' \
+      --header 'Content-Type: application/json' \
+      --data '{
+            "model": "gpt-oss", # 👈 the 'model_name' in config
+            "messages": [
+                {
+                "role": "user",
+                "content": "what llm are you"
+                }
+            ],
+        }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Usage - `reasoning_effort`
+
+GPT-OSS models support the `reasoning_effort` parameter for enhanced reasoning capabilities.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/openai/gpt-oss-20b-maas",
+    messages=[{"role": "user", "content": "Solve this complex problem step by step"}],
+    reasoning_effort="low",  # Options: "minimal", "low", "medium", "high"
+    vertex_ai_project="your-vertex-project",
+    vertex_ai_location="us-central1",
+)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+- model_name: gpt-oss
+  litellm_params:
+    model: vertex_ai/openai/gpt-oss-20b-maas
+    vertex_ai_project: "my-test-project"
+    vertex_ai_location: "us-central1"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gpt-oss",
+    "messages": [{"role": "user", "content": "Solve this complex problem step by step"}],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Model Garden
 

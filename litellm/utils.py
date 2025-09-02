@@ -3601,6 +3601,17 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+        elif provider_config is not None:
+            optional_params = provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
         else:  # use generic openai-like param mapping
             optional_params = litellm.VertexAILlama3Config().map_openai_params(
                 non_default_params=non_default_params,
@@ -6864,6 +6875,11 @@ class ProviderConfigManager:
                 return litellm.VertexGeminiConfig()
             elif "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+            elif "gpt-oss" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
+                    VertexAIGPTOSSTransformation,
+                )
+                return VertexAIGPTOSSTransformation()
             elif model in litellm.vertex_mistral_models:
                 if "codestral" in model:
                     return litellm.CodestralTextCompletionConfig()
