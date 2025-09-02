@@ -745,7 +745,7 @@ class Delta(OpenAIObject):
         if images is not None:
             self.images = images
         else:
-            del self.image
+            del self.images
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
