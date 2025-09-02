@@ -742,7 +742,7 @@ class Delta(OpenAIObject):
         else:
             del self.annotations
 
-        if images is not None:
+        if images is not None and len(images) > 0:
             self.images = images
         else:
             del self.images
