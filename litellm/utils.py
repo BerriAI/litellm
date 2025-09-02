@@ -7287,6 +7287,10 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+            return BedrockFilesConfig()
         return None
 
     @staticmethod
