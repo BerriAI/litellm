@@ -979,8 +979,8 @@ class TestProxyFunctionCalling:
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
-                "groq/llama3-70b-8192",
-                "litellm_proxy/groq/llama3-70b-8192",
+                "groq/llama-3.3-70b-versatile",
+                "litellm_proxy/groq/llama-3.3-70b-versatile",
                 False,
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
@@ -1051,7 +1051,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/claude-prod", "anthropic/claude-3-sonnet-20240229", False),
             ("litellm_proxy/claude-dev", "anthropic/claude-3-haiku-20240307", False),
             # Groq with custom names (cannot be resolved)
-            ("litellm_proxy/fast-llama", "groq/llama3-8b-8192", False),
+            ("litellm_proxy/fast-llama", "groq/llama-3.1-8b-instant", False),
             ("litellm_proxy/groq-gemma", "groq/gemma-7b-it", False),
             # Cohere with custom names (cannot be resolved)
             ("litellm_proxy/cohere-command", "cohere/command-r", False),

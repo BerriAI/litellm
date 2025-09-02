@@ -12,6 +12,8 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -308,8 +310,8 @@ class ProxyInitializationHelpers:
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=1,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
+    default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    help="Number of uvicorn / gunicorn workers to spin up. By default, 4 uvicorn workers are used.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")

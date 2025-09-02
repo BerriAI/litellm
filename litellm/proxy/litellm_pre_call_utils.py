@@ -271,6 +271,16 @@ class LiteLLMProxyRequestSetup:
         if timeout_header is not None:
             return float(timeout_header)
         return None
+    
+    @staticmethod
+    def _get_stream_timeout_from_request(headers: dict) -> Optional[float]:
+        """
+        Get the `stream_timeout` from the request headers.
+        """
+        stream_timeout_header = headers.get("x-litellm-stream-timeout", None)
+        if stream_timeout_header is not None:
+            return float(stream_timeout_header)
+        return None
 
     @staticmethod
     def _get_num_retries_from_request(headers: dict) -> Optional[int]:
@@ -439,6 +449,10 @@ class LiteLLMProxyRequestSetup:
         timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
+        
+        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+        if stream_timeout is not None:
+            data["stream_timeout"] = stream_timeout
 
         num_retries = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
