@@ -38,8 +38,8 @@ class GenerateContentToCompletionHandler:
         completion_kwargs: Dict[str, Any] = dict(completion_request)
 
         # feed metadata for custom callback
-        if 'metadata' in extra_kwargs:
-            completion_kwargs['metadata'] = extra_kwargs['metadata']
+        if "metadata" in extra_kwargs:
+            completion_kwargs["metadata"] = extra_kwargs["metadata"]
 
         if stream:
             completion_kwargs["stream"] = stream
