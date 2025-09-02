@@ -8,7 +8,11 @@ Anyone using the following models with /chat/completions:
 
 ## Key Change
 
-Gemini models now support image generation through chat completions. Images are returned in `response.choices[0].message.image` with base64 data URLs.
+:::info
+From v1.77.0, LiteLLM will return the List of images in `response.choices[0].message.images` instead of a single image in `response.choices[0].message.image`.
+:::
+
+Gemini models now support image generation through chat completions. Images are returned in `response.choices[0].message.images` with base64 data URLs.
 
 ## Before and After
 
@@ -37,7 +41,7 @@ response = completion(
 )
 
 # Image is now available in the response
-image_url = response.choices[0].message.image["url"]  # "data:image/png;base64,..."
+image_url = response.choices[0].message.images[0]["url"]  # "data:image/png;base64,..."
 ```
 
 ### Why the change?
@@ -54,7 +58,7 @@ Because the newer `gemini-2.5-flash-image-preview` model sends both text and ima
 -- base_64_image_data = response.choices[0].message.content
 
 # After
-++ image_url = response.choices[0].message.image["url"]
+++ image_url = response.choices[0].message.images[0]["url"]
 ```
 
 #### Basic Image Generation
@@ -75,7 +79,7 @@ response = completion(
 
 # Access the generated image
 print(response.choices[0].message.content)  # Text response (if any)
-print(response.choices[0].message.image)    # Image data
+print(response.choices[0].message.images[0])    # Image data
 ```
 
 #### Response Format
@@ -97,10 +101,10 @@ The image is returned in the `message.image` field:
 -- "content": "base64-image-data..."
 
 # After  
-++ "image": {
+++ "images": [{
 ++   "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
 ++   "detail": "auto"
-++ }
+++ }]
 ```
 
 #### Configuration Setup
@@ -187,7 +191,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
       "message": {
         "role": "assistant",
         "content": "Here's an image of a cat for you!",
-        "image": {
+        "images": [{
           "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
           "detail": "auto"
         }
