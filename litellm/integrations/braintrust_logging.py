@@ -159,7 +159,7 @@ class BraintrustLogger(CustomLogger):
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {}) or {}
-            dynamic_metadata = litellm_params.get("dynamic_metadata", {}) or {}
+            dynamic_metadata = litellm_params.get("metadata", {}) or {}
 
             # Get project_id from metadata or create default if needed
             project_id = dynamic_metadata.get("project_id")
@@ -175,6 +175,7 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             tags = []
+
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -184,6 +185,11 @@ class BraintrustLogger(CustomLogger):
                         and key in litellm.langfuse_default_tags
                     ):
                         tags.append(f"{key}:{value}")
+
+                    if (
+                        isinstance(value, str) and key not in standard_logging_object
+                    ):  # support logging dynamic metadata to braintrust
+                        standard_logging_object[key] = value
 
             cost = kwargs.get("response_cost", None)
 
@@ -265,9 +271,7 @@ class BraintrustLogger(CustomLogger):
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
-            dynamic_metadata = litellm_params.get("dynamic_metadata", {}) or {}
-
-            clean_metadata = {}
+            dynamic_metadata = litellm_params.get("metadata", {}) or {}
 
             # Get project_id from metadata or create default if needed
             project_id = dynamic_metadata.get("project_id")
@@ -285,6 +289,7 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             tags = []
+
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
@@ -294,6 +299,11 @@ class BraintrustLogger(CustomLogger):
                         and key in litellm.langfuse_default_tags
                     ):
                         tags.append(f"{key}:{value}")
+
+                    if (
+                        isinstance(value, str) and key not in standard_logging_object
+                    ):  # support logging dynamic metadata to braintrust
+                        standard_logging_object[key] = value
 
             cost = kwargs.get("response_cost", None)
 
