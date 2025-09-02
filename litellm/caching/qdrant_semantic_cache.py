@@ -93,9 +93,7 @@ class QdrantSemanticCache(BaseCache):
             llm_provider=httpxSpecialProvider.Caching
         )
 
-        # Auto-detect embedding dimensions if not provided
-        if self.embedding_dimensions is None:
-            self.embedding_dimensions = self._get_embedding_dimensions()
+        # Note: embedding_dimensions auto-detection is now lazy and happens only when needed
 
         if quantization_config is None:
             print_verbose(
@@ -146,7 +144,7 @@ class QdrantSemanticCache(BaseCache):
             new_collection_status = self.sync_client.put(
                 url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
                 json={
-                    "vectors": {"size": self.embedding_dimensions, "distance": self.distance_metric},
+                    "vectors": {"size": self._get_embedding_dimensions_lazy(), "distance": self.distance_metric},
                     "quantization_config": quantization_params,
                 },
                 headers=self.headers,
@@ -162,6 +160,15 @@ class QdrantSemanticCache(BaseCache):
                 )
             else:
                 raise Exception("Error while creating new collection")
+
+    def _get_embedding_dimensions_lazy(self):
+        """
+        Lazily get embedding dimensions, either from the stored value or by auto-detection.
+        This method ensures we only make LLM API calls when absolutely necessary.
+        """
+        if self.embedding_dimensions is None:
+            self.embedding_dimensions = self._get_embedding_dimensions()
+        return self.embedding_dimensions
 
     def _get_embedding_dimensions(self):
         """
