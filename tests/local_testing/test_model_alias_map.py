@@ -15,7 +15,7 @@ from litellm import completion, embedding
 
 litellm.set_verbose = True
 
-model_alias_map = {"good-model": "groq/llama3-8b-8192"}
+model_alias_map = {"good-model": "groq/llama-3.1-8b-instant"}
 
 
 def test_model_alias_map(caplog):
