@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { Card, Text, Button, Grid, Col, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react"
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
+import { ArrowLeftIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline"
 import {
   userInfoCall,
   userDeleteCall,
@@ -14,9 +14,9 @@ import { rolesWithWriteAccess } from "../../utils/roles"
 import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
-import { CopyIcon, CheckIcon } from "lucide-react";
-import NotificationsManager from "../molecules/notifications_manager";
-import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
+import { CopyIcon, CheckIcon } from "lucide-react"
+import NotificationsManager from "../molecules/notifications_manager"
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown"
 
 interface UserInfoViewProps {
   userId: string
@@ -57,16 +57,17 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(startInEditMode);
-  const [userModels, setUserModels] = useState<string[]>([]);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(initialTab);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [userData, setUserData] = useState<UserInfo | null>(null)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isEditing, setIsEditing] = useState(startInEditMode)
+  const [userModels, setUserModels] = useState<string[]>([])
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
+  const [baseUrl, setBaseUrl] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState(initialTab)
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [isTeamsExpanded, setIsTeamsExpanded] = useState(false)
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl())
@@ -175,14 +176,14 @@ export default function UserInfoView({
   }
 
   const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
+    const success = await utilCopyToClipboard(text)
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
     }
-  };
+  }
 
   return (
     <div className="p-4">
@@ -200,9 +201,9 @@ export default function UserInfoView({
               icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
               className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["user-id"] 
-                  ? 'text-green-600 bg-green-50 border-green-200' 
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                copiedStates["user-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
             />
           </div>
@@ -282,15 +283,44 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <Text>Teams</Text>
+                <div className="flex items-center justify-between">
+                  <Text>Teams</Text>
+                  {userData.teams?.length && userData.teams?.length > 20 && (
+                    <Button
+                      variant="light"
+                      size="xs"
+                      icon={isTeamsExpanded ? ChevronUpIcon : ChevronDownIcon}
+                      onClick={() => setIsTeamsExpanded(!isTeamsExpanded)}
+                    >
+                      {isTeamsExpanded ? "Show Less" : `+${userData.teams.length - 20} more`}
+                    </Button>
+                  )}
+                </div>
                 <div className="mt-2">
                   {userData.teams?.length && userData.teams?.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {userData.teams?.map((team, index) => (
-                        <Badge key={index} color="blue">
+                      {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                        <Badge key={index} color="blue" title={team.team_alias}>
                           {team.team_alias}
                         </Badge>
                       ))}
+                      {!isTeamsExpanded && userData.teams?.length > 20 && (
+                        <div className="relative group">
+                          <Badge color="gray" className="cursor-help">
+                            +{userData.teams.length - 20} more
+                          </Badge>
+                          <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded py-2 px-3 max-w-xs">
+                            <div className="max-h-32 overflow-y-auto">
+                              {userData.teams?.slice(20).map((team, index) => (
+                                <div key={index + 20} className="whitespace-nowrap">
+                                  {team.team_alias}
+                                </div>
+                              ))}
+                            </div>
+                            <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <Text>No teams</Text>
@@ -354,9 +384,9 @@ export default function UserInfoView({
                         icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                         onClick={() => copyToClipboard(userData.user_id, "user-id")}
                         className={`left-2 z-10 transition-all duration-200 ${
-                          copiedStates["user-id"] 
-                            ? 'text-green-600 bg-green-50 border-green-200' 
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          copiedStates["user-id"]
+                            ? "text-green-600 bg-green-50 border-green-200"
+                            : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                         }`}
                       />
                     </div>
@@ -391,14 +421,49 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Teams</Text>
+                    <div className="flex items-center justify-between">
+                      <Text className="font-medium">Teams</Text>
+                      {userData.teams?.length && userData.teams?.length > 20 && (
+                        <Button
+                          variant="light"
+                          size="xs"
+                          icon={isTeamsExpanded ? ChevronUpIcon : ChevronDownIcon}
+                          onClick={() => setIsTeamsExpanded(!isTeamsExpanded)}
+                        >
+                          {isTeamsExpanded ? "Show Less" : `+${userData.teams.length - 20} more`}
+                        </Button>
+                      )}
+                    </div>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.teams?.length && userData.teams?.length > 0 ? (
-                        userData.teams?.map((team, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-                            {team.team_alias || team.team_id}
-                          </span>
-                        ))
+                        <>
+                          {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-blue-100 rounded text-xs"
+                              title={team.team_alias || team.team_id}
+                            >
+                              {team.team_alias || team.team_id}
+                            </span>
+                          ))}
+                          {!isTeamsExpanded && userData.teams?.length > 20 && (
+                            <div className="relative group">
+                              <span className="px-2 py-1 bg-gray-100 rounded text-xs cursor-help">
+                                +{userData.teams.length - 20} more
+                              </span>
+                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded py-2 px-3 max-w-xs">
+                                <div className="max-h-32 overflow-y-auto">
+                                  {userData.teams?.slice(20).map((team, index) => (
+                                    <div key={index + 20} className="whitespace-nowrap">
+                                      {team.team_alias || team.team_id}
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
+                              </div>
+                            </div>
+                          )}
+                        </>
                       ) : (
                         <Text>No teams</Text>
                       )}
