@@ -329,8 +329,8 @@ class OllamaConfig(BaseConfig):
                     model_response.choices[0].finish_reason = "stop"
         else:
             response_text = response_json.get("response", "")
-            content: Optional[str] = None
-            reasoning_content: Optional[str] = None
+            content = None
+            reasoning_content = None
             if response_text is not None:
                 reasoning_content, content = _parse_content_for_reasoning(response_text)
             model_response.choices[0].message.content = content  # type: ignore
