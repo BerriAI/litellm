@@ -27,6 +27,7 @@ IGNORE_FUNCTIONS = [
     "_extract_fields_recursive",  # max depth set.
     "_remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
+    "_fix_enum_empty_strings",  # max depth set.,
 ]
 
 
