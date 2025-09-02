@@ -188,11 +188,11 @@ class TestSlackAlerting(unittest.TestCase):
         current_time = "12:34:56"
         
         # Test the specific formatting logic we're interested in
-        alert_type_formatted = f"Alert type: `{alert_type}`\n"
+        alert_type_formatted = f"Alert type: `{alert_type.name}`\n"
         formatted_message = f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
         
         # Verify alert_type is in the formatted message as expected
-        self.assertIn("Alert type: `AlertType.llm_exceptions`", formatted_message)
+        self.assertIn("Alert type: `llm_exceptions`", formatted_message)
         self.assertIn("Level: `Medium`", formatted_message)
         self.assertIn("Timestamp: `12:34:56`", formatted_message)
         self.assertIn("Message: Test alert message", formatted_message)
