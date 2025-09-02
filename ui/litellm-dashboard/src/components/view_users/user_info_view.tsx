@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { Card, Text, Button, Grid, Col, Tab, TabList, TabGroup, TabPanel, TabPanels, Title, Badge } from "@tremor/react"
-import { ArrowLeftIcon, TrashIcon, RefreshIcon, ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline"
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
 import {
   userInfoCall,
   userDeleteCall,
@@ -283,19 +283,7 @@ export default function UserInfoView({
               </Card>
 
               <Card>
-                <div className="flex items-center justify-between">
-                  <Text>Teams</Text>
-                  {userData.teams?.length && userData.teams?.length > 20 && (
-                    <Button
-                      variant="light"
-                      size="xs"
-                      icon={isTeamsExpanded ? ChevronUpIcon : ChevronDownIcon}
-                      onClick={() => setIsTeamsExpanded(!isTeamsExpanded)}
-                    >
-                      {isTeamsExpanded ? "Show Less" : `+${userData.teams.length - 20} more`}
-                    </Button>
-                  )}
-                </div>
+                <Text>Teams</Text>
                 <div className="mt-2">
                   {userData.teams?.length && userData.teams?.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
@@ -305,21 +293,22 @@ export default function UserInfoView({
                         </Badge>
                       ))}
                       {!isTeamsExpanded && userData.teams?.length > 20 && (
-                        <div className="relative group">
-                          <Badge color="gray" className="cursor-help">
-                            +{userData.teams.length - 20} more
-                          </Badge>
-                          <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded py-2 px-3 max-w-xs">
-                            <div className="max-h-32 overflow-y-auto">
-                              {userData.teams?.slice(20).map((team, index) => (
-                                <div key={index + 20} className="whitespace-nowrap">
-                                  {team.team_alias}
-                                </div>
-                              ))}
-                            </div>
-                            <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
-                          </div>
-                        </div>
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(true)}
+                        >
+                          +{userData.teams.length - 20} more
+                        </Badge>
+                      )}
+                      {isTeamsExpanded && userData.teams?.length > 20 && (
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(false)}
+                        >
+                          Show Less
+                        </Badge>
                       )}
                     </div>
                   ) : (
@@ -421,19 +410,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between">
-                      <Text className="font-medium">Teams</Text>
-                      {userData.teams?.length && userData.teams?.length > 20 && (
-                        <Button
-                          variant="light"
-                          size="xs"
-                          icon={isTeamsExpanded ? ChevronUpIcon : ChevronDownIcon}
-                          onClick={() => setIsTeamsExpanded(!isTeamsExpanded)}
-                        >
-                          {isTeamsExpanded ? "Show Less" : `+${userData.teams.length - 20} more`}
-                        </Button>
-                      )}
-                    </div>
+                    <Text className="font-medium">Teams</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.teams?.length && userData.teams?.length > 0 ? (
                         <>
@@ -447,21 +424,20 @@ export default function UserInfoView({
                             </span>
                           ))}
                           {!isTeamsExpanded && userData.teams?.length > 20 && (
-                            <div className="relative group">
-                              <span className="px-2 py-1 bg-gray-100 rounded text-xs cursor-help">
-                                +{userData.teams.length - 20} more
-                              </span>
-                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10 bg-gray-800 text-white text-xs rounded py-2 px-3 max-w-xs">
-                                <div className="max-h-32 overflow-y-auto">
-                                  {userData.teams?.slice(20).map((team, index) => (
-                                    <div key={index + 20} className="whitespace-nowrap">
-                                      {team.team_alias || team.team_id}
-                                    </div>
-                                  ))}
-                                </div>
-                                <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
-                              </div>
-                            </div>
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(true)}
+                            >
+                              +{userData.teams.length - 20} more
+                            </span>
+                          )}
+                          {isTeamsExpanded && userData.teams?.length > 20 && (
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(false)}
+                            >
+                              Show Less
+                            </span>
                           )}
                         </>
                       ) : (
