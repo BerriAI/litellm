@@ -41,3 +41,14 @@ def test_gpt5_temperature_error(config: OpenAIConfig):
             model="gpt-5",
             drop_params=False,
         )
+
+
+def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
+    assert "top_p" not in config.get_supported_openai_params(model="gpt-5")
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.5},
+        optional_params={},
+        model="gpt-5",
+        drop_params=True,
+    )
+    assert "top_p" not in params

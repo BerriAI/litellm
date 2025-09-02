@@ -1,13 +1,11 @@
 # What is this?
 ## Log success + failure events to Braintrust
 
-import copy
 import os
 from datetime import datetime
 from typing import Dict, Optional
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
@@ -24,7 +22,6 @@ API_BASE = "https://api.braintrustdata.com/v1"
 
 def get_utc_datetime():
     import datetime as dt
-    from datetime import datetime
 
     if hasattr(dt, "UTC"):
         return datetime.now(dt.UTC)  # type: ignore
@@ -45,9 +42,9 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[
-            str, str
-        ] = {}  # Cache mapping project names to IDs
+        self._project_id_cache: Dict[str, str] = (
+            {}
+        )  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
@@ -108,43 +105,6 @@ class BraintrustLogger(CustomLogger):
         except httpx.HTTPStatusError as e:
             raise Exception(f"Failed to register project: {e.response.text}")
 
-    @staticmethod
-    def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
-        """
-        Adds metadata from proxy request headers to Braintrust logging if keys start with "braintrust_"
-        and overwrites litellm_params.metadata if already included.
-
-        For example if you want to append your trace to an existing `trace_id` via header, send
-        `headers: { ..., langfuse_existing_trace_id: your-existing-trace-id }` via proxy request.
-        """
-        if litellm_params is None:
-            return metadata
-
-        if litellm_params.get("proxy_server_request") is None:
-            return metadata
-
-        if metadata is None:
-            metadata = {}
-
-        proxy_headers = (
-            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-        )
-
-        for metadata_param_key in proxy_headers:
-            if metadata_param_key.startswith("braintrust"):
-                trace_param_key = metadata_param_key.replace("braintrust", "", 1)
-                if trace_param_key in metadata:
-                    verbose_logger.warning(
-                        f"Overwriting Braintrust `{trace_param_key}` from request header"
-                    )
-                else:
-                    verbose_logger.debug(
-                        f"Found Braintrust `{trace_param_key}` in request header"
-                    )
-                metadata[trace_param_key] = proxy_headers.get(metadata_param_key)
-
-        return metadata
-
     async def create_default_project_and_experiment(self):
         project = await self.global_braintrust_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
@@ -169,7 +129,9 @@ class BraintrustLogger(CustomLogger):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
+            standard_logging_object = kwargs.get("standard_logging_object", {})
             prompt = {"messages": kwargs.get("messages")}
+
             output = None
             choices = []
             if response_obj is not None and (
@@ -192,33 +154,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = response_obj["data"]
 
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
-            metadata = self.add_metadata_from_header(litellm_params, metadata)
-            clean_metadata = {}
-            try:
-                metadata = copy.deepcopy(
-                    metadata
-                )  # Avoid modifying the original metadata
-            except Exception:
-                new_metadata = {}
-                for key, value in metadata.items():
-                    if (
-                        isinstance(value, list)
-                        or isinstance(value, dict)
-                        or isinstance(value, str)
-                        or isinstance(value, int)
-                        or isinstance(value, float)
-                    ):
-                        new_metadata[key] = copy.deepcopy(value)
-                metadata = new_metadata
+            litellm_params = kwargs.get("litellm_params", {}) or {}
+            dynamic_metadata = litellm_params.get("metadata", {}) or {}
 
             # Get project_id from metadata or create default if needed
-            project_id = metadata.get("project_id")
+            project_id = dynamic_metadata.get("project_id")
             if project_id is None:
-                project_name = metadata.get("project_name")
+                project_name = dynamic_metadata.get("project_name")
                 project_id = (
                     self.get_project_id_sync(project_name) if project_name else None
                 )
@@ -229,8 +171,9 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             tags = []
-            if isinstance(metadata, dict):
-                for key, value in metadata.items():
+
+            if isinstance(dynamic_metadata, dict):
+                for key, value in dynamic_metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -239,25 +182,12 @@ class BraintrustLogger(CustomLogger):
                     ):
                         tags.append(f"{key}:{value}")
 
-                    # clean litellm metadata before logging
-                    if key in [
-                        "headers",
-                        "endpoint",
-                        "caching_groups",
-                        "previous_models",
-                    ]:
-                        continue
-                    else:
-                        clean_metadata[key] = value
+                    if (
+                        isinstance(value, str) and key not in standard_logging_object
+                    ):  # support logging dynamic metadata to braintrust
+                        standard_logging_object[key] = value
 
             cost = kwargs.get("response_cost", None)
-            if cost is not None:
-                clean_metadata["litellm_response_cost"] = cost
-
-            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
-            litellm_model = kwargs.get("model", None)
-            if litellm_model is not None:
-                clean_metadata["model"] = litellm_model
 
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
@@ -275,12 +205,12 @@ class BraintrustLogger(CustomLogger):
                 }
 
             # Allow metadata override for span name
-            span_name = metadata.get("span_name", "Chat Completion")
-            
+            span_name = dynamic_metadata.get("span_name", "Chat Completion")
+
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
-                "metadata": clean_metadata,
+                "metadata": standard_logging_object,
                 "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
@@ -312,6 +242,7 @@ class BraintrustLogger(CustomLogger):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id = kwargs.get("litellm_call_id")
+            standard_logging_object = kwargs.get("standard_logging_object", {})
             prompt = {"messages": kwargs.get("messages")}
             output = None
             choices = []
@@ -336,32 +267,12 @@ class BraintrustLogger(CustomLogger):
                 output = response_obj["data"]
 
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = (
-                litellm_params.get("metadata", {}) or {}
-            )  # if litellm_params['metadata'] == None
-            metadata = self.add_metadata_from_header(litellm_params, metadata)
-            clean_metadata = {}
-            new_metadata = {}
-            for key, value in metadata.items():
-                if (
-                    isinstance(value, list)
-                    or isinstance(value, str)
-                    or isinstance(value, int)
-                    or isinstance(value, float)
-                ):
-                    new_metadata[key] = value
-                elif isinstance(value, BaseModel):
-                    new_metadata[key] = value.model_dump_json()
-                elif isinstance(value, dict):
-                    for k, v in value.items():
-                        if isinstance(v, datetime):
-                            value[k] = v.isoformat()
-                    new_metadata[key] = value
+            dynamic_metadata = litellm_params.get("metadata", {}) or {}
 
             # Get project_id from metadata or create default if needed
-            project_id = metadata.get("project_id")
+            project_id = dynamic_metadata.get("project_id")
             if project_id is None:
-                project_name = metadata.get("project_name")
+                project_name = dynamic_metadata.get("project_name")
                 project_id = (
                     await self.get_project_id_async(project_name)
                     if project_name
@@ -374,8 +285,9 @@ class BraintrustLogger(CustomLogger):
                 project_id = self.default_project_id
 
             tags = []
-            if isinstance(metadata, dict):
-                for key, value in metadata.items():
+
+            if isinstance(dynamic_metadata, dict):
+                for key, value in dynamic_metadata.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -384,25 +296,12 @@ class BraintrustLogger(CustomLogger):
                     ):
                         tags.append(f"{key}:{value}")
 
-                    # clean litellm metadata before logging
-                    if key in [
-                        "headers",
-                        "endpoint",
-                        "caching_groups",
-                        "previous_models",
-                    ]:
-                        continue
-                    else:
-                        clean_metadata[key] = value
+                    if (
+                        isinstance(value, str) and key not in standard_logging_object
+                    ):  # support logging dynamic metadata to braintrust
+                        standard_logging_object[key] = value
 
             cost = kwargs.get("response_cost", None)
-            if cost is not None:
-                clean_metadata["litellm_response_cost"] = cost
-
-            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
-            litellm_model = kwargs.get("model", None)
-            if litellm_model is not None:
-                clean_metadata["model"] = litellm_model
 
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
@@ -430,13 +329,13 @@ class BraintrustLogger(CustomLogger):
                     )
 
             # Allow metadata override for span name
-            span_name = metadata.get("span_name", "Chat Completion")
-            
+            span_name = dynamic_metadata.get("span_name", "Chat Completion")
+
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,
-                "metadata": clean_metadata,
+                "metadata": standard_logging_object,
                 "tags": tags,
                 "span_attributes": {"name": span_name, "type": "llm"},
             }
