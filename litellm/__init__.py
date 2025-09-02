@@ -67,6 +67,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
@@ -432,40 +433,6 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
-BEDROCK_CONVERSE_MODELS = [
-    "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0",
-    "anthropic.claude-opus-4-1-20250805-v1:0",
-    "anthropic.claude-opus-4-20250514-v1:0",
-    "anthropic.claude-sonnet-4-20250514-v1:0",
-    "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "ai21.jamba-1-5-mini-v1:0",
-    "ai21.jamba-1-5-large-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "meta.llama3-8b-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-    "mistral.mistral-large-2402-v1:0",
-    "mistral.mistral-small-2402-v1:0",
-    "meta.llama3-2-1b-instruct-v1:0",
-    "meta.llama3-2-3b-instruct-v1:0",
-    "meta.llama3-2-11b-instruct-v1:0",
-    "meta.llama3-2-90b-instruct-v1:0",
-]
 
 ####### COMPLETION MODELS ###################
 from typing import Set  
