@@ -979,8 +979,8 @@ class TestProxyFunctionCalling:
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
-                "groq/llama3-70b-8192",
-                "litellm_proxy/groq/llama3-70b-8192",
+                "groq/llama-3.3-70b-versatile",
+                "litellm_proxy/groq/llama-3.3-70b-versatile",
                 False,
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
