@@ -41,6 +41,11 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `proxyConfigMap.key`        | Key in the ConfigMap that contains the proxy config file.                                                                                                                                                      | `"config.yaml"` |
 | `proxy_config.*`            | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap’s `config.yaml` only when `proxyConfigMap.create=true`. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples. | `N/A` |
 | `extraContainers[]`         | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.
+| `pdb.enabled`                   | Enable a PodDisruptionBudget for the LiteLLM proxy Deployment                                                                 | `false` |
+| `pdb.minAvailable`             | Minimum number/percentage of pods that must be available during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable) | `null`  |
+| `pdb.maxUnavailable`           | Maximum number/percentage of pods that can be unavailable during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable) | `null`  |
+| `pdb.annotations`              | Extra metadata annotations to add to the PDB                                                                                   | `{}`    |
+| `pdb.labels`                   | Extra metadata labels to add to the PDB                                                                                        | `{}`    |
 
 #### Example `proxy_config` ConfigMap from values (default):
 
