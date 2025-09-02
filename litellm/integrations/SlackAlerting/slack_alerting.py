@@ -1371,7 +1371,7 @@ Model Info:
         if alert_type == "daily_reports" or alert_type == "new_model_added":
             formatted_message = alert_type_formatted + message
         else:
-            formatted_message = f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            formatted_message = f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
 
         if kwargs:
             for key, value in kwargs.items():
