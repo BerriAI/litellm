@@ -1367,7 +1367,9 @@ Model Info:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
-        alert_type_formatted = f"Alert type: `{alert_type}`\n"
+        # Use .name if it's an enum, otherwise use as is
+        alert_type_name = getattr(alert_type, 'name', alert_type)
+        alert_type_formatted = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
             formatted_message = alert_type_formatted + message
         else:
