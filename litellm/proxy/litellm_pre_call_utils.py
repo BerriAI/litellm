@@ -491,7 +491,8 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
-        data[_metadata_variable_name].update(metadata_from_headers)
+        if isinstance(data[_metadata_variable_name], dict):
+            data[_metadata_variable_name].update(metadata_from_headers)
         return data
 
     @staticmethod
