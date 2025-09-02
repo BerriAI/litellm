@@ -1,18 +1,15 @@
 # What is this?
 ## Log success + failure events to Braintrust
 
-import copy
 import os
 from datetime import datetime
 from typing import Dict, Optional
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.safe_json_dumps import filter_json_serializable
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -25,7 +22,6 @@ API_BASE = "https://api.braintrustdata.com/v1"
 
 def get_utc_datetime():
     import datetime as dt
-    from datetime import datetime
 
     if hasattr(dt, "UTC"):
         return datetime.now(dt.UTC)  # type: ignore
