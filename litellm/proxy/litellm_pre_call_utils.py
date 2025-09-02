@@ -469,10 +469,17 @@ class LiteLLMProxyRequestSetup:
         if num_retries is not None:
             data["num_retries"] = num_retries
 
+        return data
+    
+    @staticmethod
+    def add_litellm_metadata_from_request_headers(
+        headers: dict,
+        data: dict,
+        _metadata_variable_name: str,
+    ) -> dict:
         spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
-            data["spend_logs_metadata"] = spend_logs_metadata
-
+            data[_metadata_variable_name]["spend_logs_metadata"] = spend_logs_metadata
         return data
 
     @staticmethod
@@ -658,6 +665,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
     safe_add_api_version_from_query_params(data, request)
+    _metadata_variable_name = _get_metadata_variable_name(request)
+    if data.get(_metadata_variable_name, None) is None:
+        data[_metadata_variable_name] = {}
+
 
     _headers = clean_headers(
         request.headers,
@@ -673,6 +684,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             headers=_headers,
             user_api_key_dict=user_api_key_dict,
             general_settings=general_settings,
+        )
+    )
+
+    data.update(
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=_headers,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
         )
     )
 
@@ -725,11 +744,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data["ttl"] = cache_dict.get("s-maxage")
 
     verbose_proxy_logger.debug("receiving data: %s", data)
-
-    _metadata_variable_name = _get_metadata_variable_name(request)
-
-    if data.get(_metadata_variable_name, None) is None:
-        data[_metadata_variable_name] = {}
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
