@@ -51,7 +51,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
-    ImageURLObject,
+    ImageURLListItem,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -573,7 +573,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
-    images: Optional[List[ImageURLObject]] = None
+    images: Optional[List[ImageURLListItem]] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -590,7 +590,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        image: Optional[ImageURLObject] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
@@ -624,8 +624,8 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
-        if image is not None:
-            init_values["image"] = image
+        if images is not None:
+            init_values["images"] = images
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
@@ -647,9 +647,9 @@ class Message(OpenAIObject):
             if hasattr(self, "audio"):
                 del self.audio
 
-        if image is None:
-            if hasattr(self, "image"):
-                del self.image
+        if images is None:
+            if hasattr(self, "images"):
+                del self.images
 
         if annotations is None:
             # ensure default response matches OpenAI spec
@@ -703,7 +703,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        images: Optional[List[ImageURLObject]] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[

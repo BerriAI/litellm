@@ -43,10 +43,14 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import Text as ResponseText
+    from openai.types.responses.response_create_params import (
+        Text as ResponseText,  # type: ignore
+    )
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
-    from openai.types.responses.response_text_config_param import ResponseTextConfigParam as ResponseText
+    from openai.types.responses.response_text_config_param import (
+        ResponseTextConfigParam as ResponseText,
+    )
 
 from openai.types.responses.response_create_params import (
     Reasoning,
@@ -192,9 +196,15 @@ class ImageFileObject(TypedDict):
     detail: Optional[str]
 
 
-class ImageURLObject(TypedDict):
+class ImageURLObject(TypedDict, total=False):
     url: Required[str]
     detail: Optional[str]
+
+
+class ImageURLListItem(TypedDict):
+    image_url: ImageURLObject
+    index: int
+    type: Literal["image_url"]
 
 
 class MessageContentTextObject(TypedDict):
