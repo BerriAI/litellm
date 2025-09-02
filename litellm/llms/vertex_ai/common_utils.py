@@ -187,6 +187,25 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
     return has_text_param
 
 
+def _fix_enum_empty_strings(schema, depth=0):
+    """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+    
+    if "enum" in schema and isinstance(schema["enum"], list):
+        schema["enum"] = [None if value == "" else value for value in schema["enum"]]
+
+    # Reuse existing recursion pattern from convert_anyof_null_to_nullable
+    properties = schema.get("properties", None)
+    if properties is not None:
+        for _, value in properties.items():
+            _fix_enum_empty_strings(value, depth=depth + 1)
+
+    items = schema.get("items", None)
+    if items is not None:
+        _fix_enum_empty_strings(items, depth=depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -214,6 +233,11 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    _convert_schema_types(parameters)
+
+    # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
+    _fix_enum_empty_strings(parameters)
 
     # Handle empty items objects
     process_items(parameters)
@@ -438,6 +462,47 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     # Convert to Unix timestamp (seconds since epoch)
     return int(dt.timestamp())
 
+
+def _convert_schema_types(schema, depth=0):
+    """
+    Convert type arrays and lowercase types for Vertex AI compatibility.
+    
+    Transforms OpenAI-style schemas to Vertex AI format by converting type arrays 
+    like ["string", "number"] to anyOf format and converting all types to uppercase.
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    
+    if not isinstance(schema, dict):
+        return
+
+    
+    # Handle type field
+    if "type" in schema:
+        type_val = schema["type"]
+        if isinstance(type_val, list) and len(type_val) > 1:
+            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
+            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            schema.pop("type")
+        elif isinstance(type_val, list) and len(type_val) == 1:
+            schema["type"] = type_val[0]
+        elif isinstance(type_val, str):
+            schema["type"] = type_val
+    
+    # Recursively process nested properties, items, and anyOf
+    for key in ["properties", "items", "anyOf"]:
+        if key in schema:
+            value = schema[key]
+            if key == "properties" and isinstance(value, dict):
+                for prop_schema in value.values():
+                    _convert_schema_types(prop_schema, depth + 1)
+            elif key == "items":
+                _convert_schema_types(value, depth + 1)
+            elif key == "anyOf" and isinstance(value, list):
+                for anyof_schema in value:
+                    _convert_schema_types(anyof_schema, depth + 1)
 
 def get_vertex_project_id_from_url(url: str) -> Optional[str]:
     """
