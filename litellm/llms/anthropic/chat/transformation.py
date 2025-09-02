@@ -797,15 +797,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if content.get("citations") is not None:
                 if citations is None:
                     citations = []
-                citations.append(
-                    [
-                        {
-                            **citation,
-                            "supported_text": content.get("text", ""),
-                        }
-                        for citation in content["citations"]
-                    ]
-                )
+                citations.append(content["citations"])
         if thinking_blocks is not None:
             reasoning_content = ""
             for block in thinking_blocks:
