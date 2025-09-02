@@ -1291,6 +1291,7 @@ jobs:
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
+            pip install "fastuuid==0.12.0"
             pip install jsonschema
       - setup_litellm_enterprise_pip
       - run:
@@ -1476,6 +1477,7 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
@@ -2961,6 +2963,7 @@ jobs:
           command: |
             docker run --name my-app \
               -p 4000:4000 \
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
               myapp:latest \
               --port 4000 > docker_output.log 2>&1 || true

@@ -142,6 +142,17 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
+    def _get_langfuse_otel_host() -> Optional[str]:
+        """
+        Returns the Langfuse OTEL host based on environment variables.
+
+        Returned in the following order of precedence:
+        1. LANGFUSE_OTEL_HOST
+        2. LANGFUSE_HOST
+        """
+        return os.environ.get("LANGFUSE_OTEL_HOST") or os.environ.get("LANGFUSE_HOST")
+
+    @staticmethod
     def get_langfuse_otel_config() -> LangfuseOtelConfig:
         """
         Retrieves the Langfuse OpenTelemetry configuration based on environment variables.
@@ -166,7 +177,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             )
 
         # Determine endpoint - default to US cloud
-        langfuse_host = os.environ.get("LANGFUSE_HOST", None)
+        langfuse_host = LangfuseOtelLogger._get_langfuse_otel_host()
 
         if langfuse_host:
             # If LANGFUSE_HOST is provided, construct OTEL endpoint from it

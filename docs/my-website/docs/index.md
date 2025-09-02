@@ -226,6 +226,23 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-4o",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
 </Tabs>
 
 ### Response Format (OpenAI Format)
@@ -439,6 +456,24 @@ os.environ["NOVITA_API_KEY"] = "novita_api_key"
 
 response = completion(
   model="novita/deepseek/deepseek-r1",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-4o",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )

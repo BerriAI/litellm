@@ -11,7 +11,9 @@ import {
   BgColorsOutlined,
   CrownOutlined,
   MailOutlined,
-  SafetyOutlined
+  SafetyOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons'
 import { clearTokenCookies } from "@/utils/cookieUtils"
 import { fetchProxySettings } from "@/utils/proxyUtils"
@@ -23,10 +25,12 @@ interface NavbarProps {
   userEmail: string | null;
   userRole: string | null;
   premiumUser: boolean;
-  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   proxySettings: any;
+  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -38,6 +42,8 @@ const Navbar: React.FC<NavbarProps> = ({
   setProxySettings,
   accessToken,
   isPublicPage = false,
+  sidebarCollapsed = false,
+  onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
@@ -128,14 +134,27 @@ const Navbar: React.FC<NavbarProps> = ({
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
-        <div className="flex items-center h-12 px-4">
-          {/* Left side with correct logo positioning */}
+        <div className="flex items-center h-14 px-4"> {/* Increased height from h-12 to h-14 */}
+          {/* Left side with collapse toggle and logo */}
           <div className="flex items-center flex-shrink-0">
+            {/* Collapse/Expand Toggle Button - Larger */}
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                <span className="text-lg">
+                  {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                </span>
+              </button>
+            )}
+            
             <Link href="/" className="flex items-center">
               <img
                 src={imageUrl}
                 alt="LiteLLM Brand"
-                className="h-8 w-auto"
+                className="h-10 w-auto"
               />
             </Link>
           </div>
@@ -146,7 +165,7 @@ const Navbar: React.FC<NavbarProps> = ({
               href="https://docs.litellm.ai/docs/"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[13px] text-gray-600 hover:text-gray-900 transition-colors"
+              className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
             >
               Docs
             </a>
@@ -167,10 +186,10 @@ const Navbar: React.FC<NavbarProps> = ({
                 minWidth: '200px'
               }}
             >
-              <button className="inline-flex items-center text-[13px] text-gray-600 hover:text-gray-900 transition-colors">
+              <button className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors">
                 User
                 <svg
-                  className="ml-1 w-4 h-4 text-gray-500"
+                  className="ml-1 w-5 h-5 text-gray-500"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"

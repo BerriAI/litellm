@@ -1557,7 +1557,7 @@ def test_azure_ai_cohere_embed_input_type_param():
 
 def test_optional_params_image_gen_with_aspect_ratio():
     optional_params = get_optional_params_image_gen(
-        model="imagen-4.0-ultra-generate-preview-06-06",
+        model="imagen-4.0-ultra-generate-001",
         custom_llm_provider="vertex_ai",
         aspect_ratio="16:9",
     )
