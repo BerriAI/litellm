@@ -597,7 +597,7 @@ async def test_gemini_image_generation_async():
 
     CONTENT = response.choices[0].message.content
 
-    IMAGE_URL = response.choices[0].message.images[0]
+    IMAGE_URL = response.choices[0].message.images[0]["image_url"]
     print("IMAGE_URL: ", IMAGE_URL)
 
     assert CONTENT is not None, "CONTENT is not None"
@@ -629,7 +629,7 @@ async def test_gemini_image_generation_async_stream():
             and chunk.choices[0].delta.images is not None
             and len(chunk.choices[0].delta.images) > 0
         ):
-            model_response_image = chunk.choices[0].delta.images[0]
+            model_response_image = chunk.choices[0].delta.images[0]["image_url"]
             print("MODEL_RESPONSE_IMAGE: ", model_response_image)
             assert model_response_image is not None
             assert model_response_image["url"].startswith("data:image/png;base64,")

@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
+    ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
 )
@@ -795,9 +796,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
-    ) -> Optional[List[ImageURLObject]]:
+    ) -> Optional[List[ImageURLListItem]]:
         """Extract image response from parts if present"""
-        images: List[ImageURLObject] = []
+        images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
                 mime_type = part["inlineData"]["mimeType"]
@@ -805,7 +806,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
-                    images.append(ImageURLObject(url=data_uri, detail="auto"))
+                    images.append(
+                        ImageURLListItem(
+                            image_url=ImageURLObject(url=data_uri, detail="auto"),
+                            index=0,
+                            type="image_url",
+                        )
+                    )
         return images
 
     def _extract_audio_response_from_parts(
@@ -1134,7 +1141,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]],
         functions: Optional[ChatCompletionToolCallFunctionChunk],
         chat_completion_logprobs: Optional[ChoiceLogprobs],
-        image_response: Optional[List[ImageURLObject]],
+        image_response: Optional[List[ImageURLListItem]],
     ) -> StreamingChoices:
         """
         Helper method to create a streaming choice object for Vertex AI
@@ -1222,7 +1229,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: List[dict] = []
         url_context_metadata: List[dict] = []
-        image_response: Optional[List[ImageURLObject]] = None
+        image_response: Optional[List[ImageURLListItem]] = None
         safety_ratings: List = []
         citation_metadata: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
