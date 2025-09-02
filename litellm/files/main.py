@@ -109,7 +109,7 @@ def create_file(
     try:
         _is_async = kwargs.pop("acreate_file", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_params_dict = get_litellm_params(**kwargs)
+        litellm_params_dict = dict(**kwargs)
         logging_obj = cast(
             Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
         )
