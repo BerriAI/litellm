@@ -837,14 +837,12 @@ async def _client_async_logging_helper(
         # Async Logging Worker
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine = logging_obj.async_success_handler(
-                result=result,
-                start_time=start_time, 
-                end_time=end_time
+            async_coroutine=logging_obj.async_success_handler(
+                result=result, start_time=start_time, end_time=end_time
             )
         )
-
 
         ################################################
         # Sync Logging Worker
@@ -3304,6 +3302,7 @@ def get_optional_params(  # noqa: PLR0915
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    safety_identifier: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
@@ -3593,6 +3592,17 @@ def get_optional_params(  # noqa: PLR0915
                 )
         elif model in litellm.vertex_ai_ai21_models:
             optional_params = litellm.VertexAIAi21Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif provider_config is not None:
+            optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -6865,6 +6875,11 @@ class ProviderConfigManager:
                 return litellm.VertexGeminiConfig()
             elif "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+            elif "gpt-oss" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
+                    VertexAIGPTOSSTransformation,
+                )
+                return VertexAIGPTOSSTransformation()
             elif model in litellm.vertex_mistral_models:
                 if "codestral" in model:
                     return litellm.CodestralTextCompletionConfig()

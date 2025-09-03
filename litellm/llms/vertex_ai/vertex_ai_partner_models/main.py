@@ -49,6 +49,7 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith("jamba")
             or model.startswith("claude")
             or model.startswith("qwen")
+            or model.startswith("openai")
         ):
             return True
         return False
@@ -59,6 +60,7 @@ class VertexAIPartnerModels(VertexBase):
             "llama",
             "deepseek-ai",
             "qwen",
+            "openai",
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True

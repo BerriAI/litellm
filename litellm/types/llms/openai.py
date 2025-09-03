@@ -43,10 +43,14 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import Text as ResponseText
+    from openai.types.responses.response_create_params import (
+        Text as ResponseText,  # type: ignore
+    )
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
-    from openai.types.responses.response_text_config_param import ResponseTextConfigParam as ResponseText
+    from openai.types.responses.response_text_config_param import (
+        ResponseTextConfigParam as ResponseText,
+    )
 
 from openai.types.responses.response_create_params import (
     Reasoning,
@@ -784,6 +788,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     response_format: dict
     seed: int
     service_tier: str
+    safety_identifier: str
     stop: Union[str, List[str]]
     stream_options: dict
     temperature: float
@@ -1025,29 +1030,29 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
-    error: Optional[dict]
-    incomplete_details: Optional[IncompleteDetails]
-    instructions: Optional[str]
-    metadata: Optional[Dict]
-    model: Optional[str]
-    object: Optional[str]
+    error: Optional[dict] = None
+    incomplete_details: Optional[IncompleteDetails] = None
+    instructions: Optional[str] = None
+    metadata: Optional[Dict] = None
+    model: Optional[str] = None
+    object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
     parallel_tool_calls: bool
-    temperature: Optional[float]
+    temperature: Optional[float] = None
     tool_choice: ToolChoice
     tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
     top_p: Optional[float]
-    max_output_tokens: Optional[int]
-    previous_response_id: Optional[str]
-    reasoning: Optional[Reasoning]
-    status: Optional[str]
-    text: Optional[Union["ResponseText", Dict[str, Any]]]
-    truncation: Optional[Literal["auto", "disabled"]]
-    usage: Optional[ResponseAPIUsage]
-    user: Optional[str]
+    max_output_tokens: Optional[int] = None
+    previous_response_id: Optional[str] = None
+    reasoning: Optional[Reasoning] = None
+    status: Optional[str] = None
+    text: Optional[Union["ResponseText", Dict[str, Any]]] = None
+    truncation: Optional[Literal["auto", "disabled"]] = None
+    usage: Optional[ResponseAPIUsage] = None
+    user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
