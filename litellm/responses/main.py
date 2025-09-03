@@ -1,9 +1,10 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Type, Union
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm.constants import request_timeout
@@ -135,9 +136,10 @@ async def aresponses_api_with_mcp(
     )
 
     # Parse MCP tools and separate from other tools
-    mcp_tools_with_litellm_proxy, other_tools = (
-        LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
-    )
+    (
+        mcp_tools_with_litellm_proxy,
+        other_tools,
+    ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
     # Get available tools from MCP manager if we have MCP tools
     openai_tools = []
@@ -254,6 +256,7 @@ async def aresponses(
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
     text: Optional["ResponseText"] = None,
+    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
     tool_choice: Optional[ToolChoice] = None,
     tools: Optional[Iterable[ToolParam]] = None,
     top_p: Optional[float] = None,
@@ -278,6 +281,14 @@ async def aresponses(
     try:
         loop = asyncio.get_event_loop()
         kwargs["aresponses"] = True
+
+        # Convert text_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format, text=text
+        )
+        if text is not None:
+            # Update local_vars to include the converted text parameter
+            local_vars["text"] = text
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
@@ -367,6 +378,7 @@ def responses(
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
     text: Optional["ResponseText"] = None,
+    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
     tool_choice: Optional[ToolChoice] = None,
     tools: Optional[Iterable[ToolParam]] = None,
     top_p: Optional[float] = None,
@@ -398,6 +410,14 @@ def responses(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
+
+        # Convert text_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format, text=text
+        )
+        if text is not None:
+            # Update local_vars to include the converted text parameter
+            local_vars["text"] = text
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -432,11 +452,11 @@ def responses(
             )
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         local_vars.update(kwargs)
@@ -628,11 +648,11 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
@@ -807,11 +827,11 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
@@ -963,11 +983,11 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if responses_api_provider_config is None:
