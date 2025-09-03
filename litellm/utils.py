@@ -7302,18 +7302,6 @@ class ProviderConfigManager:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
             return BedrockBatchesConfig()
-        elif LlmProviders.GEMINI == provider:
-            # Future: Add Gemini batches config when implemented
-            pass
-        elif LlmProviders.VERTEX_AI == provider:
-            # Future: Add VertexAI batches config when refactored to use the new pattern
-            pass
-        elif LlmProviders.AZURE == provider:
-            # Future: Add Azure batches config when refactored to use the new pattern  
-            pass
-        elif LlmProviders.OPENAI == provider:
-            # Future: Add OpenAI batches config when refactored to use the new pattern
-            pass
         return None
 
     @staticmethod
