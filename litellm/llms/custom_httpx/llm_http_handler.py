@@ -2310,6 +2310,19 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+        
+        #########################################################
+        # Debug Logging
+        #########################################################
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": transformed_request,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
@@ -2447,11 +2460,19 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         try:
-            # For Bedrock and other providers that use JSON requests
-            if isinstance(transformed_request, dict):
+            if isinstance(transformed_request, dict) and "method" in transformed_request:
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                batch_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
+                    url=transformed_request["url"],
+                    headers=transformed_request["headers"],
+                    data=transformed_request["data"],
+                    timeout=timeout,
+                )
+            elif isinstance(transformed_request, dict):
+                # For other providers that use JSON requests
                 batch_response = sync_httpx_client.post(
                     url=api_base,
-                    headers={**headers, "Content-Type": "application/x-amz-json-1.1"},
+                    headers={**headers, "Content-Type": "application/json"},
                     json=transformed_request,
                     timeout=timeout,
                 )
@@ -2501,13 +2522,34 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+        
+        #########################################################
+        # Debug Logging
+        #########################################################
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": transformed_request,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
 
         try:
-            # For Bedrock and other providers that use JSON requests
-            if isinstance(transformed_request, dict):
+            if isinstance(transformed_request, dict) and "method" in transformed_request:
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                batch_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
+                    url=transformed_request["url"],
+                    headers=transformed_request["headers"],
+                    data=transformed_request["data"],
+                    timeout=timeout,
+                )
+            elif isinstance(transformed_request, dict):
+                # For other providers that use JSON requests
                 batch_response = await async_httpx_client.post(
                     url=api_base,
-                    headers={**headers, "Content-Type": "application/x-amz-json-1.1"},
+                    headers={**headers, "Content-Type": "application/json"},
                     json=transformed_request,
                     timeout=timeout,
                 )
