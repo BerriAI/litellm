@@ -2,8 +2,7 @@
 Utility functions for handling JSON schemas and $defs in LiteLLM.
 """
 
-from typing import Optional, Dict, Any
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from typing import Dict, Any
 from litellm.utils import ProviderConfigManager
 from litellm.types.utils import LlmProviders
 
