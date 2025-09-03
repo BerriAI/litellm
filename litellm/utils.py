@@ -234,6 +234,7 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -7291,6 +7292,28 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
             return BedrockFilesConfig()
+        return None
+    
+    @staticmethod
+    def get_provider_batches_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseBatchesConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+            return BedrockBatchesConfig()
+        elif LlmProviders.GEMINI == provider:
+            # Future: Add Gemini batches config when implemented
+            pass
+        elif LlmProviders.VERTEX_AI == provider:
+            # Future: Add VertexAI batches config when refactored to use the new pattern
+            pass
+        elif LlmProviders.AZURE == provider:
+            # Future: Add Azure batches config when refactored to use the new pattern  
+            pass
+        elif LlmProviders.OPENAI == provider:
+            # Future: Add OpenAI batches config when refactored to use the new pattern
+            pass
         return None
 
     @staticmethod
