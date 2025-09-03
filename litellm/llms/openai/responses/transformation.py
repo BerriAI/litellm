@@ -92,11 +92,41 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
                     validated_input.append(item.model_dump(exclude_none=True))
+                elif isinstance(item, dict):
+                    # For regular dict items, we need to manually filter out fields
+                    # that would be excluded by exclude_none=True behavior
+                    filtered_item = self._filter_fields_like_exclude_unset(item)  # type: ignore
+                    validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input
+            return validated_input  # type: ignore
         # Input is expected to be either str or List, no single BaseModel expected
         return input
+
+    def _filter_fields_like_exclude_unset(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter out fields that would be excluded by Pydantic's exclude_unset=True behavior.
+
+        This replicates the OpenAI SDK's behavior for non-Pydantic objects.
+        Fields with None values that have defaults in the Pydantic models should be excluded.
+        """
+        # Fields that have default values in the Pydantic models and should be excluded
+        # when they are None (matching exclude_unset=True behavior)
+        # Keeping ResponseReasoningItem for now
+        fields_with_defaults = {
+            "status",  # ResponseReasoningItem.status has default None
+            "content",  # ResponseReasoningItem.content has default None
+            "encrypted_content",  # ResponseReasoningItem.encrypted_content has default None
+        }
+
+        # Filter out fields that are None and have defaults
+        filtered_item = {}
+        for k, v in item.items():
+            if k in fields_with_defaults and v is None:
+                continue
+            filtered_item[k] = v
+
+        return filtered_item
 
     def transform_response_api_response(
         self,
