@@ -2904,8 +2904,15 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    stream_timeout: Optional[float]
     user: Optional[str]
     num_retries: Optional[int]
+
+class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
+    """
+    Headers a user can pass that will get added to litellm metadata for the request
+    """
+    spend_logs_metadata: Optional[dict]
 
 
 class JWTKeyItem(TypedDict, total=False):

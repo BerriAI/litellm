@@ -1,4 +1,5 @@
 model_list:
-  - model_name: xai/*
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: xai/*
+      model: openai/*
+      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
