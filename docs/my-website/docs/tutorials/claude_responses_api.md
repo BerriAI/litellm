@@ -12,6 +12,11 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 
 :::
 
+<br />
+
+<iframe width="840" height="500" src="https://www.loom.com/share/63c41b455d054054b2d6b0ba78fb4874?sid=bf83e112-76d0-4a2b-bd12-c6f2d9cea4a6" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) installed
