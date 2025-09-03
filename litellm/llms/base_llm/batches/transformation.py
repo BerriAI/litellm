@@ -9,7 +9,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
 if TYPE_CHECKING:

@@ -10,7 +10,6 @@ from litellm.types.llms.bedrock import (
     BedrockBatchJobStatus,
     BedrockCreateBatchRequest,
     BedrockCreateBatchResponse,
-    BedrockGetBatchResponse,
     BedrockInputDataConfig,
     BedrockOutputDataConfig,
     BedrockS3InputDataConfig,
