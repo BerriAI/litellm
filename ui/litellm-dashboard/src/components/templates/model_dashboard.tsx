@@ -211,11 +211,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     console.log(`setProviderModelsFn called with provider: ${provider}`);
     
     // Check if this is a Photon provider that needs dynamic model fetching
-    // Handle both enum key (e.g., "PhotonAnthropic") and enum value (e.g., "Photon (Anthropic Compatible)")
     const isPhotonProvider = provider === Providers.PhotonOpenAI || 
-                            provider === Providers.PhotonAnthropic ||
-                            provider === "PhotonOpenAI" || 
-                            provider === "PhotonAnthropic";
+                            provider === Providers.PhotonAnthropic;
     
     if (isPhotonProvider) {
       console.log(`Fetching models for Photon provider: ${provider}`);
@@ -260,17 +257,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             }
           }
           
-          // For Photon providers, the LiteLLMModelNameField expects objects with name/id properties
-          // but we have string array, so we need to convert them to the expected format
-          const photonModelObjects = modelNames.map(modelName => ({
-            name: modelName,
-            id: modelName,
-            // Use the model name as both name and id for consistency
-          }));
-          
-          console.log(`About to set Photon models:`, photonModelObjects.slice(0, 3));
-          setProviderModels(photonModelObjects);
-          console.log(`Photon provider models set (${photonModelObjects.length} models):`, photonModelObjects.slice(0, 5));
+          // setProviderModels expects a string array
+          console.log(`About to set Photon models:`, modelNames.slice(0, 3));
+          setProviderModels(modelNames);
+          console.log(`Photon provider models set (${modelNames.length} models):`, modelNames.slice(0, 5));
           
           // Return early to avoid running the regular provider logic
           return;

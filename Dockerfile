@@ -11,8 +11,8 @@ WORKDIR /app
 
 USER root
 
-# Install build dependencies
-RUN apk add --no-cache gcc python3-dev openssl openssl-dev
+# Install build dependencies including Node.js for UI build
+RUN apk add --no-cache gcc python3-dev openssl openssl-dev curl bash
 
 
 RUN pip install --upgrade pip && \
@@ -21,8 +21,20 @@ RUN pip install --upgrade pip && \
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Install Node.js via nvm and Build Admin UI in single step
+RUN chmod +x ui/litellm-dashboard/build_ui.sh && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash && \
+    export NVM_DIR="/root/.nvm" && \
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
+    nvm install v18.17.0 && \
+    nvm use v18.17.0 && \
+    cd ui/litellm-dashboard && \
+    npm install && \
+    npm run build && \
+    mkdir -p ../../litellm/proxy/_experimental/out && \
+    rm -rf ../../litellm/proxy/_experimental/out/* && \
+    cp -r ./out/* ../../litellm/proxy/_experimental/out/ && \
+    cd ../..
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -41,8 +53,7 @@ RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# UI already built in earlier step
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -67,6 +78,8 @@ ENV ARCAGI_DATA_ROOT=/data/arcagi
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
+# Copy the built UI from the builder stage
+COPY --from=builder /app/litellm/proxy/_experimental/out ./litellm/proxy/_experimental/out
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
