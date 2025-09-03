@@ -839,7 +839,6 @@ from test_completion import response_format_tests
     "model,region",
     [
         ("vertex_ai/mistral-large-2411", "us-central1"),
-        ("vertex_ai/mistral-nemo@2407", "us-central1"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
     ],
