@@ -28,7 +28,7 @@ class VertexAIError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
-class PartnerModelPrefixes(Enum, str):
+class PartnerModelPrefixes(str, Enum):
     META_PREFIX = "meta/"
     DEEPSEEK_PREFIX = "deepseek-ai"
     MISTRAL_PREFIX = "mistral"
