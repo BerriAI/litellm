@@ -10,7 +10,7 @@ const { Link } = Typography
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers
   uploadProps?: UploadProps
-  accessToken: string
+  accessToken?: string
 }
 
 interface ProviderCredentialField {
@@ -513,7 +513,7 @@ interface PhotonConfig {
   api_base: string
   models_path: string
   inference_base: string
-  anthropic_messages_base: string
+  anthropic_messages_base?: string
 }
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({

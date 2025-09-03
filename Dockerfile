@@ -21,18 +21,12 @@ RUN pip install --upgrade pip && \
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# Install Node.js via nvm for UI build
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash && \
+# Install Node.js via nvm and Build Admin UI in single step
+RUN chmod +x ui/litellm-dashboard/build_ui.sh && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash && \
     export NVM_DIR="/root/.nvm" && \
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
     nvm install v18.17.0 && \
-    nvm use v18.17.0 && \
-    npm install -g npm
-
-# Build Admin UI - Always build the UI
-RUN chmod +x ui/litellm-dashboard/build_ui.sh && \
-    export NVM_DIR="/root/.nvm" && \
-    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && \
     nvm use v18.17.0 && \
     cd ui/litellm-dashboard && \
     npm install && \
