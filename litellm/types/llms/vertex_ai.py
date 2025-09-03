@@ -41,6 +41,7 @@ class PartType(TypedDict, total=False):
     function_call: FunctionCall
     function_response: FunctionResponse
     thought: bool
+    thoughtSignature: str
 
 
 class HttpxFunctionCall(TypedDict):
@@ -72,6 +73,7 @@ class HttpxPartType(TypedDict, total=False):
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
+    thoughtSignature: str
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -245,10 +247,11 @@ class UsageMetadata(TypedDict, total=False):
 class TokenCountDetailsResponse(TypedDict):
     """
     Response structure for token count details with modality breakdown.
-    
+
     Example:
         {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
     """
+
     totalTokens: int
     promptTokensDetails: List[PromptTokensDetails]
 

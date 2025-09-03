@@ -439,6 +439,33 @@ response = client.chat.completions.create(
 
 print(response)
 ```
+
+**Using Headers:**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000"
+)
+
+# Pass spend logs metadata via headers
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_headers={
+        "x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+    }
+)
+
+print(response)
+```
+
 </TabItem>
 
 
@@ -478,6 +505,43 @@ async function runOpenAI() {
 // Call the asynchronous function
 runOpenAI();
 ```
+
+**Using Headers:**
+
+```js
+const openai = require('openai');
+
+async function runOpenAI() {
+  const client = new openai.OpenAI({
+    apiKey: 'sk-1234',
+    baseURL: 'http://0.0.0.0:4000'
+  });
+
+  try {
+    const response = await client.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: "this is a test request, write a short poem"
+        },
+      ]
+    }, {
+      headers: {
+        'x-litellm-spend-logs-metadata': '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}'
+      }
+    });
+    console.log(response);
+  } catch (error) {
+    console.log("got this exception from server");
+    console.error(error);
+  }
+}
+
+// Call the asynchronous function
+runOpenAI();
+```
+
 </TabItem>
 
 <TabItem value="Curl" label="Curl Request">
@@ -502,6 +566,29 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
 }'
 ```
+
+</TabItem>
+
+<TabItem value="headers" label="Using Headers">
+
+Pass `x-litellm-spend-logs-metadata` as a request header with JSON string
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'x-litellm-spend-logs-metadata: {"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
 </TabItem>
 <TabItem value="langchain" label="Langchain">
 
