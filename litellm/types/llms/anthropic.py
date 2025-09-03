@@ -375,6 +375,9 @@ class AnthropicResponseContentBlockText(BaseModel):
     type: Literal["text"]
     text: str
 
+class AnthropicResponseContentBlockRole(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 class AnthropicResponseContentBlockToolUse(BaseModel):
     type: Literal["tool_use"]

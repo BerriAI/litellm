@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
@@ -2544,6 +2545,7 @@ LLMResponseTypes = Union[
     OpenAIFileObject,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    AnthropicMessagesResponse
 ]
 
 

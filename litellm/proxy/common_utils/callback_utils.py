@@ -351,7 +351,7 @@ def add_guardrail_to_applied_guardrails_header(
 ):
     if guardrail_name is None:
         return
-    _metadata = request_data.get("metadata", None) or {}
+    _metadata = request_data.get("litellm_metadata") or request_data.get("metadata", {})
     if "applied_guardrails" in _metadata:
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
