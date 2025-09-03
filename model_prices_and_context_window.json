@@ -1356,7 +1356,8 @@
         "supports_pdf_input": true,
         "supports_vision": true,
         "supports_reasoning": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "deprecation_date": "2025-10-27"
     },
     "o1-preview": {
         "max_tokens": 32768,
@@ -11613,7 +11614,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 264,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-03-01"
     },
     "openrouter/anthropic/claude-3-5-haiku-20241022": {
         "max_tokens": 8192,
@@ -11625,7 +11627,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "tool_use_system_prompt_tokens": 264,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-10-01"
     },
     "openrouter/anthropic/claude-3.5-sonnet": {
         "supports_computer_use": true,
@@ -11875,7 +11878,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": false,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2025-10-27"
     },
     "openrouter/openai/o1-preview": {
         "max_tokens": 32768,
