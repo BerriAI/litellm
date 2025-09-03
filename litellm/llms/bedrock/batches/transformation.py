@@ -202,7 +202,6 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         
         # Extract information from typed Bedrock response
         job_arn = response_data.get("jobArn", "")
-        job_name = response_data.get("jobName", "")
         status: BedrockBatchJobStatus = response_data.get("status", "Submitted")
         
         # Map Bedrock status to OpenAI-compatible status

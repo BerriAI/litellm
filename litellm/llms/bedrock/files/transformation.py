@@ -455,7 +455,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         
         # Extract S3 object information from the response
         # S3 PUT object returns ETag and other metadata in headers
-        etag = response_headers.get("ETag", "").strip('"')
         content_length = response_headers.get("Content-Length", "0")
         
         # Extract bucket and key from the request URL or litellm_params
@@ -593,7 +592,6 @@ class BedrockJsonlFilesTransformation:
         # S3 response typically contains ETag, key, etc.
         object_key = s3_upload_response.get("Key", "")
         bucket_name = s3_upload_response.get("Bucket", "")
-        etag = s3_upload_response.get("ETag", "").strip('"')
         
         # Extract filename from object key
         filename = object_key.split("/")[-1] if "/" in object_key else object_key
