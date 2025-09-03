@@ -10,10 +10,13 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     create_user,
     get_service_provider_config,
     patch_user,
+    update_group,
     update_user,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMFeature,
+    SCIMGroup,
+    SCIMMember,
     SCIMPatchOp,
     SCIMPatchOperation,
     SCIMServiceProviderConfig,
@@ -678,4 +681,233 @@ async def test_update_group_metadata_serialization_issue(mocker):
     parsed_metadata = json.loads(metadata)
     assert "existing_key" in parsed_metadata
     assert "scim_data" in parsed_metadata
-    assert parsed_metadata["existing_key"] == "existing_value"
+
+
+@pytest.mark.asyncio
+async def test_team_membership_management(mocker):
+    """
+    Test that team membership changes work correctly:
+    - Adding members to team
+    - Removing members from team  
+    - members_with_roles is used as source of truth
+    """
+    from litellm.proxy._types import Member
+    from litellm.proxy.management_endpoints.scim.scim_v2 import (
+        _get_team_member_user_ids_from_team,
+        _handle_group_membership_changes,
+        patch_team_membership,
+    )
+
+    # Mock team with members_with_roles as source of truth
+    mock_team = mocker.MagicMock()
+    mock_team.members_with_roles = [
+        Member(user_id="user1", role="user"),
+        Member(user_id="user2", role="user")
+    ]
+    mock_team.members = ["user1", "user2", "user3"]  # This should be ignored
+    
+    # Test that members_with_roles is source of truth
+    member_ids = await _get_team_member_user_ids_from_team(mock_team)
+    assert set(member_ids) == {"user1", "user2"}
+    assert "user3" not in member_ids  # Should not be included even though in members
+    
+    # Mock patch_team_membership function
+    mock_patch_team_membership = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock()
+    )
+    
+    # Test adding and removing members
+    group_id = "test-group-id"
+    current_members = {"user1", "user2"}
+    final_members = {"user2", "user3", "user4"}  # Remove user1, add user3 and user4
+    
+    await _handle_group_membership_changes(
+        group_id=group_id,
+        current_members=current_members,
+        final_members=final_members
+    )
+    
+    # Verify patch_team_membership was called correctly
+    assert mock_patch_team_membership.call_count == 3
+    
+    # Check calls for adding members
+    add_calls = [call for call in mock_patch_team_membership.call_args_list 
+                if call[1]["teams_ids_to_add_user_to"] == [group_id]]
+    assert len(add_calls) == 2  # user3 and user4
+    
+    add_user_ids = {call[1]["user_id"] for call in add_calls}
+    assert add_user_ids == {"user3", "user4"}
+    
+    # Check calls for removing members  
+    remove_calls = [call for call in mock_patch_team_membership.call_args_list
+                   if call[1]["teams_ids_to_remove_user_from"] == [group_id]]
+    assert len(remove_calls) == 1  # user1
+    
+    remove_user_ids = {call[1]["user_id"] for call in remove_calls}
+    assert remove_user_ids == {"user1"}
+    
+    # Verify all calls have correct structure
+    for call in mock_patch_team_membership.call_args_list:
+        assert "user_id" in call[1]
+        assert "teams_ids_to_add_user_to" in call[1]
+        assert "teams_ids_to_remove_user_from" in call[1]
+        # Each call should either add OR remove, not both
+        add_teams = call[1]["teams_ids_to_add_user_to"]
+        remove_teams = call[1]["teams_ids_to_remove_user_from"]
+        assert (len(add_teams) > 0) != (len(remove_teams) > 0)  # XOR - one should be empty
+
+
+@pytest.mark.asyncio
+async def test_update_group_e2e(mocker):
+    """
+    End-to-end test for update_group endpoint:
+    - Updates group metadata (displayName)
+    - Handles complete member replacement (add/remove members)
+    - Verifies members_with_roles is updated as source of truth
+    - Tests the full flow from SCIM request to database updates
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+    from litellm.proxy.utils import safe_dumps
+
+    # Setup test data
+    group_id = "test-team-123"
+    
+    # Mock existing team in database
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Old Team Name",
+        members=["user1", "user2"],  # This should be ignored
+        members_with_roles=[
+            Member(user_id="user1", role="user"),
+            Member(user_id="user2", role="user")
+        ],
+        metadata={"existing_key": "existing_value"}
+    )
+    
+    # Mock updated SCIM group request
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Updated Team Name",
+        members=[
+            SCIMMember(value="user2", display="User Two"),  # Keep user2
+            SCIMMember(value="user3", display="User Three"),  # Add user3
+            SCIMMember(value="user4", display="User Four")   # Add user4
+        ]
+    )
+    
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    
+    # Mock database operations
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    
+    # Mock the updated team that gets returned from database
+    updated_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Updated Team Name",
+        members=["user2", "user3", "user4"],
+        members_with_roles=[
+            Member(user_id="user2", role="user"),
+            Member(user_id="user3", role="user"),
+            Member(user_id="user4", role="user")
+        ],
+        metadata={
+            "existing_key": "existing_value",
+            "scim_data": scim_group_update.model_dump()
+        }
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+    
+    # Mock user validation (all users exist)
+    mock_user = mocker.MagicMock()
+    mock_user.user_id = "test-user"
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    
+    # Mock dependencies
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client)
+    )
+    
+    # Mock patch_team_membership to track membership changes
+    mock_patch_team_membership = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock()
+    )
+    
+    # Mock SCIM transformation
+    expected_scim_response = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Updated Team Name",
+        members=[
+            SCIMMember(value="user2", display="user2"),
+            SCIMMember(value="user3", display="user3"), 
+            SCIMMember(value="user4", display="user4")
+        ]
+    )
+    mocker.patch.object(
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=expected_scim_response)
+    )
+    
+    # Execute the update_group function
+    result = await update_group(group_id=group_id, group=scim_group_update)
+    
+    # Verify database update was called with correct data
+    mock_prisma_client.db.litellm_teamtable.update.assert_called_once()
+    update_call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
+    
+    # Check the update parameters
+    assert update_call_args[1]["where"]["team_id"] == group_id
+    update_data = update_call_args[1]["data"]
+    assert update_data["team_alias"] == "Updated Team Name"
+    
+    # Verify metadata includes both existing data and SCIM data
+    metadata_str = update_data["metadata"]
+    import json
+    metadata = json.loads(metadata_str)
+    assert metadata["existing_key"] == "existing_value"
+    assert "scim_data" in metadata
+    assert metadata["scim_data"]["displayName"] == "Updated Team Name"
+    
+    # Verify team membership changes were handled correctly
+    assert mock_patch_team_membership.call_count == 3  # Remove user1, add user3, add user4
+    
+    # Check membership changes
+    call_args_list = mock_patch_team_membership.call_args_list
+    
+    # Find remove operation (user1)
+    remove_calls = [call for call in call_args_list 
+                   if call[1]["teams_ids_to_remove_user_from"] == [group_id]]
+    assert len(remove_calls) == 1
+    assert remove_calls[0][1]["user_id"] == "user1"
+    assert remove_calls[0][1]["teams_ids_to_add_user_to"] == []
+    
+    # Find add operations (user3, user4)
+    add_calls = [call for call in call_args_list 
+                if call[1]["teams_ids_to_add_user_to"] == [group_id]]
+    assert len(add_calls) == 2
+    add_user_ids = {call[1]["user_id"] for call in add_calls}
+    assert add_user_ids == {"user3", "user4"}
+    
+    # Verify all add calls have empty remove lists
+    for call in add_calls:
+        assert call[1]["teams_ids_to_remove_user_from"] == []
+    
+    # Verify the response
+    assert result.id == group_id
+    assert result.displayName == "Updated Team Name"
+    assert len(result.members) == 3
+    
+    # Verify SCIM transformation was called with updated team
+    ScimTransformations.transform_litellm_team_to_scim_group.assert_called_once_with(updated_team)
