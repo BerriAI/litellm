@@ -253,6 +253,12 @@ async def set_scim_content_type(response: Response):
 )
 async def get_service_provider_config(request: Request):
     """Return SCIM Service Provider Configuration."""
+    verbose_proxy_logger.debug(
+        "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
     meta = {
         "resourceType": "ServiceProviderConfig",
         "location": str(request.url),
@@ -275,6 +281,12 @@ async def get_users(
     """
     Get a list of users according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
+        startIndex,
+        count,
+        filter,
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -334,6 +346,7 @@ async def get_user(
     """
     Get a single user by ID according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug("SCIM GET USER request for user_id=%s", user_id)
     try:
         user = await _check_user_exists(user_id)
         
@@ -357,7 +370,9 @@ async def create_user(
     Create a user according to SCIM v2 protocol
     """
     try:
-        verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user)
+        verbose_proxy_logger.debug(
+            "SCIM CREATE USER request: %s", user.model_dump()
+        )
         prisma_client = await _get_prisma_client_or_raise_exception()
         
         # Extract data from SCIM user
@@ -435,7 +450,11 @@ async def update_user(
     """
     Update a user according to SCIM v2 protocol (full replacement)
     """
-    verbose_proxy_logger.debug("SCIM PUT USER request: %s", user)
+    verbose_proxy_logger.debug(
+        "SCIM PUT USER request for user_id=%s: %s",
+        user_id,
+        user.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
@@ -497,6 +516,9 @@ async def delete_user(
     """
     Delete a user according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM DELETE USER request for user_id=%s", user_id
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
@@ -691,7 +713,11 @@ async def patch_user(
     """
     Patch a user according to SCIM v2 protocol
     """
-    verbose_proxy_logger.debug("SCIM PATCH USER request: %s", patch_ops)
+    verbose_proxy_logger.debug(
+        "SCIM PATCH USER request for user_id=%s: %s",
+        user_id,
+        patch_ops.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
@@ -744,6 +770,12 @@ async def get_groups(
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
+        startIndex,
+        count,
+        filter,
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -814,6 +846,9 @@ async def get_group(
     """
     Get a single group by ID according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET GROUP request for group_id=%s", group_id
+    )
     try:
         team = await _check_team_exists(group_id)
 
@@ -839,6 +874,10 @@ async def create_group(
     """
     Create a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM CREATE GROUP request: %s",
+        group.model_dump(),
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         
@@ -892,6 +931,11 @@ async def update_group(
     """
     Update a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM PUT GROUP request for group_id=%s: %s",
+        group_id,
+        group.model_dump(),
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
@@ -980,6 +1024,9 @@ async def delete_group(
     """
     Delete a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM DELETE GROUP request for group_id=%s", group_id
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
@@ -1135,7 +1182,11 @@ async def patch_group(
     """
     Patch a group according to SCIM v2 protocol
     """
-    verbose_proxy_logger.debug("SCIM PATCH GROUP request: %s", patch_ops)
+    verbose_proxy_logger.debug(
+        "SCIM PATCH GROUP request for group_id=%s: %s",
+        group_id,
+        patch_ops.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
