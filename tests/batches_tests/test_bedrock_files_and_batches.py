@@ -55,6 +55,7 @@ async def test_async_file_and_batch():
         custom_llm_provider="bedrock",
         s3_bucket_name="litellm-proxy",
     )
+    print("CREATED FILE RESPONSE=", file_obj)
 
     # create batch
     create_batch_response = await litellm.acreate_batch(
