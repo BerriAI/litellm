@@ -665,6 +665,7 @@ async def test_openai_gpt5_reasoning():
     print("response: ", response)
     assert response.choices[0].message.content is not None
 
+
 def test_openai_responses_api_dict_input_filtering():
     """
     Test that regular dict inputs with status fields are properly filtered
@@ -718,3 +719,63 @@ def test_openai_responses_api_dict_input_filtering():
     assert function_call_item["status"] == "completed", "status value should be preserved"
 
     print("✅ OpenAI Responses API dict input filtering test passed")
+
+
+@pytest.mark.asyncio
+async def test_openai_safety_identifier_parameter():
+    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
+    from openai import AsyncOpenAI
+    
+    litellm.set_verbose = True
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        # Verify the request contains the safety_identifier parameter
+        assert "safety_identifier" in request_body
+        # Verify safety_identifier is correctly sent to the API
+        assert request_body["safety_identifier"] == "user_code_123456"
+
+
+def test_openai_safety_identifier_parameter_sync():
+    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
+    from openai import OpenAI
+    
+    litellm.set_verbose = True
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        # Verify the request contains the safety_identifier parameter
+        assert "safety_identifier" in request_body
+        # Verify safety_identifier is correctly sent to the API
+        assert request_body["safety_identifier"] == "user_code_123456"
+
