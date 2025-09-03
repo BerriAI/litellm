@@ -1014,9 +1014,15 @@ class TestProxyFunctionCalling:
     @pytest.fixture(autouse=True)
     def reset_mock_cache(self):
         """Reset model cache before each test."""
+        import os
         from litellm.utils import _model_cache
+        import litellm
 
         _model_cache.flush_cache()
+        
+        # Ensure we use local model cost map for tests
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")  # Load local backup
 
     @pytest.mark.parametrize(
         "direct_model,proxy_model,expected_result",
@@ -1051,6 +1057,11 @@ class TestProxyFunctionCalling:
             (
                 "groq/llama3-70b-8192",
                 "litellm_proxy/groq/llama3-70b-8192",
+                False,
+            ),  # This model doesn't support function calling
+            (
+                "groq/llama-3.3-70b-versatile",
+                "litellm_proxy/groq/llama-3.3-70b-versatile",
                 False,
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
