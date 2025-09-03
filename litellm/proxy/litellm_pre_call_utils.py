@@ -677,11 +677,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-    safe_add_api_version_from_query_params(data, request)
-    _metadata_variable_name = _get_metadata_variable_name(request)
-    if data.get(_metadata_variable_name, None) is None:
-        data[_metadata_variable_name] = {}
-
 
     _headers = clean_headers(
         request.headers,
@@ -691,6 +686,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             else None
         ),
     )
+
+    ##########################################################
+    # Init - Proxy Server Request
+    # we do this as soon as entering so we track the original request
+    ##########################################################
+    data["proxy_server_request"] = {
+        "url": str(request.url),
+        "method": request.method,
+        "headers": _headers,
+        "body": copy.copy(data),  # use copy instead of deepcopy
+    }
+
+    safe_add_api_version_from_query_params(data, request)
+    _metadata_variable_name = _get_metadata_variable_name(request)
+    if data.get(_metadata_variable_name, None) is None:
+        data[_metadata_variable_name] = {}
+
+
 
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
@@ -721,13 +734,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    # Include original request and headers in the data
-    data["proxy_server_request"] = {
-        "url": str(request.url),
-        "method": request.method,
-        "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
-    }
 
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
