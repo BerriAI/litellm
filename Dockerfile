@@ -58,6 +58,12 @@ WORKDIR /app
 COPY . .
 RUN ls -la /app
 
+# Provision ARC-AGI datasets/config inside image so no host mount is required
+RUN mkdir -p /data/arcagi && \
+    if [ -d "/app/data/arcagi" ]; then cp -r /app/data/arcagi/* /data/arcagi/ || true; fi && \
+    chmod -R a+rX /data/arcagi
+ENV ARCAGI_DATA_ROOT=/data/arcagi
+
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/

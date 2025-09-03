@@ -25,9 +25,14 @@ import {
   modelInfoV1Call,
   modelPatchUpdateCall,
   getGuardrailsList,
+  arcagiGetConfig,
+  arcagiRunBenchmark,
+  arcagiStreamProgress,
+  arcagiFetchReport,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip, Radio, Progress } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import ReactMarkdown from "react-markdown";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
@@ -88,11 +93,19 @@ export default function ModelInfoView({
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
-  console.log("usingExistingCredential, ", usingExistingCredential);
-  console.log(
-    "modelData.litellm_params.litellm_credential_name, ",
-    modelData?.litellm_params?.litellm_credential_name
-  );
+
+  // ARC-AGI state
+  const [arcagiDatasets, setArcagiDatasets] = useState<
+    { name: string; id: string; desc: string }[]
+  >([]);
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
+  const [isArcagiRunning, setIsArcagiRunning] = useState<boolean>(false);
+  const [arcagiProgress, setArcagiProgress] = useState<number>(0);
+  const [arcagiReportId, setArcagiReportId] = useState<string | null>(null);
+  const [arcagiMarkdown, setArcagiMarkdown] = useState<string>("");
+  const [arcagiError, setArcagiError] = useState<string>("");
+  const [arcagiAbortController, setArcagiAbortController] =
+    useState<AbortController | null>(null);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -142,6 +155,26 @@ export default function ModelInfoView({
     getModelInfo();
     fetchGuardrails();
   }, [accessToken, modelId]);
+
+  // Load ARC-AGI datasets
+  useEffect(() => {
+    const load = async () => {
+      try {
+        if (!accessToken) return;
+        const cfg = await arcagiGetConfig(accessToken);
+        const ds = (cfg?.datasets || []) as any[];
+        setArcagiDatasets(ds);
+        if (ds.length > 0) setSelectedDatasetId(ds[0].id);
+      } catch (e) {
+        setArcagiError("Failed to load datasets");
+      }
+    };
+    load();
+    return () => {
+      if (arcagiAbortController) arcagiAbortController.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
 
   const handleReuseCredential = async (values: any) => {
     console.log("values, ", values);
@@ -249,21 +282,77 @@ export default function ModelInfoView({
     }
   };
 
-  if (!modelData) {
-    return (
-      <div className="p-4">
-        <TremorButton
-          icon={ArrowLeftIcon}
-          variant="light"
-          onClick={onClose}
-          className="mb-4"
-        >
-          Back to Models
-        </TremorButton>
-        <Text>Model not found</Text>
-      </div>
-    );
-  }
+  const handleRunArcagi = async () => {
+    if (!accessToken || !modelData?.model_name) return;
+    if (!selectedDatasetId) {
+      message.warning("Select a dataset first");
+      return;
+    }
+    setArcagiError("");
+    setArcagiMarkdown("");
+    setArcagiReportId(null);
+    setArcagiProgress(0);
+    setIsArcagiRunning(true);
+    const ac = new AbortController();
+    setArcagiAbortController(ac);
+    try {
+      const { job_id } = await arcagiRunBenchmark(
+        accessToken,
+        modelData.model_name,
+        selectedDatasetId,
+      );
+      await arcagiStreamProgress(
+        accessToken,
+        job_id,
+        async (evt: any) => {
+          if (evt?.type === "progress") {
+            setArcagiProgress(Number(evt.percent || 0));
+          } else if (evt?.type === "done") {
+            const rid = evt.report_id as string;
+            setArcagiReportId(rid);
+            try {
+              const md = await arcagiFetchReport(accessToken, rid);
+              setArcagiMarkdown(md);
+            } catch (e) {
+              setArcagiError("Failed to load final report");
+            } finally {
+              setIsArcagiRunning(false);
+            }
+          } else if (evt?.type === "error") {
+            setArcagiError(evt.message || "Benchmark error");
+            setIsArcagiRunning(false);
+          }
+        },
+        ac.signal,
+      );
+    } catch (e: any) {
+      setArcagiError(e?.message || "Failed to start benchmark");
+      setIsArcagiRunning(false);
+    }
+  };
+
+  const handleCopyReport = async () => {
+    if (!arcagiMarkdown) return;
+    try {
+      await navigator.clipboard.writeText(arcagiMarkdown);
+      message.success("Report copied to clipboard");
+    } catch {
+      message.error("Failed to copy report");
+    }
+  };
+
+  const handleSaveReport = async () => {
+    if (!arcagiMarkdown) return;
+    const blob = new Blob([arcagiMarkdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `arcagi_report_${arcagiReportId || "latest"}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   const handleDelete = async () => {
     try {
@@ -281,7 +370,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-    NotificationsManager.fromBackend("Failed to delete model");
+      NotificationsManager.fromBackend("Failed to delete model");
     }
   };
 
@@ -301,6 +390,22 @@ export default function ModelInfoView({
       onModelUpdate(updatedModel);
     }
   };
+
+  if (!modelData) {
+    return (
+      <div className="p-4">
+        <TremorButton
+          icon={ArrowLeftIcon}
+          variant="light"
+          onClick={onClose}
+          className="mb-4"
+        >
+          Back to Models
+        </TremorButton>
+        <Text>Model not found</Text>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4">
@@ -360,6 +465,7 @@ export default function ModelInfoView({
         <TabList className="mb-6">
           <Tab>Overview</Tab>
           <Tab>Raw JSON</Tab>
+          <Tab>ARC-AGI</Tab>
         </TabList>
 
         <TabPanels>
@@ -821,34 +927,34 @@ export default function ModelInfoView({
                               }))}
                             />
                           </Form.Item>
-                                                 ) : (
-                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                             {localModelData.litellm_params?.guardrails ? (
-                               Array.isArray(localModelData.litellm_params.guardrails) ? (
-                                 localModelData.litellm_params.guardrails.length > 0 ? (
-                                   <div className="flex flex-wrap gap-1">
-                                     {localModelData.litellm_params.guardrails.map(
-                                       (guardrail: string, index: number) => (
-                                         <span
-                                           key={index}
-                                           className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
-                                         >
-                                           {guardrail}
-                                         </span>
-                                       )
-                                     )}
-                                   </div>
-                                 ) : (
-                                   "No guardrails assigned"
-                                 )
+                        ) : (
+                         <div className="mt-1 p-2 bg-gray-50 rounded">
+                           {localModelData.litellm_params?.guardrails ? (
+                             Array.isArray(localModelData.litellm_params.guardrails) ? (
+                               localModelData.litellm_params.guardrails.length > 0 ? (
+                                 <div className="flex flex-wrap gap-1">
+                                   {localModelData.litellm_params.guardrails.map(
+                                     (guardrail: string, index: number) => (
+                                       <span
+                                         key={index}
+                                         className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                       >
+                                         {guardrail}
+                                       </span>
+                                     )
+                                   )}
+                                 </div>
                                ) : (
-                                 localModelData.litellm_params.guardrails
+                                 "No guardrails assigned"
                                )
                              ) : (
-                               "Not Set"
-                             )}
-                           </div>
-                         )}
+                               localModelData.litellm_params.guardrails
+                             )
+                           ) : (
+                             "Not Set"
+                           )}
+                         </div>
+                       )}
                       </div>
 
                       {/* Cache Control Section */}
@@ -962,6 +1068,134 @@ export default function ModelInfoView({
               <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">
                 {JSON.stringify(modelData, null, 2)}
               </pre>
+            </Card>
+          </TabPanel>
+
+          <TabPanel>
+            <Card>
+              <div className="flex justify-between items-center mb-4">
+                <Title>ARC-AGI Benchmark</Title>
+              </div>
+              {arcagiError && (
+                <Text className="text-red-600 mb-2">{arcagiError}</Text>
+              )}
+              {/* Model context */}
+              <div className="mb-3 text-sm text-gray-600">
+                Evaluating model:{" "}
+                <span className="font-mono">
+                  {localModelData?.litellm_model_name ||
+                    modelData?.litellm_model_name ||
+                    modelData?.model_name}
+                </span>
+              </div>
+              <div className="mb-4">
+                <Text className="mb-2">Select the dataset:</Text>
+                <Radio.Group
+                  onChange={(e) => setSelectedDatasetId(e.target.value)}
+                  value={selectedDatasetId}
+                >
+                  {arcagiDatasets.map((d) => (
+                    <div key={d.id} className="py-2">
+                      <Radio value={d.id}>
+                        <span className="font-medium">
+                          {d.name} ({d.id})
+                        </span>
+                      </Radio>
+                      <div className="pl-6 text-gray-500 text-sm leading-snug max-w-3xl">
+                        {d.desc || ""}
+                      </div>
+                    </div>
+                  ))}
+                </Radio.Group>
+              </div>
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <TremorButton
+                    onClick={handleRunArcagi}
+                    disabled={isArcagiRunning || !selectedDatasetId}
+                  >
+                    {isArcagiRunning ? "Running..." : "Run Test"}
+                  </TremorButton>
+                  <div className="w-64">
+                    <Progress
+                      percent={arcagiProgress}
+                      status={
+                        isArcagiRunning
+                          ? "active"
+                          : arcagiProgress === 100
+                            ? "success"
+                            : "normal"
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <TremorButton
+                    variant="secondary"
+                    onClick={handleCopyReport}
+                    disabled={!arcagiMarkdown}
+                  >
+                    Copy
+                  </TremorButton>
+                  <TremorButton
+                    variant="secondary"
+                    onClick={handleSaveReport}
+                    disabled={!arcagiMarkdown}
+                  >
+                    Save
+                  </TremorButton>
+                </div>
+              </div>
+              {arcagiMarkdown && (
+                <div className="border-t pt-4 markdown-wrap">
+                  <ReactMarkdown
+                    components={{
+                      blockquote: ({ children }) => (
+                        <blockquote className="border-l-4 pl-3 text-gray-700 italic mb-2">
+                          {children}
+                        </blockquote>
+                      ),
+                      h1: ({ children }) => (
+                        <h1 className="text-xl font-semibold mb-2">
+                          {children}
+                        </h1>
+                      ),
+                      h2: ({ children }) => (
+                        <h2 className="text-lg font-semibold mt-4 mb-2">
+                          {children}
+                        </h2>
+                      ),
+                      h3: ({ children }) => (
+                        <h3 className="font-semibold mt-4 mb-2">{children}</h3>
+                      ),
+                      h4: ({ children }) => (
+                        <h4 className="font-semibold mt-3 mb-2">{children}</h4>
+                      ),
+                      p: ({ children }) => (
+                        <p className="mb-2 leading-relaxed">{children}</p>
+                      ),
+                      ul: ({ children }) => (
+                        <ul className="list-disc pl-6 mb-2">{children}</ul>
+                      ),
+                      ol: ({ children }) => (
+                        <ol className="list-decimal pl-6 mb-2">{children}</ol>
+                      ),
+                      li: ({ children }) => (
+                        <li className="mb-2">{children}</li>
+                      ),
+                      hr: () => <hr className="my-6 border-gray-200" />,
+                      pre: ({ children }) => (
+                        <pre className="whitespace-pre-wrap break-words">{children}</pre>
+                      ),
+                      code: ({ children }) => (
+                        <code className="px-0 py-0">{children}</code>
+                      ),
+                    }}
+                  >
+                    {arcagiMarkdown}
+                  </ReactMarkdown>
+                </div>
+              )}
             </Card>
           </TabPanel>
         </TabPanels>

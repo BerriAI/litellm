@@ -33,7 +33,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () {};
+  console.log = function() { };
 }
 
 const updateProxyBaseUrl = (
@@ -162,11 +162,14 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string) => {
+const handleError = async (errorData: string | any) => {
+  // Ensure errorData is a string for .includes() method
+  const errorString = typeof errorData === 'string' ? errorData : deriveErrorMessage(errorData);
+
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
-    if (errorData.includes("Authentication Error - Expired Key")) {
+    if (errorString.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       document.cookie =
@@ -174,14 +177,12 @@ const handleError = async (errorData: string) => {
       window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
-  } else {
-    console.log("Error suppressed to prevent spam:", errorData);
   }
 };
 
 // Global variable for the header name
-let globalLitellmHeaderName: string  = "Authorization";
-const MCP_AUTH_HEADER: string  = "x-mcp-auth";
+let globalLitellmHeaderName: string = "Authorization";
+const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(
@@ -335,14 +336,14 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
         "Content-Type": "application/json",
       },
     });
-    
+
     if (!response.ok) {
       console.error(`Status request failed with status: ${response.status}`);
       const errorText = await response.text();
       console.error("Error response:", errorText);
       throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
-    
+
     const jsonData = await response.json();
     console.log(`Model cost map reload status:`, jsonData);
     return jsonData;
@@ -539,6 +540,154 @@ export const budgetCreateCall = async (
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+// Photon helpers (call via proxy to avoid CORS)
+export type PhotonModel = { id: string; name: string };
+
+export const photonListModels = async (accessToken?: string): Promise<PhotonModel[]> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/photon/models` : `/photon/models`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: accessToken
+        ? { [globalLitellmHeaderName]: `Bearer ${accessToken}` }
+        : undefined,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const models = Array.isArray(data?.models) ? data.models : [];
+    return models.filter((m: any) => m && typeof m.id === "string" && typeof m.name === "string");
+  } catch {
+    return [];
+  }
+};
+
+export const photonGetConfig = async (
+  accessToken?: string
+): Promise<{ api_base: string; models_path: string; inference_base: string; anthropic_messages_base?: string; }> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/photon/config` : `/photon/config`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: accessToken ? { [globalLitellmHeaderName]: `Bearer ${accessToken}` } : undefined,
+  });
+  if (!res.ok) return { api_base: "", models_path: "/models", inference_base: "" };
+  return await res.json();
+};
+
+// ARC-AGI helpers
+export const arcagiGetConfig = async (accessToken: string) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/arcagi/config` : `/arcagi/config`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    await handleError(err);
+    throw new Error("Failed to get ARC-AGI config");
+  }
+  return await response.json();
+};
+
+export const arcagiDownloadDatasets = async (accessToken: string, datasets?: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/arcagi/datasets/download` : `/arcagi/datasets/download`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(datasets ? { datasets } : {}),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    await handleError(err);
+    throw new Error("Failed to download datasets");
+  }
+  return await response.json();
+};
+
+export const arcagiRunBenchmark = async (
+  accessToken: string,
+  modelId: string,
+  datasetId: string
+) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/arcagi/benchmark/run` : `/arcagi/benchmark/run`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model_id: modelId, dataset_id: datasetId }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    await handleError(err);
+    throw new Error("Failed to start benchmark");
+  }
+  return await response.json(); // { job_id }
+};
+
+export const arcagiStreamProgress = async (
+  accessToken: string,
+  jobId: string,
+  onEvent: (evt: any) => void,
+  signal?: AbortSignal
+) => {
+  // Use fetch streaming so we can pass Authorization headers
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/arcagi/benchmark/stream/${jobId}` : `/arcagi/benchmark/stream/${jobId}`;
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const err = await resp.text();
+    await handleError(err);
+    throw new Error("Failed to stream progress");
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Parse lines like: "data: {json}\n\n"
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const chunk = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const line = chunk.trim();
+      if (line.startsWith("data:")) {
+        const jsonStr = line.slice(5).trim();
+        try {
+          const evt = JSON.parse(jsonStr);
+          onEvent(evt);
+        } catch (e) {
+          console.log("Failed parsing SSE event:", jsonStr);
+        }
+      }
+    }
+  }
+};
+
+export const arcagiFetchReport = async (accessToken: string, reportId: string) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/arcagi/report/${reportId}` : `/arcagi/report/${reportId}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    await handleError(err);
+    throw new Error("Failed to fetch report");
+  }
+  return await response.text();
 };
 
 export const budgetUpdateCall = async (
@@ -3666,8 +3815,6 @@ export const credentialGetCall = async (
       url += `/by_model/${modelId}`;
     }
 
-    console.log("in credentialListCall");
-
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3685,11 +3832,9 @@ export const credentialGetCall = async (
 
 
     const data = await response.json();
-    console.log("/credentials API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
     throw error;
   }
 };
@@ -4085,7 +4230,7 @@ export const teamMemberUpdateCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
       : `/team/member_update`;
-    
+
     const requestBody: any = {
       team_id: teamId,
       role: formValues.role,
@@ -4368,9 +4513,9 @@ export const userBulkUpdateUserCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/user/bulk_update`
       : `/user/bulk_update`;
-    
+
     let request_body_json: string;
-    
+
     if (allUsers) {
       // Update all users mode
       request_body_json = JSON.stringify({
@@ -4379,7 +4524,7 @@ export const userBulkUpdateUserCall = async (
       });
     } else if (userIds && userIds.length > 0) {
       // Update specific users mode
-      let request_body = [] 
+      let request_body = []
       for (const user_id of userIds) {
         request_body.push({
           user_id: user_id,
@@ -4392,7 +4537,7 @@ export const userBulkUpdateUserCall = async (
     } else {
       throw new Error("Must provide either userIds or set allUsers=true");
     }
-    
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -5246,7 +5391,7 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
-export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+export const getPromptsList = async (accessToken: String): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/prompts/list`
@@ -5405,11 +5550,11 @@ export const convertPromptFileToJson = async (
   try {
     const formData = new FormData();
     formData.append("file", file);
-    
-    const url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter`
       : `/utils/dotprompt_json_converter`;
-    
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -5874,14 +6019,14 @@ export const callMCPTool = async (
     if (!response.ok) {
       let errorMessage = "Network response was not ok";
       let errorDetails = null;
-      
+
       // First, try to get the response as text to see what we're dealing with
       const responseText = await response.text();
-      
+
       try {
         // Try to parse as JSON
         const errorData = JSON.parse(responseText);
-        
+
         if (errorData.detail) {
           if (typeof errorData.detail === 'string') {
             errorMessage = errorData.detail;
@@ -5892,7 +6037,7 @@ export const callMCPTool = async (
         } else {
           errorMessage = errorData.message || errorData.error || errorMessage;
         }
-        
+
       } catch (parseError) {
         console.error("Failed to parse JSON error response:", parseError);
         // If JSON parsing fails, use the raw text
@@ -5900,13 +6045,13 @@ export const callMCPTool = async (
           errorMessage = responseText;
         }
       }
-      
+
       // Create a more informative error object
       const enhancedError = new Error(errorMessage);
       (enhancedError as any).status = response.status;
       (enhancedError as any).statusText = response.statusText;
       (enhancedError as any).details = errorDetails;
-      
+
       handleError(errorMessage);
       throw enhancedError;
     }
@@ -7121,9 +7266,9 @@ export const userAgentAnalyticsCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/user-agent/analytics`
       : `/tag/user-agent/analytics`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7131,16 +7276,16 @@ export const userAgentAnalyticsCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page", page.toString());
     queryParams.append("page_size", pageSize.toString());
-    
+
     if (userAgentFilter) {
       queryParams.append("user_agent_filter", userAgentFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7184,9 +7329,9 @@ export const tagDauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/dau`
       : `/tag/dau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7194,9 +7339,9 @@ export const tagDauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7205,7 +7350,7 @@ export const tagDauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7248,9 +7393,9 @@ export const tagWauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/wau`
       : `/tag/wau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7258,9 +7403,9 @@ export const tagWauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7269,7 +7414,7 @@ export const tagWauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7312,9 +7457,9 @@ export const tagMauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/mau`
       : `/tag/mau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7322,9 +7467,9 @@ export const tagMauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7333,7 +7478,7 @@ export const tagMauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7411,9 +7556,9 @@ export const userAgentSummaryCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/summary`
       : `/tag/summary`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7421,17 +7566,17 @@ export const userAgentSummaryCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
-    
+
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
         queryParams.append("tag_filters", tag);
       });
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7474,19 +7619,19 @@ export const perUserAnalyticsCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
       : `/tag/user-agent/per-user-analytics`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     queryParams.append("page", page.toString());
     queryParams.append("page_size", pageSize.toString());
-    
+
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
         queryParams.append("tag_filters", tag);
       });
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7516,10 +7661,122 @@ export const perUserAnalyticsCall = async (
   }
 };
 
+export const fetchPhotonModels = async (accessToken: string) => {
+  try {
+    // Fetch models from the backend proxy which will get the static models from fundamental-photon
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/photon/models` : `/photon/models`;
+    console.log(`Fetching Photon models from backend proxy: ${url}`);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to fetch Photon models: ${response.status} - ${response.statusText}`);
+      const errorData = await response.json().catch(() => null);
+      const errorMessage = deriveErrorMessage(errorData || { error: response.statusText });
+      handleError(errorMessage);
+      // Return empty array instead of throwing to prevent breaking the UI
+      return [];
+    }
+
+    const data = await response.json();
+    console.log("Photon models response from backend:", data);
+
+    if (data.availableModels && Array.isArray(data.availableModels)) {
+      console.log(`Found ${data.availableModels.length} Photon models:`, data.availableModels);
+      return data.availableModels;
+    } else if (Array.isArray(data)) {
+      console.log(`Found ${data.length} Photon models (direct array):`, data);
+      return data;
+    } else if (data.models && Array.isArray(data.models)) {
+      console.log(`Found ${data.models.length} Photon models (models array):`, data.models);
+      return data.models;
+    } else {
+      console.warn('Unexpected Photon models response format:', data);
+      return [];
+    }
+  } catch (error) {
+    console.error("Failed to fetch Photon models:", error);
+    // Return empty array instead of throwing to prevent breaking the UI
+    return [];
+  }
+};
+
 const deriveErrorMessage = (errorData: any): string => {
-  return (errorData?.error && (errorData.error.message || errorData.error)) ||
-    errorData?.message ||
-    errorData?.detail ||
-    errorData?.error ||
-    JSON.stringify(errorData);
+  // Handle various error formats from different APIs
+  if (typeof errorData === 'string') {
+    return errorData;
+  }
+
+  if (errorData?.error) {
+    if (typeof errorData.error === 'string') {
+      return errorData.error;
+    }
+    if (errorData.error.message) {
+      return errorData.error.message;
+    }
+  }
+
+  if (errorData?.message) {
+    return errorData.message;
+  }
+
+  if (errorData?.detail) {
+    // Handle case where detail is an array (like validation errors)
+    if (Array.isArray(errorData.detail)) {
+      // Extract meaningful error messages from validation error arrays
+      const messages = errorData.detail.map((item: any) => {
+        if (item?.msg && item?.loc) {
+          return `${item.loc.join('.')}: ${item.msg}`;
+        }
+        if (item?.msg) {
+          return item.msg;
+        }
+        if (typeof item === 'string') {
+          return item;
+        }
+        return JSON.stringify(item);
+      });
+      return messages.join('; ');
+    }
+    // Handle case where detail is a string or other type
+    if (typeof errorData.detail === 'string') {
+      return errorData.detail;
+    }
+  }
+
+  // Handle authentication errors specifically
+  if (errorData?.code === 'AUTH_ERROR' || errorData?.type === 'auth_error') {
+    return 'Authentication failed. Please check your API key.';
+  }
+
+  // Handle arrays directly (in case detail extraction above didn't work)
+  if (Array.isArray(errorData)) {
+    const messages = errorData.map((item: any) => {
+      if (item?.msg && item?.loc) {
+        return `${item.loc.join('.')}: ${item.msg}`;
+      }
+      if (item?.msg) {
+        return item.msg;
+      }
+      if (typeof item === 'string') {
+        return item;
+      }
+      return JSON.stringify(item);
+    });
+    return messages.join('; ');
+  }
+
+  // Safely stringify the error data
+  try {
+    return JSON.stringify(errorData, null, 2);
+  } catch (stringifyError) {
+    // If JSON.stringify fails (circular references, etc), return a generic message
+    return `API Error: ${errorData?.constructor?.name || 'Unknown error'}`;
+  }
 };

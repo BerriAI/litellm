@@ -4,12 +4,11 @@ import NotificationManager from "./molecules/notifications_manager";
 
 export enum Providers {
   AIML = "AI/ML API",
-  Bedrock = "Amazon Bedrock",           
   Anthropic = "Anthropic",              
   AssemblyAI = "AssemblyAI",            
-  SageMaker = "AWS SageMaker",         
   Azure = "Azure",                     
   Azure_AI_Studio = "Azure AI Foundry (Studio)", 
+  Bedrock = "Amazon Bedrock",           
   Cerebras = "Cerebras",                
   Cohere = "Cohere",                    
   Databricks = "Databricks",            
@@ -31,6 +30,9 @@ export enum Providers {
   OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
   Openrouter = "Openrouter",            
   Perplexity = "Perplexity",           
+  PhotonOpenAI = "Photon (OpenAI Compatible)",
+  PhotonAnthropic = "Photon (Anthropic Compatible)",
+  SageMaker = "AWS SageMaker",         
   Sambanova = "Sambanova",              
   TogetherAI = "TogetherAI",            
   Triton = "Triton",                    
@@ -76,6 +78,8 @@ export const provider_map: Record<string, string> = {
     VolcEngine: "volcengine",
     DeepInfra: "deepinfra",
     Hosted_Vllm: "hosted_vllm",
+    PhotonOpenAI: "openai",
+    PhotonAnthropic: "anthropic"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -115,7 +119,9 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
     [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
     [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
-    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
+    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+    [Providers.PhotonOpenAI]: `${asset_logos_folder}openai_small.svg`,
+    [Providers.PhotonAnthropic]: `${asset_logos_folder}anthropic.svg`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
@@ -171,6 +177,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "volcengine/<any-model-on-volcengine>";
     } else if (selectedProvider == Providers.DeepInfra) {
       return "deepinfra/<any-model-on-deepinfra>";
+    } else if (selectedProvider == Providers.PhotonOpenAI || selectedProvider == Providers.PhotonAnthropic) {
+      return "photon/<model-name>";
     } else {
       return "gpt-3.5-turbo";
     }
@@ -183,6 +191,12 @@ export const getPlaceholder = (selectedProvider: string): string => {
     console.log(`Provider mapped to: ${custom_llm_provider}`);
 
     let providerModels: Array<string> = [];
+
+    // Special case for Photon providers - return empty array to indicate dynamic fetching
+    if (providerKey === Providers.PhotonOpenAI || providerKey === Providers.PhotonAnthropic) {
+      console.log("Photon provider detected - returning empty array for dynamic fetching");
+      return [];
+    }
 
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {

@@ -1,0 +1,19 @@
+{
+  "datasets": [
+    {
+      "name": "Fast",
+      "id": "hellaswag",
+      "desc": "Commonsense reasoning benchmark."
+    },
+    {
+      "name": "Medium",
+      "id": "arc_easy",
+      "desc": "ARC Easy benchmark subset for reasoning tasks."
+    },
+    {
+      "name": "Hard",
+      "id": "arc_challenge",
+      "desc": "ARC Challenge benchmark subset, widely used as a hard reasoning test."
+    }
+  ]
+}

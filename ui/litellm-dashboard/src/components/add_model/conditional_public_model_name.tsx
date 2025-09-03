@@ -12,8 +12,9 @@ const ConditionalPublicModelName: React.FC = () => {
   const modelValue = Form.useWatch('model', form) || [];
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
   const customModelName = Form.useWatch('custom_model_name', form);
-  const showPublicModelName = !selectedModels.includes('all-wildcard');
   const selectedProvider = Form.useWatch('custom_llm_provider', form);
+  const isPhoton = typeof selectedProvider === 'string' && selectedProvider.includes('Photon');
+  const showPublicModelName = !selectedModels.includes('all-wildcard');
   // Force table to re-render when custom model name changes
   useEffect(() => {
     if (customModelName && selectedModels.includes('custom')) {
@@ -39,6 +40,7 @@ const ConditionalPublicModelName: React.FC = () => {
   }, [customModelName, selectedModels, selectedProvider, form]);
 
   // Initial setup of model mappings when models are selected
+  // Do not overwrite if mappings already exist (e.g., Photon mapping set by LiteLLMModelNameField)
   useEffect(() => {
     if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
       // Check if we already have mappings that match the selected models

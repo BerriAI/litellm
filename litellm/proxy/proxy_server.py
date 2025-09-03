@@ -663,6 +663,13 @@ async def proxy_startup_event(app: FastAPI):
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    # ARC-AGI bootstrap: ensure dirs + default config
+    try:
+        from litellm.proxy.arcagi_endpoints.endpoints import arcagi_bootstrap
+        await arcagi_bootstrap()
+    except Exception:
+        pass
+
     # End of startup event
     yield
 
@@ -9465,3 +9472,16 @@ app.include_router(ui_discovery_endpoints_router)
 ########################################################
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
+
+# Additional routers from custom endpoints
+try:
+    from litellm.proxy.photon_endpoints import router as photon_router
+    app.include_router(photon_router)
+except Exception:
+    pass
+try:
+    # ARC-AGI endpoints
+    from litellm.proxy.arcagi_endpoints import arcagi_router
+    app.include_router(arcagi_router)
+except Exception:
+    pass

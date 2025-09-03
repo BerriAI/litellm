@@ -40,6 +40,7 @@ litellm/proxy/tests/node_modules
 litellm/proxy/tests/package.json
 litellm/proxy/tests/package-lock.json
 ui/litellm-dashboard/.next
+ui/litellm-dashboard/out
 ui/litellm-dashboard/node_modules
 ui/litellm-dashboard/next-env.d.ts
 ui/litellm-dashboard/package.json
@@ -96,3 +97,4 @@ litellm_config.yaml
 .cursor
 .vscode/launch.json
 litellm/proxy/to_delete_loadtest_work/*
+

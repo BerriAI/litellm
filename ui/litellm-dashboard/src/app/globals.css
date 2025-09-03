@@ -70,3 +70,15 @@ body {
 .ant-dropdown-menu-item-divider {
   margin: 4px 0;
 }
+
+/* Ensure ARC-AGI markdown reports wrap nicely on small screens */
+.markdown-wrap {
+  white-space: normal;
+  overflow-wrap: anywhere; /* modern */
+  word-break: break-word;  /* legacy */
+}
+.markdown-wrap pre,
+.markdown-wrap code {
+  white-space: pre-wrap;   /* allow wrapping in code blocks */
+  word-break: break-word;
+}
