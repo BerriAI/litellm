@@ -6,6 +6,9 @@ import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
+if TYPE_CHECKING:
+    from litellm.types.llms.bedrock import BedrockCreateBatchRequest
+
 import httpx
 
 import litellm
@@ -694,7 +697,7 @@ class CommonBatchFilesUtils:
     def sign_aws_request(
         self,
         service_name: str,
-        data: Union[str, dict],
+        data: Union[str, dict, "BedrockCreateBatchRequest"],
         endpoint_url: str,
         optional_params: dict,
         method: str = "POST",
