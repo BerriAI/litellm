@@ -29,6 +29,11 @@ from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
         ("o5", False),  # Not a valid O-series model
         ("o1-", False),  # Invalid suffix
         ("o3_", False),  # Invalid suffix
+        # GPT-5 models which behave like O-series models despite the name
+        ("gpt-5", True),
+        ("gpt-5-chat", True),
+        ("openai/gpt-5", True),
+        ("openai/gpt-5-chat", True),
     ],
 )
 def test_is_model_o_series_model(model_name: str, expected: bool):
