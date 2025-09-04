@@ -17,6 +17,7 @@ import { clearTokenCookies } from "@/utils/cookieUtils"
 import { fetchProxySettings } from "@/utils/proxyUtils"
 import { useTheme } from "@/contexts/ThemeContext"
 import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage"
+import { RaypathLogo } from "@/components/ui/raypath-logo"
 
 interface NavbarProps {
   userID: string | null;
@@ -132,11 +133,7 @@ const Navbar: React.FC<NavbarProps> = ({
           {/* Left side with correct logo positioning */}
           <div className="flex items-center flex-shrink-0">
             <Link href="/" className="flex items-center">
-              <img
-                src={imageUrl}
-                alt="LiteLLM Brand"
-                className="h-8 w-auto"
-              />
+              <RaypathLogo textSize="lg" />
             </Link>
           </div>
 

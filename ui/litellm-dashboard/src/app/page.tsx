@@ -84,7 +84,7 @@ const queryClient = new QueryClient()
 function LoadingScreen() {
   return (
     <div className={cx("h-screen", "flex items-center justify-center gap-4")}>
-      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">🚅 LiteLLM</div>
+      <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">Raypath</div>
 
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
