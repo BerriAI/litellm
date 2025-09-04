@@ -1,4 +1,14 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Optional,
+    Set,
+    Type,
+    Union,
+    cast,
+    get_type_hints,
+)
 
 import httpx
 from pydantic import BaseModel
@@ -23,6 +33,72 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class OpenAIFieldExclusionRegistry:
+    """
+    Registry for managing OpenAI model field exclusions for specifically Responses API.
+
+    This follows the same pattern as get_supported_openai_params but for field exclusions.
+    Models with fields that have default None values and should be excluded when None
+    (matching Pydantic's exclude_unset=True behavior) are registered here.
+    """
+
+    # Registry of models that need field exclusion filtering
+    _MODELS_REQUIRING_EXCLUSION: Set[Type[BaseModel]] = set()
+
+    @classmethod
+    def register_model(cls, model_class: Type[BaseModel]) -> None:
+        """Register a model class that requires field exclusion filtering."""
+        cls._MODELS_REQUIRING_EXCLUSION.add(model_class)
+
+    @classmethod
+    def get_excluded_fields_for_model(cls, model_class: Type[BaseModel]) -> Set[str]:
+        """
+        Get fields that should be excluded for a specific model when they are None.
+
+        This dynamically discovers fields with default None values from the Pydantic model,
+        similar to how exclude_unset=True works.
+        """
+        if model_class not in cls._MODELS_REQUIRING_EXCLUSION:
+            return set()
+
+        fields_with_default_none = set()
+
+        # Handle both Pydantic v1 and v2
+        model_fields = getattr(model_class, "model_fields", None)
+        if model_fields is None:
+            model_fields = getattr(model_class, "__fields__", {})
+
+        for name, field in model_fields.items():
+            # Check if field has default value of None
+            if getattr(field, "default", object()) is None:
+                fields_with_default_none.add(name)
+
+        return fields_with_default_none
+
+    @classmethod
+    def get_all_excluded_fields(cls) -> Set[str]:
+        """
+        Get all fields that should be excluded across all registered models.
+        This is used for dict-based filtering when we don't know the specific model type.
+        """
+        all_excluded_fields = set()
+        for model_class in cls._MODELS_REQUIRING_EXCLUSION:
+            all_excluded_fields.update(cls.get_excluded_fields_for_model(model_class))
+        return all_excluded_fields
+
+
+# Initialize the registry with known models
+# We can import the models here to register them
+try:
+    from openai.types.responses import ResponseReasoningItem  # type: ignore
+
+    OpenAIFieldExclusionRegistry.register_model(ResponseReasoningItem)
+    # We can add more models here if needed
+except ImportError as e:
+    # Fallback if OpenAI SDK is not available or model doesn't exist
+    verbose_logger.debug(f"Could not import model for field exclusion registry: {e}")
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -108,16 +184,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Filter out fields that would be excluded by Pydantic's exclude_unset=True behavior.
 
         This replicates the OpenAI SDK's behavior for non-Pydantic objects.
-        Fields with None values that have defaults in the Pydantic models should be excluded.
+        Fields with None values that have defaults in the registered Pydantic models should be excluded.
+
+        Uses the OpenAIFieldExclusionRegistry to dynamically determine which fields to exclude.
         """
-        # Fields that have default values in the Pydantic models and should be excluded
-        # when they are None (matching exclude_unset=True behavior)
-        # Keeping ResponseReasoningItem for now
-        fields_with_defaults = {
-            "status",  # ResponseReasoningItem.status has default None
-            "content",  # ResponseReasoningItem.content has default None
-            "encrypted_content",  # ResponseReasoningItem.encrypted_content has default None
-        }
+        # Get all fields that should be excluded when None across all registered models
+        fields_with_defaults = OpenAIFieldExclusionRegistry.get_all_excluded_fields()
 
         # Filter out fields that are None and have defaults
         filtered_item = {}
@@ -125,6 +197,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if k in fields_with_defaults and v is None:
                 continue
             filtered_item[k] = v
+        verbose_logger.debug(f"Filtered item: {filtered_item}")
 
         return filtered_item
 
@@ -200,6 +273,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             event_type=event_type
         )
         return event_pydantic_model(**parsed_chunk)
+
+    @staticmethod
+    def register_model_for_field_exclusion(model_class: Type[BaseModel]) -> None:
+        """
+        Register a new OpenAI model class that requires field exclusion filtering.
+
+        This is a convenience method for adding new models to the exclusion registry.
+
+        Example:
+            from openai.types.responses import SomeNewResponseType
+            OpenAIResponsesAPIConfig.register_model_for_field_exclusion(SomeNewResponseType)
+
+        Args:
+            model_class: The Pydantic model class to register for field exclusion
+        """
+        OpenAIFieldExclusionRegistry.register_model(model_class)
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:
