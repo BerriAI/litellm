@@ -505,11 +505,11 @@ litellm_settings:
 
 ### Disable user-agent tracking
 
-You can disable user-agent tracking by setting `litellm_settings.disable_user_agent_tracking` to `true`.
+You can disable user-agent tracking by setting `litellm_settings.disable_add_user_agent_to_request_tags` to `true`.
 
 ```yaml
 litellm_settings:
-  disable_user_agent_tracking: true
+  disable_add_user_agent_to_request_tags: true
 ```
 
 ## ✨ (Enterprise) Generate Spend Reports
