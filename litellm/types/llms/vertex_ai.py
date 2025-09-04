@@ -113,7 +113,7 @@ class Schema(TypedDict, total=False):
     pattern: str
     example: Any
     anyOf: List["Schema"]
-    additionalProperties: bool
+    additionalProperties: Any
 
 
 class FunctionDeclaration(TypedDict, total=False):
