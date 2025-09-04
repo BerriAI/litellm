@@ -430,14 +430,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> GeminiThinkingConfig:
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
-            if model and "gemini-2.5-flash" in model.lower():
-                budget = (
-                    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
-                )
+            # Check for exact matches first, then partial matches
+            if model and "gemini-2.5-flash-lite" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE
             elif model and "gemini-2.5-pro" in model.lower():
                 budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO
-            elif model and "gemini-2.5-flash-lite" in model.lower():
-                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE
+            elif model and "gemini-2.5-flash" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
             else:
                 budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
 
