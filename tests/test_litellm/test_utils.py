@@ -549,6 +549,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "completion",
                         "embedding",
                         "image_generation",
+                        "video_generation",
                         "moderation",
                         "rerank",
                         "responses",
