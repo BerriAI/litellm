@@ -2,7 +2,17 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+)
 
 import httpx
 from pydantic import (
@@ -778,6 +788,14 @@ class GenerateKeyRequest(KeyRequestBase):
         description="Type of key that determines default allowed routes.",
     )
 
+class GenerateServiceAccountKeyRequest(GenerateKeyRequest):
+    @model_validator(mode="before")
+    @classmethod
+    def validate_team_id_required(cls, values):
+        if isinstance(values, dict):
+            if not values.get("team_id"):
+                raise ValueError("team_id is required for service account keys")
+        return values
 
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore

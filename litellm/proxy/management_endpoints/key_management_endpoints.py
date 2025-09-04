@@ -685,7 +685,7 @@ async def generate_key_fn(
 )
 @management_endpoint_wrapper
 async def generate_service_account_key_fn(
-    data: GenerateKeyRequest,
+    data: GenerateServiceAccountKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
         None,
