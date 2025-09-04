@@ -450,6 +450,7 @@ vertex_vision_models: Set = set()
 vertex_chat_models: Set = set()
 vertex_code_chat_models: Set = set()
 vertex_ai_image_models: Set = set()
+vertex_ai_video_models: Set = set()
 vertex_text_models: Set = set()
 vertex_code_text_models: Set = set()
 vertex_embedding_models: Set = set()
@@ -605,6 +606,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-image-models":
             key = key.replace("vertex_ai/", "")
             vertex_ai_image_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-video-models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_video_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-openai_models":
             key = key.replace("vertex_ai/", "")
             vertex_openai_models.add(key)

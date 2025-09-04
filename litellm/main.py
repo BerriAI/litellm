@@ -356,7 +356,7 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
-    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
     safety_identifier: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
@@ -897,7 +897,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,

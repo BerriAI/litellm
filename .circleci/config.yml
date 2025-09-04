@@ -1913,7 +1913,7 @@ jobs:
               -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \

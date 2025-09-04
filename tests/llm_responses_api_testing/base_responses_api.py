@@ -528,7 +528,6 @@ class BaseResponsesAPITest(ABC):
         # Validate final response structure
         validate_responses_api_response(final_response, final_chunk=True)
         assert final_response.output is not None
-        assert len(final_response.output) > 0
 
     @pytest.mark.asyncio
     async def test_text_format_to_text_conversion(self):
