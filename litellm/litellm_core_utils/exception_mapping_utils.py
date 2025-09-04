@@ -24,55 +24,6 @@ from ..exceptions import (
 )
 
 
-def _is_operational_404(original_exception) -> bool:
-    """
-    Determine if a 404 status code represents an operational issue rather than a missing model.
-    
-    Args:
-        original_exception: The exception with status_code 404
-        
-    Returns:
-        True if this is an operational issue (rate limiting, cooldowns, etc.)
-        False if this is actually a missing model
-    """
-    try:
-        # Import here to avoid circular imports
-        from litellm.types.router import RouterErrors
-        
-        # Check for known operational error patterns
-        error_message = str(original_exception).lower()
-        
-        # Check for router-specific operational errors
-        operational_patterns = [
-            RouterErrors.no_deployments_available.value.lower(),
-            "no deployments available",
-            "no healthy deployment available",
-            "no healthy deployments available",
-            "deployment over user-defined ratelimit",
-            "crossed budget",
-            "cooldown",
-            "rate limit exceeded",
-            "too many requests"
-        ]
-        
-        for pattern in operational_patterns:
-            if pattern in error_message:
-                return True
-        
-        # Check if this is a RouterRateLimitError (which indicates operational issues)
-        if hasattr(original_exception, '__class__'):
-            exception_class_name = original_exception.__class__.__name__
-            if "RouterRateLimitError" in exception_class_name:
-                return True
-        
-        return False
-        
-    except Exception:
-        # If we can't determine, default to treating it as a missing model
-        # This is safer than potentially hiding real model not found errors
-        return False
-
-
 class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
@@ -91,16 +42,16 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
+
         if "429" in error_str or "rate limit" in error_str.lower():
             return True
-        
+
         #######################################
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in error_str.lower():
             return True
-        
+
         return False
 
     @staticmethod
@@ -511,26 +462,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
-                        # Check if this is actually a "model not found" vs operational issue
-                        if _is_operational_404(original_exception):
-                            # This is operational (rate limiting, cooldowns), not a missing model
-                            # The proxy will map this to 429 status code, which is correct
-                            raise litellm.ServiceUnavailableError(
-                                message=f"ServiceUnavailableError: {exception_provider} - {message}",
-                                model=model,
-                                llm_provider=custom_llm_provider,
-                                response=getattr(original_exception, "response", None),
-                                litellm_debug_info=extra_information,
-                            )
-                        else:
-                            # This is actually a missing model
-                            raise NotFoundError(
-                                message=f"NotFoundError: {exception_provider} - {message}",
-                                model=model,
-                                llm_provider=custom_llm_provider,
-                                response=getattr(original_exception, "response", None),
-                                litellm_debug_info=extra_information,
-                            )
+                        raise NotFoundError(
+                            message=f"NotFoundError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
