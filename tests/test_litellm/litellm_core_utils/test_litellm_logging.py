@@ -467,3 +467,70 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     assert result is None
 
 
+def test_disable_user_agent_tracking():
+    """Test that disable_user_agent_tracking setting properly disables user agent tracking"""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    original_value = getattr(litellm, "disable_add_user_agent_to_request_tags", False)
+
+    try:
+        # Test case 1: User agent tracking enabled (default behavior)
+        litellm.disable_add_user_agent_to_request_tags = False
+        tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+            proxy_server_request={
+                "headers": {
+                    "user-agent": "litellm/1.0.0",
+                }
+            }
+        )
+        assert tags is not None
+        assert len(tags) == 2
+        assert "User-Agent: litellm" in tags
+        assert "User-Agent: litellm/1.0.0" in tags
+
+        # Test case 2: User agent tracking disabled
+        litellm.disable_add_user_agent_to_request_tags = True
+        tags = StandardLoggingPayloadSetup._get_user_agent_tags(
+            proxy_server_request={
+                "headers": {
+                    "user-agent": "litellm/1.0.0",
+                }
+            }
+        )
+        assert tags is None
+
+        # Test case 3: Check that _get_request_tags also respects the disable flag
+        litellm.disable_add_user_agent_to_request_tags = True
+        tags = StandardLoggingPayloadSetup._get_request_tags(
+            metadata={"tags": ["custom-tag"]},
+            proxy_server_request={
+                "headers": {
+                    "user-agent": "claude-cli/1.0.0",
+                }
+            },
+        )
+        # Should only contain custom tags, not user agent tags
+        assert "custom-tag" in tags
+        assert not any("User-Agent:" in tag for tag in tags)
+
+        # Test case 4: Verify behavior when enabled again
+        litellm.disable_add_user_agent_to_request_tags = False
+        tags = StandardLoggingPayloadSetup._get_request_tags(
+            metadata={"tags": ["custom-tag"]},
+            proxy_server_request={
+                "headers": {
+                    "user-agent": "claude-cli/1.0.0",
+                }
+            },
+        )
+
+        # Should contain both custom tags and user agent tags
+        assert "custom-tag" in tags
+        assert any("User-Agent: claude-cli" in tag for tag in tags)
+        assert any("User-Agent: claude-cli/1.0.0" in tag for tag in tags)
+
+    finally:
+        litellm.disable_add_user_agent_to_request_tags = original_value
+
+
