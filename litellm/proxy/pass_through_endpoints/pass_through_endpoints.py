@@ -314,6 +314,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             return EndpointType.VERTEX_AI
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC
+        elif (
+            parsed_url.hostname == "api.openai.com"
+            or parsed_url.hostname == "openai.azure.com"
+            or (parsed_url.hostname and "openai.com" in parsed_url.hostname)
+        ):
+            return EndpointType.OPENAI
         return EndpointType.GENERIC
 
     @staticmethod
@@ -415,10 +421,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[field_name] = (
-                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                        upload_file=field_value
-                    )
+                files[
+                    field_name
+                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                    upload_file=field_value
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -497,9 +503,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
 
         return kwargs
 
@@ -531,10 +537,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             subpath = subpath[1:]
 
         return base_target + subpath
-    
+
     @staticmethod
     def _update_stream_param_based_on_request_body(
-        parsed_body: dict, 
+        parsed_body: dict,
         stream: Optional[bool] = None,
     ) -> Optional[bool]:
         """
@@ -699,9 +705,11 @@ async def pass_through_request(  # noqa: PLR0915
                 "headers": headers,
             },
         )
-        stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-            parsed_body=_parsed_body,
-            stream=stream,
+        stream = (
+            HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+                parsed_body=_parsed_body,
+                stream=stream,
+            )
         )
 
         if stream:
