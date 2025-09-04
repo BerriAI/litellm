@@ -2,8 +2,8 @@
   "openapi": "3.0.0",
   "info": {
     "version": "1.0.0",
-    "title": "LiteLLM API",
-    "description": "API for LiteLLM"
+    "title": "Raypath API",
+    "description": "API for Raypath"
   },
   "paths": {
    "/chat/completions": {
