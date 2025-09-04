@@ -129,7 +129,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [modelMap, setModelMap] = useState<any>(null)
   const [lastRefreshed, setLastRefreshed] = useState("")
 
-  const [providerModels, setProviderModels] = useState<Array<string>>([]) // Explicitly typing providerModels as a string array
+  const [providerModels, setProviderModels] = useState<Array<string | any>>([]) // Allow both strings (regular providers) and objects (Photon providers)
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([])
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI)
@@ -208,59 +208,65 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
 
   const setProviderModelsFn = async (provider: Providers) => {
-    console.log(`setProviderModelsFn called with provider: ${provider}`);
-    
     // Check if this is a Photon provider that needs dynamic model fetching
-    const isPhotonProvider = provider === Providers.PhotonOpenAI || 
-                            provider === Providers.PhotonAnthropic;
+    // provider could be either the enum key ("PhotonOpenAI") or enum value ("Photon (OpenAI Compatible)")
+    const isPhotonProvider = provider === "PhotonOpenAI" || provider === "PhotonAnthropic" ||
+                            provider === Providers.PhotonOpenAI || provider === Providers.PhotonAnthropic;
     
     if (isPhotonProvider) {
-      console.log(`Fetching models for Photon provider: ${provider}`);
       try {
         if (accessToken) {
           const photonModelsResponse = await fetchPhotonModels(accessToken);
-          console.log('Photon models fetched:', photonModelsResponse);
           
-          // Extract model names from response - handle various response formats
-          let modelNames: string[] = [];
+          // Extract model names from response and convert to objects for frontend compatibility
+          let photonModels: any[] = [];
           
-          // Helper function to extract model names from an array that might contain strings or objects
-          const extractModelNames = (items: any[]): string[] => {
+          // Helper function to extract model names from an array and convert to objects
+          const extractPhotonModels = (items: any[]): any[] => {
             if (!Array.isArray(items)) return [];
             
             return items.map(item => {
-              // If item is already a string, use it directly
+              // If item is already a string, convert it to an object
               if (typeof item === 'string') {
+                return {
+                  name: item,
+                  id: item,
+                  modelSource: item
+                };
+              }
+              // If item is an object, return it as is (it should already have name/id)
+              if (typeof item === 'object' && item !== null) {
                 return item;
               }
-              // If item is an object, try common model name properties
-              if (typeof item === 'object' && item !== null) {
-                return item.model || item.model_name || item.name || item.id || JSON.stringify(item);
-              }
               // Fallback to string conversion
-              return String(item);
-            }).filter(name => name && name.trim().length > 0); // Filter out empty names
+              const stringItem = String(item);
+              return {
+                name: stringItem,
+                id: stringItem,
+                modelSource: stringItem
+              };
+            }).filter(model => model.name && model.name.trim().length > 0); // Filter out empty names
           };
           
           // Try different response structures
           if (Array.isArray(photonModelsResponse)) {
-            modelNames = extractModelNames(photonModelsResponse);
+            photonModels = extractPhotonModels(photonModelsResponse);
+          } else if (photonModelsResponse && photonModelsResponse.availableModels && Array.isArray(photonModelsResponse.availableModels)) {
+            photonModels = extractPhotonModels(photonModelsResponse.availableModels);
           } else if (photonModelsResponse && photonModelsResponse.models && Array.isArray(photonModelsResponse.models)) {
-            modelNames = extractModelNames(photonModelsResponse.models);
+            photonModels = extractPhotonModels(photonModelsResponse.models);
           } else if (photonModelsResponse && photonModelsResponse.data && Array.isArray(photonModelsResponse.data)) {
-            modelNames = extractModelNames(photonModelsResponse.data);
+            photonModels = extractPhotonModels(photonModelsResponse.data);
           } else if (photonModelsResponse && typeof photonModelsResponse === 'object') {
             // If response is an object, look for any array property that might contain models
             const possibleArrays = Object.values(photonModelsResponse).filter(Array.isArray);
             if (possibleArrays.length > 0) {
-              modelNames = extractModelNames(possibleArrays[0] as any[]);
+              photonModels = extractPhotonModels(possibleArrays[0] as any[]);
             }
           }
           
-          // setProviderModels expects a string array
-          console.log(`About to set Photon models:`, modelNames.slice(0, 3));
-          setProviderModels(modelNames);
-          console.log(`Photon provider models set (${modelNames.length} models):`, modelNames.slice(0, 5));
+          // setProviderModels expects an array (string array for regular providers, object array for Photon)
+          setProviderModels(photonModels);
           
           // Return early to avoid running the regular provider logic
           return;
@@ -276,10 +282,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       }
     } else {
       // Regular provider - use existing logic
-      console.log(`Processing regular provider: ${provider}`);
       const _providerModels = getProviderModels(provider, modelMap)
       setProviderModels(_providerModels)
-      console.log(`Regular provider models set: ${_providerModels}`)
     }
   }
 
