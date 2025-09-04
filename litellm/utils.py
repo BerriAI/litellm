@@ -234,6 +234,7 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -2395,7 +2396,7 @@ def _should_drop_param(k, additional_drop_params) -> bool:
 
 
 def _get_non_default_params(
-    passed_params: dict, default_params: dict, additional_drop_params: Optional[bool]
+    passed_params: dict, default_params: dict, additional_drop_params: Optional[list]
 ) -> dict:
     non_default_params = {}
     for k, v in passed_params.items():
@@ -2509,7 +2510,7 @@ def get_optional_params_image_gen(
     user: Optional[str] = None,
     input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
-    additional_drop_params: Optional[bool] = None,
+    additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
@@ -2628,9 +2629,20 @@ def get_optional_params_image_gen(
             )  # Default to square if size not recognized
             optional_params["aspectRatio"] = aspect_ratio
 
-    for k in passed_params.keys():
-        if k not in default_params.keys():
-            optional_params[k] = passed_params[k]
+    openai_params: list[str] = list(default_params.keys())
+    if provider_config is not None:
+        supported_params = provider_config.get_supported_openai_params(
+            model=model or ""
+        )
+        openai_params = list(supported_params)
+
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider or "",
+        openai_params=openai_params,
+        additional_drop_params=additional_drop_params,
+    )
     return optional_params
 
 
@@ -7287,6 +7299,20 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+            return BedrockFilesConfig()
+        return None
+    
+    @staticmethod
+    def get_provider_batches_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseBatchesConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+            return BedrockBatchesConfig()
         return None
 
     @staticmethod
