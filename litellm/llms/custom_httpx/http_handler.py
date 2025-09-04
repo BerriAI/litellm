@@ -215,6 +215,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=headers,
+            follow_redirects=True,
             trust_env=True,
         )
 
@@ -691,6 +692,7 @@ class HTTPHandler:
                 verify=ssl_config,
                 cert=cert,
                 headers=headers,
+                follow_redirects=True,
                 trust_env=True,
             )
         else:
