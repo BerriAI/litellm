@@ -209,9 +209,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const setProviderModelsFn = async (provider: Providers) => {
     // Check if this is a Photon provider that needs dynamic model fetching
-    // provider could be either the enum key ("PhotonOpenAI") or enum value ("Photon (OpenAI Compatible)")
-    const isPhotonProvider = provider === "PhotonOpenAI" || provider === "PhotonAnthropic" ||
-                            provider === Providers.PhotonOpenAI || provider === Providers.PhotonAnthropic;
+    const isPhotonProvider = provider.includes("Photon");
     
     if (isPhotonProvider) {
       try {
