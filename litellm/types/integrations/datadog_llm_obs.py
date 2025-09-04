@@ -46,6 +46,7 @@ class LLMMetrics(TypedDict, total=False):
 class LLMObsPayload(TypedDict, total=False):
     parent_id: str
     trace_id: str
+    apm_id: str
     span_id: str
     name: str
     meta: Meta
