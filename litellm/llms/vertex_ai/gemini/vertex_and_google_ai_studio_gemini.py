@@ -30,6 +30,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -423,7 +424,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
     ) -> GeminiThinkingConfig:
-        if reasoning_effort == "low":
+        if reasoning_effort == "minimal":
+            return {
+                "thinkingBudget": DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
                 "includeThoughts": True,
