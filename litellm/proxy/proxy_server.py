@@ -1880,7 +1880,7 @@ class ProxyConfig:
                             litellm.default_max_internal_user_budget
                         )
 
-                elif key == "disable_user_agent_tracking":
+                elif key == "disable_add_user_agent_to_request_tags":
                     setattr(litellm, "disable_add_user_agent_to_request_tags", value)
                 elif key == "custom_provider_map":
                     from litellm.utils import custom_llm_setup
