@@ -234,6 +234,7 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -7287,6 +7288,20 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+            return BedrockFilesConfig()
+        return None
+    
+    @staticmethod
+    def get_provider_batches_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseBatchesConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+            return BedrockBatchesConfig()
         return None
 
     @staticmethod
