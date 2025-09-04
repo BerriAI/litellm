@@ -52,6 +52,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.html_forms.sso_login import get_sso_login_template
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -169,14 +170,18 @@ async def google_login(
         )
         is True
     ):
-        verbose_proxy_logger.info(f"Redirecting to SSO login for {redirect_url}")
-        return await SSOAuthenticationHandler.get_sso_login_redirect(
-            redirect_url=redirect_url,
-            microsoft_client_id=microsoft_client_id,
-            google_client_id=google_client_id,
-            generic_client_id=generic_client_id,
-            state=cli_state,
-        )
+        # Show SSO login page instead of auto-redirecting
+        from fastapi.responses import HTMLResponse
+        
+        providers = {
+            'google': google_client_id is not None,
+            'microsoft': microsoft_client_id is not None, 
+            'generic': generic_client_id is not None
+        }
+        
+        verbose_proxy_logger.info(f"Showing SSO login page for providers: {providers}")
+        sso_login_html = get_sso_login_template(redirect_url, providers)
+        return HTMLResponse(content=sso_login_html, status_code=200)
     elif ui_username is not None:
         # No Google, Microsoft SSO
         # Use UI Credentials set in .env
@@ -187,6 +192,71 @@ async def google_login(
         from fastapi.responses import HTMLResponse
 
         return HTMLResponse(content=html_form, status_code=200)
+
+
+@router.get("/sso/redirect", tags=["experimental"], include_in_schema=False)
+async def sso_redirect(
+    request: Request, 
+    provider: str,
+    source: Optional[str] = None, 
+    key: Optional[str] = None
+):
+    """
+    Handle SSO redirect when user clicks a provider button.
+    This is called from the SSO login page buttons.
+    """
+    from litellm.proxy.proxy_server import premium_user
+    
+    # Get provider configurations
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None) if provider == "microsoft" else None
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None) if provider == "google" else None 
+    generic_client_id = os.getenv("GENERIC_CLIENT_ID", None) if provider == "generic" else None
+    
+    # Validate provider is configured
+    if not any([microsoft_client_id, google_client_id, generic_client_id]):
+        from fastapi.responses import HTMLResponse
+        error_html = f"""
+        <html><body>
+        <h2>Configuration Error</h2>
+        <p>The requested SSO provider '{provider}' is not configured.</p>
+        <p><a href="/sso/key/generate">← Back to login</a></p>
+        </body></html>
+        """
+        return HTMLResponse(content=error_html, status_code=400)
+    
+    # Premium user check (same as main endpoint)
+    if premium_user is not True:
+        from litellm.proxy.proxy_server import prisma_client
+        if prisma_client is not None:
+            total_users = await prisma_client.db.litellm_usertable.count()
+            if total_users and total_users > 5:
+                raise ProxyException(
+                    message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users.",
+                    type=ProxyErrorTypes.auth_error,
+                    param="premium_user",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+    
+    # Build redirect URL and state
+    redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+        request=request,
+        sso_callback_route="sso/callback",
+    )
+    
+    cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
+        source=source,
+        key=key,
+    )
+    
+    # Perform the actual SSO redirect
+    verbose_proxy_logger.info(f"Redirecting to {provider} SSO for {redirect_url}")
+    return await SSOAuthenticationHandler.get_sso_login_redirect(
+        redirect_url=redirect_url,
+        microsoft_client_id=microsoft_client_id,
+        google_client_id=google_client_id, 
+        generic_client_id=generic_client_id,
+        state=cli_state,
+    )
 
 
 def generic_response_convertor(
