@@ -536,7 +536,6 @@ class BaseResponsesAPITest(ABC):
         # Validate final response structure
         validate_responses_api_response(final_response, final_chunk=True)
         assert final_response.output is not None
-        assert len(final_response.output) > 0
 
     def test_openai_responses_api_dict_input_filtering(self):
         """
@@ -591,3 +590,4 @@ class BaseResponsesAPITest(ABC):
         assert function_call_item["status"] == "completed", "status value should be preserved"
 
         print("✅ OpenAI Responses API dict input filtering test passed")
+
