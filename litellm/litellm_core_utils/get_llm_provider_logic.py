@@ -320,6 +320,7 @@ def get_llm_provider(  # noqa: PLR0915
             or model in litellm.vertex_embedding_models
             or model in litellm.vertex_vision_models
             or model in litellm.vertex_ai_image_models
+            or model in litellm.vertex_ai_video_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21

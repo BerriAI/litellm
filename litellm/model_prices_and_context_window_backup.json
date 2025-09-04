@@ -9484,6 +9484,48 @@
         "source": "https://aistudio.google.com",
         "supports_tool_choice": true
     },
+    "gemini/veo-3.0-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.75,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "gemini/veo-3.0-fast-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.40,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "gemini/veo-2.0-generate-001": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.35,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
     "vertex_ai/claude-opus-4-1": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -10300,6 +10342,48 @@
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/veo-3.0-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.75,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "vertex_ai/veo-3.0-fast-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.40,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "vertex_ai/veo-2.0-generate-001": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.35,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
     },
     "text-embedding-004": {
         "max_tokens": 2048,
