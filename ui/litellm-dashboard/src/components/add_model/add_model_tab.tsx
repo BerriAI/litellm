@@ -166,7 +166,17 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                   });
                 }}
               >
-                {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
+                {Object.entries(Providers)
+                  .sort(([, a], [, b]) => {
+                    // Sort Photon providers first, then alphabetically
+                    const aIsPhoton = a.includes('Photon');
+                    const bIsPhoton = b.includes('Photon');
+                    
+                    if (aIsPhoton && !bIsPhoton) return -1;
+                    if (!aIsPhoton && bIsPhoton) return 1;
+                    return a.localeCompare(b);
+                  })
+                  .map(([providerEnum, providerDisplayName]) => (
                   <AntdSelect.Option
                     key={providerEnum}
                     value={providerEnum}
