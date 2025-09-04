@@ -475,6 +475,239 @@ def test_transform_response_with_bash_tool():
     assert args["command"] == "ls -la *.py"
 
 
+def test_transform_response_with_structured_response_being_called():
+    """Test response transformation with structured response."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with a bash tool call
+    response_json = {
+        "additionalModelResponseFields": {},
+        "metrics": {"latencyMs": 100.0},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_456",
+                            "name": "json_tool_call",
+                            "input": {
+                                "Current_Temperature": 62, 
+                                "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."},
+                        }
+                    }
+                ]
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 8,
+            "outputTokens": 3,
+            "totalTokens": 11,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'get_weather', 
+                    'description': 'Get the current weather in a given location', 
+                    'parameters': {
+                        'type': 'object', 
+                        'properties': {
+                            'location': {
+                                'type': 'string', 
+                                'description': 'The city and state, e.g. San Francisco, CA'
+                            }, 
+                            'unit': {
+                                'type': 'string', 
+                                'enum': ['celsius', 'fahrenheit']
+                            }
+                        }, 
+                        'required': ['location']
+                    }
+                }
+            }, 
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'json_tool_call', 
+                    'parameters': {
+                        '$schema': 'http://json-schema.org/draft-07/schema#', 
+                        'type': 'object', 
+                        'required': ['Weather_Explanation', 'Current_Temperature'], 
+                        'properties': {
+                            'Weather_Explanation': {
+                                'type': ['string', 'null'], 
+                                'description': '1-2 sentences explaining the weather in the location'
+                            }, 
+                            'Current_Temperature': {
+                                'type': ['number', 'null'], 
+                                'description': 'Current temperature in the location'
+                            }
+                        }, 
+                        'additionalProperties': False
+                    }
+                }
+            }
+        ]
+    }
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    # Check that the tool call is present in the returned message
+    assert result.choices[0].message.tool_calls is None
+
+    assert result.choices[0].message.content is not None
+    assert result.choices[0].message.content ==  '{"Current_Temperature": 62, "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."}'
+
+def test_transform_response_with_structured_response_calling_tool():
+    """Test response transformation with structured response."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with a bash tool call
+    response_json = {
+        "metrics": {
+            "latencyMs": 1148
+        }, 
+        "output": {
+            "message": 
+            {
+                "content": [
+                    {
+                        "text": "I\'ll check the current weather in San Francisco for you."
+                    }, 
+                    {
+                        "toolUse": {
+                            "input": {
+                                "location": "San Francisco, CA",
+                                "unit": "celsius"
+                            }, 
+                            "name": "get_weather", 
+                            "toolUseId": "tooluse_oKk__QrqSUmufMw3Q7vGaQ"
+                        }
+                    }
+                ], 
+                "role": "assistant"
+            }
+        }, 
+        "stopReason": "tool_use", 
+        "usage": {
+            "cacheReadInputTokenCount": 0, 
+            "cacheReadInputTokens": 0, 
+            "cacheWriteInputTokenCount": 0, 
+            "cacheWriteInputTokens": 0, 
+            "inputTokens": 534, 
+            "outputTokens": 69, 
+            "totalTokens": 603
+        }
+    }
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'get_weather', 
+                    'description': 'Get the current weather in a given location', 
+                    'parameters': {
+                        'type': 'object', 
+                        'properties': {
+                            'location': {
+                                'type': 'string', 
+                                'description': 'The city and state, e.g. San Francisco, CA'
+                            }, 
+                            'unit': {
+                                'type': 'string', 
+                                'enum': ['celsius', 'fahrenheit']
+                            }
+                        }, 
+                        'required': ['location']
+                    }
+                }
+            }, 
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'json_tool_call', 
+                    'parameters': {
+                        '$schema': 'http://json-schema.org/draft-07/schema#', 
+                        'type': 'object', 
+                        'required': ['Weather_Explanation', 'Current_Temperature'], 
+                        'properties': {
+                            'Weather_Explanation': {
+                                'type': ['string', 'null'], 
+                                'description': '1-2 sentences explaining the weather in the location'
+                            }, 
+                            'Current_Temperature': {
+                                'type': ['number', 'null'], 
+                                'description': 'Current temperature in the location'
+                            }
+                        }, 
+                        'additionalProperties': False
+                    }
+                }
+            }
+        ]
+    }
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    # Check that the tool call is present in the returned message
+    assert result.choices[0].message.tool_calls is not None
+    assert len(result.choices[0].message.tool_calls) == 1
+    assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco, CA", "unit": "celsius"}'
+
+
 @pytest.mark.asyncio
 async def test_bedrock_bash_tool_acompletion():
     """Test Bedrock with bash tool for ls command using acompletion."""
@@ -936,6 +1169,68 @@ def test_transform_request_with_function_tool():
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
     assert request_data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+
+
+def test_map_openai_params_with_response_format():
+    """Test map_openai_params with response_format."""
+    config = AmazonConverseConfig()
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        }
+    ]
+
+    json_schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "WeatherResult",
+            "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "required": ["Weather_Explanation", "Current_Temperature"],
+                "properties": {
+                    "Weather_Explanation": {
+                        "type": ["string", "null"],
+                        "description": "1-2 sentences explaining the weather in the location",
+                    },
+                    "Current_Temperature": {
+                        "type": ["number", "null"],
+                        "description": "Current temperature in the location",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "strict": False,
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": json_schema},
+        optional_params={"tools": tools},
+        model="eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False
+    )
+
+    assert "tools" in optional_params
+    assert len(optional_params["tools"]) == 2
+    assert optional_params["tools"][1]["type"] == "function"
+    assert optional_params["tools"][1]["function"]["name"] == "json_tool_call"
 
 
 @pytest.mark.asyncio

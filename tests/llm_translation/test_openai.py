@@ -665,7 +665,6 @@ async def test_openai_gpt5_reasoning():
     print("response: ", response)
     assert response.choices[0].message.content is not None
 
-
 @pytest.mark.asyncio
 async def test_openai_safety_identifier_parameter():
     """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
@@ -723,3 +722,4 @@ def test_openai_safety_identifier_parameter_sync():
         assert "safety_identifier" in request_body
         # Verify safety_identifier is correctly sent to the API
         assert request_body["safety_identifier"] == "user_code_123456"
+
