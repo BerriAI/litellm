@@ -118,9 +118,9 @@ async def test_key_token_handling(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_budget_reset_at_first_of_month(monkeypatch):
+async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     """
-    Test that when budget_duration is "1mo", budget_reset_at is set to first of next month
+    Test that when budget_duration, duration, and key_budget_duration are "1mo", budget_reset_at and expires are set to first of next month
     """
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
@@ -152,10 +152,12 @@ async def test_budget_reset_at_first_of_month(monkeypatch):
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # Test key generation with budget_duration="1mo"
+    # Test key generation with budget_duration="1mo", duration="1mo", key_budget_duration="1mo"
     response = await generate_key_helper_fn(
         request_type="user",
         budget_duration="1mo",
+        duration="1mo",
+        key_budget_duration="1mo",
         user_id="test_user",
     )
 
@@ -171,17 +173,17 @@ async def test_budget_reset_at_first_of_month(monkeypatch):
         expected_month = now.month + 1
         expected_year = now.year
 
-    # Parse the response date
-    response_date = response["budget_reset_at"]
-
-    # Verify budget_reset_at is set to first of next month
-    assert (
-        response_date.year == expected_year
-    ), f"Expected year {expected_year}, got {response_date.year}"
-    assert (
-        response_date.month == expected_month
-    ), f"Expected month {expected_month}, got {response_date.month}"
-    assert response_date.day == 1, f"Expected day 1, got {response_date.day}"
+    # Verify budget_reset_at, expires is set to first of next month
+    for key in ["budget_reset_at", "expires"]:
+        response_date = response.get(key)
+        assert response_date is not None, f"{key} not found in response"
+        assert (
+            response_date.year == expected_year
+        ), f"Expected year {expected_year}, got {response_date.year} for {key}"
+        assert (
+            response_date.month == expected_month
+        ), f"Expected month {expected_month}, got {response_date.month} for {key}"
+        assert response_date.day == 1, f"Expected day 1, got {response_date.day} for {key}"
 
 
 @pytest.mark.asyncio
