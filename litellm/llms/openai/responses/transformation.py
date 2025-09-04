@@ -3,14 +3,13 @@ from typing import (
     Any,
     Dict,
     Optional,
-    Set,
-    Type,
     Union,
     cast,
     get_type_hints,
 )
 
 import httpx
+from openai.types.responses import ResponseReasoningItem
 from pydantic import BaseModel
 
 import litellm
@@ -24,7 +23,6 @@ from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from openai.types.responses import ResponseReasoningItem
 
 from ..common_utils import OpenAIError
 
@@ -34,9 +32,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -110,10 +105,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     # Handle reasoning items specifically to filter out status=None
                     verbose_logger.debug(f"Handling reasoning item: {item}")
                     if item.get("type") == "reasoning":
-                        filtered_item = self._handle_reasoning_item(item)
+                        # Type assertion since we know it's a dict at this point
+                        dict_item = cast(Dict[str, Any], item)
+                        filtered_item = self._handle_reasoning_item(dict_item)
                     else:
                         # For other dict items, just pass through
-                        filtered_item = item
+                        filtered_item = cast(Dict[str, Any], item)
                     validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
@@ -138,19 +135,30 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 if "id" not in item_data:
                     item_data["id"] = f"reasoning_{hash(str(item_data))}"
                 if "summary" not in item_data:
-                    item_data["summary"] = item_data.get("reasoning_content", "")[:100] + "..." if len(item_data.get("reasoning_content", "")) > 100 else item_data.get("reasoning_content", "")
-                
+                    item_data["summary"] = (
+                        item_data.get("reasoning_content", "")[:100] + "..."
+                        if len(item_data.get("reasoning_content", "")) > 100
+                        else item_data.get("reasoning_content", "")
+                    )
+
                 # Create ResponseReasoningItem object from the item data
                 reasoning_item = ResponseReasoningItem(**item_data)
-                
+
                 # Convert back to dict with exclude_none=True to exclude None fields
                 dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
-                
+
                 return dict_reasoning_item
             except Exception as e:
-                verbose_logger.debug(f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}")
+                verbose_logger.debug(
+                    f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}"
+                )
                 # Fallback: manually filter out known None fields
-                filtered_item = {k: v for k, v in item.items() if v is not None or k not in {'status', 'content', 'encrypted_content'}}
+                filtered_item = {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None
+                    or k not in {"status", "content", "encrypted_content"}
+                }
                 return filtered_item
         return item
 
@@ -226,7 +234,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             event_type=event_type
         )
         return event_pydantic_model(**parsed_chunk)
-
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:
