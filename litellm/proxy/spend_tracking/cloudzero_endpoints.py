@@ -257,62 +257,6 @@ async def update_cloudzero_settings(
 _cloudzero_background_job_initialized = False
 
 
-async def init_cloudzero_background_job():
-    """
-    Initialize CloudZero background job if not already initialized.
-    This should be called from the proxy server startup.
-    """
-    global _cloudzero_background_job_initialized
-
-    if _cloudzero_background_job_initialized:
-        verbose_proxy_logger.debug(
-            "CloudZero background job already initialized, skipping"
-        )
-        return
-
-    try:
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            verbose_proxy_logger.warning(
-                "Prisma client not available, skipping CloudZero background job initialization"
-            )
-            return
-
-        # Get CloudZero settings from database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": "cloudzero_settings"}
-        )
-
-        if not cloudzero_config or not cloudzero_config.param_value:
-            verbose_proxy_logger.debug(
-                "CloudZero settings not configured, skipping background job initialization"
-            )
-            return
-
-        settings = dict(cloudzero_config.param_value)
-
-        # Initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-
-        logger = CloudZeroLogger(
-            api_key=settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
-        )
-
-        # Initialize the background job
-        await logger.init_background_job()
-
-        _cloudzero_background_job_initialized = True
-        verbose_proxy_logger.info("CloudZero background job initialized successfully")
-
-    except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error initializing CloudZero background job: {str(e)}"
-        )
-
-
 async def is_cloudzero_setup_in_db() -> bool:
     """
     Check if CloudZero is setup in the database.
@@ -340,6 +284,47 @@ async def is_cloudzero_setup_in_db() -> bool:
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error checking CloudZero status: {str(e)}")
+        return False
+
+
+def is_cloudzero_setup_in_config() -> bool:
+    """
+    Check if CloudZero is setup in config.yaml or environment variables.
+
+    CloudZero is considered setup in config if:
+    - "cloudzero" is in the callbacks list in config.yaml, OR
+    Returns:
+        bool: True if CloudZero is configured, False otherwise
+    """
+    import litellm
+    return "cloudzero" in litellm.callbacks
+
+
+async def is_cloudzero_setup() -> bool:
+    """
+    Check if CloudZero is setup in either config.yaml/env vars OR database.
+
+    CloudZero is considered setup if:
+    - CloudZero is configured in config.yaml callbacks, OR
+    - CloudZero environment variables are set, OR  
+    - CloudZero settings exist in the database
+
+    Returns:
+        bool: True if CloudZero is configured anywhere, False otherwise
+    """
+    try:
+        # Check config.yaml/environment variables first
+        if is_cloudzero_setup_in_config():
+            return True
+            
+        # Check database as fallback
+        if await is_cloudzero_setup_in_db():
+            return True
+            
+        return False
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error checking CloudZero setup: {str(e)}")
         return False
 
 
@@ -382,9 +367,6 @@ async def init_cloudzero_settings(
         )
 
         verbose_proxy_logger.info("CloudZero settings initialized successfully")
-
-        # Initialize background job after settings are saved
-        await init_cloudzero_background_job()
 
         return CloudZeroInitResponse(
             message="CloudZero settings initialized successfully", status="success"

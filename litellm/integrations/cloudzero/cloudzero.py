@@ -38,14 +38,6 @@ class CloudZeroLogger(CustomLogger):
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
         verbose_logger.debug(f"CloudZero Logger initialized with connection ID: {self.connection_id}, timezone: {self.timezone}")
 
-    async def init_background_job(self):
-        """
-        Initialize the background job.
-
-        This starts up a job that uses Pod Lock Manager to export the usage data to CloudZero every hour.
-        """
-        await self.initialize_cloudzero_export_job()
-
     async def initialize_cloudzero_export_job(self):
         """
         Handler for initializing CloudZero export job.
@@ -87,7 +79,6 @@ class CloudZeroLogger(CustomLogger):
         from datetime import timedelta, timezone
 
         from litellm.constants import CLOUDZERO_MAX_FETCHED_DATA_RECORDS
-        from litellm.proxy.proxy_server import proxy_logging_obj
         current_time_utc = datetime.now(timezone.utc)
         one_hour_ago_utc = current_time_utc - timedelta(hours=1)
         await self.export_usage_data(
@@ -327,3 +318,33 @@ class CloudZeroLogger(CustomLogger):
         console.print(f"  Unique Services: {unique_services}")
 
         console.print("\n[dim]💡 This is the CloudZero CBF format ready for AnyCost ingestion[/dim]")
+    
+    @staticmethod
+    async def init_cloudzero_background_job(scheduler: AsyncIOScheduler):
+        """
+        Initialize the CloudZero background job.
+
+        Starts the background job that exports the usage data to CloudZero every hour.
+        """
+        from litellm.constants import CLOUDZERO_EXPORT_INTERVAL_MINUTES
+        from litellm.integrations.custom_logger import CustomLogger
+        
+
+        prometheus_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CloudZeroLogger
+            )
+        )
+        # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
+        verbose_logger.debug("found %s cloudzero loggers", len(prometheus_loggers))
+        if len(prometheus_loggers) > 0:
+            cloudzero_logger = cast(CloudZeroLogger, prometheus_loggers[0])
+            verbose_logger.debug(
+                "Initializing remaining budget metrics as a cron job executing every %s minutes"
+                % CLOUDZERO_EXPORT_INTERVAL_MINUTES
+            )
+            scheduler.add_job(
+                cloudzero_logger.initialize_cloudzero_export_job,
+                "interval",
+                minutes=CLOUDZERO_EXPORT_INTERVAL_MINUTES
+            )
