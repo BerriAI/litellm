@@ -3,19 +3,14 @@ import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
-import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
-import DeleteModelButton from "../../delete_model_button";
-import { useState } from "react";
+import { TrashIcon, KeyIcon } from "@heroicons/react/outline";
 
 export const columns = (
   userRole: string,
   userID: string,
-  premiumUser: boolean,
   setSelectedModelId: (id: string) => void,
   setSelectedTeamId: (id: string) => void,
   getDisplayModelName: (model: any) => string,
-  handleEditClick: (model: any) => void,
-  handleRefreshClick: () => void,
   setEditModel: (edit: boolean) => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
@@ -103,14 +98,29 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const credentialName = model.litellm_params?.litellm_credential_name;
+      // const mockRegion = getMockRegion(model.provider, credentialName);
       
       return credentialName ? (
-        <Tooltip title={`Credential: ${credentialName}`}>
-          <div className="flex items-center space-x-2 max-w-[180px]">
-            <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
-            <span className="text-xs truncate" title={credentialName}>
-              {credentialName}
-            </span>
+        <Tooltip title={`Credential: ${credentialName}${mockRegion ? ` | Region: ${mockRegion}` : ''}`}>
+          <div className="flex flex-col space-y-1 max-w-[180px]">
+            {/* Credential Name */}
+            <div className="flex items-center space-x-2">
+              <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
+              <span className="text-xs truncate" title={credentialName}>
+                {credentialName}
+              </span>
+            </div>
+            
+            {/* Region Badge */}
+            <div className="flex items-center justify-start">
+              <Badge
+                size="xs"
+                color="blue"
+                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+              >
+                {mockRegion || 'no-region'}
+              </Badge>
+            </div>
           </div>
         </Tooltip>
       ) : (
