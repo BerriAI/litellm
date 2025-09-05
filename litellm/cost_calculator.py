@@ -601,6 +601,7 @@ def completion_cost(  # noqa: PLR0915
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    **kwargs
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -998,6 +999,7 @@ def response_cost_calculator(
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    **kwargs
 ) -> float:
     """
     Returns
@@ -1031,6 +1033,7 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                **kwargs
             )
         return response_cost
     except Exception as e:
