@@ -36,83 +36,30 @@ class LiteLLMDatabase:
         return prisma_client
 
     async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
-        """Retrieve consolidated usage data from LiteLLM daily spend tables."""
+        """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
         
-        # Union query to combine user, team, and tag spend data
+        # Query to get user spend data only
         query = """
-        WITH consolidated_spend AS (
-            -- User spend data
-            SELECT
-                id,
-                date,
-                user_id as entity_id,
-                'user' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyUserSpend"
-
-            UNION ALL
-
-            -- Team spend data
-            SELECT
-                id,
-                date,
-                team_id as entity_id,
-                'team' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTeamSpend"
-
-            UNION ALL
-
-            -- Tag spend data
-            SELECT
-                id,
-                date,
-                tag as entity_id,
-                'tag' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTagSpend"
-        )
-        SELECT * FROM consolidated_spend
+        SELECT
+            id,
+            date,
+            user_id,
+            api_key,
+            model,
+            model_group,
+            custom_llm_provider,
+            prompt_tokens,
+            completion_tokens,
+            spend,
+            api_requests,
+            successful_requests,
+            failed_requests,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            created_at,
+            updated_at
+        FROM "LiteLLM_DailyUserSpend"
         ORDER BY date DESC, created_at DESC
         """
 
@@ -127,16 +74,14 @@ class LiteLLMDatabase:
             raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the consolidated daily spend tables."""
+        """Get information about the daily user spend table."""
         client = self._ensure_prisma_client()
         
         try:
-            # Get combined row count from both tables
+            # Get row count from user spend table
             user_count = await self._get_table_row_count('LiteLLM_DailyUserSpend')
-            team_count = await self._get_table_row_count('LiteLLM_DailyTeamSpend')
-            tag_count = await self._get_table_row_count('LiteLLM_DailyTagSpend')
 
-            # Get column structure from user spend table (representative)
+            # Get column structure from user spend table
             query = """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
@@ -147,12 +92,8 @@ class LiteLLMDatabase:
 
             return {
                 'columns': columns_response,
-                'row_count': user_count + team_count + tag_count,
-                'table_breakdown': {
-                    'user_spend': user_count,
-                    'team_spend': team_count,
-                    'tag_spend': tag_count
-                }
+                'row_count': user_count,
+                'table_name': 'LiteLLM_DailyUserSpend'
             }
         except Exception as e:
             raise Exception(f"Error getting table info: {str(e)}")
