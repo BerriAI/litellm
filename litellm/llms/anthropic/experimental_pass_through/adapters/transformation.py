@@ -52,6 +52,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 from litellm.types.utils import Choices, ModelResponse, Usage
+from litellm.llms.anthropic.chat.transformation import _valid_user_id
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -349,7 +350,9 @@ class LiteLLMAnthropicMessagesAdapter:
         if "metadata" in anthropic_message_request:
             metadata = anthropic_message_request["metadata"]
             if metadata and "user_id" in metadata:
-                new_kwargs["user"] = metadata["user_id"]
+                # Only pass user_id if it's valid (not an email or phone number)
+                if _valid_user_id(metadata["user_id"]):
+                    new_kwargs["user"] = metadata["user_id"]
 
         # Pass litellm proxy specific metadata
         if "litellm_metadata" in anthropic_message_request:
