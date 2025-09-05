@@ -18,6 +18,7 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -35,12 +36,28 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
+    async def get_usage_data(
+        self, 
+        limit: Optional[int] = None,
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None
+    ) -> pl.DataFrame:
         """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
         
+        # Build WHERE clause for time filtering
+        where_conditions = []
+        if start_time_utc:
+            where_conditions.append(f"dus.created_at >= '{start_time_utc.isoformat()}'")
+        if end_time_utc:
+            where_conditions.append(f"dus.created_at <= '{end_time_utc.isoformat()}'")
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
         # Query to get user spend data with team information
-        query = """
+        query = f"""
         SELECT
             dus.id,
             dus.date,
@@ -65,6 +82,7 @@ class LiteLLMDatabase:
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        {where_clause}
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
