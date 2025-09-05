@@ -4562,6 +4562,20 @@ class Router:
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
         )
+    
+    def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
+        """
+        Helper to return what the "metadata" field should be called in the request data
+
+        - New endpoints return `litellm_metadata`
+        - Old endpoints return `metadata`
+
+        Context:
+        - LiteLLM used `metadata` as an internal field for storing metadata
+        - OpenAI then started using this field for their metadata
+        - LiteLLM is now moving to using `litellm_metadata` for our metadata
+        """
+        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
@@ -6788,6 +6802,7 @@ class Router:
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
         )
 
         if len(healthy_deployments) == 0:
