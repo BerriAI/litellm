@@ -60,6 +60,7 @@ class LiteLLMDatabase:
             dus.created_at,
             dus.updated_at,
             vt.team_id,
+            vt.key_alias as api_key_alias,
             tt.team_alias
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token

@@ -1,6 +1,8 @@
 import os
 from typing import Optional
 
+import polars as pl
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -105,7 +107,56 @@ class CloudZeroLogger(CustomLogger):
 
             verbose_logger.debug(f"CloudZero Dry Run: Processing {len(data)} records...")
             
+            # Pretty print first 20 rows of usage data with team information highlighted
+            from rich.box import SIMPLE
+            from rich.console import Console
+            from rich.table import Table
+            
+            console = Console()
+            console.print(f"\n[bold blue]📊 Usage Data Sample (first 20 rows):[/bold blue]")
+            
+            # Create a focused table showing key fields including team info
+            usage_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
+            usage_table.add_column("Date", style="blue", no_wrap=True)
+            usage_table.add_column("Model", style="green", no_wrap=True)
+            usage_table.add_column("Provider", style="cyan", no_wrap=True)
+            usage_table.add_column("Team ID", style="magenta", no_wrap=True)
+            usage_table.add_column("Team Alias", style="magenta", no_wrap=True)
+            usage_table.add_column("API Key Alias", style="yellow", no_wrap=True)
+            usage_table.add_column("Tokens", style="white", justify="right")
+            usage_table.add_column("Cost", style="green", justify="right")
+            usage_table.add_column("Requests", style="dim", justify="right")
+            
+            # Show first 20 rows with key information
+            sample_data = data.head(20).to_dicts()
+            for row in sample_data:
+                usage_table.add_row(
+                    str(row.get('date', 'N/A'))[:10],  # Just the date part
+                    str(row.get('model', 'N/A'))[:20],  # Truncate long model names
+                    str(row.get('custom_llm_provider', 'N/A'))[:15],
+                    str(row.get('team_id', 'null'))[:20],
+                    str(row.get('team_alias', 'null'))[:20],
+                    str(row.get('api_key_alias', 'N/A'))[:20] if row.get('api_key_alias') else 'N/A',
+                    f"{row.get('prompt_tokens', 0) + row.get('completion_tokens', 0):,}",
+                    f"${row.get('spend', 0):.4f}",
+                    str(row.get('successful_requests', 0))
+                )
+            
+            console.print(usage_table)
+            
+            # Also show the full polars output for debugging
+            console.print(f"\n[bold dim]📋 Full Data Schema (first 5 rows):[/bold dim]")
+            with pl.Config(
+                tbl_rows=5,
+                tbl_cols=20,
+                fmt_str_lengths=30,
+                tbl_width_chars=150
+            ):
+                console.print(str(data.head(5)))
+
             # Transform data to CloudZero CBF format
+
+
             transformer = CBFTransformer()
             cbf_data = transformer.transform(data)
             
@@ -146,6 +197,9 @@ class CloudZeroLogger(CustomLogger):
         cbf_table.add_column("cost/cost", style="green", justify="right", no_wrap=False)
         cbf_table.add_column("entity_type", style="magenta", justify="right", no_wrap=False)
         cbf_table.add_column("entity_id", style="magenta", justify="right", no_wrap=False)
+        cbf_table.add_column("team_id", style="cyan", no_wrap=False)
+        cbf_table.add_column("team_alias", style="cyan", no_wrap=False)
+        cbf_table.add_column("api_key_alias", style="yellow", no_wrap=False)
         cbf_table.add_column("usage/amount", style="yellow", justify="right", no_wrap=False)
         cbf_table.add_column("resource/id", style="magenta", no_wrap=False)
         cbf_table.add_column("resource/service", style="cyan", no_wrap=False)
@@ -163,12 +217,18 @@ class CloudZeroLogger(CustomLogger):
             resource_region = str(record.get('resource/region', 'N/A'))
             entity_type = str(record.get('entity_type', 'N/A'))
             entity_id = str(record.get('entity_id', 'N/A'))
+            team_id = str(record.get('resource/tag:team_id', 'N/A'))
+            team_alias = str(record.get('resource/tag:team_alias', 'N/A'))
+            api_key_alias = str(record.get('resource/tag:api_key_alias', 'N/A'))
 
             cbf_table.add_row(
                 time_usage_start,
                 cost_cost,
                 entity_type,
                 entity_id,
+                team_id,
+                team_alias,
+                api_key_alias,
                 usage_amount,
                 resource_id,
                 resource_service,

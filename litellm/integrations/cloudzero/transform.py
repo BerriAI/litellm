@@ -95,9 +95,19 @@ class CBFTransformer:
         model = str(row.get('model', ''))
         api_key_hash = str(row.get('api_key', ''))[:8]  # First 8 chars for identification
         api_key_alias = str(row.get('api_key_alias', ''))
+        
+        # Handle team information with fallbacks
+        team_id = row.get('team_id')
+        team_alias = row.get('team_alias')
+        
+        # Use team_alias if available, otherwise team_id, otherwise fallback to 'unknown'
+        entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
+        
         dimensions = {
             'entity_type': CZEntityType.TEAM,
-            'entity_id': str(row.get('team_id', '')),
+            'entity_id': entity_id,
+            'team_id': str(team_id) if team_id else 'unknown',
+            'team_alias': str(team_alias) if team_alias else 'unknown',
             'model': model,
             'model_group': str(row.get('model_group', '')),
             'provider': str(row.get('custom_llm_provider', '')),
@@ -139,9 +149,13 @@ class CBFTransformer:
         cbf_record['resource/tag:provider'] = provider  # CZRN provider component
         cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component (model)
 
+        # Add entity information directly to CBF record for visibility
+        cbf_record['entity_type'] = dimensions['entity_type']
+        cbf_record['entity_id'] = dimensions['entity_id']
+        
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
-            if value and value != 'N/A':  # Only add non-empty tags
+            if value and value != 'N/A' and value != 'unknown':  # Only add meaningful tags
                 cbf_record[f'resource/tag:{key}'] = str(value)
 
         # Add token breakdown as resource tags for analysis
