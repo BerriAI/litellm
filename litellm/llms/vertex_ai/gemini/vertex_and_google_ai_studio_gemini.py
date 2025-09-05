@@ -1045,6 +1045,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
+        image_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
@@ -1064,6 +1065,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
+
         #########################################################
 
         if "promptTokensDetails" in usage_metadata:
@@ -1072,6 +1074,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
                     text_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "IMAGE":
+                    image_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
 
@@ -1083,6 +1087,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             and cached_tokens is not None
         ):
             text_tokens = text_tokens - cached_tokens
+
+        # Count image tokens as text tokens because this fits the pricing
+        if image_tokens:
+            text_tokens = (text_tokens or 0) + image_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
