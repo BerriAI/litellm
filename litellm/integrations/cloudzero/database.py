@@ -72,8 +72,9 @@ class LiteLLMDatabase:
 
         try:
             db_response = await client.db.query_raw(query)
-            # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response)
+            # Convert the response to polars DataFrame with full schema inference
+            # This prevents schema mismatch errors when data types vary across rows
+            return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {str(e)}")
 
