@@ -28,10 +28,6 @@ Each provider uses their own search backend:
 **Anthropic Web Search Models**: Claude models that support web search: `claude-3-5-sonnet-latest`, `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`, `claude-3-7-sonnet-20250219`
 :::
 
-:::tip
-Want Google Search specifically? Use Gemini models with `tools=[{"googleSearch": {}}]`
-:::
-
 ## `/chat/completions` (litellm.completion)
 
 ### Quick Start
