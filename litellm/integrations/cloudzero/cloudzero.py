@@ -144,6 +144,8 @@ class CloudZeroLogger(CustomLogger):
         cbf_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
         cbf_table.add_column("time/usage_start", style="blue", no_wrap=False)
         cbf_table.add_column("cost/cost", style="green", justify="right", no_wrap=False)
+        cbf_table.add_column("entity_type", style="magenta", justify="right", no_wrap=False)
+        cbf_table.add_column("entity_id", style="magenta", justify="right", no_wrap=False)
         cbf_table.add_column("usage/amount", style="yellow", justify="right", no_wrap=False)
         cbf_table.add_column("resource/id", style="magenta", no_wrap=False)
         cbf_table.add_column("resource/service", style="cyan", no_wrap=False)
@@ -159,10 +161,14 @@ class CloudZeroLogger(CustomLogger):
             resource_service = str(record.get('resource/service', 'N/A'))
             resource_account = str(record.get('resource/account', 'N/A'))
             resource_region = str(record.get('resource/region', 'N/A'))
+            entity_type = str(record.get('entity_type', 'N/A'))
+            entity_id = str(record.get('entity_id', 'N/A'))
 
             cbf_table.add_row(
                 time_usage_start,
                 cost_cost,
+                entity_type,
+                entity_id,
                 usage_amount,
                 resource_id,
                 resource_service,

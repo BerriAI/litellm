@@ -24,7 +24,7 @@ from typing import Any, Optional
 import polars as pl
 
 from ...types.integrations.cloudzero import CBFRecord
-from .cz_resource_names import CZRNGenerator
+from .cz_resource_names import CZEntityType, CZRNGenerator
 
 
 class CBFTransformer:
@@ -92,17 +92,17 @@ class CBFTransformer:
         resource_id = self.czrn_generator.create_from_litellm_data(row)
 
         # Build dimensions for CloudZero
-        entity_id = str(row.get('entity_id', ''))
         model = str(row.get('model', ''))
         api_key_hash = str(row.get('api_key', ''))[:8]  # First 8 chars for identification
-
+        api_key_alias = str(row.get('api_key_alias', ''))
         dimensions = {
-            'entity_type': str(row.get('entity_type', '')),  # 'user' or 'team'
-            'entity_id': entity_id,
+            'entity_type': CZEntityType.TEAM,
+            'entity_id': str(row.get('team_id', '')),
             'model': model,
             'model_group': str(row.get('model_group', '')),
             'provider': str(row.get('custom_llm_provider', '')),
             'api_key_prefix': api_key_hash,
+            'api_key_alias': str(row.get('api_key_alias', '')),
             'api_requests': str(row.get('api_requests', 0)),
             'successful_requests': str(row.get('successful_requests', 0)),
             'failed_requests': str(row.get('failed_requests', 0)),
