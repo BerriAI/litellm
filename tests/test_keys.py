@@ -67,9 +67,10 @@ async def generate_key(
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     metadata: Optional[dict] = None,
-    calling_key="sk-1234",
+    calling_key: Optional[str] = None,
 ):
     url = "http://0.0.0.0:4000/key/generate"
+    calling_key = calling_key or f"sk-test-{uuid.uuid4().hex}"
     headers = {
         "Authorization": f"Bearer {calling_key}",
         "Content-Type": "application/json",
