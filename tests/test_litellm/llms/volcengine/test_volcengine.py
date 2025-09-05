@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 
-from litellm.llms.volcengine import VolcEngineConfig
+from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineConfig
 from litellm.utils import get_optional_params
 
 
