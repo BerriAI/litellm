@@ -407,19 +407,20 @@ def test_vertex_ai_usage_metadata_response_token_count():
 
     v = VertexGeminiConfig()
     usage_metadata = {
-        "promptTokenCount": 57,
+        "promptTokenCount": 66,
         "responseTokenCount": 74,
         "totalTokenCount": 131,
-        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}, {"modality": "IMAGE", "tokenCount": 9}],
         "responseTokensDetails": [{"modality": "TEXT", "tokenCount": 74}],
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     print("result", result)
-    assert result.prompt_tokens == 57
+    assert result.prompt_tokens == 66
     assert result.completion_tokens == 74
     assert result.total_tokens == 131
     assert result.prompt_tokens_details.text_tokens == 57
+    assert result.prompt_tokens_details.image_tokens == 9
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74

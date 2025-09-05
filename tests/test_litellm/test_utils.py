@@ -507,6 +507,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
