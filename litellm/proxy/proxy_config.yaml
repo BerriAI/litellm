@@ -3,3 +3,7 @@ model_list:
     litellm_params:
       model: openai/*
       api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+
+general_settings:
+  default_internal_user_params:
+    user_role: "proxy_admin"  # Give new SSO users admin access
