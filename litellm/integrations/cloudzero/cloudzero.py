@@ -1,15 +1,21 @@
 import os
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 
 import polars as pl
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 from .cz_stream_api import CloudZeroStreamer
 from .database import LiteLLMDatabase
 from .transform import CBFTransformer
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+else:
+    AsyncIOScheduler = Any
 
 
 class CloudZeroLogger(CustomLogger):
@@ -34,8 +40,63 @@ class CloudZeroLogger(CustomLogger):
     async def init_background_job(self):
         """
         Initialize the background job.
+
+        This starts up a job that uses Pod Lock Manager to export the usage data to CloudZero every hour.
         """
-        pass
+        await self.initialize_cloudzero_export_job()
+
+    async def initialize_cloudzero_export_job(self):
+        """
+        Handler for initializing CloudZero export job.
+
+        Runs when CloudZero logger starts up.
+
+        - If redis cache is available, we use the pod lock manager to acquire a lock and export the data.
+            - Ensures only one pod exports the data at a time.
+        - If redis cache is not available, we export the data directly.
+        """
+        from litellm.constants import (
+            CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME,
+            CLOUDZERO_MAX_FETCHED_DATA_RECORDS,
+        )
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+
+        # if using redis, ensure only one pod exports the data at a time
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            if await pod_lock_manager.acquire_lock(
+                cronjob_id=CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME
+            ):
+                try:
+                    await self._hourly_usage_data_export()
+                finally:
+                    await pod_lock_manager.release_lock(
+                        cronjob_id=CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME
+                    )
+        else:
+            # if not using redis, export the data directly
+            await self._hourly_usage_data_export()
+    
+    async def _hourly_usage_data_export(self):
+        """
+        Exports the hourly usage data to CloudZero.
+
+        Start time: 1 hour ago
+        End time: current time
+        """
+        from datetime import timedelta, timezone
+
+        from litellm.constants import CLOUDZERO_MAX_FETCHED_DATA_RECORDS
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        current_time_utc = datetime.now(timezone.utc)
+        one_hour_ago_utc = current_time_utc - timedelta(hours=1)
+        await self.export_usage_data(
+            limit=CLOUDZERO_MAX_FETCHED_DATA_RECORDS,
+            operation="replace_hourly",
+            start_time_utc=one_hour_ago_utc,
+            end_time_utc=current_time_utc
+        )
+
 
     async def export_usage_data(
         self, 
