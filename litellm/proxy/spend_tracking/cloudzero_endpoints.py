@@ -302,7 +302,7 @@ async def init_cloudzero_background_job():
         )
 
         # Initialize the background job
-        #await logger.init_background_job()
+        await logger.init_background_job()
 
         _cloudzero_background_job_initialized = True
         verbose_proxy_logger.info("CloudZero background job initialized successfully")
