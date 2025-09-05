@@ -42,6 +42,11 @@ const ConditionalPublicModelName: React.FC = () => {
   // Initial setup of model mappings when models are selected
   // Do not overwrite if mappings already exist (e.g., Photon mapping set by LiteLLMModelNameField)
   useEffect(() => {
+    // Skip mapping recreation for Photon providers - they create their own mappings with modelSource
+    if (isPhoton) {
+      return;
+    }
+    
     if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
       // Check if we already have mappings that match the selected models
       const currentMappings = form.getFieldValue('model_mappings') || [];

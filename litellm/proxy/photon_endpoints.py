@@ -36,11 +36,15 @@ async def list_photon_models() -> dict:
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success") and isinstance(data.get("models"), list):
-                    deployed_models = sorted(list(set([
-                        model["modelSource"]
+                    deployed_models = sorted([
+                        {
+                            "id": model.get("id"),
+                            "name": model.get("name"), 
+                            "modelSource": model.get("modelSource")
+                        }
                         for model in data["models"]
                         if model.get("status") == "Deployed" and "modelSource" in model
-                    ])))
+                    ], key=lambda x: x["modelSource"] or "")
                     return {"availableModels": deployed_models}
     except Exception:
         # If request fails, return empty array to prevent UI breakage
