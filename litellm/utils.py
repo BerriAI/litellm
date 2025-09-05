@@ -7118,6 +7118,12 @@ class ProviderConfigManager:
             )
 
             return JinaAIEmbeddingConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.embedding.transformation import (
+                VolcEngineEmbeddingConfig,
+            )
+
+            return VolcEngineEmbeddingConfig()
         return None
 
     @staticmethod
