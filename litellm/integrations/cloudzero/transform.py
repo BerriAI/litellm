@@ -104,7 +104,7 @@ class CBFTransformer:
         entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
         
         dimensions = {
-            'entity_type': CZEntityType.TEAM,
+            'entity_type': CZEntityType.TEAM.value,
             'entity_id': entity_id,
             'team_id': str(team_id) if team_id else 'unknown',
             'team_alias': str(team_alias) if team_alias else 'unknown',
