@@ -516,6 +516,16 @@ def get_dynamic_callbacks(
         returned_callbacks.extend(dynamic_callbacks)  # type: ignore
     return returned_callbacks
 
+@lru_cache(None)
+def _fast_is_coroutine_function(f):
+    return inspect.iscoroutinefunction(f)
+
+def fast_is_coroutine_function(obj):
+    try:
+        hash(obj)
+    except TypeError:
+        return False
+    return _fast_is_coroutine_function(obj)
 
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
@@ -591,7 +601,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if fast_is_coroutine_function(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -601,7 +611,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if fast_is_coroutine_function(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -626,7 +636,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if fast_is_coroutine_function(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -659,7 +669,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    inspect.iscoroutinefunction(callback)
+                    fast_is_coroutine_function(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
@@ -838,9 +848,9 @@ async def _client_async_logging_helper(
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine = logging_obj.async_success_handler(
+            async_coroutine=logging_obj.async_success_handler(
                 result=result,
-                start_time=start_time, 
+                start_time=start_time,
                 end_time=end_time
             )
         )
@@ -900,7 +910,7 @@ def client(original_function):  # noqa: PLR0915
     def check_coroutine(value) -> bool:
         if inspect.iscoroutine(value):
             return True
-        elif inspect.iscoroutinefunction(value):
+        elif fast_is_coroutine_function(value):
             return True
         else:
             return False
