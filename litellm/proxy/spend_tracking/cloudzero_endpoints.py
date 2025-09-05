@@ -302,7 +302,7 @@ async def init_cloudzero_background_job():
         )
 
         # Initialize the background job
-        await logger.init_background_job()
+        #await logger.init_background_job()
 
         _cloudzero_background_job_initialized = True
         verbose_proxy_logger.info("CloudZero background job initialized successfully")
@@ -430,7 +430,7 @@ async def cloudzero_dry_run_export(
 
     try:
         # Import and initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+        from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
@@ -490,7 +490,7 @@ async def cloudzero_export(
         settings = await _get_cloudzero_settings()
 
         # Import and initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+        from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger(

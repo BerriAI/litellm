@@ -668,3 +668,4 @@ def test_get_supported_openai_params():
     assert "stream" in params
     assert "background" in params
     assert "stream" in params
+

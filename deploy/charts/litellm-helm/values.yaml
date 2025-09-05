@@ -240,4 +240,11 @@ extraEnvVars: {
     #   value: EXTRA_ENV_VAR_VALUE
 }
 
-
+# Pod Disruption Budget
+pdb:
+  enabled: false
+  # Set exactly one of the following. If both are set, minAvailable takes precedence.
+  minAvailable: null     # e.g. "50%" or 1
+  maxUnavailable: null   # e.g. 1 or "20%"
+  annotations: {}
+  labels: {}
