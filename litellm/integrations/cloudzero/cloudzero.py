@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import Optional
 
 import polars as pl
@@ -30,7 +31,19 @@ class CloudZeroLogger(CustomLogger):
         self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID") 
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
 
-    async def export_usage_data(self, limit: Optional[int] = None, operation: str = "replace_hourly"):
+    async def init_background_job(self):
+        """
+        Initialize the background job.
+        """
+        pass
+
+    async def export_usage_data(
+        self, 
+        limit: Optional[int] = None, 
+        operation: str = "replace_hourly",
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None
+    ):
         """
         Exports the usage data to CloudZero.
 
@@ -54,7 +67,11 @@ class CloudZeroLogger(CustomLogger):
             # Initialize database connection and load data
             database = LiteLLMDatabase()
             verbose_logger.debug("CloudZero Logger: Loading usage data from database")
-            data = await database.get_usage_data(limit=limit)
+            data = await database.get_usage_data(
+                limit=limit,
+                start_time_utc=start_time_utc,
+                end_time_utc=end_time_utc
+            )
             
             if data.is_empty():
                 verbose_logger.info("CloudZero Logger: No usage data found to export")
