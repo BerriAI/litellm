@@ -3,7 +3,7 @@ CloudZero endpoint types for LiteLLM Proxy
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,8 @@ class CloudZeroExportResponse(BaseModel):
     message: str
     status: str
     records_exported: Optional[int] = None
+    dry_run_data: Optional[Dict[str, Any]] = Field(None, description="Dry run data including usage data and CBF transformed data")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics for dry run")
 
 
 class CloudZeroSettingsView(BaseModel):

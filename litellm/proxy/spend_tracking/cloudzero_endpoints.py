@@ -412,10 +412,15 @@ async def cloudzero_dry_run_export(
     Perform a dry run export using the CloudZero logger.
 
     This endpoint uses the CloudZero logger to perform a dry run export,
-    which displays the data that would be exported without actually sending it to CloudZero.
+    which returns the data that would be exported without actually sending it to CloudZero.
 
     Parameters:
     - limit: Optional limit on number of records to process (default: 10000)
+
+    Returns:
+    - usage_data: Sample of the raw usage data (first 50 records)
+    - cbf_data: CloudZero CBF formatted data ready for export
+    - summary: Statistics including total cost, tokens, and record counts
 
     Only admin users can perform CloudZero exports.
     """
@@ -432,15 +437,17 @@ async def cloudzero_dry_run_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
-        await logger.dry_run_export_usage_data(
+        dry_run_result = await logger.dry_run_export_usage_data(
             limit=request.limit
         )
 
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero dry run export completed successfully. Check logs for output.",
+            message="CloudZero dry run export completed successfully.",
             status="success",
+            dry_run_data=dry_run_result,
+            summary=dry_run_result.get("summary") if dry_run_result else None,
         )
 
     except Exception as e:
@@ -504,7 +511,10 @@ async def cloudzero_export(
         verbose_proxy_logger.info("CloudZero export completed successfully")
 
         return CloudZeroExportResponse(
-            message="CloudZero export completed successfully", status="success"
+            message="CloudZero export completed successfully", 
+            status="success",
+            dry_run_data=None,
+            summary=None
         )
 
     except Exception as e:

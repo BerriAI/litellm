@@ -166,10 +166,13 @@ class CloudZeroLogger(CustomLogger):
 
     async def dry_run_export_usage_data(self, limit: Optional[int] = 10000):
         """
-        Only prints the data that would be exported to CloudZero.
+        Returns the data that would be exported to CloudZero without actually sending it.
         
         Args:
             limit: Limit number of records to display (default: 10000)
+            
+        Returns:
+            dict: Contains usage_data, cbf_data, and summary statistics
         """
         try:
             verbose_logger.debug("CloudZero Logger: Starting dry run export")
@@ -181,71 +184,63 @@ class CloudZeroLogger(CustomLogger):
             
             if data.is_empty():
                 verbose_logger.warning("CloudZero Dry Run: No usage data found")
-                return
+                return {
+                    "usage_data": [],
+                    "cbf_data": [],
+                    "summary": {
+                        "total_records": 0,
+                        "total_cost": 0,
+                        "total_tokens": 0,
+                        "unique_accounts": 0,
+                        "unique_services": 0
+                    }
+                }
 
             verbose_logger.debug(f"CloudZero Dry Run: Processing {len(data)} records...")
             
-            # Pretty print first 20 rows of usage data with team information highlighted
-            from rich.box import SIMPLE
-            from rich.console import Console
-            from rich.table import Table
-            
-            console = Console()
-            console.print(f"\n[bold blue]📊 Usage Data Sample (first 20 rows):[/bold blue]")
-            
-            # Create a focused table showing key fields including team info
-            usage_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
-            usage_table.add_column("Date", style="blue", no_wrap=True)
-            usage_table.add_column("Model", style="green", no_wrap=True)
-            usage_table.add_column("Provider", style="cyan", no_wrap=True)
-            usage_table.add_column("Team ID", style="magenta", no_wrap=True)
-            usage_table.add_column("Team Alias", style="magenta", no_wrap=True)
-            usage_table.add_column("API Key Alias", style="yellow", no_wrap=True)
-            usage_table.add_column("Tokens", style="white", justify="right")
-            usage_table.add_column("Cost", style="green", justify="right")
-            usage_table.add_column("Requests", style="dim", justify="right")
-            
-            # Show first 20 rows with key information
-            sample_data = data.head(20).to_dicts()
-            for row in sample_data:
-                usage_table.add_row(
-                    str(row.get('date', 'N/A'))[:10],  # Just the date part
-                    str(row.get('model', 'N/A'))[:20],  # Truncate long model names
-                    str(row.get('custom_llm_provider', 'N/A'))[:15],
-                    str(row.get('team_id', 'null'))[:20],
-                    str(row.get('team_alias', 'null'))[:20],
-                    str(row.get('api_key_alias', 'N/A'))[:20] if row.get('api_key_alias') else 'N/A',
-                    f"{row.get('prompt_tokens', 0) + row.get('completion_tokens', 0):,}",
-                    f"${row.get('spend', 0):.4f}",
-                    str(row.get('successful_requests', 0))
-                )
-            
-            console.print(usage_table)
-            
-            # Also show the full polars output for debugging
-            console.print(f"\n[bold dim]📋 Full Data Schema (first 5 rows):[/bold dim]")
-            with pl.Config(
-                tbl_rows=5,
-                tbl_cols=20,
-                fmt_str_lengths=30,
-                tbl_width_chars=150
-            ):
-                console.print(str(data.head(5)))
+            # Convert usage data to dict format for response
+            usage_data_sample = data.head(50).to_dicts()  # Return first 50 rows
 
             # Transform data to CloudZero CBF format
-
-
             transformer = CBFTransformer()
             cbf_data = transformer.transform(data)
             
             if cbf_data.is_empty():
                 verbose_logger.warning("CloudZero Dry Run: No valid data after transformation")
-                return
+                return {
+                    "usage_data": usage_data_sample,
+                    "cbf_data": [],
+                    "summary": {
+                        "total_records": len(usage_data_sample),
+                        "total_cost": sum(row.get('spend', 0) for row in usage_data_sample),
+                        "total_tokens": sum(row.get('prompt_tokens', 0) + row.get('completion_tokens', 0) for row in usage_data_sample),
+                        "unique_accounts": 0,
+                        "unique_services": 0
+                    }
+                }
 
-            # Display the transformed data on screen
-            self._display_cbf_data_on_screen(cbf_data)
+            # Convert CBF data to dict format for response
+            cbf_data_dict = cbf_data.to_dicts()
+            
+            # Calculate summary statistics
+            total_cost = sum(record.get('cost/cost', 0) for record in cbf_data_dict)
+            unique_accounts = len(set(record.get('resource/account', '') for record in cbf_data_dict if record.get('resource/account')))
+            unique_services = len(set(record.get('resource/service', '') for record in cbf_data_dict if record.get('resource/service')))
+            total_tokens = sum(record.get('usage/amount', 0) for record in cbf_data_dict)
             
             verbose_logger.info(f"CloudZero Logger: Dry run completed for {len(cbf_data)} records")
+            
+            return {
+                "usage_data": usage_data_sample,
+                "cbf_data": cbf_data_dict,
+                "summary": {
+                    "total_records": len(cbf_data_dict),
+                    "total_cost": total_cost,
+                    "total_tokens": total_tokens,
+                    "unique_accounts": unique_accounts,
+                    "unique_services": unique_services
+                }
+            }
             
         except Exception as e:
             verbose_logger.error(f"CloudZero Logger: Error in dry run export: {str(e)}")
