@@ -30,8 +30,11 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       // Get current model value to check if we need to update
       const currentModel = form.getFieldValue('model');
 
-      // Only update if the value has actually changed
-      if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
+      // For Photon providers, always recreate mappings to ensure modelSource is used
+      const isPhoton = selectedProvider.includes("Photon");
+      const shouldUpdate = JSON.stringify(currentModel) !== JSON.stringify(values) || isPhoton;
+      
+      if (shouldUpdate) {
 
         // Create mappings first
         const mappings = values.map(model => {
@@ -41,6 +44,20 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               litellm_model: `azure/${model}`
             };
           }
+          
+          // For Photon providers, find the original model object to get modelSource
+          const isPhoton = selectedProvider.includes("Photon");
+          if (isPhoton) {
+            const modelObj = providerModels.find((m: any) => m.name === model);
+            
+            if (modelObj && modelObj.modelSource) {
+              return {
+                public_name: model,
+                litellm_model: modelObj.modelSource
+              };
+            }
+          }
+          
           return {
             public_name: model,
             litellm_model: model
@@ -151,13 +168,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                       ]
                     : isPhoton
                       ? providerModels.map((m: any) => {
-                          const looksLikeGenerated =
-                            typeof m?.name === "string" && m.name.startsWith("model_");
-                          const idLooksHuman =
-                            typeof m?.id === "string" && !m.id.startsWith("model_");
-                          const label = looksLikeGenerated && idLooksHuman ? m.id : m.name;
-                          // Use the display label as the value so downstream fields get the readable name
-                          return { label, value: label };
+                          // Always use name field for Photon providers
+                          return { label: m.name, value: m.name };
                         })
                       : providerModels.map((model: any) => ({
                           label: model,

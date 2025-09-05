@@ -285,22 +285,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           // Extract model names from response and convert to objects for frontend compatibility
           let photonModels: any[] = [];
           
-          // Helper function to extract model names from an array and convert to objects
+          // Helper function to extract model objects from array
           const extractPhotonModels = (items: any[]): any[] => {
             if (!Array.isArray(items)) return [];
             
             return items.map(item => {
-              // If item is already a string, convert it to an object
+              // If item is already a proper object with the expected fields, return as is
+              if (typeof item === 'object' && item !== null && item.name && item.modelSource) {
+                return item;
+              }
+              // If item is a string (backward compatibility), convert to object
               if (typeof item === 'string') {
                 return {
                   name: item,
                   id: item,
                   modelSource: item
                 };
-              }
-              // If item is an object, return it as is (it should already have name/id)
-              if (typeof item === 'object' && item !== null) {
-                return item;
               }
               // Fallback to string conversion
               const stringItem = String(item);
@@ -328,7 +328,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               photonModels = extractPhotonModels(possibleArrays[0] as any[]);
             }
           }
-          
           // setProviderModels expects an array (string array for regular providers, object array for Photon)
           setProviderModels(photonModels);
           

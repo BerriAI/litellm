@@ -13,7 +13,6 @@ export const prepareModelAddRequest = async (
     try {
       console.log("handling submit for formValues:", formValues);
 
-
       // Get model mappings and safely remove from formValues
       const modelMappings = formValues["model_mappings"] || [];
       if ("model_mappings" in formValues) {
@@ -65,7 +64,7 @@ export const prepareModelAddRequest = async (
             continue;
           }
           if (key == "model_name") {
-            litellmParamsObj["model"] = value;
+            // Don't override the model field - it should use the litellm_model from mapping
           } else if (key == "custom_llm_provider") {
             console.log("custom_llm_provider:", value);
             const mappingResult = provider_map[value]; // Get the corresponding value from the mapping
