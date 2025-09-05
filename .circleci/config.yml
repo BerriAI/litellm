@@ -1477,6 +1477,7 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
@@ -1912,6 +1913,7 @@ jobs:
               -e APORIA_API_BASE_1=$APORIA_API_BASE_1 \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
@@ -2962,6 +2964,7 @@ jobs:
           command: |
             docker run --name my-app \
               -p 4000:4000 \
+              -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
               myapp:latest \
               --port 4000 > docker_output.log 2>&1 || true

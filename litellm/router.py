@@ -4562,6 +4562,20 @@ class Router:
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
         )
+    
+    def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
+        """
+        Helper to return what the "metadata" field should be called in the request data
+
+        - New endpoints return `litellm_metadata`
+        - Old endpoints return `metadata`
+
+        Context:
+        - LiteLLM used `metadata` as an internal field for storing metadata
+        - OpenAI then started using this field for their metadata
+        - LiteLLM is now moving to using `litellm_metadata` for our metadata
+        """
+        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
     def log_retry(self, kwargs: dict, e: Exception) -> dict:
         """
@@ -5658,6 +5672,11 @@ class Router:
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
+                
+                # Get mode from database model_info if available, otherwise default to "chat"
+                db_model_info = model.get("model_info", {})
+                mode = db_model_info.get("mode", "chat")
+                
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
@@ -5666,7 +5685,7 @@ class Router:
                     input_cost_per_token=0,
                     output_cost_per_token=0,
                     litellm_provider=llm_provider,
-                    mode="chat",
+                    mode=mode,
                     supported_openai_params=supported_openai_params,
                     supports_system_messages=None,
                 )
@@ -6783,6 +6802,7 @@ class Router:
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
         )
 
         if len(healthy_deployments) == 0:
