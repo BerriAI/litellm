@@ -6854,6 +6854,8 @@ class ProviderConfigManager:
             return litellm.OpenAIGPT5Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
+        elif litellm.LlmProviders.ALIBABA == provider:
+            return litellm.AlibabaChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
         elif litellm.LlmProviders.BYTEZ == provider:
