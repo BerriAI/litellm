@@ -16,7 +16,8 @@ In each method it will call the appropriate method from caching.py
 
 import asyncio
 import datetime
-import inspect
+from functools import lru_cache
+from types import FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -996,22 +997,23 @@ class LLMCachingHandler:
         )
 
 
+@lru_cache(maxsize=None)
+def _positional_names(func: FunctionType) -> Tuple[str, ...]:
+    """
+    Return (posonly + pos-or-kw) parameter names using only __code__.
+    Order matches function definition.
+    """
+    code = func.__code__
+    posonly = getattr(code, "co_posonlyargcount", 0)
+    total = posonly + code.co_argcount
+    return code.co_varnames[:total]
+
+
 def convert_args_to_kwargs(
     original_function: Callable,
     args: Optional[Tuple[Any, ...]] = None,
 ) -> Dict[str, Any]:
-    # Get the signature of the original function
-    signature = inspect.signature(original_function)
-
-    # Get parameter names in the order they appear in the original function
-    param_names = list(signature.parameters.keys())
-
-    # Create a mapping of positional arguments to parameter names
-    args_to_kwargs = {}
-    if args:
-        for index, arg in enumerate(args):
-            if index < len(param_names):
-                param_name = param_names[index]
-                args_to_kwargs[param_name] = arg
-
-    return args_to_kwargs
+    if not args:
+        return {}
+    # zip truncates if args is longer than positional slots
+    return dict(zip(_positional_names(original_function), args, strict=False))
