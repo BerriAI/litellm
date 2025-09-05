@@ -65,6 +65,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   };
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
+    { 
+      key: "16", 
+      page: "model-hub-table", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined />
+    },
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
     { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
     { key: "2", page: "models", label: "Models + Endpoints", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
@@ -73,12 +79,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { 
-      key: "16", 
-      page: "model-hub-table", 
-      label: "Model Hub", 
-      icon: <AppstoreOutlined />
-    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
     {

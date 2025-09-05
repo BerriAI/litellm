@@ -118,9 +118,9 @@ export default function CreateKeyPage() {
 
   const invitation_id = searchParams.get("invitation_id")
 
-  // Get page from URL, default to 'api-keys' if not present
+  // Get page from URL, default to 'model-hub-table' if not present
   const [page, setPage] = useState(() => {
-    return searchParams.get("page") || "api-keys"
+    return searchParams.get("page") || "model-hub-table"
   })
 
   // Custom setPage function that updates URL

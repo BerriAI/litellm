@@ -103,8 +103,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   return (
     <>
       <Form.Item
-        label="LiteLLM Model Name(s)"
-        tooltip="The model name LiteLLM will send to the LLM API"
+        label="Raypath Model Name(s)"
+        tooltip="The model name Raypath will send to the LLM API"
         className="mb-0"
       >
         <Form.Item

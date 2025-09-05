@@ -476,14 +476,11 @@ else:
         global_max_parallel_request_retry_timeout_env
     )
 
-ui_link = f"{server_root_path}/ui/"
+ui_link = f"{server_root_path}/"
 model_hub_link = f"{server_root_path}/ui/model_hub_table"
 ui_message = (
-    f"👉 [```Raypath Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
+    f"👉 [```Raypath Admin Panel on /```]({ui_link}). Create, Edit Keys with SSO"
 )
-ui_message += "\n\n💸 [```Raypath Model Cost Map```](https://models.litellm.ai/)."
-
-ui_message += f"\n\n🔎 [```Raypath Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/model_hub)"
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
@@ -685,6 +682,12 @@ app = FastAPI(
     version=version,
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
+    servers=[
+        {
+            "url": "https://fundamental-raypath.xyz/",
+            "description": "Raypath Production Server"
+        }
+    ],
 )
 
 
@@ -703,6 +706,14 @@ def get_openapi_schema():
         description=app.description,
         routes=app.routes,
     )
+    
+    # Set custom server URL for curl examples
+    openapi_schema["servers"] = [
+        {
+            "url": "https://fundamental-raypath.xyz/",
+            "description": "Raypath Production Server"
+        }
+    ]
 
     # Find all WebSocket routes
     websocket_routes = [
@@ -753,6 +764,14 @@ def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     openapi_schema = get_openapi_schema()
+
+    # Set custom server URL for curl examples
+    openapi_schema["servers"] = [
+        {
+            "url": "https://fundamental-raypath.xyz/",
+            "description": "Raypath Production Server"
+        }
+    ]
 
     # Filter routes to include only specific ones
     openai_routes = LiteLLMRoutes.openai_routes.value
@@ -9373,9 +9392,7 @@ async def get_model_cost_map_reload_status(
         )
 
 
-@router.get("/", dependencies=[Depends(user_api_key_auth)])
-async def home(request: Request):
-    return "LiteLLM: RUNNING"
+# Root route removed - UI will be served at / instead
 
 
 @router.get("/routes", dependencies=[Depends(user_api_key_auth)])
@@ -9483,5 +9500,23 @@ try:
     # ARC-AGI endpoints
     from litellm.proxy.arcagi_endpoints import arcagi_router
     app.include_router(arcagi_router)
+except Exception:
+    pass
+
+########################################################
+# Add root route to serve UI index.html
+########################################################
+try:
+    import os
+    from fastapi.responses import FileResponse
+    
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    ui_path = os.path.join(current_dir, "_experimental", "out")
+    
+    if os.path.exists(ui_path):
+        # Add root route to serve UI index.html
+        @app.get("/")
+        async def serve_ui_root():
+            return FileResponse(os.path.join(ui_path, "index.html"))
 except Exception:
     pass

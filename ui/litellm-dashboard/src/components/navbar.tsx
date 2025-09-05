@@ -140,6 +140,14 @@ const Navbar: React.FC<NavbarProps> = ({
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
             <a
+              href="/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[13px] text-gray-600 hover:text-gray-900 transition-colors"
+            >
+              API Docs
+            </a>
+            <a
               href="https://docs.litellm.ai/docs/"
               target="_blank"
               rel="noopener noreferrer"
