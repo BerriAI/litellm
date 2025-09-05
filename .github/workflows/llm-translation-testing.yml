@@ -52,6 +52,19 @@ jobs:
       - name: Create test results directory
         run: mkdir -p test-results
       
+      - name: Fetch test runner script if missing
+        run: |
+          if [ ! -f ".github/workflows/run_llm_translation_tests.py" ]; then
+            echo "Test runner script not found in current ref, fetching from main branch..."
+            curl -s https://raw.githubusercontent.com/BerriAI/litellm/main/.github/workflows/run_llm_translation_tests.py -o .github/workflows/run_llm_translation_tests.py || true
+            if [ -f ".github/workflows/run_llm_translation_tests.py" ]; then
+              chmod +x .github/workflows/run_llm_translation_tests.py
+              echo "Successfully fetched test runner script from main branch"
+            else
+              echo "Failed to fetch test runner script from main branch"
+            fi
+          fi
+      
       - name: Run LLM Translation Tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -63,10 +76,35 @@ jobs:
           AZURE_API_VERSION: ${{ secrets.AZURE_API_VERSION }}
           # Add other API keys as needed
         run: |
-          python .github/workflows/run_llm_translation_tests.py \
-            --tag "${{ github.event.inputs.release_candidate_tag || github.ref_name }}" \
-            --commit "${{ github.sha }}" \
-            || true  # Continue even if tests fail
+          # Check if the test runner script exists
+          if [ -f ".github/workflows/run_llm_translation_tests.py" ]; then
+            echo "Found test runner script, executing tests..."
+            python .github/workflows/run_llm_translation_tests.py \
+              --tag "${{ github.event.inputs.release_candidate_tag || github.ref_name }}" \
+              --commit "${{ github.sha }}" \
+              || true  # Continue even if tests fail
+          else
+            echo "Warning: Test runner script not found at .github/workflows/run_llm_translation_tests.py"
+            echo "Running tests directly with pytest as fallback..."
+            
+            # Fallback to direct pytest execution
+            poetry run pytest tests/llm_translation/ \
+              -v \
+              --junitxml=test-results/junit.xml \
+              --tb=short \
+              || true  # Continue even if tests fail
+            
+            # Create a simple markdown report
+            echo "# LLM Translation Test Report" > test-results/llm_translation_report.md
+            echo "" >> test-results/llm_translation_report.md
+            echo "**Note**: Using fallback test execution. Full report generation requires the test runner script." >> test-results/llm_translation_report.md
+            echo "" >> test-results/llm_translation_report.md
+            echo "- Tag/Version: ${{ github.event.inputs.release_candidate_tag || github.ref_name }}" >> test-results/llm_translation_report.md
+            echo "- Commit: ${{ github.sha }}" >> test-results/llm_translation_report.md
+            echo "- Date: $(date)" >> test-results/llm_translation_report.md
+            echo "" >> test-results/llm_translation_report.md
+            echo "See junit.xml for detailed test results." >> test-results/llm_translation_report.md
+          fi
       
       - name: Display test summary
         if: always()
