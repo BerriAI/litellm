@@ -509,6 +509,10 @@ class LiteLLMProxyRequestSetup:
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
+            user_api_key_spend=user_api_key_dict.spend,
+            user_api_key_max_budget=user_api_key_dict.max_budget,
+            user_api_key_team_spend=user_api_key_dict.team_spend,
+            user_api_key_team_max_budget=user_api_key_dict.team_max_budget
         )
         return user_api_key_logged_metadata
 
@@ -531,9 +535,9 @@ class LiteLLMProxyRequestSetup:
             "user_api_key"
         ] = user_api_key_dict.api_key  # this is just the hashed token
 
-        data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
-            user_api_key_dict, "end_user_max_budget", None
-        )
+        data[_metadata_variable_name][
+            "user_api_end_user_max_budget"
+        ] = user_api_key_dict.end_user_max_budget
         return data
 
     @staticmethod
