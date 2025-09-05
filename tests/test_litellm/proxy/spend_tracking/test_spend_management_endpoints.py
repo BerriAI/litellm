@@ -18,7 +18,9 @@ import litellm
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.proxy_server import app, prisma_client
+from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
+from litellm.types.utils import BudgetConfig
 
 ignored_keys = [
     "request_id",
@@ -32,6 +34,18 @@ ignored_keys = [
     "metadata.cold_storage_object_key",
 ]
 
+MODEL_LIST = [
+    {
+        "model_name": "azure-gpt-4o",
+        "litellm_params": {
+            "model": "azure/gpt-4o-mini",
+            "mock_response": "Hello, world!",
+            "tags": ["default"],
+            "base_model": "gpt-4o-mini",
+        },
+    },
+]
+
 
 @pytest.fixture
 def client():
@@ -41,6 +55,19 @@ def client():
 @pytest.fixture(autouse=True)
 def add_anthropic_api_key_to_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
+
+
+@pytest.fixture
+def disable_budget_sync(monkeypatch):
+    """Disable periodic sync during tests"""
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+        noop,
+    )
 
 
 @pytest.mark.asyncio
@@ -1318,3 +1345,70 @@ async def test_view_spend_tags_no_database(client, monkeypatch):
     # Check the actual error message structure
     assert "error" in data
     assert "Database not connected" in data["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_under(disable_budget_sync):
+    """Test that router allows completion when under budget"""
+    provider_budget_config = {
+        "azure": BudgetConfig(max_budget=0.01, budget_duration="10d")
+    }
+
+    router = Router(
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    response = await router.acompletion(
+        model="azure-gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+
+    assert response is not None
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_over(disable_budget_sync):
+    """Test that router allows completion when over budget"""
+    provider_budget_config = {
+        "azure": BudgetConfig(max_budget=-0.01, budget_duration="10d")
+    }
+
+    router = Router(
+        num_retries=0,
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    with pytest.raises(Exception) as e:
+        response = await router.acompletion(
+            model="azure-gpt-4o",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+    assert "Exceeded budget for provider" in str(e.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_budget_provider_budgets(disable_budget_sync):
+    """Test that provider_budgets() returns correct values"""
+    provider = "azure"
+    max_budget = -0.01
+    budget_duration = "10d"
+    provider_budget_config = {
+        provider: BudgetConfig(max_budget=max_budget, budget_duration=budget_duration)
+    }
+
+    router = Router(
+        num_retries=0,
+        enable_pre_call_checks=True,
+        provider_budget_config=provider_budget_config,
+        model_list=MODEL_LIST,
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        response = await spend_management_endpoints.provider_budgets()
+        provider_budget_response = response.providers[provider]
+        assert provider_budget_response.budget_limit == max_budget
+        assert provider_budget_response.time_period == budget_duration
