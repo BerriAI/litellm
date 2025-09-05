@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 from typing import Optional
 
 import pytest
@@ -157,7 +158,7 @@ async def test_pass_through_endpoint_rpm_limit(
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 
-    mock_api_key = "sk-my-test-key"
+    mock_api_key = f"sk-test-{uuid.uuid4().hex}"
     cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
 
     _cohere_api_key = os.environ.get("COHERE_API_KEY")
