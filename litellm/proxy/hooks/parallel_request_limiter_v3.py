@@ -68,6 +68,32 @@ end
 return results
 """
 
+TOKEN_INCREMENT_SCRIPT = """
+local results = {}
+
+-- Process each key/increment_value/ttl triplet
+for i = 1, #KEYS do
+    local key = KEYS[i]
+    local increment_value = tonumber(ARGV[i * 2 - 1])
+    local ttl_seconds = tonumber(ARGV[i * 2])
+
+    -- Increment the value
+    local new_value = redis.call('INCRBYFLOAT', key, increment_value)
+
+    -- Handle TTL: only set expire if ttl_seconds > 0 and key has no current TTL
+    -- ttl_seconds can be 0 (no TTL) or positive (set TTL)
+    if ttl_seconds and ttl_seconds > 0 then
+        local current_ttl = redis.call('TTL', key)
+        if current_ttl == -1 then
+            redis.call('EXPIRE', key, ttl_seconds)
+        end
+    end
+
+    table.insert(results, new_value)
+end
+
+return results
+"""
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
@@ -109,8 +135,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     BATCH_RATE_LIMITER_SCRIPT
                 )
             )
+            self.token_increment_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    TOKEN_INCREMENT_SCRIPT
+                )
+            )
         else:
             self.batch_rate_limiter_script = None
+            self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -567,6 +599,62 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    async def async_increment_tokens_with_ttl_preservation(
+        self,
+        pipeline_operations: List["RedisPipelineIncrementOperation"],
+        parent_otel_span: Optional[Span] = None,
+    ) -> None:
+        """
+        Increment token counters using Lua script to preserve existing TTL.
+        This prevents TTL reset on every token increment.
+        """
+        if not pipeline_operations:
+            return
+
+        # Check if script is available
+        if self.token_increment_script is None:
+            verbose_proxy_logger.debug("TTL preservation script not available, using regular pipeline")
+            await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                increment_list=pipeline_operations,
+                litellm_parent_otel_span=parent_otel_span,
+            )
+            return
+
+        try:
+            # Use Lua script for all operations
+            keys = []
+            args = []
+
+            for op in pipeline_operations:
+                # Convert None TTL to 0 for Lua script
+                ttl_value = op["ttl"] if op["ttl"] is not None else 0
+                
+                verbose_proxy_logger.debug(
+                    f"Executing TTL-preserving increment for key={op['key']}, "
+                    f"increment={op['increment_value']}, ttl={ttl_value}"
+                )
+                keys.append(op["key"])
+                args.extend([op["increment_value"], ttl_value])
+
+            await self.token_increment_script(
+                keys=keys,
+                args=args,
+            )
+
+            verbose_proxy_logger.debug(
+                f"Successfully executed TTL-preserving increment for {len(pipeline_operations)} keys"
+            )
+
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"TTL preservation failed, falling back to regular pipeline: {str(e)}"
+            )
+            # Fallback to regular pipeline on error
+            await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                increment_list=pipeline_operations,
+                litellm_parent_otel_span=parent_otel_span,
+            )
+
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
         from litellm.proxy.proxy_server import general_settings
 
@@ -713,9 +801,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Execute all increments in a single pipeline
             if pipeline_operations:
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=pipeline_operations,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
+                await self.async_increment_tokens_with_ttl_preservation(
+                    pipeline_operations=pipeline_operations,
+                    parent_otel_span=litellm_parent_otel_span,
                 )
 
         except Exception as e:

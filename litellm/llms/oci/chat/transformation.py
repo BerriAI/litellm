@@ -255,7 +255,12 @@ class OCIChatConfig(BaseConfig):
         oci_key = optional_params.get("oci_key")
         oci_key_file = optional_params.get("oci_key_file")
 
-        if not oci_user or not oci_fingerprint or not oci_tenancy or not (oci_key or oci_key_file):
+        if (
+            not oci_user
+            or not oci_fingerprint
+            or not oci_tenancy
+            or not (oci_key or oci_key_file)
+        ):
             raise Exception(
                 "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, "
                 "and at least one of oci_key or oci_key_file."
@@ -304,10 +309,13 @@ class OCIChatConfig(BaseConfig):
         private_key = (
             load_private_key_from_str(oci_key)
             if oci_key
-            else load_private_key_from_file(oci_key_file)
-            if oci_key_file
-            else None
+            else load_private_key_from_file(oci_key_file) if oci_key_file else None
         )
+
+        if private_key is None:
+            raise Exception(
+                "Private key is required for OCI authentication. Please provide either oci_key or oci_key_file."
+            )
 
         signature = private_key.sign(
             signing_string.encode("utf-8"),
@@ -764,20 +772,20 @@ def adapt_messages_to_generic_oci_standard(
         tool_calls = message.get("tool_calls")
         tool_call_id = message.get("tool_call_id")
 
-        if role in ["system", "user", "assistant"] and content is not None:
+        if role == "assistant" and tool_calls is not None:
+            if not isinstance(tool_calls, list):
+                raise Exception("Prop `tool_calls` must be a list of tool calls")
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
+            )
+
+        elif role in ["system", "user", "assistant"] and content is not None:
             if not isinstance(content, (str, list)):
                 raise Exception(
                     "Prop `content` must be a string or a list of content items"
                 )
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_content_message(role, content)
-            )
-
-        elif role == "assistant" and tool_calls is not None:
-            if not isinstance(tool_calls, list):
-                raise Exception("Prop `tool_calls` must be a list of tool calls")
-            new_messages.append(
-                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
             )
 
         elif role == "tool":

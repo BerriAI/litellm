@@ -118,9 +118,9 @@ export default function CreateKeyPage() {
 
   const invitation_id = searchParams.get("invitation_id")
 
-  // Get page from URL, default to 'api-keys' if not present
+  // Get page from URL, default to 'model-hub-table' if not present
   const [page, setPage] = useState(() => {
-    return searchParams.get("page") || "api-keys"
+    return searchParams.get("page") || "model-hub-table"
   })
 
   // Custom setPage function that updates URL
@@ -136,6 +136,11 @@ export default function CreateKeyPage() {
   }
 
   const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(!sidebarCollapsed);
+  };
 
   const addKey = (data: any) => {
     setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
@@ -248,14 +253,17 @@ export default function CreateKeyPage() {
                 proxySettings={proxySettings}
                 accessToken={accessToken}
                 isPublicPage={false}
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={toggleSidebar}
               />
               <div className="flex flex-1 overflow-auto">
-                <div className="mt-8">
+                <div className="mt-2">
                   <Sidebar
                     accessToken={accessToken}
                     setPage={updatePage}
                     userRole={userRole}
                     defaultSelectedKey={page}
+                    collapsed={sidebarCollapsed}
                   />
                 </div>
 

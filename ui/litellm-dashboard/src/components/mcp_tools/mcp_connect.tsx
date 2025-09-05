@@ -234,10 +234,10 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       <div className="bg-gradient-to-r from-emerald-50 to-green-50 p-6 rounded-lg border border-emerald-100">
         <div className="flex items-center gap-3 mb-3">
           <Zap className="text-emerald-600" size={24} />
-          <Title level={4} className="mb-0 text-emerald-900">LiteLLM Proxy API Integration</Title>
+          <Title level={4} className="mb-0 text-emerald-900">Raypath Proxy API Integration</Title>
         </div>
         <Text className="text-emerald-700">
-          Connect to LiteLLM Proxy Responses API for seamless tool integration with multiple model providers
+          Connect to Raypath Proxy Responses API for seamless tool integration with multiple model providers
         </Text>
       </div>
       
@@ -245,11 +245,11 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <FeatureCard
           icon={<KeyIcon className="text-emerald-600" size={16} />}
           title="API Key Setup"
-          description="Configure your LiteLLM Proxy API key for authentication"
+          description="Configure your Raypath Proxy API key for authentication"
         >
           <Space direction="vertical" size="middle" className="w-full">
             <div>
-              <Text>Get your API key from your LiteLLM Proxy dashboard or contact your administrator</Text>
+              <Text>Get your API key from your Raypath Proxy dashboard or contact your administrator</Text>
             </div>
             <CodeBlock
               title="Environment Variable"
@@ -262,7 +262,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <FeatureCard
           icon={<ServerIcon className="text-emerald-600" size={16} />}
           title="MCP Server Information"
-          description="Connection details for your LiteLLM MCP server"
+          description="Connection details for your Raypath MCP server"
         >
           <CodeBlock
             title="Server URL"
@@ -315,7 +315,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <Title level={4} className="mb-0 text-blue-900">OpenAI Responses API Integration</Title>
         </div>
         <Text className="text-blue-700">
-          Connect OpenAI Responses API to your LiteLLM MCP server for seamless tool integration
+          Connect OpenAI Responses API to your Raypath MCP server for seamless tool integration
         </Text>
       </div>
       
@@ -403,7 +403,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <Title level={4} className="mb-0 text-purple-900">Cursor IDE Integration</Title>
         </div>
         <Text className="text-purple-700">
-          Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks without leaving your coding environment.
+          Use tools directly from Cursor IDE with Raypath MCP. Enable your AI assistant to perform real-world tasks without leaving your coding environment.
         </Text>
       </div>
 
@@ -466,7 +466,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <Title level={4} className="mb-0 text-green-900">Streamable HTTP Transport</Title>
         </div>
         <Text className="text-green-700">
-          Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
+          Connect to Raypath MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
         </Text>
       </div>
       
