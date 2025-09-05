@@ -82,14 +82,8 @@ async def _get_cloudzero_settings():
     cloudzero_config = await prisma_client.db.litellm_config.find_first(
         where={"param_name": "cloudzero_settings"}
     )
-
-    if not cloudzero_config or not cloudzero_config.param_value:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "CloudZero settings not configured. Please run /cloudzero/init first."
-            },
-        )
+    if cloudzero_config is None:
+        return {}
 
     settings = dict(cloudzero_config.param_value)
 
@@ -481,13 +475,15 @@ async def cloudzero_export(
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger(
-            api_key=settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
+            api_key=settings.get("api_key"),
+            connection_id=settings.get("connection_id"),
+            timezone=settings.get("timezone"),
         )
         await logger.export_usage_data(
             limit=request.limit,
             operation=request.operation,
+            start_time_utc=request.start_time_utc,
+            end_time_utc=request.end_time_utc,
         )
 
         verbose_proxy_logger.info("CloudZero export completed successfully")
