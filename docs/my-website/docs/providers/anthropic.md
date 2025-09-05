@@ -1698,3 +1698,59 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Set `ssl_verify=False`
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session` and `litellm.module_level_client`
+- For `litellm.acompletion` set `litellm.aclient_session` and `litellm.module_level_aclient`
+
+as follows:
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(verify=False)
+litellm.module_level_client = litellm.HTTPHandler(client=litellm.client_session)
+response = litellm.completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(verify=False)
+litellm.module_level_aclient = litellm.HTTPHandler(client=litellm.aclient_session)
+response = litellm.acompletion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+```
+
+## Using HTTP/HTTPS Proxy with LiteLLM
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session` and `litellm.module_level_client`
+- For `litellm.acompletion` set `litellm.aclient_session` and `litellm.module_level_aclient`
+
+as follows:
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(proxy="http://proxy.com")
+litellm.module_level_client=litellm.HTTPHandler(client=litellm.client_session)
+response = litellm.completion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.Client(proxy="http://proxy.com")
+litellm.module_level_aclient=litellm.HTTPHandler(client=litellm.aclient_session)
+response = litellm.acompletion(
+    model="claude-3-5-sonnet-20240620",
+    messages=messages,
+)
+```

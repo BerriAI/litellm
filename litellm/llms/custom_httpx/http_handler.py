@@ -167,16 +167,21 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
+        client: Optional[httpx.AsyncClient] = None
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
-        self.client = self.create_client(
-            timeout=timeout,
-            concurrent_limit=concurrent_limit,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-        )
         self.client_alias = client_alias
+
+        if client is None:
+            self.client = self.create_client(
+                timeout=timeout,
+                concurrent_limit=concurrent_limit,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+            )
+        else:
+            self.client = client
 
     def create_client(
         self,
@@ -930,6 +935,9 @@ def get_async_httpx_client(
     """
     _params_key_name = ""
     if params is not None:
+        if params.get("client") is None and litellm.aclient_session is not None:
+            params["client"] = litellm.aclient_session
+
         for key, value in params.items():
             try:
                 _params_key_name += f"{key}_{value}"
@@ -945,7 +953,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0)
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0), client=litellm.aclient_session
         )
 
     litellm.in_memory_llm_clients_cache.set_cache(
@@ -965,6 +973,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
     """
     _params_key_name = ""
     if params is not None:
+        if params.get("client") is None and litellm.client_session is not None:
+            params["client"] = litellm.client_session
+
         for key, value in params.items():
             try:
                 _params_key_name += f"{key}_{value}"
@@ -980,7 +991,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
     if params is not None:
         _new_client = HTTPHandler(**params)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0), client=litellm.client_session)
 
     litellm.in_memory_llm_clients_cache.set_cache(
         key=_cache_key_name,
