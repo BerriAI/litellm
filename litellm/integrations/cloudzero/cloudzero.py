@@ -36,6 +36,7 @@ class CloudZeroLogger(CustomLogger):
         self.api_key = api_key or os.getenv("CLOUDZERO_API_KEY")
         self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID") 
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
+        verbose_logger.debug(f"CloudZero Logger initialized with connection ID: {self.connection_id}, timezone: {self.timezone}")
 
     async def init_background_job(self):
         """
