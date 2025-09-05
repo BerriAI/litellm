@@ -67,6 +67,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
@@ -226,6 +227,7 @@ vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
@@ -431,40 +433,6 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
-BEDROCK_CONVERSE_MODELS = [
-    "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0",
-    "anthropic.claude-opus-4-1-20250805-v1:0",
-    "anthropic.claude-opus-4-20250514-v1:0",
-    "anthropic.claude-sonnet-4-20250514-v1:0",
-    "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "ai21.jamba-1-5-mini-v1:0",
-    "ai21.jamba-1-5-large-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "meta.llama3-8b-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-    "mistral.mistral-large-2402-v1:0",
-    "mistral.mistral-small-2402-v1:0",
-    "meta.llama3-2-1b-instruct-v1:0",
-    "meta.llama3-2-3b-instruct-v1:0",
-    "meta.llama3-2-11b-instruct-v1:0",
-    "meta.llama3-2-90b-instruct-v1:0",
-]
 
 ####### COMPLETION MODELS ###################
 from typing import Set  
@@ -482,6 +450,7 @@ vertex_vision_models: Set = set()
 vertex_chat_models: Set = set()
 vertex_code_chat_models: Set = set()
 vertex_ai_image_models: Set = set()
+vertex_ai_video_models: Set = set()
 vertex_text_models: Set = set()
 vertex_code_text_models: Set = set()
 vertex_embedding_models: Set = set()
@@ -490,6 +459,7 @@ vertex_llama3_models: Set = set()
 vertex_deepseek_models: Set = set()
 vertex_ai_ai21_models: Set = set()
 vertex_mistral_models: Set = set()
+vertex_openai_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -542,6 +512,7 @@ hyperbolic_models: Set = set()
 recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
+vercel_ai_gateway_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -599,6 +570,8 @@ def add_known_models():
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.add(key)
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -633,6 +606,12 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-image-models":
             key = key.replace("vertex_ai/", "")
             vertex_ai_image_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-video-models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_video_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-openai_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_openai_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -835,6 +814,7 @@ model_list = list(
     | recraft_models
     | cometapi_models
     | oci_models
+    | vercel_ai_gateway_models
 )
 
 model_list_set = set(model_list)
@@ -853,6 +833,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
     "ai21": ai21_models,
@@ -1247,6 +1228,7 @@ from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1254,6 +1236,7 @@ from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
+    ImageFetchError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,

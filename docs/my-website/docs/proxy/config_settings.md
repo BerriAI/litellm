@@ -236,7 +236,7 @@ Most values can also be set via `litellm_settings`. If you see overlapping value
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
   redis_host: <your-redis-host>           # string
   redis_password: <your-redis-password>   # string
   redis_port: <your-redis-port>           # string
@@ -335,12 +335,15 @@ router_settings:
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
+| AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
 | AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
 | AWS_REGION | AWS region for service interactions (takes precedence over AWS_DEFAULT_REGION)
 | AWS_REGION_NAME | Default AWS region for service interactions
 | AWS_ROLE_ARN | ARN of the AWS IAM role to assume for authentication
 | AWS_ROLE_NAME | Role name for AWS IAM usage
+| AWS_S3_BUCKET_NAME | Name of the AWS S3 bucket for file operations
+| AWS_S3_OUTPUT_BUCKET_NAME | Name of the AWS S3 output bucket for batch operations
 | AWS_SECRET_ACCESS_KEY | Secret Access Key for AWS services
 | AWS_SESSION_NAME | Name for AWS session
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
@@ -431,6 +434,7 @@ router_settings:
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
+| DEFAULT_NUM_WORKERS_LITELLM_PROXY | Default number of workers for LiteLLM proxy. Default is 4. **We strongly recommend setting NUM Workers to Number of vCPUs available**
 | DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD | Default threshold for prompt injection similarity. Default is 0.7
 | DEFAULT_POLLING_INTERVAL | Default polling interval for schedulers in seconds. Default is 0.03
 | DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET | Default reasoning effort disable thinking budget. Default is 0
@@ -558,6 +562,7 @@ router_settings:
 | LITERAL_API_KEY | API key for Literal integration
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
+| LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
 | LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
@@ -571,6 +576,10 @@ router_settings:
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
 | LITELLM_LOG_FILE | File path to write LiteLLM logs to. When set, logs will be written to both console and the specified file
+| LITELLM_LOGGER_NAME | Name for OTEL logger 
+| LITELLM_METER_NAME | Name for OTEL Meter 
+| LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS | Optionally enable semantic logs for OTEL
+| LITELLM_OTEL_INTEGRATION_ENABLE_METRICS | Optionally enable emantic metrics for OTEL
 | LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
@@ -581,6 +590,7 @@ router_settings:
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
+| MAX_STRING_LENGTH_PROMPT_IN_DB | Maximum length for strings in spend logs when sanitizing request bodies. Strings longer than this will be truncated. Default is 1000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
 | MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the long side of high-resolution images. Default is 2000
 | MAX_REDIS_BUFFER_DEQUEUE_COUNT | Maximum count for Redis buffer dequeue operations. Default is 100
