@@ -57,7 +57,6 @@ class CloudZeroLogger(CustomLogger):
         """
         from litellm.constants import (
             CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME,
-            CLOUDZERO_MAX_FETCHED_DATA_RECORDS,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
