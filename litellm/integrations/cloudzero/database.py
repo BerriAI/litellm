@@ -39,28 +39,32 @@ class LiteLLMDatabase:
         """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
         
-        # Query to get user spend data only
+        # Query to get user spend data with team information
         query = """
         SELECT
-            id,
-            date,
-            user_id,
-            api_key,
-            model,
-            model_group,
-            custom_llm_provider,
-            prompt_tokens,
-            completion_tokens,
-            spend,
-            api_requests,
-            successful_requests,
-            failed_requests,
-            cache_creation_input_tokens,
-            cache_read_input_tokens,
-            created_at,
-            updated_at
-        FROM "LiteLLM_DailyUserSpend"
-        ORDER BY date DESC, created_at DESC
+            dus.id,
+            dus.date,
+            dus.user_id,
+            dus.api_key,
+            dus.model,
+            dus.model_group,
+            dus.custom_llm_provider,
+            dus.prompt_tokens,
+            dus.completion_tokens,
+            dus.spend,
+            dus.api_requests,
+            dus.successful_requests,
+            dus.failed_requests,
+            dus.cache_creation_input_tokens,
+            dus.cache_read_input_tokens,
+            dus.created_at,
+            dus.updated_at,
+            vt.team_id,
+            tt.team_alias
+        FROM "LiteLLM_DailyUserSpend" dus
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
+        LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        ORDER BY dus.date DESC, dus.created_at DESC
         """
 
         if limit:
