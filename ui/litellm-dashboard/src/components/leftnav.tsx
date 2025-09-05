@@ -65,6 +65,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
     { 
+      key: "16", 
+      page: "model-hub-table", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined style={{ fontSize: '18px' }} />
+    },
+    { 
       key: "1", 
       page: "api-keys", 
       label: "Virtual Keys", 
@@ -83,12 +89,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined style={{ fontSize: '18px' }} />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined style={{ fontSize: '18px' }} />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: '18px' }} /> },
-    { 
-      key: "16", 
-      page: "model-hub-table", 
-      label: "Model Hub", 
-      icon: <AppstoreOutlined style={{ fontSize: '18px' }} />
-    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: '18px' }} />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined style={{ fontSize: '18px' }} />, roles: all_admin_roles },
     {
