@@ -148,10 +148,6 @@ class CBFTransformer:
         # Add CZRN components that don't have direct CBF column mappings as resource tags
         cbf_record['resource/tag:provider'] = provider  # CZRN provider component
         cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component (model)
-
-        # Add entity information directly to CBF record for visibility
-        cbf_record['entity_type'] = dimensions['entity_type']
-        cbf_record['entity_id'] = dimensions['entity_id']
         
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
