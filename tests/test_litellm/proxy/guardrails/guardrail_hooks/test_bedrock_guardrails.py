@@ -7,6 +7,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
@@ -14,6 +15,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
+)
+from litellm.types.llms.anthropic import (
+    AllAnthropicMessageValues,
+    AnthropicResponseContentBlockText,
+    AnthropicResponseContentBlockRole,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
 )
 
 
@@ -859,3 +868,570 @@ async def test__redact_pii_matches_comprehensive_coverage():
     )
 
     print("Comprehensive coverage redaction test passed")
+
+
+@pytest.mark.asyncio
+async def test_create_bedrock_input_content_request_with_anthropic_messages():
+    """Test creating Bedrock input request from Anthropic message types"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    # Create Anthropic message structure
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello, my name is John and my SSN is 123-45-6789"
+                }
+            ]
+        },
+        {
+            "role": "assistant", 
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I understand you've provided personal information."
+                }
+            ]
+        }
+    ]
+    
+    # Test the conversion
+    bedrock_request = guardrail._create_bedrock_input_content_request(anthropic_messages)
+    
+    # Verify the structure
+    assert "content" in bedrock_request
+    assert len(bedrock_request["content"]) == 2
+    
+    # Verify first message content
+    assert bedrock_request["content"][0]["text"]["text"] == "Hello, my name is John and my SSN is 123-45-6789"
+    
+    # Verify second message content
+    assert bedrock_request["content"][1]["text"]["text"] == "I understand you've provided personal information."
+    
+    print("Anthropic input messages conversion test passed")
+
+
+@pytest.mark.asyncio
+async def test_create_bedrock_output_content_request_with_anthropic_response():
+    """Test creating Bedrock output request from AnthropicMessagesResponse"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    # Create AnthropicMessagesResponse structure
+    anthropic_response: AnthropicMessagesResponse = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            AnthropicResponseContentBlockText(
+                type="text",
+                text="Hello! Your personal information has been processed."
+            ),
+            AnthropicResponseContentBlockRole(
+                type="role",
+                role="assistant", 
+                content="Additional response content"
+            )
+        ],
+        "model": "claude-3-sonnet-20240229",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 20}
+    }
+    
+    # Test the conversion
+    bedrock_request = guardrail._create_bedrock_output_content_request(anthropic_response)
+    
+    # Verify the structure
+    assert "content" in bedrock_request
+    assert len(bedrock_request["content"]) == 2
+    
+    # Verify text content block conversion
+    assert bedrock_request["content"][0]["text"]["text"] == "Hello! Your personal information has been processed."
+    
+    # Verify role content block conversion  
+    assert bedrock_request["content"][1]["text"]["text"] == "Additional response content"
+    
+    print("Anthropic response conversion test passed")
+
+
+@pytest.mark.asyncio
+async def test_convert_to_bedrock_format_anthropic_input():
+    """Test convert_to_bedrock_format with Anthropic messages as INPUT"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "My email is user@example.com and phone is 555-123-4567"
+                }
+            ]
+        }
+    ]
+    
+    # Test conversion for INPUT source
+    bedrock_request = guardrail.convert_to_bedrock_format(
+        source="INPUT",
+        messages=anthropic_messages
+    )
+    
+    # Verify the structure
+    assert "content" in bedrock_request
+    assert len(bedrock_request["content"]) == 1
+    assert bedrock_request["content"][0]["text"]["text"] == "My email is user@example.com and phone is 555-123-4567"
+    
+    print("Anthropic INPUT format conversion test passed")
+
+
+@pytest.mark.asyncio
+async def test_convert_to_bedrock_format_anthropic_output():
+    """Test convert_to_bedrock_format with Anthropic response as OUTPUT"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    anthropic_response: AnthropicMessagesResponse = {
+        "id": "msg_456", 
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            AnthropicResponseContentBlockText(
+                type="text",
+                text="I'll help you with that sensitive information: credit card 4111-1111-1111-1111"
+            )
+        ],
+        "model": "claude-3-sonnet-20240229", 
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 15, "output_tokens": 25}
+    }
+    
+    # Test conversion for OUTPUT source
+    bedrock_request = guardrail.convert_to_bedrock_format(
+        source="OUTPUT",
+        response=anthropic_response
+    )
+    
+    # Verify the structure
+    assert "content" in bedrock_request
+    assert len(bedrock_request["content"]) == 1
+    assert bedrock_request["content"][0]["text"]["text"] == "I'll help you with that sensitive information: credit card 4111-1111-1111-1111"
+    
+    print("Anthropic OUTPUT format conversion test passed")
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_with_anthropic_messages():
+    """Test make_bedrock_api_request with Anthropic messages"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text", 
+                    "text": "My SSN is 123-45-6789"
+                }
+            ]
+        }
+    ]
+    
+    # Mock Bedrock API response
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Input blocked due to PII"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "US_SOCIAL_SECURITY_NUMBER",
+                            "match": "123-45-6789", 
+                            "action": "BLOCKED"
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    
+    # Mock credentials and AWS methods
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key" 
+    mock_credentials.token = None
+    
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(
+        guardrail, "_prepare_request", return_value=MagicMock()
+    ):
+        mock_post.return_value = mock_bedrock_response
+        
+        # Call the API request method
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=anthropic_messages
+            )        
+        # Verify that HTTPException was raised with correct details
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert "Input blocked due to PII" in str(exc_info.value.detail)
+
+    print("Anthropic API request test passed")
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_with_anthropic_response():
+    """Test make_bedrock_api_request with AnthropicMessagesResponse"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    anthropic_response: AnthropicMessagesResponse = {
+        "id": "msg_789",
+        "type": "message", 
+        "role": "assistant",
+        "content": [
+            AnthropicResponseContentBlockText(
+                type="text",
+                text="Your credit card number 4111-1111-1111-1111 has been processed"
+            )
+        ],
+        "model": "claude-3-sonnet-20240229",
+        "stop_reason": "end_turn", 
+        "stop_sequence": None,
+        "usage": {"input_tokens": 20, "output_tokens": 30}
+    }
+    
+    # Mock Bedrock API response
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Output blocked due to credit card info"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "CREDIT_DEBIT_CARD_NUMBER",
+                            "match": "4111-1111-1111-1111",
+                            "action": "BLOCKED"
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    
+    # Mock credentials and AWS methods
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(
+        guardrail, "_prepare_request", return_value=MagicMock()
+    ):
+        mock_post.return_value = mock_bedrock_response
+        
+        # Call the API request method        
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="OUTPUT",
+                messages=anthropic_response
+            )        
+        # Verify that HTTPException was raised with correct details
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert "Output blocked due to credit card info" in str(exc_info.value.detail)
+
+
+    print("Anthropic response API request test passed")
+
+
+@pytest.mark.asyncio
+async def test_apply_masking_to_anthropic_messages_response():
+    """Test applying masking to AnthropicMessagesResponse"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", 
+        guardrailVersion="DRAFT"
+    )
+    
+    # Create AnthropicMessagesResponse with sensitive content
+    anthropic_response: AnthropicMessagesResponse = {
+        "id": "msg_mask_test",
+        "type": "message",
+        "role": "assistant", 
+        "content": [
+            AnthropicResponseContentBlockText(
+                type="text",
+                text="Your SSN 123-45-6789 is sensitive"
+            ),
+            AnthropicResponseContentBlockRole(
+                type="role",
+                role="assistant",
+                content="Credit card 4111-1111-1111-1111 detected"
+            )
+        ],
+        "model": "claude-3-sonnet-20240229",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 25, "output_tokens": 35}
+    }
+    
+    # Mock Bedrock guardrail response with masking
+    mock_guardrail_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [
+            {"text": "Your SSN [REDACTED] is sensitive"},
+            {"text": "Credit card [REDACTED] detected"}
+        ],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "US_SOCIAL_SECURITY_NUMBER",
+                            "match": "123-45-6789",
+                            "action": "BLOCKED"
+                        },
+                        {
+                            "type": "CREDIT_DEBIT_CARD_NUMBER", 
+                            "match": "4111-1111-1111-1111",
+                            "action": "BLOCKED"
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    
+    # Apply masking
+    guardrail._apply_masking_to_response(anthropic_response, mock_guardrail_response)
+    
+    # Verify that content has been masked
+    content = anthropic_response["content"]
+    assert len(content) == 2
+    
+    # Check first content block (AnthropicResponseContentBlockText)
+    assert isinstance(content[0], AnthropicResponseContentBlockText)
+    assert content[0].text == "Your SSN [REDACTED] is sensitive"
+    
+    # Check second content block (AnthropicResponseContentBlockRole)
+    assert isinstance(content[1], AnthropicResponseContentBlockRole) 
+    assert content[1].content == "Credit card [REDACTED] detected"
+    
+    # Verify other fields remain unchanged
+    assert anthropic_response["id"] == "msg_mask_test"
+    assert anthropic_response["role"] == "assistant"
+    assert anthropic_response["model"] == "claude-3-sonnet-20240229"
+    
+    print("Anthropic response masking test passed")
+
+
+@pytest.mark.asyncio
+async def test_get_content_for_anthropic_message():
+    """Test extracting content from Anthropic message format"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Test with Anthropic message containing multiple content blocks
+    anthropic_message = {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "First piece of content with SSN 123-45-6789"
+            },
+            {
+                "type": "text", 
+                "text": "Second piece with email user@example.com"
+            }
+        ]
+    }
+    
+    # Extract content
+    content_list = guardrail.get_content_for_message(anthropic_message)
+    
+    # Verify extraction
+    assert content_list is not None
+    assert len(content_list) == 2
+    assert content_list[0] == "First piece of content with SSN 123-45-6789"
+    assert content_list[1] == "Second piece with email user@example.com"
+    
+    print("Anthropic message content extraction test passed")
+
+
+@pytest.mark.asyncio
+async def test_apply_masking_to_anthropic_messages():
+    """Test applying masking to Anthropic messages list"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Create Anthropic messages with sensitive content
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "My SSN is 123-45-6789"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text", 
+                    "text": "Your credit card 4111-1111-1111-1111 is noted"
+                }
+            ]
+        }
+    ]
+    
+    # Define masked texts
+    masked_texts = [
+        "My SSN is [REDACTED]", 
+        "Your credit card [REDACTED] is noted"
+    ]
+    
+    # Apply masking
+    masked_messages = guardrail._apply_masking_to_messages(anthropic_messages, masked_texts)
+    
+    # Verify masking was applied
+    assert len(masked_messages) == 2
+    
+    # Check first message
+    first_message_content = masked_messages[0]["content"][0]["text"]
+    assert first_message_content == "My SSN is [REDACTED]"
+    
+    # Check second message  
+    second_message_content = masked_messages[1]["content"][0]["text"]
+    assert second_message_content == "Your credit card [REDACTED] is noted"
+    
+    # Verify roles remain unchanged
+    assert masked_messages[0]["role"] == "user"
+    assert masked_messages[1]["role"] == "assistant"
+    
+    print("Anthropic messages masking test passed")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_integration_pre_call_hook():
+    """Test pre_call_hook with Anthropic messages"""
+    
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Mock data with Anthropic messages
+    data = {
+        "model": "claude-3-sonnet-20240229",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hi, my phone number is 555-123-4567"
+                    }
+                ]
+            }
+        ]
+    }
+    
+    # Mock Bedrock API response
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Hi, my phone number is [REDACTED]"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "PHONE",
+                            "match": "555-123-4567",
+                            "action": "BLOCKED"
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    
+    # Mock credentials and AWS methods
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(
+        guardrail, "_prepare_request", return_value=MagicMock()
+    ):
+        mock_post.return_value = mock_bedrock_response
+        
+        # Call pre_call_hook - should raise HTTPException when guardrail blocks
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None, 
+                data=data,
+                call_type="completion"
+            )
+        
+        # Verify that HTTPException was raised with correct details
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        
+    print("Anthropic pre_call_hook integration test passed")

@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, TypeGuard, TypedDict, Union
 
 from typing_extensions import TypeAlias
 
 from litellm.types.llms.anthropic import (
+    AnthropicResponseContentBlockRole,
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
 )
@@ -50,6 +51,8 @@ class AnthropicResponseRedactedThinkingBlock(TypedDict, total=False):
 
 AnthropicResponseContentBlock: TypeAlias = Union[
     AnthropicResponseTextBlock,
+    AnthropicResponseContentBlockRole,
+    AnthropicResponseContentBlockText,
     AnthropicResponseToolUseBlock,
     AnthropicResponseThinkingBlock,
     AnthropicResponseRedactedThinkingBlock,
@@ -94,3 +97,17 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]
+
+
+def is_anthropic_messages_response(
+    response: object,
+) -> "TypeGuard[AnthropicMessagesResponse]":
+    if not isinstance(response, Mapping):
+        return False
+    return (
+        response.get("type") == "message"
+        and "id" in response
+        and "model" in response
+        and "role" in response
+        and isinstance(response.get("content"), list)
+    )

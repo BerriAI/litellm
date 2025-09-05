@@ -9,12 +9,15 @@ import copy
 import os
 import sys
 
+from litellm.types.llms.anthropic import AllAnthropicMessageValues, AnthropicResponseContentBlockRole, AnthropicResponseContentBlockText
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse, is_anthropic_messages_response
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, TypeVar, Union
 from litellm.secret_managers.main import get_secret_str
 import httpx
 from fastapi import HTTPException
@@ -140,7 +143,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
     
 
-    def _create_bedrock_input_content_request(self, messages: Optional[List[AllMessageValues]]) -> BedrockRequest:
+    def _create_bedrock_input_content_request(self, messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]]) -> BedrockRequest:
         """
         Create a bedrock request for the input content - the LLM request.
         """
@@ -163,7 +166,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request["content"] = bedrock_request_content
         return bedrock_request
 
-    def _create_bedrock_output_content_request(self, response: Union[Any, ModelResponse]) -> BedrockRequest:
+    def _create_bedrock_output_content_request(self, response: Union[Any, ModelResponse, AnthropicMessagesResponse]) -> BedrockRequest:
         """
         Create a bedrock request for the output content - the LLM response.
         """
@@ -180,12 +183,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         )
                         bedrock_request_content.append(bedrock_content_item)
             bedrock_request["content"] = bedrock_request_content
+
+        # AnthropicMessagesResponse
+        if is_anthropic_messages_response(response):
+            contents = response.get("content") or []
+            for content in contents:
+                if isinstance(content, AnthropicResponseContentBlockText):
+                    bedrock_content_item = BedrockContentItem(
+                        text=BedrockTextContent(text=content.text)
+                    )
+                    bedrock_request_content.append(bedrock_content_item)
+
+                if isinstance(content, AnthropicResponseContentBlockRole):
+                    bedrock_content_item = BedrockContentItem(
+                        text=BedrockTextContent(text=content.content)
+                    )
+                    bedrock_request_content.append(bedrock_content_item)
+            bedrock_request["content"] = bedrock_request_content
+
         return bedrock_request
 
     def convert_to_bedrock_format(
         self,
         source: Literal["INPUT", "OUTPUT"],
-        messages: Optional[List[AllMessageValues]] = None,
+        messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]] = None,
         response: Optional[Union[Any, ModelResponse]] = None,
     ) -> BedrockRequest:
         """
@@ -296,8 +317,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def make_bedrock_api_request(
         self, 
         source: Literal["INPUT", "OUTPUT"],
-        messages: Optional[List[AllMessageValues]] = None,
-        response: Optional[Union[Any, litellm.ModelResponse]] = None,
+        messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]] = None,
+        response: Optional[Union[Any, litellm.ModelResponse, AnthropicMessagesResponse]] = None,
         request_data: Optional[dict] = None
     ) -> BedrockGuardrailResponse:
         from datetime import datetime
@@ -512,7 +533,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
@@ -567,7 +588,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
@@ -620,7 +641,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ):
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: Optional[Union[List[AllMessageValues], List[AllAnthropicMessageValues]]] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Bedrock AI: not running guardrail. No messages in data"
@@ -656,9 +677,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ##############################################################################
     def _update_messages_with_updated_bedrock_guardrail_response(
         self,
-        messages: List[AllMessageValues],
+        messages: Union[List[AllMessageValues], List[AllAnthropicMessageValues]],
         bedrock_guardrail_response: BedrockGuardrailResponse,
-    ) -> List[AllMessageValues]:
+    ) -> Union[List[AllMessageValues], List[AllAnthropicMessageValues]]:
         """
         Use the output from the bedrock guardrail to mask sensitive content in messages.
 
@@ -790,8 +811,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return masked_output_text
 
     def _apply_masking_to_messages(
-        self, messages: List[AllMessageValues], masked_texts: List[str]
-    ) -> List[AllMessageValues]:
+        self, messages: Union[List[AllMessageValues], List[AllAnthropicMessageValues]], masked_texts: List[str]
+    ) -> Union[List[AllMessageValues], List[AllAnthropicMessageValues]]:
         """
         Apply masked texts to message content using index tracking.
 
@@ -862,7 +883,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return new_content, masking_index
 
-    def get_content_for_message(self, message: AllMessageValues) -> Optional[List[str]]:
+    def get_content_for_message(self, message: Union[AllMessageValues, AllAnthropicMessageValues]) -> Optional[List[str]]:
         """
         Get the content for a message.
 
@@ -886,7 +907,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _apply_masking_to_response(
         self,
-        response: Union[ModelResponse, Any],
+        response: Union[ModelResponse, AnthropicMessagesResponse, Any],
         bedrock_guardrail_response: BedrockGuardrailResponse,
     ) -> None:
         """
@@ -912,6 +933,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Apply masking to ModelResponse
         if isinstance(response, litellm.ModelResponse):
             self._apply_masking_to_model_response(response, masked_texts)
+        elif is_anthropic_messages_response(response):
+            self._apply_masking_to_anthropic_messages_response(response, masked_texts)
         else:
             verbose_proxy_logger.warning(
                 "Unsupported response type for masking: %s", type(response)
@@ -957,3 +980,31 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         verbose_proxy_logger.debug(
                             "Applied masking to choice text content"
                         )
+
+    def _apply_masking_to_anthropic_messages_response(
+        self, response: AnthropicMessagesResponse, masked_texts: List[str]
+    ) -> None:
+        """
+        Apply masked texts to a ModelResponse object.
+        
+        Args:
+            response: The ModelResponse object to modify in-place
+            masked_texts: List of masked text strings from guardrail
+        """
+        masking_index = 0
+        
+        contents = response.get("content") or []
+        for content in contents:
+            if isinstance(content, AnthropicResponseContentBlockText):
+                if masking_index < len(masked_texts):
+                    content.text = masked_texts[masking_index]
+                    masking_index += 1
+                    verbose_proxy_logger.debug(
+                        "Applied masking to choice message content"
+                    )
+            elif isinstance(content, AnthropicResponseContentBlockRole):
+                    content.content = masked_texts[masking_index]
+                    masking_index += 1
+                    verbose_proxy_logger.debug(
+                        "Applied masking to choice message content"
+                    )
