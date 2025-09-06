@@ -890,6 +890,9 @@ MAX_SPENDLOG_ROWS_TO_QUERY = int(
 DEFAULT_SOFT_BUDGET = float(
     os.getenv("DEFAULT_SOFT_BUDGET", 50.0)
 )  # by default all litellm proxy keys have a soft budget of 50.0
+DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS = int(
+    os.getenv("DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS", 600)
+)  # 10 minutes timeout for client disconnect checking in proxy
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY = "LiteLLM Virtual Key user_api_key_hash"
 

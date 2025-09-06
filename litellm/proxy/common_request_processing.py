@@ -25,6 +25,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -188,9 +189,9 @@ async def _check_request_disconnection(request: Request, llm_api_call_task):
     - None
     """
 
-    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
+    # only run this function for configured timeout -> if these don't get cancelled -> we don't want the server to have many while loops
     start_time = time.time()
-    while time.time() - start_time < 600:
+    while time.time() - start_time < DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS:
         await asyncio.sleep(1)
         message = await request.receive()
         if message["type"] == "http.disconnect":
