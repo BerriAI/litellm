@@ -7,7 +7,6 @@ JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import fnmatch
-import json
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
 
