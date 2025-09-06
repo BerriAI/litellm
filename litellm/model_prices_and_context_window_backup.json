@@ -21033,5 +21033,65 @@
         "metadata": {
             "notes": "DALL-E 2 via AI/ML API - Reliable text-to-image generation"
         }
+    },
+    "doubao-embedding-large": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - large version with 2048 dimensions"
+        }
+    },
+    "doubao-embedding-large-text-250515": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-250515 version with 2048 dimensions"
+        }
+    },
+    "doubao-embedding-large-text-240915": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-240915 version with 4096 dimensions"
+        }
+    },
+    "doubao-embedding": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2560,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - standard version with 2560 dimensions"
+        }
+    },
+    "doubao-embedding-text-240715": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2560,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-240715 version with 2560 dimensions"
+        }
     }
 }

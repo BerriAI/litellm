@@ -63,6 +63,7 @@ async def test_router_free_paid_tier():
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["free"]},
+            mock_response="Tell me a joke.",
         )
 
         print("Response: ", response)
@@ -78,6 +79,7 @@ async def test_router_free_paid_tier():
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},
+            mock_response="Tell me a joke.",
         )
 
         print("Response: ", response)
@@ -136,6 +138,7 @@ async def test_router_free_paid_tier_embeddings():
             model="gpt-4",
             input="Tell me a joke.",
             metadata={"tags": ["free"]},
+            mock_response=[1, 2, 3],
         )
 
         print("Response: ", response)
@@ -151,6 +154,7 @@ async def test_router_free_paid_tier_embeddings():
             model="gpt-4",
             input="Tell me a joke.",
             metadata={"tags": ["paid"]},
+            mock_response=[1, 2, 3],
         )
 
         print("Response: ", response)
@@ -205,6 +209,7 @@ async def test_default_tagged_deployments():
         response = await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
+            mock_response="Tell me a joke.",
         )
 
         print("Response: ", response)
@@ -220,6 +225,7 @@ async def test_default_tagged_deployments():
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["default"]},
+            mock_response="Tell me a joke.",
         )
 
         print("Response: ", response)
@@ -235,6 +241,7 @@ async def test_default_tagged_deployments():
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["invalid-tag"]},
+            mock_response="Tell me a joke.",
         )
 
         print("Response: ", response)
@@ -292,6 +299,7 @@ async def test_error_from_tag_routing():
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},
+            mock_response="Tell me a joke.",
         )
 
         pytest.fail("this should have failed - expected it to fail")
@@ -315,3 +323,66 @@ def test_tag_routing_with_list_of_tags():
     assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], [])
     assert not is_valid_deployment_tag(["default"], ["teamA"])
+
+
+@pytest.mark.asyncio()
+async def test_router_free_paid_tier_with_responses_api():
+    """
+    Pass list of orgs in 1 model definition,
+    expect a unique deployment for each to be created
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free"],
+                },
+                "model_info": {"id": "very-cheap-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                },
+                "model_info": {"id": "very-expensive-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        # this should pick model with id == very-cheap-model
+        response = await router.aresponses(
+            model="gpt-4",
+            input="Tell me a joke.",
+            litellm_metadata={"tags": ["free"]},
+            mock_response="Tell me a joke.",
+        )
+
+        print("Response: ", response)
+
+        response_extra_info = response._hidden_params
+        print("response_extra_info: ", response_extra_info)
+
+        assert response_extra_info["model_id"] == "very-cheap-model"
+
+    for _ in range(5):
+        # this should pick model with id == very-cheap-model
+        response = await router.aresponses(
+            model="gpt-4",
+            input="Tell me a joke.",
+            litellm_metadata={"tags": ["paid"]},
+            mock_response="Tell me a joke.",
+        )
+
+        print("Response: ", response)
+
+        response_extra_info = response._hidden_params
+        print("response_extra_info: ", response_extra_info)
+
+        assert response_extra_info["model_id"] == "very-expensive-model"

@@ -29,7 +29,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
 
 
@@ -63,6 +63,36 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
     @staticmethod
+    def is_openai_image_generation_route(url_route: str) -> bool:
+        """Check if the URL route is an OpenAI image generation endpoint."""
+        if not url_route:
+            return False
+        parsed_url = urlparse(url_route)
+        return bool(
+            parsed_url.hostname
+            and (
+                "api.openai.com" in parsed_url.hostname
+                or "openai.azure.com" in parsed_url.hostname
+            )
+            and "/v1/images/generations" in parsed_url.path
+        )
+
+    @staticmethod
+    def is_openai_image_editing_route(url_route: str) -> bool:
+        """Check if the URL route is an OpenAI image editing endpoint."""
+        if not url_route:
+            return False
+        parsed_url = urlparse(url_route)
+        return bool(
+            parsed_url.hostname
+            and (
+                "api.openai.com" in parsed_url.hostname
+                or "openai.azure.com" in parsed_url.hostname
+            )
+            and "/v1/images/edits" in parsed_url.path
+        )
+
+    @staticmethod
     def _get_user_from_metadata(
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
     ) -> Optional[str]:
@@ -73,7 +103,79 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return None
 
     @staticmethod
-    def openai_passthrough_handler(
+    def _calculate_image_generation_cost(
+        model: str,
+        response_body: dict,
+        request_body: dict,
+    ) -> float:
+        """Calculate cost for OpenAI image generation."""
+        try:
+            # Extract parameters from request
+            n = request_body.get("n", 1)
+            try:
+                n = int(n)
+            except Exception:
+                n = 1
+            size = request_body.get("size", "1024x1024")
+            quality = request_body.get("quality", None)
+
+            # Use LiteLLM's default image cost calculator
+            from litellm.cost_calculator import default_image_cost_calculator
+
+            cost = default_image_cost_calculator(
+                model=model,
+                custom_llm_provider="openai",
+                quality=quality,
+                n=n,
+                size=size,
+                optional_params=request_body,
+            )
+
+            return cost
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Error calculating image generation cost: {str(e)}"
+            )
+            return 0.0
+
+    @staticmethod
+    def _calculate_image_editing_cost(
+        model: str,
+        response_body: dict,
+        request_body: dict,
+    ) -> float:
+        """Calculate cost for OpenAI image editing."""
+        try:
+            # Extract parameters from request
+            n = request_body.get("n", 1)
+            # Image edit typically uses multipart/form-data (because of files), so all fields arrive as strings (e.g., n = "1").
+            try:
+                n = int(n)
+            except Exception:
+                n = 1
+            size = request_body.get("size", "1024x1024")
+
+            # Use LiteLLM's default image cost calculator
+            from litellm.cost_calculator import default_image_cost_calculator
+
+            cost = default_image_cost_calculator(
+                model=model,
+                custom_llm_provider="openai",
+                quality=None,  # Image editing doesn't have quality parameter
+                n=n,
+                size=size,
+                optional_params=request_body,
+            )
+
+            return cost
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Error calculating image editing cost: {str(e)}"
+            )
+            return 0.0
+
+    @staticmethod
+    def openai_passthrough_handler(  # noqa: PLR0915
         httpx_response: httpx.Response,
         response_body: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -86,13 +188,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
-        Handle OpenAI passthrough logging with cost tracking for chat completions.
+        Handle OpenAI passthrough logging with cost tracking for chat completions, image generation, and image editing.
         """
-        # Only handle chat completions endpoints
-        if not OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(
-            url_route
-        ):
-            # For non-chat-completions endpoints, use the base handler without cost tracking
+        # Check if this is a supported endpoint for cost tracking
+        is_chat_completions = (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+        )
+        is_image_generation = (
+            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
+        )
+        is_image_editing = (
+            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+        )
+
+        if not (is_chat_completions or is_image_generation or is_image_editing):
+            # For unsupported endpoints, use the base handler without cost tracking
             base_handler = OpenAIPassthroughLoggingHandler()
             return base_handler.passthrough_chat_handler(
                 httpx_response=httpx_response,
@@ -128,31 +238,89 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
         try:
-            # Transform the response to LiteLLM format for cost calculation
-            provider_config = OpenAIPassthroughLoggingHandler.get_provider_config(
-                model=model
-            )
-            litellm_model_response: ModelResponse = provider_config.transform_response(
-                raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                model=model,
-                messages=request_body.get("messages", []),
-                logging_obj=logging_obj,
-                optional_params=request_body.get("optional_params", {}),
-                api_key="",
-                request_data=request_body,
-                encoding=litellm.encoding,
-                json_mode=request_body.get("response_format", {}).get("type")
-                == "json_object",
-                litellm_params={},
-            )
+            response_cost = 0.0
+            litellm_model_response = None
 
-            # Calculate cost using LiteLLM's cost calculator
-            response_cost = litellm.completion_cost(
-                completion_response=litellm_model_response,
-                model=model,
-                custom_llm_provider="openai",
-            )
+            if is_chat_completions:
+                # Handle chat completions with existing logic
+                provider_config = OpenAIPassthroughLoggingHandler.get_provider_config(
+                    model=model
+                )
+                litellm_model_response = provider_config.transform_response(
+                    raw_response=httpx_response,
+                    model_response=litellm.ModelResponse(),
+                    model=model,
+                    messages=request_body.get("messages", []),
+                    logging_obj=logging_obj,
+                    optional_params=request_body.get("optional_params", {}),
+                    api_key="",
+                    request_data=request_body,
+                    encoding=litellm.encoding,
+                    json_mode=request_body.get("response_format", {}).get("type")
+                    == "json_object",
+                    litellm_params={},
+                )
+
+                # Calculate cost using LiteLLM's cost calculator
+                response_cost = litellm.completion_cost(
+                    completion_response=litellm_model_response,
+                    model=model,
+                    custom_llm_provider="openai",
+                )
+            elif is_image_generation:
+                # Handle image generation cost calculation
+                response_cost = (
+                    OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
+                        model=model,
+                        response_body=response_body,
+                        request_body=request_body,
+                    )
+                )
+                # Mark call type for downstream image-aware logic/metrics
+                try:
+                    logging_obj.call_type = (
+                        PassthroughCallTypes.passthrough_image_generation.value
+                    )
+                except Exception:
+                    pass
+                # Create a simple response object for logging
+                from litellm.types.utils import ImageResponse
+
+                litellm_model_response = ImageResponse(
+                    data=response_body.get("data", []),
+                    model=model,
+                )
+                # Set the calculated cost in _hidden_params to prevent recalculation
+                if not hasattr(litellm_model_response, "_hidden_params"):
+                    litellm_model_response._hidden_params = {}
+                litellm_model_response._hidden_params["response_cost"] = response_cost
+            elif is_image_editing:
+                # Handle image editing cost calculation
+                response_cost = (
+                    OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
+                        model=model,
+                        response_body=response_body,
+                        request_body=request_body,
+                    )
+                )
+                # Mark call type for downstream image-aware logic/metrics
+                try:
+                    logging_obj.call_type = (
+                        PassthroughCallTypes.passthrough_image_generation.value
+                    )
+                except Exception:
+                    pass
+                # Create a simple response object for logging
+                from litellm.types.utils import ImageResponse
+
+                litellm_model_response = ImageResponse(
+                    data=response_body.get("data", []),
+                    model=model,
+                )
+                # Set the calculated cost in _hidden_params to prevent recalculation
+                if not hasattr(litellm_model_response, "_hidden_params"):
+                    litellm_model_response._hidden_params = {}
+                litellm_model_response._hidden_params["response_cost"] = response_cost
 
             # Update kwargs with cost information
             kwargs["response_cost"] = response_cost
@@ -174,26 +342,34 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     )
 
             # Create standard logging object
-            get_standard_logging_object_payload(
-                kwargs=kwargs,
-                init_response_obj=litellm_model_response,
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=logging_obj,
-                status="success",
-            )
+            if litellm_model_response is not None:
+                get_standard_logging_object_payload(
+                    kwargs=kwargs,
+                    init_response_obj=litellm_model_response,
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=logging_obj,
+                    status="success",
+                )
 
             # Update logging object with cost information
             logging_obj.model_call_details["model"] = model
             logging_obj.model_call_details["custom_llm_provider"] = "openai"
             logging_obj.model_call_details["response_cost"] = response_cost
 
+            endpoint_type = (
+                "chat_completions"
+                if is_chat_completions
+                else "image_generation"
+                if is_image_generation
+                else "image_editing"
+            )
             verbose_proxy_logger.debug(
-                f"OpenAI passthrough cost tracking - Model: {model}, Cost: ${response_cost:.6f}"
+                f"OpenAI passthrough cost tracking - Endpoint: {endpoint_type}, Model: {model}, Cost: ${response_cost:.6f}"
             )
 
             return {
-                "result": litellm_model_response,
+                "result": litellm_model_response or response_body,
                 "kwargs": kwargs,
             }
 
