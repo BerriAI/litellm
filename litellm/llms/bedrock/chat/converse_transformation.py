@@ -466,13 +466,12 @@ class AmazonConverseConfig(BaseConfig):
                 if "gpt-oss" in model:
                     # GPT-OSS models: keep reasoning_effort as-is
                     # It will be passed through to additionalModelRequestFields
-                    optional_params["reasoning_effort"] = value
                     continue
-                else:
-                    # Anthropic and other models: convert to thinking parameter
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
+
+                # Anthropic and other models: convert to thinking parameter
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
 
         # Only update thinking tokens for non-GPT-OSS models
         if not ("gpt-oss" in model):
