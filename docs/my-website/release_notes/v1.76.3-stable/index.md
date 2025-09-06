@@ -239,8 +239,6 @@ This release includes significant performance optimizations. On our internal ben
     - Bug fixes for handling SCIM Group Memberships - [PR #14226](https://github.com/BerriAI/litellm/pull/14226)
 - **Kubernetes**
     - Added optional PodDisruptionBudget for litellm proxy - [PR #14093](https://github.com/BerriAI/litellm/pull/14093)
-- **Redis**
-    - Added redis ssl and username support (reverted in this release) - [PR #11319](https://github.com/BerriAI/litellm/pull/11319), [PR #14303](https://github.com/BerriAI/litellm/pull/14303)
 - **Error Handling**
     - Add model to azure error message - [PR #14294](https://github.com/BerriAI/litellm/pull/14294)
 
