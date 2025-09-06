@@ -51,6 +51,21 @@ pip install litellm==1.76.3
 
 ## Major Changes 
 - **Performance Optimization**: LiteLLM Proxy now achieves +400 RPS when using correct amount of CPU cores - [PR #14153](https://github.com/BerriAI/litellm/pull/14153), [PR #14242](https://github.com/BerriAI/litellm/pull/14242)
+  
+  By default, LiteLLM will now use `num_workers = os.cpu_count()` to achieve optimal performance. 
+  
+  **Override Options:**
+  
+  Set environment variable:
+  ```bash
+  DEFAULT_NUM_WORKERS_LITELLM_PROXY=1
+  ```
+  
+  Or start LiteLLM Proxy with:
+  ```bash
+  litellm --num_workers 1
+  ```
+
 - **Security Fix**: Fixed memory_usage_in_mem_cache cache endpoint vulnerability - [PR #14229](https://github.com/BerriAI/litellm/pull/14229)
 
 ---
