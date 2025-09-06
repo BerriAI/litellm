@@ -125,7 +125,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ```
 </TabItem>
 
-
+</Tabs>
 ### Test - Loadbalancing
 
 In this request, the following will occur:
