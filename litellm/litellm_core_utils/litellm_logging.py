@@ -1165,6 +1165,14 @@ class Logging(LiteLLMLoggingBaseClass):
         used for consistent cost calculation across response headers + logging integrations.
         """
 
+        # Check if response_cost is already calculated and stored in model_call_details
+        # This is used by passthrough endpoints that calculate costs manually
+        if (
+            hasattr(self, "model_call_details")
+            and self.model_call_details.get("response_cost") is not None
+        ):
+            return self.model_call_details["response_cost"]
+
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
