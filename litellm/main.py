@@ -502,7 +502,7 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=completion_kwargs.get("base_url", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=completion_kwargs.get("base_url", None)
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -3671,7 +3671,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Embedding ###
     kwargs["aembedding"] = True
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(embedding, *args, **kwargs)
@@ -3681,7 +3681,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=kwargs.get("api_base", None)
         )
 
         # Await normally
@@ -4502,6 +4502,36 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "volcengine":
+            volcengine_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("ARK_API_KEY")
+                or get_secret_str("VOLCENGINE_API_KEY")
+            )
+            if volcengine_key is None:
+                raise ValueError(
+                    "Missing API key for Volcengine. Set ARK_API_KEY or VOLCENGINE_API_KEY environment variable or pass api_key parameter."
+                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
+            else:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=volcengine_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
             )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None

@@ -248,7 +248,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -295,7 +297,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -992,33 +996,6 @@ last_model_cost_map_reload = None
 db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
-
-async def check_request_disconnection(request: Request, llm_api_call_task):
-    """
-    Asynchronously checks if the request is disconnected at regular intervals.
-    If the request is disconnected
-    - cancel the litellm.router task
-    - raises an HTTPException with status code 499 and detail "Client disconnected the request".
-
-    Parameters:
-    - request: Request: The request object to check for disconnection.
-    Returns:
-    - None
-    """
-
-    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
-    start_time = time.time()
-    while time.time() - start_time < 600:
-        await asyncio.sleep(1)
-        if await request.is_disconnected():
-            # cancel the LLM API Call task if any passed - this is passed from individual providers
-            # Example OpenAI, Azure, VertexAI etc
-            llm_api_call_task.cancel()
-
-            raise HTTPException(
-                status_code=499,
-                detail="Client disconnected the request",
-            )
 
 
 def _resolve_typed_dict_type(typ):
@@ -3807,13 +3784,13 @@ class ProxyStartupEvent:
         ########################################################
         # CloudZero Background Job
         ########################################################
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
         from litellm.proxy.spend_tracking.cloudzero_endpoints import (
-            init_cloudzero_background_job,
-            is_cloudzero_setup_in_db,
+            is_cloudzero_setup,
         )
 
-        if await is_cloudzero_setup_in_db():
-            await init_cloudzero_background_job()
+        if await is_cloudzero_setup():
+            await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job

@@ -19,6 +19,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
 )
@@ -216,7 +217,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
         )
 
-        return LLMObsPayload(
+        payload: LLMObsPayload = LLMObsPayload(
             parent_id=metadata.get("parent_id", "undefined"),
             trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
@@ -230,6 +231,26 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
+
+        apm_trace_id = self._get_apm_trace_id()
+        if apm_trace_id is not None:
+            payload["apm_id"] = apm_trace_id
+
+        return payload
+
+    def _get_apm_trace_id(self) -> Optional[str]:
+        """Retrieve the current APM trace ID if available."""
+        try:
+            current_span_fn = getattr(tracer, "current_span", None)
+            if callable(current_span_fn):
+                current_span = current_span_fn()
+                if current_span is not None:
+                    trace_id = getattr(current_span, "trace_id", None)
+                    if trace_id is not None:
+                        return str(trace_id)
+        except Exception:
+            pass
+        return None
     
     def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
         """

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 from typing import (
@@ -24,6 +25,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -109,7 +111,6 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
-
         # Handle coroutine that returns a generator
         if asyncio.iscoroutine(generator):
             generator = await generator
@@ -118,7 +119,6 @@ async def create_streaming_response(
         first_chunk_value = await generator.__anext__()
 
         if first_chunk_value is not None:
-
             try:
                 error_code_from_chunk = await _parse_event_data_for_error(
                     first_chunk_value
@@ -132,7 +132,6 @@ async def create_streaming_response(
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
-
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
@@ -145,7 +144,6 @@ async def create_streaming_response(
             status_code=default_status_code,
         )
     except Exception as e:
-
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(
             f"Error consuming first chunk from generator: {e}"
@@ -168,7 +166,6 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
-
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -179,6 +176,29 @@ async def create_streaming_response(
         status_code=final_status_code,
     )
 
+
+async def _check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected
+    - cancel the litellm.router task
+
+    Parameters:
+    - request: Request: The request object to check for disconnection.
+    Returns:
+    - None
+    """
+
+    # only run this function for configured timeout -> if these don't get cancelled -> we don't want the server to have many while loops
+    start_time = time.time()
+    while time.time() - start_time < DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS:
+        await asyncio.sleep(1)
+        message = await request.receive()
+        if message.get("type") == "http.disconnect":
+            # cancel the LLM API Call task if any passed - this is passed from individual providers
+            # Example OpenAI, Azure, VertexAI etc
+            llm_api_call_task.cancel()
+            return
 
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
@@ -430,12 +450,24 @@ class ProxyBaseLLMRequestProcessing:
         )
         tasks.append(llm_call)
 
-        # wait for call to end
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        # Execute the task to detect disconnection
+        disconnect_task = asyncio.create_task(_check_request_disconnection(request, llm_responses))
+
+        try:
+            # wait for call to end
+            # Note: In the case of streaming, processing does not wait here, so disconnection detection is performed in StreamingResponse.
+            responses = await llm_responses
+            disconnect_task.cancel()
+
+        except asyncio.CancelledError:
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
 
         response = responses[1]
 
@@ -462,7 +494,6 @@ class ProxyBaseLLMRequestProcessing:
         ) or self._is_streaming_response(
             response
         ):  # use generate_responses to stream responses
-
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -480,7 +511,6 @@ class ProxyBaseLLMRequestProcessing:
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
-
                     if asyncio.iscoroutine(response):
                         generator = await response
                     else:
@@ -501,7 +531,6 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                     )
             else:
-
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,
@@ -740,7 +769,11 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in response:
+            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+            ):
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
                 )
