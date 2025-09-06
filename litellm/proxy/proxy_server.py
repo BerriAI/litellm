@@ -997,6 +997,33 @@ db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
 
+async def check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected
+    - cancel the litellm.router task
+    - raises an HTTPException with status code 499 and detail "Client disconnected the request".
+
+    Parameters:
+    - request: Request: The request object to check for disconnection.
+    Returns:
+    - None
+    """
+
+    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
+    start_time = time.time()
+    while time.time() - start_time < 600:
+        await asyncio.sleep(1)
+        if await request.is_disconnected():
+            # cancel the LLM API Call task if any passed - this is passed from individual providers
+            # Example OpenAI, Azure, VertexAI etc
+            llm_api_call_task.cancel()
+
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+
 
 def _resolve_typed_dict_type(typ):
     """Resolve the actual TypedDict class from a potentially wrapped type."""
