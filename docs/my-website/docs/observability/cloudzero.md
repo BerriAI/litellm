@@ -15,25 +15,7 @@ LiteLLM provides an integration with CloudZero's AnyCost API, allowing you to ex
 | Data Format | CloudZero Billing Format (CBF) with proper resource tagging |
 | Export Frequency | Hourly (configurable via `CLOUDZERO_EXPORT_INTERVAL_MINUTES`) |
 
-## Features
-
-- **Automatic Data Export**: LiteLLM automatically exports usage data to CloudZero every hour
-- **Cost Tracking**: Track costs by model, team, user, and other dimensions
-- **Token Usage Analytics**: Monitor prompt tokens, completion tokens, and total token consumption
-- **Resource Tagging**: Comprehensive tagging with CloudZero Resource Names (CZRNs) for detailed cost attribution
-- **Dry Run Testing**: Test your configuration without sending data to CloudZero
-- **Manual Export**: On-demand data export with customizable time ranges
-
-## Prerequisites
-
-1. **CloudZero Account**: Active CloudZero account with API access
-2. **CloudZero API Key**: API key from your CloudZero account settings
-3. **CloudZero Connection ID**: Connection ID for data submission (created in CloudZero dashboard)
-4. **LiteLLM Proxy**: Running LiteLLM proxy with database enabled
-
-## Configuration
-
-### Environment Variables
+## Environment Variables
 
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
@@ -45,18 +27,11 @@ LiteLLM provides an integration with CloudZero's AnyCost API, allowing you to ex
 ## Setup
 
 ### End to End Video Walkthrough
-
+This video walks through the entire process of setting up LiteLLM with CloudZero integration and viewing LiteLLM exported usage data in CloudZero.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/59b57593183f4cc3b1c05a2dd3277f92" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
-### Step 1: Get CloudZero Credentials
-
-This video walks through:
-1. Creating a CloudZero connection ID
-2. Setting up LiteLLM with CloudZero integration
-3. Running a dry run to test the configuration
-
-### Step 2: Configure Environment Variables
+### Step 1: Configure Environment Variables
 
 Set your CloudZero credentials in your environment:
 
@@ -66,12 +41,10 @@ export CLOUDZERO_CONNECTION_ID="conn_xxxxxxxxxx"
 export CLOUDZERO_TIMEZONE="UTC"  # Optional, defaults to UTC
 ```
 
-### Step 3: Enable CloudZero Integration
+### Step 2: Enable CloudZero Integration
 
-Add the CloudZero callback to your LiteLLM configuration:
+Add the CloudZero callback to your LiteLLM configuration YAML file:
 
-<Tabs>
-<TabItem value="config" label="config.yaml">
 
 ```yaml
 model_list:
@@ -84,38 +57,7 @@ litellm_settings:
   callbacks: ["cloudzero"]  # Enable CloudZero integration
 ```
 
-</TabItem>
-<TabItem value="env" label="Environment Variables">
-
-```bash
-export LITELLM_CALLBACKS="cloudzero"
-```
-
-</TabItem>
-<TabItem value="python" label="Python SDK">
-
-```python
-import litellm
-import os
-
-# Set your CloudZero credentials
-os.environ["CLOUDZERO_API_KEY"] = "cz_api_xxxxxxxxxx"
-os.environ["CLOUDZERO_CONNECTION_ID"] = "conn_xxxxxxxxxx"
-
-# Enable CloudZero callback
-litellm.callbacks = ["cloudzero"]
-
-# Make LLM requests as usual
-response = litellm.completion(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-</TabItem>
-</Tabs>
-
-### Step 4: Start LiteLLM Proxy
+### Step 3: Start LiteLLM Proxy
 
 Start your LiteLLM proxy with the configuration:
 
@@ -127,7 +69,7 @@ litellm --config /path/to/config.yaml
 
 ### Dry Run Export
 
-Test your CloudZero configuration without sending data to CloudZero:
+Call the dry run endpoint to test your CloudZero configuration without sending data to CloudZero. This endpoint will not send any data to CloudZero, but will return the data that would be exported.
 
 ```bash
 curl -X POST "http://localhost:4000/cloudzero/dry-run" \
@@ -157,7 +99,7 @@ curl -X POST "http://localhost:4000/cloudzero/dry-run" \
 
 ### Manual Export
 
-Send data immediately to CloudZero:
+Call the export endpoint to send data immediately to CloudZero. We suggest setting a small `limit` to test the export. This will only export the last 10 records to CloudZero. Note: Cloudzero can take up to 15 minutes to process the exported data.
 
 ```bash
 curl -X POST "http://localhost:4000/cloudzero/export" \
@@ -261,46 +203,7 @@ curl -X POST "http://localhost:4000/cloudzero/export" \
    - Check that your LiteLLM proxy is generating usage data
    - Use the dry-run endpoint to verify data is being formatted correctly
 
-### Debug Mode
-
-Enable verbose logging to see detailed CloudZero export information:
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-import litellm
-litellm.set_verbose = True
-```
-
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
-```bash
-export LITELLM_LOG="DEBUG"
-```
-
-</TabItem>
-</Tabs>
-
-This will show:
-- CloudZero export job scheduling
-- Data transformation details
-- API request/response information
-- Error details if exports fail
-
-## Data Processing Timeline
-
-1. **LiteLLM Request**: User makes an LLM API request
-2. **Usage Logging**: LiteLLM logs usage data to database
-3. **Hourly Export**: CloudZero logger exports data every hour
-4. **Data Transformation**: Usage data is converted to CBF format
-5. **CloudZero Submission**: Data is sent to CloudZero AnyCost API
-6. **CloudZero Processing**: CloudZero processes data (10-15 minutes)
-7. **Dashboard Availability**: Data appears in CloudZero dashboard
-
 ## Related Links
 
 - [CloudZero Documentation](https://docs.cloudzero.com/)
 - [CloudZero AnyCost API](https://docs.cloudzero.com/reference/anycost-api)
-- [LiteLLM Observability](https://docs.litellm.ai/docs/observability/)
