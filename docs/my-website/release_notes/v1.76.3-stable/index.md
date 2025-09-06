@@ -244,16 +244,6 @@ This release includes significant performance optimizations. On our internal ben
 
 ---
 
-## Documentation Improvements
-
-- **Provider Documentation**
-    - Added more info to load balancing & pass through endpoints - [PR #14232](https://github.com/BerriAI/litellm/pull/14232)
-    - Fixed custom callbacks doc - [PR #14216](https://github.com/BerriAI/litellm/pull/14216)
-    - Fixed prometheus metrics documentation - [PR #14199](https://github.com/BerriAI/litellm/pull/14199)
-    - Added loom for claude code - [PR #14223](https://github.com/BerriAI/litellm/pull/14223)
-
----
-
 ## New Contributors
 * @iabhi4 made their first contribution in [PR #14093](https://github.com/BerriAI/litellm/pull/14093)
 * @zainhas made their first contribution in [PR #14087](https://github.com/BerriAI/litellm/pull/14087)
