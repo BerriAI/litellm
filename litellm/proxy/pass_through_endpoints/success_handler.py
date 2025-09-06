@@ -162,7 +162,7 @@ class PassThroughEndpointLogging:
                 cohere_passthrough_logging_handler_result["result"]
             )
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        elif self.is_openai_route(url_route):
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
             from .llm_provider_handlers.openai_passthrough_logging_handler import (
                 OpenAIPassthroughLoggingHandler,
             )
@@ -317,6 +317,18 @@ class PassThroughEndpointLogging:
         return parsed_url.hostname and (
             "api.openai.com" in parsed_url.hostname
             or "openai.azure.com" in parsed_url.hostname
+        )
+
+    def _is_supported_openai_endpoint(self, url_route: str) -> bool:
+        """Check if the OpenAI endpoint is supported by the passthrough logging handler."""
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+        
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route) or
+            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route) or
+            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
 
     def _set_cost_per_request(

@@ -201,20 +201,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
         if not (is_chat_completions or is_image_generation or is_image_editing):
-            # For unsupported endpoints, use the base handler without cost tracking
-            base_handler = OpenAIPassthroughLoggingHandler()
-            return base_handler.passthrough_chat_handler(
-                httpx_response=httpx_response,
-                response_body=response_body,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                request_body=request_body,
-                **kwargs,
-            )
+            # For unsupported endpoints, return None to let the system fall back to generic behavior
+            return {
+                "result": None,
+                "kwargs": kwargs,
+            }
 
         # Extract model from request or response
         model = request_body.get("model", response_body.get("model", ""))
