@@ -24,7 +24,7 @@ from typing import Any, Optional
 import polars as pl
 
 from ...types.integrations.cloudzero import CBFRecord
-from .cz_resource_names import CZRNGenerator
+from .cz_resource_names import CZEntityType, CZRNGenerator
 
 
 class CBFTransformer:
@@ -92,17 +92,26 @@ class CBFTransformer:
         resource_id = self.czrn_generator.create_from_litellm_data(row)
 
         # Build dimensions for CloudZero
-        entity_id = str(row.get('entity_id', ''))
         model = str(row.get('model', ''))
         api_key_hash = str(row.get('api_key', ''))[:8]  # First 8 chars for identification
-
+        
+        # Handle team information with fallbacks
+        team_id = row.get('team_id')
+        team_alias = row.get('team_alias')
+        
+        # Use team_alias if available, otherwise team_id, otherwise fallback to 'unknown'
+        entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
+        
         dimensions = {
-            'entity_type': str(row.get('entity_type', '')),  # 'user' or 'team'
+            'entity_type': CZEntityType.TEAM.value,
             'entity_id': entity_id,
+            'team_id': str(team_id) if team_id else 'unknown',
+            'team_alias': str(team_alias) if team_alias else 'unknown',
             'model': model,
             'model_group': str(row.get('model_group', '')),
             'provider': str(row.get('custom_llm_provider', '')),
             'api_key_prefix': api_key_hash,
+            'api_key_alias': str(row.get('api_key_alias', '')),
             'api_requests': str(row.get('api_requests', 0)),
             'successful_requests': str(row.get('successful_requests', 0)),
             'failed_requests': str(row.get('failed_requests', 0)),
@@ -138,10 +147,10 @@ class CBFTransformer:
         # Add CZRN components that don't have direct CBF column mappings as resource tags
         cbf_record['resource/tag:provider'] = provider  # CZRN provider component
         cbf_record['resource/tag:model'] = cloud_local_id  # CZRN cloud-local-id component (model)
-
+        
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
-            if value and value != 'N/A':  # Only add non-empty tags
+            if value and value != 'N/A' and value != 'unknown':  # Only add meaningful tags
                 cbf_record[f'resource/tag:{key}'] = str(value)
 
         # Add token breakdown as resource tags for analysis
