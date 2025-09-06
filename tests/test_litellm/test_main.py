@@ -530,6 +530,79 @@ def test_responses_api_bridge_check_handles_exception():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_bridge_triggered_by_reasoning_effort(monkeypatch):
+    """Ensure reasoning_effort triggers Responses API bridge even without mode in model map."""
+    import litellm
+    from litellm.types.utils import ModelResponse, Choices, Message
+
+    # Make bridge return a simple ModelResponse and record invocation
+    called = {"value": False}
+
+    def fake_bridge_completion(**kwargs):
+        called["value"] = True
+        return ModelResponse(
+            id="resp_test",
+            model=kwargs.get("model", "gpt-5"),
+            choices=[
+                Choices(
+                    message=Message(role="assistant", content="ok"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=0,
+        )
+
+    # Avoid default 'mode: responses' branch
+    monkeypatch.setattr(
+        "litellm.main.responses_api_bridge_check", lambda model, custom_llm_provider: ({}, model)
+    )
+    monkeypatch.setattr(
+        "litellm.completion_extras.responses_api_bridge.completion",
+        fake_bridge_completion,
+    )
+
+    resp = litellm.completion(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "hi"}],
+        reasoning_effort="low",
+    )
+
+    assert called["value"] is True
+    assert resp.choices[0].message.content == "ok"
+
+
+def test_nonstream_reasoning_summary_added_to_chat_message():
+    """Responses transformation should include reasoning_content for non-stream responses."""
+    import litellm
+    from litellm.responses.main import mock_responses_api_response
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.utils import ModelResponse
+
+    handler = LiteLLMResponsesTransformationHandler()
+    raw = mock_responses_api_response("hello")
+    # Inject a reasoning summary
+    raw.reasoning = {"summary": "this is why"}
+
+    base = ModelResponse(id="id1", model="gpt-5", choices=[], created=0)
+
+    out = handler.transform_response(
+        model="gpt-5",
+        raw_response=raw,
+        model_response=base,
+        logging_obj=None,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert out.choices and out.choices[0].message.reasoning_content == "this is why"
+
+
 @pytest.mark.asyncio
 async def test_async_mock_delay():
     """Use asyncio await for mock delay on acompletion"""

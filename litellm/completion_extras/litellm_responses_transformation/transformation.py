@@ -40,6 +40,10 @@ if TYPE_CHECKING:
         OpenAIMessageContentListBlock,
     )
     from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+    # Needed for type annotations used as forward references
+    from litellm.types.utils import Choices
+    # Use concrete Responses API type for mypy
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -222,15 +226,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
 
-        from openai.types.responses import (
-            ResponseFunctionToolCall,
-            ResponseOutputMessage,
-            ResponseReasoningItem,
-        )
-
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.utils import Choices, Message
 
         if not isinstance(raw_response, ResponsesAPIResponse):
             raise ValueError(f"Unexpected response type: {type(raw_response)}")
@@ -238,21 +235,77 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if raw_response.error is not None:
             raise ValueError(f"Error in response: {raw_response.error}")
 
+        # Extract choices and any item-level reasoning text
+        choices, reasoning_text = self._extract_choices_and_reasoning(raw_response)
+
+        if len(choices) == 0:
+            if (
+                raw_response.incomplete_details is not None
+                and raw_response.incomplete_details.reason is not None
+            ):
+                raise ValueError(
+                    f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
+            else:
+                raise ValueError(
+                    f"Unknown items in responses API response: {raw_response.output}"
+                )
+
+        # If not captured from items, try overall response-level reasoning summary
+        reasoning_text = self._fallback_reasoning_summary_if_needed(
+            raw_response, reasoning_text
+        )
+
+        # Attach reasoning to the first assistant choice (if present)
+        self._attach_reasoning_content_to_choices(choices, reasoning_text)
+
+        setattr(model_response, "choices", choices)
+
+        model_response.model = model
+
+        setattr(
+            model_response,
+            "usage",
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                raw_response.usage
+            ),
+        )
+        return model_response
+
+    def _extract_choices_and_reasoning(
+        self, raw_response: "ResponsesAPIResponse"
+    ) -> Tuple[List["Choices"], Optional[str]]:
+        from openai.types.responses import (
+            ResponseFunctionToolCall,
+            ResponseOutputMessage,
+            ResponseReasoningItem,
+        )
+        from litellm.types.utils import Choices, Message
+
         choices: List[Choices] = []
         index = 0
+        reasoning_text: Optional[str] = None
         for item in raw_response.output:
             if isinstance(item, ResponseReasoningItem):
-                pass  # ignore for now.
+                try:
+                    segments: List[str] = []
+                    for content in getattr(item, "content", []) or []:
+                        segments.append(getattr(content, "text", ""))
+                    candidate = "".join(segments).strip()
+                    if candidate:
+                        reasoning_text = candidate
+                except Exception:
+                    pass
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     msg = Message(
                         role=item.role, content=response_text if response_text else ""
                     )
-
-                    choices.append(
-                        Choices(message=msg, finish_reason="stop", index=index)
+                    finish_reason = self._map_responses_status_to_finish_reason(
+                        getattr(item, "status", None)
                     )
+                    choices.append(Choices(message=msg, finish_reason=finish_reason, index=index))
                     index += 1
             elif isinstance(item, ResponseFunctionToolCall):
                 msg = Message(
@@ -268,39 +321,44 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         }
                     ],
                 )
-
-                choices.append(
-                    Choices(message=msg, finish_reason="tool_calls", index=index)
-                )
+                choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
                 index += 1
             else:
-                pass  # don't fail request if item in list is not supported
+                # ignore unknown output items
+                pass
+        return choices, reasoning_text
 
-        if len(choices) == 0:
-            if (
-                raw_response.incomplete_details is not None
-                and raw_response.incomplete_details.reason is not None
-            ):
-                raise ValueError(
-                    f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
-                )
+    def _fallback_reasoning_summary_if_needed(
+        self, raw_response: "BaseModel", reasoning_text: Optional[str]
+    ) -> Optional[str]:
+        if reasoning_text is not None:
+            return reasoning_text
+        try:
+            reasoning_obj = getattr(raw_response, "reasoning", None)
+            if isinstance(reasoning_obj, dict):
+                summary = reasoning_obj.get("summary")
             else:
-                raise ValueError(
-                    f"Unknown items in responses API response: {raw_response.output}"
-                )
+                summary = getattr(reasoning_obj, "summary", None)
+            if isinstance(summary, str) and summary.strip():
+                return summary.strip()
+        except Exception:
+            return None
+        return None
 
-        setattr(model_response, "choices", choices)
-
-        model_response.model = model
-
-        setattr(
-            model_response,
-            "usage",
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                raw_response.usage
-            ),
-        )
-        return model_response
+    def _attach_reasoning_content_to_choices(
+        self, choices: List["Choices"], reasoning_text: Optional[str]
+    ) -> None:
+        if not reasoning_text or not choices:
+            return
+        try:
+            # Attach to the first assistant message choice
+            for ch in choices:
+                msg = getattr(ch, "message", None)
+                if msg is not None and getattr(msg, "role", "assistant") == "assistant":
+                    msg.reasoning_content = reasoning_text
+                    break
+        except Exception:
+            pass
 
     def get_model_response_iterator(
         self,
