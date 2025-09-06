@@ -174,21 +174,14 @@ def get_redis_url_from_environment():
         raise ValueError(
             "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified for Redis."
         )
-    
-    if "REDIS_SSL" in os.environ and os.environ["REDIS_SSL"].lower() == "true":
-        redis_protocol = "rediss"
+
+    if "REDIS_PASSWORD" in os.environ:
+        redis_password = f":{os.environ['REDIS_PASSWORD']}@"
     else:
-        redis_protocol = "redis"
-    
-    # Build authentication part of URL
-    auth_part = ""
-    if "REDIS_USERNAME" in os.environ and "REDIS_PASSWORD" in os.environ:
-        auth_part = f"{os.environ['REDIS_USERNAME']}:{os.environ['REDIS_PASSWORD']}@"
-    elif "REDIS_PASSWORD" in os.environ:
-        auth_part = f"{os.environ['REDIS_PASSWORD']}@"
-    
+        redis_password = ""
+
     return (
-        f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
+        f"redis://{redis_password}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
     )
 
 
