@@ -94,7 +94,6 @@ class CBFTransformer:
         # Build dimensions for CloudZero
         model = str(row.get('model', ''))
         api_key_hash = str(row.get('api_key', ''))[:8]  # First 8 chars for identification
-        api_key_alias = str(row.get('api_key_alias', ''))
         
         # Handle team information with fallbacks
         team_id = row.get('team_id')
