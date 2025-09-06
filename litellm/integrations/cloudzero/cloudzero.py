@@ -1,12 +1,19 @@
 import os
-from typing import Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, List, Optional, cast
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 from .cz_stream_api import CloudZeroStreamer
 from .database import LiteLLMDatabase
 from .transform import CBFTransformer
+
+if TYPE_CHECKING:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+else:
+    AsyncIOScheduler = Any
 
 
 class CloudZeroLogger(CustomLogger):
@@ -27,8 +34,66 @@ class CloudZeroLogger(CustomLogger):
         self.api_key = api_key or os.getenv("CLOUDZERO_API_KEY")
         self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID") 
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
+        verbose_logger.debug(f"CloudZero Logger initialized with connection ID: {self.connection_id}, timezone: {self.timezone}")
 
-    async def export_usage_data(self, limit: Optional[int] = None, operation: str = "replace_hourly"):
+    async def initialize_cloudzero_export_job(self):
+        """
+        Handler for initializing CloudZero export job.
+
+        Runs when CloudZero logger starts up.
+
+        - If redis cache is available, we use the pod lock manager to acquire a lock and export the data.
+            - Ensures only one pod exports the data at a time.
+        - If redis cache is not available, we export the data directly.
+        """
+        from litellm.constants import (
+            CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME,
+        )
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+
+        # if using redis, ensure only one pod exports the data at a time
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            if await pod_lock_manager.acquire_lock(
+                cronjob_id=CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME
+            ):
+                try:
+                    await self._hourly_usage_data_export()
+                finally:
+                    await pod_lock_manager.release_lock(
+                        cronjob_id=CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME
+                    )
+        else:
+            # if not using redis, export the data directly
+            await self._hourly_usage_data_export()
+    
+    async def _hourly_usage_data_export(self):
+        """
+        Exports the hourly usage data to CloudZero.
+
+        Start time: 1 hour ago
+        End time: current time
+        """
+        from datetime import timedelta, timezone
+
+        from litellm.constants import CLOUDZERO_MAX_FETCHED_DATA_RECORDS
+        current_time_utc = datetime.now(timezone.utc)
+        one_hour_ago_utc = current_time_utc - timedelta(hours=1)
+        await self.export_usage_data(
+            limit=CLOUDZERO_MAX_FETCHED_DATA_RECORDS,
+            operation="replace_hourly",
+            start_time_utc=one_hour_ago_utc,
+            end_time_utc=current_time_utc
+        )
+
+
+    async def export_usage_data(
+        self, 
+        limit: Optional[int] = None, 
+        operation: str = "replace_hourly",
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None
+    ):
         """
         Exports the usage data to CloudZero.
 
@@ -52,7 +117,11 @@ class CloudZeroLogger(CustomLogger):
             # Initialize database connection and load data
             database = LiteLLMDatabase()
             verbose_logger.debug("CloudZero Logger: Loading usage data from database")
-            data = await database.get_usage_data(limit=limit)
+            data = await database.get_usage_data(
+                limit=limit,
+                start_time_utc=start_time_utc,
+                end_time_utc=end_time_utc
+            )
             
             if data.is_empty():
                 verbose_logger.info("CloudZero Logger: No usage data found to export")
@@ -86,10 +155,13 @@ class CloudZeroLogger(CustomLogger):
 
     async def dry_run_export_usage_data(self, limit: Optional[int] = 10000):
         """
-        Only prints the data that would be exported to CloudZero.
+        Returns the data that would be exported to CloudZero without actually sending it.
         
         Args:
             limit: Limit number of records to display (default: 10000)
+            
+        Returns:
+            dict: Contains usage_data, cbf_data, and summary statistics
         """
         try:
             verbose_logger.debug("CloudZero Logger: Starting dry run export")
@@ -101,22 +173,63 @@ class CloudZeroLogger(CustomLogger):
             
             if data.is_empty():
                 verbose_logger.warning("CloudZero Dry Run: No usage data found")
-                return
+                return {
+                    "usage_data": [],
+                    "cbf_data": [],
+                    "summary": {
+                        "total_records": 0,
+                        "total_cost": 0,
+                        "total_tokens": 0,
+                        "unique_accounts": 0,
+                        "unique_services": 0
+                    }
+                }
 
             verbose_logger.debug(f"CloudZero Dry Run: Processing {len(data)} records...")
             
+            # Convert usage data to dict format for response
+            usage_data_sample = data.head(50).to_dicts()  # Return first 50 rows
+
             # Transform data to CloudZero CBF format
             transformer = CBFTransformer()
             cbf_data = transformer.transform(data)
             
             if cbf_data.is_empty():
                 verbose_logger.warning("CloudZero Dry Run: No valid data after transformation")
-                return
+                return {
+                    "usage_data": usage_data_sample,
+                    "cbf_data": [],
+                    "summary": {
+                        "total_records": len(usage_data_sample),
+                        "total_cost": sum(row.get('spend', 0) for row in usage_data_sample),
+                        "total_tokens": sum(row.get('prompt_tokens', 0) + row.get('completion_tokens', 0) for row in usage_data_sample),
+                        "unique_accounts": 0,
+                        "unique_services": 0
+                    }
+                }
 
-            # Display the transformed data on screen
-            self._display_cbf_data_on_screen(cbf_data)
+            # Convert CBF data to dict format for response
+            cbf_data_dict = cbf_data.to_dicts()
+            
+            # Calculate summary statistics
+            total_cost = sum(record.get('cost/cost', 0) for record in cbf_data_dict)
+            unique_accounts = len(set(record.get('resource/account', '') for record in cbf_data_dict if record.get('resource/account')))
+            unique_services = len(set(record.get('resource/service', '') for record in cbf_data_dict if record.get('resource/service')))
+            total_tokens = sum(record.get('usage/amount', 0) for record in cbf_data_dict)
             
             verbose_logger.info(f"CloudZero Logger: Dry run completed for {len(cbf_data)} records")
+            
+            return {
+                "usage_data": usage_data_sample,
+                "cbf_data": cbf_data_dict,
+                "summary": {
+                    "total_records": len(cbf_data_dict),
+                    "total_cost": total_cost,
+                    "total_tokens": total_tokens,
+                    "unique_accounts": unique_accounts,
+                    "unique_services": unique_services
+                }
+            }
             
         except Exception as e:
             verbose_logger.error(f"CloudZero Logger: Error in dry run export: {str(e)}")
@@ -144,6 +257,11 @@ class CloudZeroLogger(CustomLogger):
         cbf_table = Table(show_header=True, header_style="bold cyan", box=SIMPLE, padding=(0, 1))
         cbf_table.add_column("time/usage_start", style="blue", no_wrap=False)
         cbf_table.add_column("cost/cost", style="green", justify="right", no_wrap=False)
+        cbf_table.add_column("entity_type", style="magenta", justify="right", no_wrap=False)
+        cbf_table.add_column("entity_id", style="magenta", justify="right", no_wrap=False)
+        cbf_table.add_column("team_id", style="cyan", no_wrap=False)
+        cbf_table.add_column("team_alias", style="cyan", no_wrap=False)
+        cbf_table.add_column("api_key_alias", style="yellow", no_wrap=False)
         cbf_table.add_column("usage/amount", style="yellow", justify="right", no_wrap=False)
         cbf_table.add_column("resource/id", style="magenta", no_wrap=False)
         cbf_table.add_column("resource/service", style="cyan", no_wrap=False)
@@ -159,10 +277,20 @@ class CloudZeroLogger(CustomLogger):
             resource_service = str(record.get('resource/service', 'N/A'))
             resource_account = str(record.get('resource/account', 'N/A'))
             resource_region = str(record.get('resource/region', 'N/A'))
+            entity_type = str(record.get('entity_type', 'N/A'))
+            entity_id = str(record.get('entity_id', 'N/A'))
+            team_id = str(record.get('resource/tag:team_id', 'N/A'))
+            team_alias = str(record.get('resource/tag:team_alias', 'N/A'))
+            api_key_alias = str(record.get('resource/tag:api_key_alias', 'N/A'))
 
             cbf_table.add_row(
                 time_usage_start,
                 cost_cost,
+                entity_type,
+                entity_id,
+                team_id,
+                team_alias,
+                api_key_alias,
                 usage_amount,
                 resource_id,
                 resource_service,
@@ -188,3 +316,33 @@ class CloudZeroLogger(CustomLogger):
         console.print(f"  Unique Services: {unique_services}")
 
         console.print("\n[dim]💡 This is the CloudZero CBF format ready for AnyCost ingestion[/dim]")
+    
+    @staticmethod
+    async def init_cloudzero_background_job(scheduler: AsyncIOScheduler):
+        """
+        Initialize the CloudZero background job.
+
+        Starts the background job that exports the usage data to CloudZero every hour.
+        """
+        from litellm.constants import CLOUDZERO_EXPORT_INTERVAL_MINUTES
+        from litellm.integrations.custom_logger import CustomLogger
+        
+
+        prometheus_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=CloudZeroLogger
+            )
+        )
+        # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
+        verbose_logger.debug("found %s cloudzero loggers", len(prometheus_loggers))
+        if len(prometheus_loggers) > 0:
+            cloudzero_logger = cast(CloudZeroLogger, prometheus_loggers[0])
+            verbose_logger.debug(
+                "Initializing remaining budget metrics as a cron job executing every %s minutes"
+                % CLOUDZERO_EXPORT_INTERVAL_MINUTES
+            )
+            scheduler.add_job(
+                cloudzero_logger.initialize_cloudzero_export_job,
+                "interval",
+                minutes=CLOUDZERO_EXPORT_INTERVAL_MINUTES
+            )

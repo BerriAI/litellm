@@ -18,6 +18,7 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -35,85 +36,54 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
-        """Retrieve consolidated usage data from LiteLLM daily spend tables."""
+    async def get_usage_data(
+        self, 
+        limit: Optional[int] = None,
+        start_time_utc: Optional[datetime] = None,
+        end_time_utc: Optional[datetime] = None
+    ) -> pl.DataFrame:
+        """Retrieve usage data from LiteLLM daily user spend table."""
         client = self._ensure_prisma_client()
         
-        # Union query to combine user, team, and tag spend data
-        query = """
-        WITH consolidated_spend AS (
-            -- User spend data
-            SELECT
-                id,
-                date,
-                user_id as entity_id,
-                'user' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyUserSpend"
-
-            UNION ALL
-
-            -- Team spend data
-            SELECT
-                id,
-                date,
-                team_id as entity_id,
-                'team' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTeamSpend"
-
-            UNION ALL
-
-            -- Tag spend data
-            SELECT
-                id,
-                date,
-                tag as entity_id,
-                'tag' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTagSpend"
-        )
-        SELECT * FROM consolidated_spend
-        ORDER BY date DESC, created_at DESC
+        # Build WHERE clause for time filtering
+        where_conditions = []
+        if start_time_utc:
+            where_conditions.append(f"dus.created_at >= '{start_time_utc.isoformat()}'")
+        if end_time_utc:
+            where_conditions.append(f"dus.created_at <= '{end_time_utc.isoformat()}'")
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # Query to get user spend data with team information
+        query = f"""
+        SELECT
+            dus.id,
+            dus.date,
+            dus.user_id,
+            dus.api_key,
+            dus.model,
+            dus.model_group,
+            dus.custom_llm_provider,
+            dus.prompt_tokens,
+            dus.completion_tokens,
+            dus.spend,
+            dus.api_requests,
+            dus.successful_requests,
+            dus.failed_requests,
+            dus.cache_creation_input_tokens,
+            dus.cache_read_input_tokens,
+            dus.created_at,
+            dus.updated_at,
+            vt.team_id,
+            vt.key_alias as api_key_alias,
+            tt.team_alias
+        FROM "LiteLLM_DailyUserSpend" dus
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
+        LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
+        {where_clause}
+        ORDER BY dus.date DESC, dus.created_at DESC
         """
 
         if limit:
@@ -121,22 +91,21 @@ class LiteLLMDatabase:
 
         try:
             db_response = await client.db.query_raw(query)
-            # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response)
+            # Convert the response to polars DataFrame with full schema inference
+            # This prevents schema mismatch errors when data types vary across rows
+            return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the consolidated daily spend tables."""
+        """Get information about the daily user spend table."""
         client = self._ensure_prisma_client()
         
         try:
-            # Get combined row count from both tables
+            # Get row count from user spend table
             user_count = await self._get_table_row_count('LiteLLM_DailyUserSpend')
-            team_count = await self._get_table_row_count('LiteLLM_DailyTeamSpend')
-            tag_count = await self._get_table_row_count('LiteLLM_DailyTagSpend')
 
-            # Get column structure from user spend table (representative)
+            # Get column structure from user spend table
             query = """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
@@ -147,12 +116,8 @@ class LiteLLMDatabase:
 
             return {
                 'columns': columns_response,
-                'row_count': user_count + team_count + tag_count,
-                'table_breakdown': {
-                    'user_spend': user_count,
-                    'team_spend': team_count,
-                    'tag_spend': tag_count
-                }
+                'row_count': user_count,
+                'table_name': 'LiteLLM_DailyUserSpend'
             }
         except Exception as e:
             raise Exception(f"Error getting table info: {str(e)}")
