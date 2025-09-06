@@ -6,10 +6,6 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
-from .cz_stream_api import CloudZeroStreamer
-from .database import LiteLLMDatabase
-from .transform import CBFTransformer
-
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
@@ -105,6 +101,9 @@ class CloudZeroLogger(CustomLogger):
             limit: Optional limit on number of records to export
             operation: CloudZero operation type ("replace_hourly" or "sum")
         """
+        from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
+        from litellm.integrations.cloudzero.database import LiteLLMDatabase
+        from litellm.integrations.cloudzero.transform import CBFTransformer
         try:
             verbose_logger.debug("CloudZero Logger: Starting usage data export")
             
@@ -163,6 +162,8 @@ class CloudZeroLogger(CustomLogger):
         Returns:
             dict: Contains usage_data, cbf_data, and summary statistics
         """
+        from litellm.integrations.cloudzero.database import LiteLLMDatabase
+        from litellm.integrations.cloudzero.transform import CBFTransformer
         try:
             verbose_logger.debug("CloudZero Logger: Starting dry run export")
             
