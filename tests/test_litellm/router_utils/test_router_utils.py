@@ -1,21 +1,27 @@
 #### What this tests ####
 # This tests utils used by llm router -> like llmrouter.get_settings()
 
-import sys, os, time
-import traceback, asyncio
+import asyncio
+import os
+import sys
+import time
+import traceback
+
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from litellm.types.router import ModelInfo
-from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
-from dotenv import load_dotenv
-from unittest.mock import patch, MagicMock, AsyncMock
 
 load_dotenv()
 
