@@ -396,50 +396,9 @@ class AmazonConverseConfig(BaseConfig):
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
-                ignore_response_format_types = ["text"]
-                if value["type"] in ignore_response_format_types:  # value is a no-op
-                    continue
-
-                json_schema: Optional[dict] = None
-                description: Optional[str] = None
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                    description = value["json_schema"].get("description")
-
-                if "type" in value and value["type"] == "text":
-                    continue
-
-                """
-                Follow similar approach to anthropic - translate to a single tool call. 
-
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
-                _tool = self._create_json_tool_call_for_response_format(
-                    json_schema=json_schema,
-                    description=description,
+                optional_params = self._translate_response_format_param(
+                    value=value, model=model, optional_params=optional_params, non_default_params=non_default_params, is_thinking_enabled=is_thinking_enabled
                 )
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=[_tool]
-                )
-
-                if (
-                    litellm.utils.supports_tool_choice(
-                        model=model, custom_llm_provider=self.custom_llm_provider
-                    )
-                    and not is_thinking_enabled
-                ):
-
-                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                        tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
-                    )
-                optional_params["json_mode"] = True
-                if non_default_params.get("stream", False) is True:
-                    optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -486,6 +445,66 @@ class AmazonConverseConfig(BaseConfig):
                 non_default_params=non_default_params, optional_params=optional_params
             )
 
+        return optional_params
+    
+    def _translate_response_format_param(
+        self, 
+        value: dict, 
+        model: str, 
+        optional_params: dict,
+        non_default_params: dict,
+        is_thinking_enabled: bool,
+    ) -> dict:
+        """
+        Handles translation of response_format parameter to Bedrock format.
+
+        Returns `optional_params` with the translated response_format parameter.
+        """
+        ignore_response_format_types = ["text"]
+        if value["type"] in ignore_response_format_types:  # value is a no-op
+            return optional_params
+
+        json_schema: Optional[dict] = None
+        description: Optional[str] = None
+        if "response_schema" in value:
+            json_schema = value["response_schema"]
+        elif "json_schema" in value:
+            json_schema = value["json_schema"]["schema"]
+            description = value["json_schema"].get("description")
+
+        if "type" in value and value["type"] == "text":
+            return optional_params
+
+        """
+        Follow similar approach to anthropic - translate to a single tool call. 
+
+        When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+        - You usually want to provide a single tool
+        - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+        """
+        _tool = self._create_json_tool_call_for_response_format(
+            json_schema=json_schema,
+            description=description,
+        )
+        optional_params = self._add_tools_to_optional_params(
+            optional_params=optional_params, tools=[_tool]
+        )
+
+        if (
+            litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+            and not is_thinking_enabled
+        ):
+
+            optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
+            )
+        optional_params["json_mode"] = True
+        if non_default_params.get("stream", False) is True:
+            optional_params["fake_stream"] = True
+        
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
