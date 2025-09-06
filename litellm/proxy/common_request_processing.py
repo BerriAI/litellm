@@ -453,10 +453,12 @@ class ProxyBaseLLMRequestProcessing:
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
+        # Execute the task to detect disconnection
         disconnect_task = asyncio.create_task(_check_request_disconnection(request, llm_responses))
 
         try:
             # wait for call to end
+            # Note: In the case of streaming, processing does not wait here, so disconnection detection is performed in StreamingResponse.
             responses = await llm_responses
             disconnect_task.cancel()
 
