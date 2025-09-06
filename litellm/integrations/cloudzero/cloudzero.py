@@ -2,8 +2,6 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, cast
 
-import polars as pl
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger

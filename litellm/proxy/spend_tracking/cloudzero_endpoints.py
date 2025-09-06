@@ -458,7 +458,6 @@ async def cloudzero_export(
     Only admin users can perform CloudZero exports.
     """
 
-    from datetime import datetime
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
