@@ -45,27 +45,23 @@ pip install litellm==1.76.3
 
 ## Key Highlights
 
-- **Major Performance Improvements** - +400 RPS when using correct amount of CPU cores and stream timeout improvements
-- **Video Generation Support** - Added Veo Video Generation through LiteLLM Pass through routes
-- **New Model Support** - GPT-4.1 family, Together AI model updates, and Volcengine embedding models
-- **CloudZero Integration** - New cost tracking integration for enterprise users
-- **Enhanced Provider Support** - Improved Gemini tool calling, Groq reasoning_effort, and Bedrock Batches API
+- **Major Performance Improvements** +400 RPS when using correct amount of workers + CPU cores combination
+- **Video Generation Support** - Added Google AI Studio  and Vertex AI Veo Video Generation through LiteLLM Pass through routes
+- **CloudZero Integration** - New cost tracking integration for exporting LiteLLM Usage and Spend data to CloudZero. 
 
 ## Major Changes 
-- **Performance Optimization**: LiteLLM Proxy now achieves +400 RPS when using correct amount of CPU cores - [PR #14153](https://github.com/BerriAI/litellm/pull/14153)
-- **Video Generation**: Added support for Veo Video Generation through LiteLLM Pass through routes - [PR #14228](https://github.com/BerriAI/litellm/pull/14228)
+- **Performance Optimization**: LiteLLM Proxy now achieves +400 RPS when using correct amount of CPU cores - [PR #14153](https://github.com/BerriAI/litellm/pull/14153), [PR #14242](https://github.com/BerriAI/litellm/pull/14242)
 - **Security Fix**: Fixed memory_usage_in_mem_cache cache endpoint vulnerability - [PR #14229](https://github.com/BerriAI/litellm/pull/14229)
 
 ---
 
 ## Performance Improvements
 
-This release includes significant performance optimizations:
+This release includes significant performance optimizations. On our internal benchmarks we saw 1 instance get +400 RPS when using correct amount of  workers + CPU cores combination.
 
 - **+400 RPS Performance Boost** - LiteLLM Proxy now uses correct amount of CPU cores for optimal performance - [PR #14153](https://github.com/BerriAI/litellm/pull/14153)
-- **Stream Timeout Control** - Allow using `x-litellm-stream-timeout` header for stream timeout in requests - [PR #14147](https://github.com/BerriAI/litellm/pull/14147)
 - **Default CPU Workers** - Changed DEFAULT_NUM_WORKERS_LITELLM_PROXY default to number of CPUs - [PR #14242](https://github.com/BerriAI/litellm/pull/14242)
-- **Client Disconnect Handling** - Cancel upstream on client disconnect (reverted in this release) - [PR #14295](https://github.com/BerriAI/litellm/pull/14295), [PR #14304](https://github.com/BerriAI/litellm/pull/14304)
+
 
 ---
 
@@ -86,21 +82,9 @@ This release includes significant performance optimizations:
 | Volcengine | `doubao-embedding-large` | 4K | Free | Free | 2048-dim embeddings |
 | Together AI | `together_ai/deepseek-ai/DeepSeek-V3.1` | 128K | $0.60 | $1.70 | Reasoning support |
 
-**Video Generation Models Added:** Veo 3.0, Veo 3.0 Fast, and Veo 2.0 models for both Gemini and Vertex AI providers.
-
-**Volcengine Embedding Models:** Multiple Doubao embedding models with various dimensions (2048, 2560, 4096).
-
-#### Model Updates
-
-- **Together AI Models** - Added function calling and tool choice support for Qwen3, DeepSeek-R1, Mistral, and GPT-OSS models
-- **Gemini Pricing Update** - Corrected output pricing for `gemini-2.5-flash-image-preview` from $2.50 to $30.00 per 1M tokens
-- **Deprecated Models Removed** - Removed deprecated Groq llama3 models and Cerebras gpt-oss-20b
-
 #### Features
 
 - **[Google Gemini](../../docs/providers/gemini)**
-    - Fixed Gemini 2.5 Pro schema validation with OpenAI-style type arrays in tools - [PR #14154](https://github.com/BerriAI/litellm/pull/14154)
-    - Fixed Gemini Tool Calling empty enum property - [PR #14155](https://github.com/BerriAI/litellm/pull/14155)
     - Added 'thoughtSignature' support via 'thinking_blocks' - [PR #14122](https://github.com/BerriAI/litellm/pull/14122)
     - Added support for reasoning_effort='minimal' for Gemini models - [PR #14262](https://github.com/BerriAI/litellm/pull/14262)
 - **[OpenRouter](../../docs/providers/openrouter)**
@@ -117,15 +101,19 @@ This release includes significant performance optimizations:
 - **[Ollama](../../docs/providers/ollama)**
     - Added unified 'thinking' param support via `reasoning_content` - [PR #14121](https://github.com/BerriAI/litellm/pull/14121)
 - **[Anthropic](../../docs/providers/anthropic)**
-    - Added support for anthropic citation API in Databricks - [PR #14077](https://github.com/BerriAI/litellm/pull/14077)
     - Added supported text field to anthropic citation response - [PR #14126](https://github.com/BerriAI/litellm/pull/14126)
-    - Added guardrail to the Anthropic API endpoint - [PR #14107](https://github.com/BerriAI/litellm/pull/14107)
 - **[OCI Provider](../../docs/providers/oci)**
     - Handle assistant messages with both content and tool_calls - [PR #14171](https://github.com/BerriAI/litellm/pull/14171)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Fixed structure output - [PR #14130](https://github.com/BerriAI/litellm/pull/14130)
     - Added initial support for Bedrock Batches API - [PR #14190](https://github.com/BerriAI/litellm/pull/14190)
-    - Support AWS_BEDROCK_RUNTIME_ENDPOINT on bedrock passthrough - [PR #14156](https://github.com/BerriAI/litellm/pull/14156)
+- **[Databricks](../../docs/providers/databricks)**
+    - Added support for anthropic citation API in Databricks - [PR #14077](https://github.com/BerriAI/litellm/pull/14077)
+
+### Bug Fixes
+- **[Google Gemini (Google AI Studio + Vertex AI)](../../docs/providers/gemini)**
+    - Fixed Gemini 2.5 Pro schema validation with OpenAI-style type arrays in tools - [PR #14154](https://github.com/BerriAI/litellm/pull/14154)
+    - Fixed Gemini Tool Calling empty enum property - [PR #14155](https://github.com/BerriAI/litellm/pull/14155)
 
 #### New Provider Support
 
@@ -141,11 +129,13 @@ This release includes significant performance optimizations:
 - **[Images API](../../docs/image_generation)**
     - Added pass through image generation and image editing on OpenAI - [PR #14292](https://github.com/BerriAI/litellm/pull/14292)
     - Support extra_body parameter for image generation - [PR #14211](https://github.com/BerriAI/litellm/pull/14211)
-- **[Video Generation](../../docs/video_generation)**
-    - Allow using Veo Video Generation through LiteLLM Pass through routes - [PR #14228](https://github.com/BerriAI/litellm/pull/14228)
 - **[Responses API](../../docs/response_api)**
     - Fixed response API for reasoning item in input for litellm proxy - [PR #14200](https://github.com/BerriAI/litellm/pull/14200)
     - Added structured output for SDK - [PR #14206](https://github.com/BerriAI/litellm/pull/14206)
+- **[Bedrock Passthrough](../../docs/pass_through/bedrock)**
+    - Support AWS_BEDROCK_RUNTIME_ENDPOINT on bedrock passthrough - [PR #14156](https://github.com/BerriAI/litellm/pull/14156)
+- **[Google AI Studio Passthrough](../../docs/pass_through/google_ai_studio)**
+    - Allow using Veo Video Generation through LiteLLM Pass through routes - [PR #14228](https://github.com/BerriAI/litellm/pull/14228)
 - **General**
     - Added support for safety_identifier parameter in chat.completions.create - [PR #14174](https://github.com/BerriAI/litellm/pull/14174)
     - Fixed misclassified 500 error on invalid image_url in /chat/completions request - [PR #14149](https://github.com/BerriAI/litellm/pull/14149)
@@ -154,11 +144,22 @@ This release includes significant performance optimizations:
 #### Bugs
 
 - **General**
-    - Fixed x-litellm-tags not routing with Responses API - [PR #14289](https://github.com/BerriAI/litellm/pull/14289)
     - Remove "/" or ":" from model name when being used as h11 header name - [PR #14191](https://github.com/BerriAI/litellm/pull/14191)
     - Bug fix for openai.gpt-oss when using reasoning_effort parameter - [PR #14300](https://github.com/BerriAI/litellm/pull/14300)
 
 ---
+
+## Spend Tracking, Budgets and Rate Limiting
+
+### Features
+    - Added header support for spend_logs_metadata - [PR #14186](https://github.com/BerriAI/litellm/pull/14186)
+    - Litellm passthrough cost tracking for chat completion - [PR #14256](https://github.com/BerriAI/litellm/pull/14256)
+
+### Bug Fixes
+    - Fixed TPM Rate Limit Bug - [PR #14237](https://github.com/BerriAI/litellm/pull/14237)
+    - Fixed Key Budget not resets at expectable times - [PR #14241](https://github.com/BerriAI/litellm/pull/14241)
+
+
 
 ## Management Endpoints / UI
 
@@ -197,6 +198,9 @@ This release includes significant performance optimizations:
 - **[Slack Alerting](../../docs/proxy/alerting)**
     - Added alert type to alert message to slack for easier handling - [PR #14176](https://github.com/BerriAI/litellm/pull/14176)
 
+#### Guardrails
+    - Added guardrail to the Anthropic API endpoint - [PR #14107](https://github.com/BerriAI/litellm/pull/14107)
+
 #### New Integration
 
 - **[CloudZero](../../docs/proxy/cost_tracking)**
@@ -212,13 +216,12 @@ This release includes significant performance optimizations:
     - LiteLLM Proxy: +400 RPS when using correct amount of CPU cores - [PR #14153](https://github.com/BerriAI/litellm/pull/14153)
     - Allow using `x-litellm-stream-timeout` header for stream timeout in requests - [PR #14147](https://github.com/BerriAI/litellm/pull/14147)
     - Change DEFAULT_NUM_WORKERS_LITELLM_PROXY default to number CPUs - [PR #14242](https://github.com/BerriAI/litellm/pull/14242)
-- **Rate Limiting**
-    - Fixed TPM Rate Limit Bug - [PR #14237](https://github.com/BerriAI/litellm/pull/14237)
-    - Fixed Key Budget not resets at expectable times - [PR #14241](https://github.com/BerriAI/litellm/pull/14241)
 - **Monitoring**
     - Added Prometheus missing metrics - [PR #14139](https://github.com/BerriAI/litellm/pull/14139)
-    - Added header support for spend_logs_metadata - [PR #14186](https://github.com/BerriAI/litellm/pull/14186)
-    - Litellm passthrough cost tracking for chat completion - [PR #14256](https://github.com/BerriAI/litellm/pull/14256)
+- **Timeout**
+    - **Stream Timeout Control** - Allow using `x-litellm-stream-timeout` header for stream timeout in requests - [PR #14147](https://github.com/BerriAI/litellm/pull/14147)
+- **Routing**
+    - Fixed x-litellm-tags not routing with Responses API - [PR #14289](https://github.com/BerriAI/litellm/pull/14289)
 
 #### Bugs
 
