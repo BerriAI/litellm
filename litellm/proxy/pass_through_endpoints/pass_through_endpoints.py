@@ -1133,6 +1133,9 @@ async def initialize_pass_through_endpoints(
         if endpoint.get("id") is None:
             endpoint["id"] = str(uuid.uuid4())
 
+        # Get the endpoint_id as a string (guaranteed to be set at this point)
+        endpoint_id: str = endpoint["id"]
+
         _target = endpoint.get("target", None)
         _path: Optional[str] = endpoint.get("path", None)
         if _path is None:
@@ -1160,7 +1163,7 @@ async def initialize_pass_through_endpoints(
 
         # Add exact path route
         verbose_proxy_logger.debug(
-            "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint.get("id")
+            "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
         )
         InitPassThroughEndpointHelpers.add_exact_path_route(
             app=app,
@@ -1171,7 +1174,7 @@ async def initialize_pass_through_endpoints(
             merge_query_params=_merge_query_params,
             dependencies=_dependencies,
             cost_per_request=endpoint.get("cost_per_request", None),
-            endpoint_id=endpoint.get("id"),
+            endpoint_id=endpoint_id,
         )
 
         # Add wildcard route for sub-paths
@@ -1185,11 +1188,11 @@ async def initialize_pass_through_endpoints(
                 merge_query_params=_merge_query_params,
                 dependencies=_dependencies,
                 cost_per_request=endpoint.get("cost_per_request", None),
-                endpoint_id=endpoint.get("id"),
+                endpoint_id=endpoint_id,
             )
 
         verbose_proxy_logger.debug(
-            "Added new pass through endpoint: %s (ID: %s)", _path, endpoint.get("id")
+            "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
         )
 
 
