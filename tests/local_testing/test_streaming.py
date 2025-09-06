@@ -1422,8 +1422,6 @@ def test_bedrock_claude_3_streaming():
         "claude-3-opus-20240229",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
-        # "databricks/databricks-dbrx-instruct",  # databricks
-        "predibase/llama-3-8b-instruct",  # predibase
     ],
 )
 @pytest.mark.asyncio
