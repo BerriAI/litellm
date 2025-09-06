@@ -474,7 +474,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Only update thinking tokens for non-GPT-OSS models
-        if not ("gpt-oss" in model):
+        if "gpt-oss" not in model:
             self.update_optional_params_with_thinking_tokens(
                 non_default_params=non_default_params, optional_params=optional_params
             )
