@@ -14,10 +14,9 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 
 <br />
 
-### LiteLLM x Claude Code
+### Video Walkthrough
 
-<iframe width="840" height="500" src="https://www.loom.com/share/3c17d683cdb74d36a3698763cc558f56?sid=6fa6af6e-429f-4eed-91c9-66c74d1661fa" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
-
+<iframe width="840" height="500" src="https://www.loom.com/embed/3c17d683cdb74d36a3698763cc558f56" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 ## Prerequisites
 
