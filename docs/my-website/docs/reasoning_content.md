@@ -12,7 +12,7 @@ Requires LiteLLM v1.63.0+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
-- Bedrock (Anthropic + Deepseek) (`bedrock/`)
+- Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
 - XAI (`xai/`)
