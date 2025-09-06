@@ -1690,3 +1690,38 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     print(
         "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
     )
+
+
+def test_get_metadata_variable_name_from_kwargs(model_list):
+    """
+    Test _get_metadata_variable_name_from_kwargs method returns correct metadata variable name based on kwargs content.
+    """
+    router = Router(model_list=model_list)
+    
+    # Test case 1: kwargs contains litellm_metadata - should return "litellm_metadata"
+    kwargs_with_litellm_metadata = {
+        "litellm_metadata": {"user": "test"},
+        "metadata": {"other": "data"}
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_litellm_metadata)
+    assert result == "litellm_metadata"
+    
+    # Test case 2: kwargs only contains metadata - should return "metadata"
+    kwargs_with_metadata_only = {
+        "metadata": {"user": "test"}
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_with_metadata_only)
+    assert result == "metadata"
+    
+    # Test case 3: kwargs contains neither - should return "metadata" (default)
+    kwargs_empty = {}
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_empty)
+    assert result == "metadata"
+    
+    # Test case 4: kwargs contains other keys but no metadata keys - should return "metadata"
+    kwargs_other = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}]
+    }
+    result = router._get_metadata_variable_name_from_kwargs(kwargs_other)
+    assert result == "metadata"

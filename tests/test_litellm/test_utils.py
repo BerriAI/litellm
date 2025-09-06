@@ -170,7 +170,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.volcengine import VolcEngineConfig
+    from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineConfig
 
     assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
         model="llama3"

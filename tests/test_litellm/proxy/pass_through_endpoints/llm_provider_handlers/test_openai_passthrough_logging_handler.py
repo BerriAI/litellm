@@ -105,6 +105,30 @@ class TestOpenAIPassthroughLoggingHandler:
         assert OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route("https://api.anthropic.com/v1/messages") == False
         assert OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route("") == False
 
+    def test_is_openai_image_generation_route(self):
+        """Test OpenAI image generation route detection"""
+        # Positive cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("https://api.openai.com/v1/images/generations") == True
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("https://openai.azure.com/v1/images/generations") == True
+        
+        # Negative cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("https://api.openai.com/v1/chat/completions") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("https://api.openai.com/v1/images/edits") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("http://localhost:4000/openai/v1/images/generations") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_generation_route("") == False
+
+    def test_is_openai_image_editing_route(self):
+        """Test OpenAI image editing route detection"""
+        # Positive cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("https://api.openai.com/v1/images/edits") == True
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("https://openai.azure.com/v1/images/edits") == True
+        
+        # Negative cases
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("https://api.openai.com/v1/chat/completions") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("https://api.openai.com/v1/images/generations") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("http://localhost:4000/openai/v1/images/edits") == False
+        assert OpenAIPassthroughLoggingHandler.is_openai_image_editing_route("") == False
+
     @patch('litellm.completion_cost')
     @patch('litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload')
     def test_openai_passthrough_handler_success(self, mock_get_standard_logging, mock_completion_cost):
@@ -349,6 +373,34 @@ class TestOpenAIPassthroughIntegration:
     def setup_method(self):
         """Set up test fixtures"""
         self.handler = PassThroughEndpointLogging()
+        self.start_time = datetime.now()
+        self.end_time = datetime.now()
+
+    def _create_mock_logging_obj(self) -> LiteLLMLoggingObj:
+        """Create a mock logging object"""
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {}
+        return mock_logging_obj
+
+    def _create_mock_httpx_response(self, response_data: dict = None) -> httpx.Response:
+        """Create a mock httpx response"""
+        if response_data is None:
+            response_data = {"id": "test", "choices": [{"message": {"content": "Hello"}}]}
+            
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(response_data)
+        mock_response.json.return_value = response_data
+        mock_response.headers = {"content-type": "application/json"}
+        return mock_response
+
+    def _create_passthrough_logging_payload(self, user: str = "test_user") -> PassthroughStandardLoggingPayload:
+        """Create a mock passthrough logging payload"""
+        return PassthroughStandardLoggingPayload(
+            url="https://api.openai.com/v1/chat/completions",
+            request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]},
+            request_method="POST",
+        )
 
     def test_is_openai_route_detection(self):
         """Test OpenAI route detection in the main success handler"""
@@ -445,6 +497,240 @@ class TestOpenAIPassthroughIntegration:
 
         # Assert - Should call the base handler, not our OpenAI handler
         self.handler._handle_logging.assert_called_once()
+
+    @patch('litellm.cost_calculator.default_image_cost_calculator')
+    def test_calculate_image_generation_cost(self, mock_image_cost_calculator):
+        """Test image generation cost calculation"""
+        # Arrange
+        mock_image_cost_calculator.return_value = 0.040
+        model = "dall-e-3"
+        response_body = {
+            "data": [
+                {
+                    "url": "https://example.com/image1.png",
+                    "revised_prompt": "A beautiful sunset over the ocean"
+                }
+            ]
+        }
+        request_body = {
+            "model": "dall-e-3",
+            "prompt": "A beautiful sunset over the ocean",
+            "n": 1,
+            "size": "1024x1024",
+            "quality": "standard"
+        }
+
+        # Act
+        cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
+            model=model,
+            response_body=response_body,
+            request_body=request_body,
+        )
+
+        # Assert
+        assert cost == 0.040
+        mock_image_cost_calculator.assert_called_once_with(
+            model=model,
+            custom_llm_provider="openai",
+            quality="standard",
+            n=1,
+            size="1024x1024",
+            optional_params=request_body,
+        )
+
+    @patch('litellm.cost_calculator.default_image_cost_calculator')
+    def test_calculate_image_editing_cost(self, mock_image_cost_calculator):
+        """Test image editing cost calculation"""
+        # Arrange
+        mock_image_cost_calculator.return_value = 0.020
+        model = "dall-e-2"
+        response_body = {
+            "data": [
+                {
+                    "url": "https://example.com/edited_image.png",
+                    "revised_prompt": "A beautiful sunset over the ocean with added clouds"
+                }
+            ]
+        }
+        request_body = {
+            "model": "dall-e-2",
+            "prompt": "Add clouds to the sky",
+            "n": 1,
+            "size": "1024x1024"
+        }
+
+        # Act
+        cost = OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
+            model=model,
+            response_body=response_body,
+            request_body=request_body,
+        )
+
+        # Assert
+        assert cost == 0.020
+        mock_image_cost_calculator.assert_called_once_with(
+            model=model,
+            custom_llm_provider="openai",
+            quality=None,  # Image editing doesn't have quality parameter
+            n=1,
+            size="1024x1024",
+            optional_params=request_body,
+        )
+
+    def test_cost_calculation_preservation(self):
+        """Test that manually calculated costs are preserved and not overridden."""
+        # Create a logging object
+        logging_obj = LiteLLMLoggingObj(
+            model="dall-e-3",
+            messages=[{"role": "user", "content": "Generate an image"}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=self.start_time,
+            litellm_call_id="test_123",
+            function_id="test_fn",
+        )
+        
+        # Set a manually calculated cost in model_call_details
+        test_cost = 0.040000
+        logging_obj.model_call_details["response_cost"] = test_cost
+        logging_obj.model_call_details["model"] = "dall-e-3"
+        logging_obj.model_call_details["custom_llm_provider"] = "openai"
+        
+        # Create an ImageResponse with cost in _hidden_params
+        from litellm.types.utils import ImageResponse
+        image_response = ImageResponse(
+            data=[{"url": "https://example.com/image.png"}],
+            model="dall-e-3",
+        )
+        image_response._hidden_params = {"response_cost": test_cost}
+        
+        # Test the _response_cost_calculator method
+        calculated_cost = logging_obj._response_cost_calculator(result=image_response)
+        
+        assert calculated_cost == test_cost, f"Expected {test_cost}, got {calculated_cost}"
+
+    @patch('litellm.cost_calculator.default_image_cost_calculator')
+    def test_openai_passthrough_handler_image_generation(self, mock_image_cost_calculator):
+        """Test successful cost tracking for OpenAI image generation"""
+        # Arrange
+        mock_image_cost_calculator.return_value = 0.040
+        
+        mock_image_response = {
+            "data": [
+                {
+                    "url": "https://example.com/image1.png",
+                    "revised_prompt": "A beautiful sunset over the ocean"
+                }
+            ]
+        }
+        
+        mock_httpx_response = self._create_mock_httpx_response(mock_image_response)
+        mock_logging_obj = self._create_mock_logging_obj()
+        passthrough_payload = self._create_passthrough_logging_payload()
+        
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "dall-e-3",
+        }
+
+        request_body = {
+            "model": "dall-e-3",
+            "prompt": "A beautiful sunset over the ocean",
+            "n": 1,
+            "size": "1024x1024",
+            "quality": "standard"
+        }
+
+        # Act
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_image_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/images/generations",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body=request_body,
+            **kwargs
+        )
+
+        # Assert
+        assert result is not None
+        assert "result" in result
+        assert "kwargs" in result
+        assert result["kwargs"]["response_cost"] == 0.040
+        assert result["kwargs"]["model"] == "dall-e-3"
+        assert result["kwargs"]["custom_llm_provider"] == "openai"
+        
+        # Verify cost calculation was called
+        mock_image_cost_calculator.assert_called_once()
+        
+        # Verify logging object was updated
+        assert mock_logging_obj.model_call_details["response_cost"] == 0.040
+        assert mock_logging_obj.model_call_details["model"] == "dall-e-3"
+        assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+    @patch('litellm.cost_calculator.default_image_cost_calculator')
+    def test_openai_passthrough_handler_image_editing(self, mock_image_cost_calculator):
+        """Test successful cost tracking for OpenAI image editing"""
+        # Arrange
+        mock_image_cost_calculator.return_value = 0.020
+        
+        mock_image_response = {
+            "data": [
+                {
+                    "url": "https://example.com/edited_image.png",
+                    "revised_prompt": "A beautiful sunset over the ocean with added clouds"
+                }
+            ]
+        }
+        
+        mock_httpx_response = self._create_mock_httpx_response(mock_image_response)
+        mock_logging_obj = self._create_mock_logging_obj()
+        passthrough_payload = self._create_passthrough_logging_payload()
+        
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "dall-e-2",
+        }
+
+        request_body = {
+            "model": "dall-e-2",
+            "prompt": "Add clouds to the sky",
+            "n": 1,
+            "size": "1024x1024"
+        }
+
+        # Act
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_image_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/images/edits",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body=request_body,
+            **kwargs
+        )
+
+        # Assert
+        assert result is not None
+        assert "result" in result
+        assert "kwargs" in result
+        assert result["kwargs"]["response_cost"] == 0.020
+        assert result["kwargs"]["model"] == "dall-e-2"
+        assert result["kwargs"]["custom_llm_provider"] == "openai"
+        
+        # Verify cost calculation was called
+        mock_image_cost_calculator.assert_called_once()
+        
+        # Verify logging object was updated
+        assert mock_logging_obj.model_call_details["response_cost"] == 0.020
+        assert mock_logging_obj.model_call_details["model"] == "dall-e-2"
+        assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
 
 
 if __name__ == "__main__":
