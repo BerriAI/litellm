@@ -914,7 +914,6 @@ OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "us
 
 OpenAIImageGenerationOptionalParams = Literal[
     "background",
-    "input_fidelity",
     "moderation",
     "n",
     "output_compression",
