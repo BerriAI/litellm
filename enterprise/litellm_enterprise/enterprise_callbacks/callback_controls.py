@@ -69,10 +69,11 @@ class EnterpriseCallbackControls:
         # check if disabled via headers
         #########################################################
         request_headers = get_proxy_server_request_headers(litellm_params)
-        disabled_callbacks = request_headers.get(X_LITELLM_DISABLE_CALLBACKS, None)
-        if disabled_callbacks is not None:
-            disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
-            return list(disabled_callbacks)
+        if request_headers is not None:
+            disabled_callbacks = request_headers.get(X_LITELLM_DISABLE_CALLBACKS, None)
+            if disabled_callbacks is not None:
+                disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
+                return list(disabled_callbacks)
         
 
         #########################################################
