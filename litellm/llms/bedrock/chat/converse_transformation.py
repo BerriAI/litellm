@@ -164,7 +164,9 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if (
+        if "gpt-oss" in model:
+            supported_params.append("reasoning_effort")
+        elif (
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
@@ -319,7 +321,6 @@ class AmazonConverseConfig(BaseConfig):
         return computer_use_tools, regular_tools
 
 
-
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
@@ -462,13 +463,22 @@ class AmazonConverseConfig(BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                if "gpt-oss" in model:
+                    # GPT-OSS models: keep reasoning_effort as-is
+                    # It will be passed through to additionalModelRequestFields
+                    optional_params["reasoning_effort"] = value
+                    continue
+                else:
+                    # Anthropic and other models: convert to thinking parameter
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
 
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
-        )
+        # Only update thinking tokens for non-GPT-OSS models
+        if not ("gpt-oss" in model):
+            self.update_optional_params_with_thinking_tokens(
+                non_default_params=non_default_params, optional_params=optional_params
+            )
 
         return optional_params
 
