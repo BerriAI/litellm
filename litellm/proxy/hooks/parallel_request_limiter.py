@@ -1,3 +1,4 @@
+from typing import Dict
 import asyncio
 import sys
 from datetime import datetime, timedelta
@@ -100,12 +101,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 headers={"retry-after": str(self.time_to_next_minute())},
             )
 
-        await self.internal_usage_cache.async_batch_set_cache(
-            cache_list=values_to_update_in_cache,
-            ttl=60,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            local_only=True,
-        )
+        for key, value in values_to_update_in_cache:
+            await self.internal_usage_cache.async_set_cache(
+                key=key,
+                value=value,
+                ttl=60,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
         return new_val
 
     def time_to_next_minute(self) -> float:
@@ -153,21 +155,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_team_id,
             request_count_end_user_id,
         ]
-        results = await self.internal_usage_cache.async_batch_get_cache(
-            keys=keys,
-            parent_otel_span=parent_otel_span,
-        )
-
-        if results is None:
-            return CacheObject(
-                current_global_requests=None,
-                request_count_api_key=None,
-                request_count_api_key_model=None,
-                request_count_user_id=None,
-                request_count_team_id=None,
-                request_count_end_user_id=None,
-            )
-
+        results = []
+        for key in keys:
+            if key is not None:
+                value = await self.internal_usage_cache.async_get_cache(
+                    key=key,
+                    litellm_parent_otel_span=parent_otel_span,
+                )
+                results.append(value)
+            else:
+                results.append(None)
+        
         return CacheObject(
             current_global_requests=results[0],
             request_count_api_key=results[1],
@@ -230,10 +228,23 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
             # if below -> increment
             else:
-                await self.internal_usage_cache.async_increment_cache(
+                current_value = await self.internal_usage_cache.async_get_cache(
                     key=_key,
-                    value=1,
                     local_only=True,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                if current_value is None:
+                    current_value = 0
+                await self.internal_usage_cache.async_set_cache(
+                    key=_key,
+                    value=current_value + 1,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                new_value = (current_value or 0) + 1
+                # Establecer el nuevo valor en el caché
+                await self.internal_usage_cache.async_set_cache(
+                    key=_key,
+                    value=new_value,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
         _model = data.get("model", None)
@@ -435,12 +446,21 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
 
         asyncio.create_task(
-            self.internal_usage_cache.async_batch_set_cache(
+            self._async_batch_set_cache_wrapper(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            )  # don't block execution for cache updates
+            )
         )
+
+    async def _async_batch_set_cache_wrapper(self, cache_list: List[Tuple], ttl: int, litellm_parent_otel_span: Any = None):
+        for key, value in cache_list:
+            await self.internal_usage_cache.async_set_cache(
+                key=key,
+                value=value,
+                ttl=ttl,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+            )
 
         return
 
@@ -485,10 +505,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # get value from cache
                 _key = "global_max_parallel_requests"
                 # decrement
-                await self.internal_usage_cache.async_increment_cache(
+                current_value = await self.internal_usage_cache.async_get_cache(
                     key=_key,
-                    value=-1,
                     local_only=True,
+                    litellm_parent_otel_span=litellm_parent_otel_span,
+                )
+                new_value = (current_value or 0) - 1
+                await self.internal_usage_cache.async_set_cache(
+                    key=_key,
+                    value=new_value,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
 
@@ -669,7 +694,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
                 values_to_update_in_cache.append((request_count_api_key, new_val))
 
-            await self.internal_usage_cache.async_batch_set_cache(
+            await self._async_batch_set_cache_wrapper(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
                 litellm_parent_otel_span=litellm_parent_otel_span,
@@ -713,10 +738,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         )
                     )
                     # decrement
-                    await self.internal_usage_cache.async_increment_cache(
+                    current_value = await self.internal_usage_cache.async_get_cache(
                         key=_key,
-                        value=-1,
                         local_only=True,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+                    new_value = (current_value or 0) - 1
+                    await self.internal_usage_cache.async_set_cache(
+                        key=_key,
+                        value=new_value,
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
 

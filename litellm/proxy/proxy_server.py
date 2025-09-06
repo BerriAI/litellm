@@ -8017,7 +8017,7 @@ async def new_invitation(
         )
         return response
     except Exception as e:
-        raise handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e, proxy_logging_obj=proxy_logging_obj, user_api_key_dict=user_api_key_dict, model=model)
 
 
 @router.get(

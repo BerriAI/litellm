@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import pytz  # type: ignore
 import smtplib
 import threading
 import time
@@ -42,6 +43,9 @@ except ImportError:
 
 from fastapi import HTTPException, status
 
+from sqlite3 import OperationalError
+from asyncio import TimeoutError
+
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
@@ -60,7 +64,10 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging,
+    _custom_logger_compatible_callbacks_literal,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
@@ -105,6 +112,144 @@ else:
     Span = Any
 
 
+
+def _calculate_next_midnight_pt() -> datetime:
+    """
+    Calculate the next midnight in Pacific Time (PT).
+    
+    Returns:
+        datetime: The next midnight PT in UTC timezone
+    """
+    # Get current UTC time
+    now_utc = datetime.now(pytz.UTC)
+    
+    # Convert to Pacific Time
+    pt_tz = pytz.timezone('US/Pacific')
+    now_pt = now_utc.astimezone(pt_tz)
+    
+    # Calculate next midnight PT
+    next_midnight_pt = now_pt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if now_pt >= next_midnight_pt:
+        # If we're already past today's midnight PT, get tomorrow's midnight PT
+        next_midnight_pt = next_midnight_pt + timedelta(days=1)
+    
+    # Convert back to UTC
+    return next_midnight_pt.astimezone(pytz.UTC)
+
+def _is_gemini_resource_exhausted(error_detail: Any) -> bool:
+    """
+    Check if the error is a Gemini RESOURCE_EXHAUSTED error.
+    
+    Args:
+        error_detail: The error detail from the HTTPException or response
+        
+    Returns:
+        bool: True if this is a Gemini daily limit error
+    """
+    if isinstance(error_detail, dict):
+        # Check for RESOURCE_EXHAUSTED in error detail
+        error_info = error_detail.get('error', {})
+        if isinstance(error_info, dict):
+            return error_info.get('code') == 'RESOURCE_EXHAUSTED'
+        
+        # Also check the top level error field
+        return error_detail.get('error') == 'RESOURCE_EXHAUSTED'
+    
+    elif isinstance(error_detail, str):
+        # Check if the string contains RESOURCE_EXHAUSTED
+        return 'RESOURCE_EXHAUSTED' in error_detail
+    
+    return False
+
+class InternalUsageCache:
+    def __init__(self, dual_cache: DualCache):
+        self.dual_cache = dual_cache
+
+    async def async_get_cache(self, key: str, litellm_parent_otel_span: Any = None, local_only: bool = False, **kwargs):
+        return await self.dual_cache.async_get_cache(key=key, local_only=local_only, litellm_parent_otel_span=litellm_parent_otel_span, **kwargs)
+
+    async def async_set_cache(self, key: str, value: Any, ttl: Optional[int] = None, litellm_parent_otel_span: Any = None):
+        await self.dual_cache.async_set_cache(key=key, value=value, ttl=ttl, litellm_parent_otel_span=litellm_parent_otel_span)
+
+    async def async_delete_cache(self, key: str, **kwargs):
+        await self.dual_cache.async_delete_cache(key=key, **kwargs)
+
+async def _handle_gemini_cooldown(api_key_hash: str, usage_cache: Optional[InternalUsageCache] = None) -> None:
+    """
+    Apply cooldown for a Gemini API key that hit daily limit.
+    
+    Args:
+        api_key_hash: The hashed API key
+        usage_cache: Optional cache instance to store cooldown info
+    """
+    if usage_cache is None:
+        # If no cache provided, still log the event
+        verbose_proxy_logger.info(f"Gemini daily limit hit for API key {api_key_hash[:8]}...")
+        return
+    
+    try:
+        # Calculate next midnight PT
+        next_midnight_utc = _calculate_next_midnight_pt()
+        
+        # Create cooldown record
+        cooldown_key = f"gemini_cooldown:{api_key_hash}"
+        cooldown_data = {
+            "expire_at": next_midnight_utc.isoformat(),
+            "reason": "RESOURCE_EXHAUSTED",
+            "provider": "gemini"
+        }
+        
+        # Store cooldown info in cache with TTL until end of cooldown
+        ttl_seconds = int((next_midnight_utc - datetime.now(pytz.UTC)).total_seconds())
+        
+        await usage_cache.async_set_cache(
+            key=cooldown_key,
+            value=cooldown_data,
+            ttl=ttl_seconds,
+            litellm_parent_otel_span=None
+        )
+        
+        verbose_proxy_logger.info(f"Applied Gemini cooldown for API key {api_key_hash[:8]}... Expires at {next_midnight_utc}")
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Failed to apply Gemini cooldown: {e}")
+
+async def _is_gemini_key_in_cooldown(api_key_hash: str, usage_cache: Optional[InternalUsageCache] = None) -> bool:
+    """
+    Check if a Gemini API key is currently in cooldown.
+    
+    Args:
+        api_key_hash: The hashed API key
+        usage_cache: Optional cache instance
+        
+    Returns:
+        bool: True if key is in cooldown
+    """
+    if usage_cache is None:
+        return False
+    
+    try:
+        cooldown_key = f"gemini_cooldown:{api_key_hash}"
+        cooldown_data = await usage_cache.async_get_cache(
+            key=cooldown_key,
+            litellm_parent_otel_span=None
+        )
+        
+        if cooldown_data and isinstance(cooldown_data, dict):
+            expire_at_str = cooldown_data.get('expire_at')
+            if expire_at_str:
+                expire_at = datetime.fromisoformat(expire_at_str)
+                expire_at = expire_at.replace(tzinfo=pytz.UTC)
+                
+                if datetime.now(pytz.UTC) < expire_at:
+                    return True
+        
+        return False
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"Failed to check Gemini cooldown status: {e}")
+        return False
+
 def print_verbose(print_statement):
     """
     Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
@@ -118,112 +263,6 @@ def print_verbose(print_statement):
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
-
-
-class InternalUsageCache:
-    def __init__(self, dual_cache: DualCache):
-        self.dual_cache: DualCache = dual_cache
-
-    async def async_get_cache(
-        self,
-        key,
-        litellm_parent_otel_span: Union[Span, None],
-        local_only: bool = False,
-        **kwargs,
-    ) -> Any:
-        return await self.dual_cache.async_get_cache(
-            key=key,
-            local_only=local_only,
-            parent_otel_span=litellm_parent_otel_span,
-            **kwargs,
-        )
-
-    async def async_set_cache(
-        self,
-        key,
-        value,
-        litellm_parent_otel_span: Union[Span, None],
-        local_only: bool = False,
-        **kwargs,
-    ) -> None:
-        return await self.dual_cache.async_set_cache(
-            key=key,
-            value=value,
-            local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
-            **kwargs,
-        )
-
-    async def async_batch_set_cache(
-        self,
-        cache_list: List,
-        litellm_parent_otel_span: Union[Span, None],
-        local_only: bool = False,
-        **kwargs,
-    ) -> None:
-        return await self.dual_cache.async_set_cache_pipeline(
-            cache_list=cache_list,
-            local_only=local_only,
-            litellm_parent_otel_span=litellm_parent_otel_span,
-            **kwargs,
-        )
-
-    async def async_batch_get_cache(
-        self,
-        keys: list,
-        parent_otel_span: Optional[Span] = None,
-        local_only: bool = False,
-    ):
-        return await self.dual_cache.async_batch_get_cache(
-            keys=keys,
-            parent_otel_span=parent_otel_span,
-            local_only=local_only,
-        )
-
-    async def async_increment_cache(
-        self,
-        key,
-        value: float,
-        litellm_parent_otel_span: Union[Span, None],
-        local_only: bool = False,
-        **kwargs,
-    ):
-        return await self.dual_cache.async_increment_cache(
-            key=key,
-            value=value,
-            local_only=local_only,
-            parent_otel_span=litellm_parent_otel_span,
-            **kwargs,
-        )
-
-    def set_cache(
-        self,
-        key,
-        value,
-        local_only: bool = False,
-        **kwargs,
-    ) -> None:
-        return self.dual_cache.set_cache(
-            key=key,
-            value=value,
-            local_only=local_only,
-            **kwargs,
-        )
-
-    def get_cache(
-        self,
-        key,
-        local_only: bool = False,
-        **kwargs,
-    ) -> Any:
-        return self.dual_cache.get_cache(
-            key=key,
-            local_only=local_only,
-            **kwargs,
-        )
-
-
-### LOGGING ###
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -250,7 +289,7 @@ class ProxyLogging:
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
         self.alerting: Optional[List] = None
-        self.alerting_threshold: float = 300  # default to 5 min. threshold
+        self.alerting_threshold: int = 300  # default to 5 min. threshold
         self.alert_types: List[AlertType] = DEFAULT_ALERT_TYPES
         self.alert_to_webhook_url: Optional[dict] = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
@@ -311,7 +350,7 @@ class ProxyLogging:
     def update_values(
         self,
         alerting: Optional[List] = None,
-        alerting_threshold: Optional[float] = None,
+        alerting_threshold: Optional[int] = None,
         redis_cache: Optional[RedisCache] = None,
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
@@ -390,13 +429,14 @@ class ProxyLogging:
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
         for callback in litellm.callbacks:
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                    callback,
+                _callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                    logging_integration=callback,  # type: ignore
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
-                if callback is None:
+                if _callback is None:
                     continue
+                callback = _callback
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)  # type: ignore
             if callback not in litellm.success_callback:
@@ -434,7 +474,7 @@ class ProxyLogging:
             return
 
         # current alerting threshold
-        alerting_threshold: float = self.alerting_threshold
+        alerting_threshold: int = self.alerting_threshold
 
         # add a 100 second buffer to the alerting threshold
         # ensures we don't send errant hanging request slack alerts
@@ -443,7 +483,6 @@ class ProxyLogging:
         await self.internal_usage_cache.async_set_cache(
             key="request_status:{}".format(litellm_call_id),
             value=status,
-            local_only=True,
             ttl=alerting_threshold,
             litellm_parent_otel_span=None,
         )
@@ -855,6 +894,26 @@ class ProxyLogging:
         if data is None:
             return None
 
+        # Check for Gemini cooldown before proceeding with any other hooks
+        if user_api_key_dict.api_key is not None:
+            model = data.get("model", "")
+            if "gemini" in model.lower(): # Only apply to Gemini models
+                if await _is_gemini_key_in_cooldown(
+                    api_key_hash=user_api_key_dict.api_key,
+                    usage_cache=self.internal_usage_cache
+                ):
+                    verbose_proxy_logger.info(f"Gemini API key {user_api_key_dict.api_key[:8]}... is in cooldown.")
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail={
+                            "error": {
+                                "message": "Gemini daily rate limit exceeded. Please try again after midnight PT.",
+                                "type": "resource_exhausted",
+                                "code": "RESOURCE_EXHAUSTED"
+                            }
+                        }
+                    )
+
         litellm_logging_obj = cast(
             Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
         )
@@ -902,7 +961,7 @@ class ProxyLogging:
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        logging_integration=callback  # type: ignore
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1171,6 +1230,28 @@ class ProxyLogging:
         if litellm.utils.capture_exception:
             litellm.utils.capture_exception(error=original_exception)
 
+    async def handle_gemini_rate_limit(
+        self,
+        original_exception: HTTPException,
+        user_api_key_hash: str,
+        model: str,
+    ) -> bool:
+        """
+        Handles Gemini RESOURCE_EXHAUSTED errors by applying a daily cooldown.
+        Returns True if a cooldown was applied and the request should be rejected.
+        """
+        if original_exception.status_code == 429 and _is_gemini_resource_exhausted(
+            original_exception.detail
+        ):
+            verbose_proxy_logger.info(
+                f"Gemini RESOURCE_EXHAUSTED error detected for API key {user_api_key_hash[:8]}... Model: {model}"
+            )
+            await _handle_gemini_cooldown(
+                api_key_hash=user_api_key_hash, usage_cache=self.internal_usage_cache
+            )
+            return True
+        return False
+
     async def post_call_failure_hook(
         self,
         request_data: dict,
@@ -1201,6 +1282,21 @@ class ProxyLogging:
         await self.update_request_status(
             litellm_call_id=request_data.get("litellm_call_id", ""), status="fail"
         )
+        # Check for Gemini rate limit and apply cooldown
+        if (
+            isinstance(original_exception, HTTPException)
+            and user_api_key_dict.api_key is not None
+        ):
+            model_from_request = request_data.get("model", "unknown")
+            if "gemini" in model_from_request.lower():
+                if await self.handle_gemini_rate_limit(
+                    original_exception=original_exception,
+                    user_api_key_hash=user_api_key_dict.api_key,
+                    model=model_from_request,
+                ):
+                    # If Gemini cooldown was applied, we don't need to proceed with other failure hooks
+                    return
+
         if AlertType.llm_exceptions in self.alert_types and not isinstance(
             original_exception, HTTPException
         ):
@@ -1241,7 +1337,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        logging_integration=callback  # type: ignore
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1401,7 +1497,7 @@ class ProxyLogging:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        logging_integration=callback  # type: ignore
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -1482,7 +1578,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            callback
+                            logging_integration=callback  # type: ignore
                         )
                     else:
                         _callback = callback  # type: ignore
@@ -1522,7 +1618,7 @@ class ProxyLogging:
             _callback: Optional[CustomLogger] = None
             if isinstance(callback, str):
                 _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    callback
+                    logging_integration=callback  # type: ignore
                 )
             else:
                 _callback = callback  # type: ignore
@@ -1560,7 +1656,7 @@ class ProxyLogging:
 ### DB CONNECTOR ###
 # Define the retry decorator with backoff strategy
 # Function to be called whenever a retry is about to happen
-def on_backoff(details):
+async def on_backoff(details):
     # The 'tries' key in the details dictionary contains the number of completed tries
     print_verbose(f"Backing off... this was attempt #{details['tries']}")
 
@@ -1580,6 +1676,10 @@ def jsonify_object(data: dict) -> dict:
 
 class PrismaClient:
     spend_log_transactions: List = []
+    max_tries = int(os.getenv("DB_MAX_TRIES", 3))
+    factor = int(os.getenv("DB_FACTOR", 2))
+    _jitter_env = os.getenv("DB_JITTER")
+    jitter = backoff.full_jitter if _jitter_env and float(_jitter_env) > 0.0 else None
 
     def __init__(
         self,
@@ -1592,6 +1692,7 @@ class PrismaClient:
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
             os.getenv("IAM_TOKEN_DB_AUTH")
         )
+
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
@@ -1679,13 +1780,6 @@ class PrismaClient:
                     db_data[k] = "failed-to-serialize-json"
         return db_data
 
-    @backoff.on_exception(
-        backoff.expo,
-        Exception,  # base exception to catch for the backoff
-        max_tries=3,  # maximum number of retries
-        max_time=10,  # maximum total time to retry for
-        on_backoff=on_backoff,  # specifying the function to call on backoff
-    )
     async def check_view_exists(self):
         """
         Checks if the LiteLLM_VerificationTokenView and MonthlyGlobalSpend exists in the user's db.
@@ -1782,8 +1876,9 @@ class PrismaClient:
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
-        max_tries=1,  # maximum number of retries
-        max_time=2,  # maximum total time to retry for
+        max_tries=3,
+        factor=2,
+        jitter=None,
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def get_generic_data(
@@ -1836,12 +1931,12 @@ class PrismaClient:
 
     @backoff.on_exception(
         backoff.expo,
-        Exception,  # base exception to catch for the backoff
-        max_tries=3,  # maximum number of retries
-        max_time=10,  # maximum total time to retry for
+        (OperationalError, TimeoutError),  # base exception to catch for the backoff
+        max_tries=max_tries,
+        factor=factor,
+        jitter=jitter,
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    @log_db_metrics
     async def get_data(  # noqa: PLR0915
         self,
         token: Optional[Union[str, list]] = None,
@@ -1983,12 +2078,12 @@ class PrismaClient:
                 if query_type == "find_unique":
                     if key_val is None:
                         key_val = {"user_id": user_id}
-
+ 
                     response = await self.db.litellm_usertable.find_unique(  # type: ignore
                         where=key_val,  # type: ignore
                         include={"organization_memberships": True},
                     )
-
+ 
                 elif query_type == "find_all" and key_val is not None:
                     response = await self.db.litellm_usertable.find_many(
                         where=key_val  # type: ignore
@@ -3119,120 +3214,253 @@ def _hash_token_if_needed(token: str) -> str:
         return token
 
 
+import contextvars # Import contextvars for passing context across async calls
+import httpx # Import httpx for Request/Response types
+
+# Define ContextVars for prisma_client and proxy_logging_obj
+_spend_log_prisma_client_ctx = contextvars.ContextVar("spend_log_prisma_client_ctx")
+_spend_log_proxy_logging_obj_ctx = contextvars.ContextVar("spend_log_proxy_logging_obj_ctx")
+
+# Define ContextVars for prisma_client and proxy_logging_obj
+_spend_log_prisma_client_ctx = contextvars.ContextVar("spend_log_prisma_client_ctx")
+_spend_log_proxy_logging_obj_ctx = contextvars.ContextVar("spend_log_proxy_logging_obj_ctx")
+
+async def _on_spend_log_backoff(details):
+    """
+    Custom backoff handler for spend log updates.
+    Handles Gemini rate limit errors by applying a cooldown.
+    """
+    exception = details['exception']
+    if isinstance(exception, Exception) and hasattr(exception, '__cause__') and isinstance(exception.__cause__, httpx.HTTPStatusError):
+        http_error = exception.__cause__
+        status_code = http_error.response.status_code
+        error_detail = http_error.response.json() if hasattr(http_error.response, 'json') else {}
+
+        if status_code == 429 and _is_gemini_resource_exhausted(error_detail):
+            proxy_logging_obj = _spend_log_proxy_logging_obj_ctx.get()
+            if proxy_logging_obj:
+                api_key_hash = proxy_logging_obj.last_api_key_hash
+                await _handle_gemini_cooldown(api_key_hash, proxy_logging_obj.usage_cache)
+            else:
+                verbose_proxy_logger.warning("proxy_logging_obj not found in context for Gemini cooldown.")
+
+def _should_giveup_spend_logs(e: Exception) -> bool:
+    """
+    Determines if a backoff should give up for spend log updates based on the exception type.
+    - Retries on DB connection errors.
+    - Retries on HTTP 5xx errors.
+    - Respects Retry-After header for HTTP 429.
+    - Does not retry on other HTTP 4xx errors.
+    - Gives up on Gemini 429 errors after applying cooldown in on_backoff.
+    """
+    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        verbose_proxy_logger.debug(f"DB Connection Error, retrying: {e}")
+        return False
+    
+    # Check if the exception is an httpx.HTTPStatusError (which is wrapped in a generic Exception)
+    if isinstance(e, Exception) and hasattr(e, '__cause__') and isinstance(e.__cause__, httpx.HTTPStatusError):
+        http_error = e.__cause__
+        status_code = http_error.response.status_code
+        headers = http_error.response.headers
+        error_detail = http_error.response.json() if hasattr(http_error.response, 'json') else {}
+
+        if status_code == 429:
+            if _is_gemini_resource_exhausted(error_detail):
+                verbose_proxy_logger.debug(f"Gemini 429 RESOURCE_EXHAUSTED error, giving up after cooldown: {e}")
+                return True # Give up, cooldown handled in _on_spend_log_backoff
+            
+            retry_after = headers.get("Retry-After")
+            if retry_after:
+                try:
+                    # backoff will handle the sleep if we return False
+                    verbose_proxy_logger.debug(f"HTTP 429 with Retry-After: {retry_after}, retrying: {e}")
+                    return False # backoff will use the custom wait_gen
+                except ValueError:
+                    verbose_proxy_logger.warning(f"Invalid Retry-After header: {retry_after}. Falling back to exponential backoff.")
+                    return False
+            verbose_proxy_logger.debug(f"HTTP 429, retrying with exponential backoff: {e}")
+            return False # Always retry 429, use exponential backoff if no Retry-After
+        elif 500 <= status_code < 600:
+            verbose_proxy_logger.debug(f"HTTP 5xx error, retrying: {e}")
+            return False
+        elif 400 <= status_code < 500:
+            verbose_proxy_logger.debug(f"HTTP 4xx error (excluding 429), not retrying: {e}")
+            return True # Give up on other 4xx errors
+    
+    verbose_proxy_logger.debug(f"Unknown exception type, retrying with exponential backoff: {e}")
+    return False # Default to retry for unknown exceptions
+
+def _custom_wait_gen():
+    """
+    Custom wait generator that respects Retry-After header for HTTP 429 errors.
+    This is a generator function that yields the wait time.
+    """
+    # initial wait time is 0
+    yield 0
+    
+    # get customized backoff values from environment variables
+    factor = int(os.getenv("SPEND_LOGS_FACTOR", 2))
+    jitter_value = float(os.getenv("SPEND_LOGS_JITTER", 0.0)) # Default to 0.0 for no jitter
+    max_value = 128  # max wait time in seconds
+
+    # default backoff starts here
+    wait_time = 1
+
+    while True:
+        try:
+            # this is where the error from the decorated function is passed in
+            e = yield wait_time
+            
+            if isinstance(e, Exception) and hasattr(e, '__cause__') and isinstance(e.__cause__, httpx.HTTPStatusError):
+                http_error = e.__cause__
+                if http_error.response.status_code == 429:
+                    # Check if it's a Gemini error, if so, we've already handled cooldown and given up
+                    error_detail = http_error.response.json() if hasattr(http_error.response, 'json') else {}
+                    if _is_gemini_resource_exhausted(error_detail):
+                        verbose_proxy_logger.debug("Gemini 429 RESOURCE_EXHAUSTED error detected, no further wait needed as backoff will give up.")
+                        wait_time = 0 # No need to wait, backoff will give up
+                    else:
+                        retry_after = http_error.response.headers.get("Retry-After")
+                        if retry_after:
+                            try:
+                                wait_time = float(retry_after)
+                            except ValueError:
+                                verbose_proxy_logger.warning(f"Invalid Retry-After header: {retry_after}. Falling back to exponential backoff.")
+                                wait_time = min(wait_time * factor, max_value)
+                        else:
+                            wait_time = min(wait_time * factor, max_value)
+                else:
+                    wait_time = min(wait_time * factor, max_value)
+            else:
+                wait_time = min(wait_time * factor, max_value)
+
+        except GeneratorExit:
+            # handle generator cleanup if necessary
+            break
+        except Exception:
+            # handle any other exceptions
+            break
+
 class ProxyUpdateSpend:
     @staticmethod
+    @backoff.on_exception(
+        backoff.expo,
+        (httpx.HTTPStatusError,) + DB_CONNECTION_ERROR_TYPES,
+        max_tries=3,
+        giveup=_should_giveup_spend_logs,
+        on_backoff=_on_spend_log_backoff,
+    )
     async def update_end_user_spend(
-        n_retry_times: int,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
         end_user_list_transactions: Dict[str, float],
     ):
-        for i in range(n_retry_times + 1):
-            start_time = time.time()
-            try:
-                async with prisma_client.db.tx(
-                    timeout=timedelta(seconds=60)
-                ) as transaction:
-                    async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
-                            if litellm.max_end_user_budget is not None:
-                                pass
-                            batcher.litellm_endusertable.upsert(
-                                where={"user_id": end_user_id},
-                                data={
-                                    "create": {
-                                        "user_id": end_user_id,
-                                        "spend": response_cost,
-                                        "blocked": False,
-                                    },
-                                    "update": {"spend": {"increment": response_cost}},
+        # Set context variables for backoff handlers
+        token_prisma_client = _spend_log_prisma_client_ctx.set(prisma_client)
+        token_proxy_logging_obj = _spend_log_proxy_logging_obj_ctx.set(proxy_logging_obj)
+        
+        start_time = time.time() # Moved initialization outside try block
+        try:
+            async with prisma_client.db.tx(
+                timeout=timedelta(seconds=60)
+            ) as transaction:
+                async with transaction.batch_() as batcher:
+                    for (
+                        end_user_id,
+                        response_cost,
+                    ) in end_user_list_transactions.items():
+                        if litellm.max_end_user_budget is not None:
+                            pass
+                        batcher.litellm_endusertable.upsert(
+                            where={"user_id": end_user_id},
+                            data={
+                                "create": {
+                                    "user_id": end_user_id,
+                                    "spend": response_cost,
+                                    "blocked": False,
                                 },
-                            )
+                                "update": {"spend": {"increment": response_cost}},
+                            },
+                        )
+        except Exception as e:
+            _raise_failed_update_spend_exception(
+                e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
+            )
+        finally:
+            # Reset context variables
+            _spend_log_prisma_client_ctx.reset(token_prisma_client)
+            _spend_log_proxy_logging_obj_ctx.reset(token_proxy_logging_obj)
 
-                break
-            except DB_CONNECTION_ERROR_TYPES as e:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-                    )
-                # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
-            except Exception as e:
-                _raise_failed_update_spend_exception(
-                    e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-                )
+    async def _make_spend_log_request(
+        self, db_writer_client: HTTPHandler, base_url: str, logs_to_process: List[dict]
+    ):
+        """
+        Makes an HTTP request to the spend logs URL with retry logic.
+        """
+        verbose_proxy_logger.debug(
+            f"Making spend log request to {base_url} with {len(logs_to_process)} logs"
+        )
+        response = await db_writer_client.post(
+            url=f"{base_url}spend/add",
+            data={"spend_logs": logs_to_process},
+            timeout=60,
+        )
+        response.raise_for_status()
+        verbose_proxy_logger.debug(f"Spend log request succeeded: {response.status_code}")
 
-    @staticmethod
+    @backoff.on_exception(
+        _custom_wait_gen,
+        (Exception, httpx.HTTPStatusError),
+        max_tries=int(os.getenv("SPEND_LOGS_MAX_TRIES", 5)),
+        jitter=backoff.full_jitter,
+        giveup=_should_giveup_spend_logs,
+        on_backoff=on_backoff,
+    )
     async def update_spend_logs(
-        n_retry_times: int,
+        self,
         prisma_client: PrismaClient,
         db_writer_client: Optional[HTTPHandler],
         proxy_logging_obj: ProxyLogging,
     ):
-        BATCH_SIZE = 100  # Preferred size of each batch to write to the database
-        MAX_LOGS_PER_INTERVAL = (
-            1000  # Maximum number of logs to flush in a single interval
-        )
-        # Get initial logs to process
+        BATCH_SIZE = 100
+        MAX_LOGS_PER_INTERVAL = 1000
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         start_time = time.time()
         try:
-            for i in range(n_retry_times + 1):
-                try:
-                    base_url = os.getenv("SPEND_LOGS_URL", None)
-                    if (
-                        len(logs_to_process) > 0
-                        and base_url is not None
-                        and db_writer_client is not None
-                    ):
-                        if not base_url.endswith("/"):
-                            base_url += "/"
-                        verbose_proxy_logger.debug("base_url: {}".format(base_url))
-                        response = await db_writer_client.post(
-                            url=base_url + "spend/update",
-                            data=json.dumps(logs_to_process),
-                            headers={"Content-Type": "application/json"},
-                        )
-                        if response.status_code == 200:
-                            prisma_client.spend_log_transactions = (
-                                prisma_client.spend_log_transactions[
-                                    len(logs_to_process) :
-                                ]
-                            )
-                    else:
-                        for j in range(0, len(logs_to_process), BATCH_SIZE):
-                            batch = logs_to_process[j : j + BATCH_SIZE]
-                            batch_with_dates = [
-                                prisma_client.jsonify_object({**entry})
-                                for entry in batch
-                            ]
-                            await prisma_client.db.litellm_spendlogs.create_many(
-                                data=batch_with_dates, skip_duplicates=True
-                            )
-                            verbose_proxy_logger.debug(
-                                f"Flushed {len(batch)} logs to the DB."
-                            )
-
-                        prisma_client.spend_log_transactions = (
-                            prisma_client.spend_log_transactions[len(logs_to_process) :]
-                        )
-                        verbose_proxy_logger.debug(
-                            f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
-                        )
-                    break
-                except DB_CONNECTION_ERROR_TYPES:
-                    if i is None:
-                        i = 0
-                    if i >= n_retry_times:
-                        raise
-                    await asyncio.sleep(2**i)
+            base_url = os.getenv("SPEND_LOGS_URL", None)
+            if (
+                len(logs_to_process) > 0
+                and base_url is not None
+                and db_writer_client is not None
+            ):
+                if not base_url.endswith("/"):
+                    base_url += "/"
+                verbose_proxy_logger.debug("base_url: {}".format(base_url))
+                await self._make_spend_log_request(
+                    db_writer_client=db_writer_client,
+                    base_url=base_url,
+                    logs_to_process=logs_to_process
+                )
+                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process):]
+            else:
+                for j in range(0, len(logs_to_process), BATCH_SIZE):
+                    batch = logs_to_process[j : j + BATCH_SIZE]
+                    batch_with_dates = [
+                        prisma_client.jsonify_object({**entry})
+                        for entry in batch
+                    ]
+                    await prisma_client.db.litellm_spendlogs.create_many(
+                        data=batch_with_dates, skip_duplicates=True
+                    )
+                    verbose_proxy_logger.debug(
+                        f"Flushed {len(batch)} logs to the DB."
+                    )
+                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process):]
+                verbose_proxy_logger.debug(
+                        f"{len(logs_to_process)} logs processed. Remaining in queue: {len(prisma_client.spend_log_transactions)}"
+                    )
         except Exception as e:
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process):]
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -3248,7 +3476,6 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
-
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
@@ -3266,7 +3493,7 @@ async def update_spend(  # noqa: PLR0915
     team_list: list,
     spend_logs: list,
     """
-    n_retry_times = 3
+    n_retry_times = 3 # This variable is no longer used by update_spend_logs, but kept for db_update_spend_transaction_handler
     await proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler(
         prisma_client=prisma_client,
         n_retry_times=n_retry_times,
@@ -3279,8 +3506,8 @@ async def update_spend(  # noqa: PLR0915
     )
 
     if len(prisma_client.spend_log_transactions) > 0:
-        await ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
+        spend_updater = ProxyUpdateSpend()
+        await spend_updater.update_spend_logs(
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
             db_writer_client=db_writer_client,
@@ -3288,7 +3515,7 @@ async def update_spend(  # noqa: PLR0915
 
 
 def _raise_failed_update_spend_exception(
-    e: Exception, start_time: float, proxy_logging_obj: ProxyLogging
+e: Exception, start_time: float, proxy_logging_obj: ProxyLogging
 ):
     """
     Raise an exception for failed update spend logs
@@ -3518,27 +3745,50 @@ def _get_docs_url() -> Optional[str]:
     return "/"
 
 
-def handle_exception_on_proxy(e: Exception) -> ProxyException:
+async def handle_exception_on_proxy(
+    e: Exception,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    request_data: Optional[dict] = None, # Added request_data
+) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
     """
-    from fastapi import status
-
     verbose_proxy_logger.exception(f"Exception: {e}")
 
     if isinstance(e, HTTPException):
+        if (
+            proxy_logging_obj is not None
+            and user_api_key_dict is not None
+            and user_api_key_dict.token is not None
+        ):
+            model = request_data.get("model", "unknown") if request_data else "unknown" # Get model from request_data
+            # Check if it's a Gemini daily limit error
+            if "gemini" in model.lower() and _is_gemini_resource_exhausted(e.detail): # Use model variable
+                is_cooldown_applied = await proxy_logging_obj.handle_gemini_rate_limit(
+                    original_exception=e,
+                    user_api_key_hash=user_api_key_dict.token,
+                    model=model, # Use model variable
+                )
+                if is_cooldown_applied:
+                    return ProxyException(
+                        code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        message="Gemini daily rate limit exceeded. API key is in cooldown until next midnight PT.",
+                        type="llm_provider_exception",
+                        param=None,
+                    )
         return ProxyException(
             message=getattr(e, "detail", f"error({str(e)})"),
-            type=ProxyErrorTypes.internal_server_error,
-            param=getattr(e, "param", "None"),
+            type="llm_provider_exception",
+            param=getattr(e, "param", None),
             code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
         )
     elif isinstance(e, ProxyException):
         return e
     return ProxyException(
         message="Internal Server Error, " + str(e),
-        type=ProxyErrorTypes.internal_server_error,
-        param=getattr(e, "param", "None"),
+        type="internal_server_error",
+        param=getattr(e, "param", None),
         code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
 

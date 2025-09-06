@@ -39,10 +39,11 @@ class HTTPHandler:
         data: Optional[Union[dict, str]] = None,
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
+        timeout: Optional[int] = None, # Add timeout parameter
     ):
         try:
             response = await self.client.post(
-                url, data=data, params=params, headers=headers  # type: ignore
+                url, data=data, params=params, headers=headers, timeout=timeout  # type: ignore
             )
             return response
         except Exception as e:
