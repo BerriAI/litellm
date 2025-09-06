@@ -1814,6 +1814,18 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_end_user_id: Optional[str]
     user_api_key_request_route: Optional[str]
 
+    #####################################
+    # Key level spend and budget
+    #####################################
+    user_api_key_spend: Optional[float]
+    user_api_key_max_budget: Optional[float]
+
+    #####################################
+    # Team level spend and budget
+    #####################################
+    user_api_key_team_spend: Optional[float]
+    user_api_key_team_max_budget: Optional[float]
+
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
     name: str

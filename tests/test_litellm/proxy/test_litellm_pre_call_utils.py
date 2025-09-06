@@ -691,6 +691,10 @@ def test_add_user_api_key_auth_to_request_metadata():
         end_user_id="test-end-user-123",
         request_route="/chat/completions",
         end_user_max_budget=500.0,
+        spend=1.0,
+        max_budget=10.0,
+        team_spend=2.0,
+        team_max_budget=20.0,
     )
 
     metadata_variable_name = "litellm_metadata"
@@ -715,6 +719,10 @@ def test_add_user_api_key_auth_to_request_metadata():
     assert metadata["user_api_key_end_user_id"] == "test-end-user-123"
     assert metadata["user_api_key_user_email"] == "test@example.com"
     assert metadata["user_api_key_request_route"] == "/chat/completions"
+    assert metadata["user_api_key_spend"] == 1.0
+    assert metadata["user_api_key_max_budget"] == 10.0
+    assert metadata["user_api_key_team_spend"] == 2.0
+    assert metadata["user_api_key_team_max_budget"] == 20.0
 
     # Check that the hashed API key was added
     assert metadata["user_api_key"] == "hashed-test-key-123"

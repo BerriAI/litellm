@@ -49,6 +49,13 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `user_api_key_team_id` | `Optional[str]` | Team ID associated with the key |
 | `user_api_key_user_id` | `Optional[str]` | User ID associated with the key |
 | `user_api_key_team_alias` | `Optional[str]` | Team alias associated with the key |
+| `user_api_key_user_email` | `Optional[str]` | User email associated with the key |
+| `user_api_key_end_user_id` | `Optional[str]` | End user ID associated with the key |
+| `user_api_key_request_route` | `Optional[str]` | Request route used by the key |
+| `user_api_key_spend` | `Optional[float]` | Total spend for the API key |
+| `user_api_key_max_budget` | `Optional[float]` | Max budget for the API key |
+| `user_api_key_team_spend` | `Optional[float]` | Current spend for the team |
+| `user_api_key_team_max_budget` | `Optional[float]` | Max budget for the team |
 
 ## StandardLoggingMetadata
 
