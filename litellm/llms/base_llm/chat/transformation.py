@@ -178,6 +178,14 @@ class BaseConfig(ABC):
         """
         return map_developer_role_to_system_role(messages=messages)
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Returns True if the provider supports $defs in JSON schemas.
+        Providers that support $defs should preserve them for proper type information.
+        """
+        return False
+
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict
     ) -> bool:
