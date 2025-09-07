@@ -344,6 +344,7 @@ def test_add_exact_path_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -385,6 +386,7 @@ def test_add_subpath_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -702,6 +704,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=5.00,
+        endpoint_id="test-endpoint-id-1",
     )
 
     # Verify add_api_route was called
@@ -727,6 +730,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=7.50,
+        endpoint_id="test-endpoint-id-2",
     )
 
     # Verify add_api_route was called for subpath
