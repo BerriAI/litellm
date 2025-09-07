@@ -1,3 +1,4 @@
+import NotificationManager from "@/components/molecules/notifications_manager";
 import { mcpToolsCall } from "../../networking";
 import { message } from "antd";
 
@@ -27,7 +28,7 @@ export async function fetchAvailableMCPTools(
     return data.tools || [];
   } catch (error) {
     console.error("Error fetching MCP tools:", error);
-    message.error("Failed to fetch MCP tools");
+    NotificationManager.fromBackend("Failed to fetch MCP tools");
     return [];
   }
 } 

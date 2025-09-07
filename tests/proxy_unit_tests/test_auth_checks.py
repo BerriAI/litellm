@@ -54,6 +54,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
             end_user_id=end_user_id,
             prisma_client="RANDOM VALUE",  # type: ignore
             user_api_key_cache=_cache,
+            route="/v1/chat/completions",
         )
         if customer_spend > customer_budget:
             pytest.fail(

@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 | Provider | [Microsoft Presidio](https://github.com/microsoft/presidio/) |
 | Supported Entity Types | All Presidio Entity Types |
 | Supported Actions | `MASK`, `BLOCK` |
-| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
+| Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only`, `pre_mcp_call` |
 | Language Support | Configurable via `presidio_language` parameter (supports multiple languages including English, Spanish, German, etc.) |
 
 ## Deployment options
@@ -239,7 +239,7 @@ guardrails:
   - guardrail_name: "presidio-mask-guard"
     litellm_params:
       guardrail: presidio
-      mode: "pre_call"
+      mode: "pre_mcp_call"  # Use this mode for MCP requests
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses
@@ -247,7 +247,7 @@ guardrails:
   - guardrail_name: "presidio-block-guard"
     litellm_params:
       guardrail: presidio
-      mode: "pre_call"
+      mode: "pre_call"  # Use this mode for regular LLM requests
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
 ```
@@ -337,6 +337,52 @@ The exception includes the entity type that was blocked (`CREDIT_CARD` in this c
 </Tabs>
 
 ## Advanced
+
+### Supported Modes
+
+The Presidio guardrail supports the following modes:
+
+- `pre_call`: Run **before** LLM call, on **input**
+- `post_call`: Run **after** LLM call, on **input & output**
+- `logging_only`: Run **after** LLM call, only apply PII Masking before logging to Langfuse, etc. Not on the actual llm api request / response
+- `pre_mcp_call`: Run **before** MCP call, on **input**. Use this mode when you want to apply PII masking/blocking for MCP requests
+
+### MCP Usage Example
+
+Here's how to use Presidio guardrails with MCP:
+
+```yaml title="MCP Configuration Example" showLineNumbers
+guardrails:
+  - guardrail_name: "presidio-mcp-guard"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_mcp_call"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"  # Will mask credit card numbers
+        EMAIL_ADDRESS: "BLOCK"  # Will block email addresses
+        PHONE_NUMBER: "MASK"  # Will mask phone numbers
+        MEDICAL_LICENSE: "BLOCK"  # Will block medical license numbers
+      default_on: true
+```
+
+Test the MCP guardrail with a request:
+
+```shell title="Test MCP Guardrail" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "My credit card is 4111-1111-1111-1111 and my medical license is ABC123"}
+    ],
+    "guardrails": ["presidio-mcp-guard"]
+  }'
+```
+
+The request will be processed as follows:
+1. Credit card number will be masked (e.g., replaced with `<CREDIT_CARD>`)
+2. If a medical license is detected, the request will be blocked with a `BlockedPiiEntityError`
 
 ###  Set `language` per request
 

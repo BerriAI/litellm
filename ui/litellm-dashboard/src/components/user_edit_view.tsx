@@ -5,6 +5,8 @@ import { Button } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { all_admin_roles } from "../utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+
 interface UserEditViewProps {
   userData: any;
   onCancel: () => void;
@@ -40,6 +42,7 @@ export function UserEditView({
       user_role: userData.user_info?.user_role,
       models: userData.user_info?.models || [],
       max_budget: userData.user_info?.max_budget,
+      budget_duration: userData.user_info?.budget_duration,
       metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     });
   }, [userData, form]);
@@ -152,6 +155,10 @@ export function UserEditView({
           precision={2}
           style={{ width: "100%" }}
         />
+      </Form.Item>
+
+      <Form.Item label="Reset Budget" name="budget_duration">
+        <BudgetDurationDropdown />
       </Form.Item>
 
       <Form.Item

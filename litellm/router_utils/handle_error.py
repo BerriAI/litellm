@@ -82,9 +82,14 @@ async def async_raise_no_deployment_exception(
         litellm_router_instance=litellm_router_instance,
         parent_otel_span=parent_otel_span,
     )
+    verbose_router_logger.info(
+        f"No deployment found for model: {model}, cooldown_list with debug info: {_cooldown_list}"
+    )
+
+    cooldown_list_ids = [cooldown_model[0] for cooldown_model in (_cooldown_list or [])]
     return RouterRateLimitError(
         model=model,
         cooldown_time=_cooldown_time,
         enable_pre_call_checks=litellm_router_instance.enable_pre_call_checks,
-        cooldown_list=_cooldown_list,
+        cooldown_list=cooldown_list_ids,
     )

@@ -35,6 +35,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -288,9 +289,6 @@ def _is_api_route_allowed(
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
 
-    # Check if management routes are disabled and raise exception if they are
-    RouteChecks.should_call_route(route=route, valid_token=valid_token)
-
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
@@ -440,6 +438,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    route: str,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -456,6 +455,8 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
+            return
         if end_user_obj.litellm_budget_table is None:
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
@@ -498,6 +499,63 @@ async def get_end_user_object(
     except Exception as e:  # if end-user not in db
         if isinstance(e, litellm.BudgetExceededError):
             raise e
+        return None
+
+
+@log_db_metrics
+async def get_team_membership(
+    user_id: str,
+    team_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> Optional["LiteLLM_TeamMembership"]:
+    """
+    Returns team membership object if user is member of team.
+
+    Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
+    """
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    if prisma_client is None:
+        raise Exception("No db connected")
+
+    if user_id is None or team_id is None:
+        return None
+
+    _key = "team_membership:{}:{}".format(user_id, team_id)
+
+    # check if in cache
+    cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
+    if cached_membership_obj is not None:
+        if isinstance(cached_membership_obj, dict):
+            return LiteLLM_TeamMembership(**cached_membership_obj)
+        elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
+            return cached_membership_obj
+
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_teammembership.find_unique(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+            include={"litellm_budget_table": True},
+        )
+
+        if response is None:
+            return None
+
+        # save the team membership object to cache
+        await user_api_key_cache.async_set_cache(key=_key, value=response)
+
+        _response = LiteLLM_TeamMembership(**response.dict())
+
+        return _response
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Error getting team membership for user_id: %s, team_id: %s",
+            user_id,
+            team_id,
+        )
         return None
 
 
@@ -1147,11 +1205,63 @@ async def get_org_object(
         )
 
 
+def _check_model_access_helper(
+    model: str,
+    llm_router: Optional[Router],
+    models: List[str],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+    team_id: Optional[str] = None,
+    object_type: Literal["user", "team", "key", "org"] = "user",
+) -> bool:
+    ## check if model in allowed model names
+    from collections import defaultdict
+
+    access_groups: Dict[str, List[str]] = defaultdict(list)
+
+    if llm_router:
+        access_groups = llm_router.get_model_access_groups(
+            model_name=model, team_id=team_id
+        )
+
+    if (
+        len(access_groups) > 0 and llm_router is not None
+    ):  # check if token contains any model access groups
+        for idx, m in enumerate(
+            models
+        ):  # loop token models, if any of them are an access group add the access group
+            if m in access_groups:
+                return True
+
+    # Filter out models that are access_groups
+    filtered_models = [m for m in models if m not in access_groups]
+
+    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
+        return True
+
+    if _model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=filtered_models
+    ):
+        return True
+
+    all_model_access: bool = False
+
+    if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
+        all_model_access = True
+
+    if SpecialModelNames.all_proxy_models.value in filtered_models:
+        all_model_access = True
+
+    if model is not None and model not in filtered_models and all_model_access is False:
+        return False
+    return True
+
+
 def _can_object_call_model(
     model: Union[str, List[str]],
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    team_id: Optional[str] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
@@ -1184,68 +1294,40 @@ def _can_object_call_model(
                 llm_router=llm_router,
                 models=models,
                 team_model_aliases=team_model_aliases,
+                team_id=team_id,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
             )
         return True
 
+    potential_models = [model]
     if model in litellm.model_alias_map:
-        model = litellm.model_alias_map[model]
+        potential_models.append(litellm.model_alias_map[model])
     elif llm_router and model in llm_router.model_group_alias:
         _model = llm_router._get_model_from_alias(model)
         if _model:
-            model = _model
+            potential_models.append(_model)
 
-    ## check if model in allowed model names
-    from collections import defaultdict
+    ## check model access for alias + underlying model - allow if either is in allowed models
+    for m in potential_models:
+        if _check_model_access_helper(
+            model=m,
+            llm_router=llm_router,
+            models=models,
+            team_model_aliases=team_model_aliases,
+            team_id=team_id,
+            object_type=object_type,
+        ):
+            return True
 
-    access_groups: Dict[str, List[str]] = defaultdict(list)
-
-    if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
-
-    if (
-        len(access_groups) > 0 and llm_router is not None
-    ):  # check if token contains any model access groups
-        for idx, m in enumerate(
-            models
-        ):  # loop token models, if any of them are an access group add the access group
-            if m in access_groups:
-                return True
-
-    # Filter out models that are access_groups
-    filtered_models = [m for m in models if m not in access_groups]
-
-    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
-        return True
-
-    if _model_matches_any_wildcard_pattern_in_list(
-        model=model, allowed_model_list=filtered_models
-    ):
-        return True
-
-    all_model_access: bool = False
-
-    if (len(filtered_models) == 0 and len(models) == 0) or "*" in filtered_models:
-        all_model_access = True
-
-    if SpecialModelNames.all_proxy_models.value in filtered_models:
-        all_model_access = True
-
-    if model is not None and model not in filtered_models and all_model_access is False:
-        raise ProxyException(
-            message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
-            type=ProxyErrorTypes.get_model_access_error_type_for_object(
-                object_type=object_type
-            ),
-            param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
-
-    verbose_proxy_logger.debug(
-        f"filtered allowed_models: {filtered_models}; models: {models}"
+    raise ProxyException(
+        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+        type=ProxyErrorTypes.get_model_access_error_type_for_object(
+            object_type=object_type
+        ),
+        param="model",
+        code=status.HTTP_401_UNAUTHORIZED,
     )
-    return True
 
 
 def _model_in_team_aliases(
@@ -1288,6 +1370,7 @@ async def can_key_call_model(
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
+        team_id=valid_token.team_id,
         object_type="key",
     )
 
@@ -1326,6 +1409,7 @@ def can_team_access_model(
         llm_router=llm_router,
         models=team_object.models if team_object else [],
         team_model_aliases=team_model_aliases,
+        team_id=team_object.team_id if team_object else None,
         object_type="team",
     )
 

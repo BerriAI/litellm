@@ -14,6 +14,11 @@ git clone https://github.com/BerriAI/litellm.git
 Tell the proxy where the UI is located
 ```bash
 export PROXY_BASE_URL="http://localhost:3000/"
+
+### ALSO ###  - set the basic env variables
+DATABASE_URL = "postgresql://<user>:<password>@<host>:<port>/<dbname>"
+LITELLM_MASTER_KEY = "sk-1234"
+STORE_MODEL_IN_DB = "True"
 ```
 
 ```bash

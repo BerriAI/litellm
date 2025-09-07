@@ -38,6 +38,7 @@ import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -152,13 +153,13 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    message.info("Storing credential..");
+    NotificationsManager.info("Storing credential..");
     let credentialResponse = await credentialCreateCall(
       accessToken,
       credentialItem
     );
     console.log("credentialResponse, ", credentialResponse);
-    message.success("Credential stored successfully");
+    NotificationsManager.success("Credential stored successfully");
   };
 
   const handleModelUpdate = async (values: any) => {
@@ -211,7 +212,7 @@ export default function ModelInfoView({
           };
         }
       } catch (e) {
-        message.error("Invalid JSON in Model Info");
+        NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
       }
 
@@ -237,12 +238,12 @@ export default function ModelInfoView({
         onModelUpdate(updatedModelData);
       }
 
-      message.success("Model settings updated successfully");
+      NotificationsManager.success("Model settings updated successfully");
       setIsDirty(false);
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      message.error("Failed to update model settings");
+      NotificationsManager.fromBackend("Failed to update model settings");
     } finally {
       setIsSaving(false);
     }
@@ -268,7 +269,7 @@ export default function ModelInfoView({
     try {
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
-      message.success("Model deleted successfully");
+      NotificationsManager.success("Model deleted successfully");
 
       if (onModelUpdate) {
         onModelUpdate({
@@ -280,7 +281,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      message.error("Failed to delete model");
+    NotificationsManager.fromBackend("Failed to delete model");
     }
   };
 
@@ -398,9 +399,15 @@ export default function ModelInfoView({
               </Card>
               <Card>
                 <Text>LiteLLM Model</Text>
-                <pre>
-                  <Title>{modelData.litellm_model_name || "Not Set"}</Title>
-                </pre>
+                <div className="mt-2 overflow-hidden">
+                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
+                    <div 
+                      className="break-all text-sm font-medium leading-relaxed cursor-pointer"
+                    >
+                      {modelData.litellm_model_name || "Not Set"}
+                    </div>
+                  </Tooltip>
+                </div>
               </Card>
               <Card>
                 <Text>Pricing</Text>

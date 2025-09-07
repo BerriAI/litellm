@@ -95,13 +95,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
                 "litellm_llm_api_time_to_first_token_metric",
                 "Time to first token for a models LLM API call",
-                labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
-                ],
+                # labelnames=[
+                #     "model",
+                #     "hashed_api_key",
+                #     "api_key_alias",
+                #     "team",
+                #     "team_alias",
+                # ],
+                labelnames=self.get_labels_for_metric("litellm_llm_api_time_to_first_token_metric"),
                 buckets=LATENCY_BUCKETS,
             )
 
@@ -109,32 +110,24 @@ class PrometheusLogger(CustomLogger):
             self.litellm_spend_metric = self._counter_factory(
                 "litellm_spend_metric",
                 "Total spend on LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=self.get_labels_for_metric("litellm_spend_metric"),
             )
 
             # Counter for total_output_tokens
             self.litellm_tokens_metric = self._counter_factory(
-                "litellm_total_tokens",
+                "litellm_total_tokens_metric",
                 "Total number of input + output tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_total_tokens_metric"),
             )
 
             self.litellm_input_tokens_metric = self._counter_factory(
-                "litellm_input_tokens",
+                "litellm_input_tokens_metric",
                 "Total number of input tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_input_tokens_metric"),
             )
 
             self.litellm_output_tokens_metric = self._counter_factory(
-                "litellm_output_tokens",
+                "litellm_output_tokens_metric",
                 "Total number of output tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_output_tokens_metric"),
             )
@@ -243,25 +236,18 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["api_provider"],
             )
 
-            # Get all keys
-            _logged_llm_labels = [
-                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
-                UserAPIKeyLabelNames.MODEL_ID.value,
-                UserAPIKeyLabelNames.API_BASE.value,
-                UserAPIKeyLabelNames.API_PROVIDER.value,
-            ]
-
             # Metric for deployment state
             self.litellm_deployment_state = self._gauge_factory(
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
-                labelnames=_logged_llm_labels,
+                labelnames=self.get_labels_for_metric("litellm_deployment_state")
             )
 
             self.litellm_deployment_cooled_down = self._counter_factory(
                 "litellm_deployment_cooled_down",
                 "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
-                labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                # labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                labelnames=self.get_labels_for_metric("litellm_deployment_cooled_down")
             )
 
             self.litellm_deployment_success_responses = self._counter_factory(
@@ -327,6 +313,7 @@ class PrometheusLogger(CustomLogger):
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=self.get_labels_for_metric("litellm_requests_metric"),
             )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -2293,10 +2280,60 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
     return result
 
 
+def _tag_matches_wildcard_configured_pattern(tags: List[str], configured_tag: str) -> bool:
+    """
+    Check if any of the request tags matches a wildcard configured pattern
+
+    Args:
+        tags: List[str] - The request tags
+        configured_tag: str - The configured tag
+
+    Returns:
+        bool - True if any of the request tags matches the configured tag, False otherwise
+
+    e.g.
+    tags = ["User-Agent: curl/7.68.0", "User-Agent: python-requests/2.28.1", "prod"]
+    configured_tag = "User-Agent: curl/*"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # True
+
+    configured_tag = "User-Agent: python-requests/*"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # True
+
+    configured_tag = "gm"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # False
+    """
+    import re
+
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    pattern_router = PatternMatchRouter()
+    regex_pattern = pattern_router._pattern_to_regex(configured_tag)
+    return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
+
+
 def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     """
-    Get custom labels from tags based on admin configuration
+    Get custom labels from tags based on admin configuration.
+    
+    Supports both exact matches and wildcard patterns:
+    - Exact match: "prod" matches "prod" exactly
+    - Wildcard pattern: "User-Agent: curl/*" matches "User-Agent: curl/7.68.0" 
+    
+    Reuses PatternMatchRouter for wildcard pattern matching.
+
+    Returns dict of label_name: "true" if the tag matches the configured tag, "false" otherwise
+
+    {
+        "tag_User-Agent_curl": "true",
+        "tag_User-Agent_python_requests": "false",
+        "tag_Environment_prod": "true",
+        "tag_Environment_dev": "false",
+        "tag_Service_api_gateway_v2": "true",
+        "tag_Service_web_app_v1": "false",
+    }
     """
+    import re
+
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
@@ -2304,16 +2341,22 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
+    pattern_router = PatternMatchRouter()
 
-    # Map each configured tag to its presence in the request tags
     for configured_tag in configured_tags:
-        # Create a safe prometheus label name
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")
-
-        # Check if this tag is present in the request tags
+        
+        # Check for exact match first (backwards compatibility)
         if configured_tag in tags:
             result[label_name] = "true"
-        else:
-            result[label_name] = "false"
+            continue
+            
+        # Use PatternMatchRouter for wildcard pattern matching
+        if "*" in configured_tag and _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag):
+            result[label_name] = "true"
+            continue
+        
+        # No match found
+        result[label_name] = "false"
 
     return result

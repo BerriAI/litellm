@@ -12,6 +12,7 @@ import { MCPServerView } from "./mcp_server_view"
 import CreateMCPServer from "./create_mcp_server"
 import MCPConnect from "./mcp_connect"
 import { QuestionCircleOutlined } from "@ant-design/icons"
+import NotificationsManager from "../molecules/notifications_manager"
 
 const { Option } = Select
 
@@ -150,7 +151,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
     try {
       await deleteMCPServer(accessToken, serverIdToDelete)
-      message.success("Deleted MCP Server successfully")
+      NotificationsManager.success("Deleted MCP Server successfully")
       refetch()
     } catch (error) {
       console.error("Error deleting the mcp server:", error)

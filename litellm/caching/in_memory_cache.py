@@ -112,14 +112,15 @@ class InMemoryCache(BaseCache):
         - 3. the size of in-memory cache is bounded
 
         """
-        for key in list(self.ttl_dict.keys()):
-            if self._is_key_expired(key):
-                self._remove_key(key)
+        current_time = time.time()
+        expired_keys = [key for key, ttl in self.ttl_dict.items() if current_time > ttl]
+        for key in expired_keys:
+            self._remove_key(key)
 
-                # de-reference the removed item
-                # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
-                # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
-                # This can occur when an object is referenced by another object, but the reference is never removed.
+        # de-reference the removed item
+        # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
+        # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
+        # This can occur when an object is referenced by another object, but the reference is never removed.
 
     def allow_ttl_override(self, key: str) -> bool:
         """

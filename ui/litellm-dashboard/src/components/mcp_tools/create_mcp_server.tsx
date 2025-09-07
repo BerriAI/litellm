@@ -8,6 +8,8 @@ import MCPServerCostConfig from "./mcp_server_cost_config"
 import MCPConnectionStatus from "./mcp_connection_status"
 import StdioConfiguration from "./StdioConfiguration"
 import { isAdminRole } from "@/utils/roles"
+import { validateMCPServerUrl, validateMCPServerName } from "./utils"
+import NotificationsManager from "../molecules/notifications_manager"
 
 const asset_logos_folder = "../ui/assets/logos/"
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`
@@ -37,6 +39,23 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [tools, setTools] = useState<any[]>([])
   const [transportType, setTransportType] = useState<string>("sse")
   const [searchValue, setSearchValue] = useState<string>("")
+  const [urlWarning, setUrlWarning] = useState<string>("")
+
+  // Function to check URL format based on transport type
+  const checkUrlFormat = (url: string, transport: string) => {
+    if (!url) {
+      setUrlWarning("")
+      return
+    }
+
+    if (transport === "sse" && !url.endsWith("/sse")) {
+      setUrlWarning("Typically MCP SSE URLs end with /sse. You can add this url but this is a warning.")
+    } else if (transport === "http" && !url.endsWith("/mcp")) {
+      setUrlWarning("Typically MCP HTTP URLs end with /mcp. You can add this url but this is a warning.")
+    } else {
+      setUrlWarning("")
+    }
+  }
 
   const handleCreate = async (formValues: Record<string, any>) => {
     setIsLoading(true)
@@ -79,7 +98,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
           console.log("Parsed stdio config:", stdioFields)
         } catch (error) {
-          message.error("Invalid JSON in stdio configuration")
+          NotificationsManager.fromBackend("Invalid JSON in stdio configuration")
           return
         }
       }
@@ -104,15 +123,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (accessToken != null) {
         const response = await createMCPServer(accessToken, payload)
 
-        message.success("MCP Server created successfully")
+        NotificationsManager.success("MCP Server created successfully")
         form.resetFields()
         setCostConfig({})
         setTools([])
+        setUrlWarning("")
         setModalVisible(false)
         onCreateSuccess(response)
       }
     } catch (error) {
-      message.error("Error creating MCP Server: " + error, 20)
+      NotificationsManager.fromBackend("Error creating MCP Server: " + error)
     } finally {
       setIsLoading(false)
     }
@@ -123,6 +143,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     form.resetFields()
     setCostConfig({})
     setTools([])
+    setUrlWarning("")
     setModalVisible(false)
   }
 
@@ -131,8 +152,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
       form.setFieldsValue({ url: undefined, auth_type: undefined })
+      setUrlWarning("")
     } else {
       form.setFieldsValue({ command: undefined, args: undefined, env: undefined })
+      // Check URL format for the new transport type
+      const currentUrl = form.getFieldValue("url")
+      if (currentUrl) {
+        checkUrlFormat(currentUrl, value)
+      }
     }
   }
 
@@ -228,12 +255,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="server_name"
               rules={[
                 { required: false, message: "Please enter a server name" },
-                {
-                  validator: (_, value) =>
-                    value && value.includes("-")
-                      ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                      : Promise.resolve(),
-                },
+                { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
               <TextInput
@@ -310,13 +332,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 name="url"
                 rules={[
                   { required: true, message: "Please enter a server URL" },
-                  { type: "url", message: "Please enter a valid URL" },
+                  { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <TextInput
-                  placeholder="https://your-mcp-server.com"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
+                <div>
+                  <TextInput
+                    placeholder="https://your-mcp-server.com"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    onChange={(e) => checkUrlFormat(e.target.value, transportType)}
+                  />
+                  {urlWarning && (
+                    <div className="mt-1 text-red-500 text-sm font-medium">
+                      {urlWarning}
+                    </div>
+                  )}
+                </div>
               </Form.Item>
             )}
 
@@ -352,7 +382,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[{ required: true, message: "Please select a spec version" }]}
             >
               <Select placeholder="Select MCP version" className="rounded-lg" size="large">
-                <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
+                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
+                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>

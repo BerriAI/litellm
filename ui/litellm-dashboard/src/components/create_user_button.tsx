@@ -26,6 +26,7 @@ import { Tooltip } from "antd"
 import { InfoCircleOutlined } from "@ant-design/icons"
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key"
 import { useQueryClient } from "@tanstack/react-query"
+import NotificationsManager from "./molecules/notifications_manager"
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
@@ -120,7 +121,7 @@ const Createuser: React.FC<CreateuserProps> = ({
 
   const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
     try {
-      message.info("Making API Call")
+      NotificationsManager.info("Making API Call")
       if (!isEmbedded) {
         setIsModalVisible(true)
       }
@@ -169,12 +170,12 @@ const Createuser: React.FC<CreateuserProps> = ({
         setIsInvitationLinkModalVisible(true)
       }
 
-      message.success("API user Created")
+      NotificationsManager.success("API user Created")
       form.resetFields()
       localStorage.removeItem("userData" + userID)
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user"
-      message.error(errorMessage)
+      NotificationsManager.fromBackend(errorMessage)
       console.error("Error creating the user:", error)
     }
   }

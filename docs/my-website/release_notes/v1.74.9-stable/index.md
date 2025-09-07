@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.74.9-stable"
+title: "v1.74.9-stable - Auto-Router"
 slug: "v1-74-9"
 date: 2025-07-27T10:00:00
 authors:
@@ -21,21 +21,104 @@ import TabItem from '@theme/TabItem';
 
 ## Deploy this version
 
-:::info
+<Tabs>
+<TabItem value="docker" label="Docker">
 
-This release is not live yet. 
+``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.74.9-stable.patch.1
+```
+</TabItem>
 
-:::
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.74.9.post2
+```
+
+</TabItem>
+</Tabs>
 
 ---
 
+## Key Highlights
+
+- **Auto-Router** - Automatically route requests to specific models based on request content.
+- **Model-level Guardrails** - Only run guardrails when specific models are used.
+- **MCP Header Propagation** - Propagate headers from client to backend MCP.
+- **New LLM Providers** - Added Bedrock inpainting support and Recraft API image generation  / image edits support.
+
+---
+
+## Auto-Router
+
+<Image img={require('../../img/release_notes/auto_router.png')} />
+
+<br/>
+
+This release introduces auto-routing to models based on request content. This means **Proxy Admins** can define a set of keywords that always routes to specific models when **users** opt in to using the auto-router.
+
+This is great for internal use cases where you don't want **users** to think about which model to use - for example, use Claude models for coding vs GPT models for generating ad copy.
+
+
+[Read More](../../docs/proxy/auto_routing)
+
+---
+
+## Model-level Guardrails
+
+<Image img={require('../../img/release_notes/model_level_guardrails.jpg')} />
+
+<br/>
+
+This release brings model-level guardrails support to your config.yaml + UI. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+      api_base: https://api.anthropic.com/v1
+      guardrails: ["azure-text-moderation"] # 👈 KEY CHANGE
+
+guardrails:
+  - guardrail_name: azure-text-moderation
+    litellm_params:
+      guardrail: azure/text_moderations
+      mode: "post_call" 
+      api_key: os.environ/AZURE_GUARDRAIL_API_KEY
+      api_base: os.environ/AZURE_GUARDRAIL_API_BASE 
+```
+
+
+[Read More](../../docs/proxy/guardrails/quick_start#model-level-guardrails)
+
+---
+## MCP Header Propagation
+
+<Image img={require('../../img/release_notes/mcp_header_propogation.png')} />
+
+<br/>
+
+v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
+
+- Allowing users to specify which `header_name` is to be propagated to which `mcp_server` via headers
+- Allows adding of different deployments of same MCP server type to use different authentication headers
+
+
+[Read More](https://docs.litellm.ai/docs/mcp#new-server-specific-auth-headers-recommended)
+
+---
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
 
 | Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) |
 | ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- |
-| Fireworks AI | `fireworks/models/kimi-k2-instruct | 131k | $0.6 | $2.5 | 
+| Fireworks AI | `fireworks/models/kimi-k2-instruct` | 131k | $0.6 | $2.5 | 
 | OpenRouter | `openrouter/qwen/qwen-vl-plus` | 8192 | $0.21 | $0.63 | 
 | OpenRouter | `openrouter/qwen/qwen3-coder` | 8192 | $1 | $5 | 
 | OpenRouter | `openrouter/bytedance/ui-tars-1.5-7b` | 128k | $0.10 | $0.20 | 

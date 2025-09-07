@@ -24,6 +24,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         **{
             **litellm_params.model_dump(),
             "guardrail_name": guardrail_name,
+            "event_hook": litellm_params.mode,
             "default_on": litellm_params.default_on or False,
         }
     )

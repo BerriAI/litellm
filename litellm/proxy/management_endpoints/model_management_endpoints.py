@@ -233,7 +233,7 @@ async def patch_model(
             data=update_data,
         )
 
-        # Clear cache and reload models
+        # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         await clear_cache()
 
         ## CREATE AUDIT LOG ##
@@ -987,7 +987,7 @@ async def update_public_model_groups(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.proxy_server import proxy_config
+        from litellm.proxy.proxy_server import proxy_config, store_model_in_db
 
         # Check if user has admin permissions
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -997,6 +997,15 @@ async def update_public_model_groups(
                     "error": "Only proxy admins can update public model groups. Your role={}".format(
                         user_api_key_dict.user_role
                     )
+                },
+            )
+
+        # Check if STORE_MODEL_IN_DB is enabled
+        if store_model_in_db is not True:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
 
@@ -1144,13 +1153,38 @@ async def clear_cache():
         )
         return
 
-    try:
-        llm_router.model_list.clear()
-        llm_router.auto_routers.clear()
 
+    try:
+        # Only clear DB models, preserve config models
+        verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+        
+        # Get current models and filter out DB models
+        current_models = llm_router.model_list.copy()
+        config_models = []
+        db_model_ids = []
+        
+        for model in current_models:
+            model_info = model.get("model_info", {})
+            if model_info.get("db_model", False):
+                # This is a DB model, mark for deletion
+                db_model_ids.append(model_info.get("id"))
+            else:
+                # This is a config model, preserve it
+                config_models.append(model)
+        
+        # Clear only DB models
+        for model_id in db_model_ids:
+            llm_router.delete_deployment(id=model_id)
+        
+        # Clear auto routers
+        llm_router.auto_routers.clear()
+        
+        # Reload only DB models
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
+        
+        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

@@ -8,6 +8,7 @@ Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini fin
 
 | Supported Integrations | Link |
 |------------------------|------|
+| Native LiteLLM GitOps (.prompt files) | [Get Started](native_litellm_prompt) |
 | Langfuse               | [Get Started](https://langfuse.com/docs/prompts/get-started) |
 | Humanloop              | [Get Started](../observability/humanloop) |
 

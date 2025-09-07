@@ -87,6 +87,11 @@ response = client.chat.completions.create(
 print(response)
 ```
 </TabItem>
+<TabItem value="litellm_sdk" label="LiteLLM Python SDK">
+
+[**👉 Go Here**](../providers/litellm_proxy#send-all-sdk-requests-to-litellm-proxy)
+
+</TabItem>
 <TabItem value="azureopenai" label="AzureOpenAI Python">
 
 Set `extra_body={"metadata": { }}` to `metadata` you want to pass

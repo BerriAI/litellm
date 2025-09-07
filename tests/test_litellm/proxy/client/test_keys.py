@@ -370,7 +370,7 @@ def test_info_request_minimal(client, base_url, api_key):
     """Test info request with minimal parameters"""
     request = client.info(key="test-key", return_request=True)
     assert request.method == "GET"
-    assert request.url == f"{base_url}/keys/info?key=test-key"
+    assert request.url == f"{base_url}/key/info?key=test-key"
     assert request.headers["Content-Type"] == "application/json"
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
@@ -387,7 +387,7 @@ def test_info_mock_response(client):
     }
     responses.add(
         responses.GET,
-        f"{client._base_url}/keys/info?key=test-key",
+        f"{client._base_url}/key/info?key=test-key",
         json=mock_response,
         status=200,
     )
@@ -400,7 +400,7 @@ def test_info_unauthorized_error(client):
     """Test that info raises UnauthorizedError for 401 responses"""
     responses.add(
         responses.GET,
-        f"{client._base_url}/keys/info?key=test-key",
+        f"{client._base_url}/key/info?key=test-key",
         status=401,
         json={"error": "Unauthorized"},
     )
@@ -413,7 +413,7 @@ def test_info_server_error(client):
     """Test that info raises HTTPError for server errors"""
     responses.add(
         responses.GET,
-        f"{client._base_url}/keys/info?key=test-key",
+        f"{client._base_url}/key/info?key=test-key",
         status=500,
         json={"error": "Internal Server Error"},
     )

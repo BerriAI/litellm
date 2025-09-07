@@ -603,3 +603,123 @@ def test_openai_deepresearch_model_bridge():
     )
 
     print("response: ", response)
+
+
+def test_openai_tool_calling():
+    from pydantic import BaseModel
+    from typing import Any, Literal
+
+    class OpenAIFunction(BaseModel):
+        description: Optional[str] = None
+        name: str
+        parameters: Optional[dict[str, Any]] = None
+
+    class OpenAITool(BaseModel):
+        type: Literal["function"]
+        function: OpenAIFunction
+
+    completion_params = {
+        "model": "openai/gpt-4.1",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is TSLA stock price at today?"}
+                ],
+            }
+        ],
+        "stream": False,
+        "temperature": 0.5,
+        "stop": None,
+        "max_tokens": 1600,
+        "tools": [
+            OpenAITool(
+                type="function",
+                function=OpenAIFunction(
+                    description="Get the current stock price for a given ticker symbol.",
+                    name="get_stock_price",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "ticker": {
+                                "type": "string",
+                                "description": "The stock ticker symbol, e.g. AAPL for Apple Inc.",
+                            }
+                        },
+                        "required": ["ticker"],
+                    },
+                ),
+            )
+        ],
+    }
+
+    response = litellm.completion(**completion_params)
+
+@pytest.mark.asyncio
+async def test_openai_gpt5_reasoning():
+    response = await litellm.acompletion(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        reasoning_effort="minimal",
+    )
+    print("response: ", response)
+    assert response.choices[0].message.content is not None
+
+@pytest.mark.asyncio
+async def test_openai_safety_identifier_parameter():
+    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
+    from openai import AsyncOpenAI
+    
+    litellm.set_verbose = True
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        # Verify the request contains the safety_identifier parameter
+        assert "safety_identifier" in request_body
+        # Verify safety_identifier is correctly sent to the API
+        assert request_body["safety_identifier"] == "user_code_123456"
+
+
+def test_openai_safety_identifier_parameter_sync():
+    """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
+    from openai import OpenAI
+    
+    litellm.set_verbose = True
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        # Verify the request contains the safety_identifier parameter
+        assert "safety_identifier" in request_body
+        # Verify safety_identifier is correctly sent to the API
+        assert request_body["safety_identifier"] == "user_code_123456"
+

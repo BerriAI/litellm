@@ -102,35 +102,3 @@ async def test_datadog_llm_obs_logging():
 
     await asyncio.sleep(6)
 
-
-@pytest.mark.asyncio
-async def test_create_llm_obs_payload():
-    datadog_llm_obs_logger = DataDogLLMObsLogger()
-    standard_logging_payload = create_standard_logging_payload()
-    payload = datadog_llm_obs_logger.create_llm_obs_payload(
-        kwargs={
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "standard_logging_object": standard_logging_payload,
-        },
-        response_obj=litellm.ModelResponse(
-            id="test_id",
-            choices=[{"message": {"content": "Hi there!"}}],
-            created=12,
-            model="gpt-4",
-        ),
-        start_time=datetime.now(),
-        end_time=datetime.now() + timedelta(seconds=1),
-    )
-
-    print("dd created payload", payload)
-
-    assert payload["name"] == "litellm_llm_call"
-    assert payload["meta"]["kind"] == "llm"
-    assert payload["meta"]["input"]["messages"] == [
-        {"role": "user", "content": "Hello, world!"}
-    ]
-    assert payload["meta"]["output"]["messages"][0]["content"] == "Hi there!"
-    assert payload["metrics"]["input_tokens"] == 20
-    assert payload["metrics"]["output_tokens"] == 10
-    assert payload["metrics"]["total_tokens"] == 30

@@ -33,7 +33,12 @@ class SensitiveDataMasker:
 
         value_str = str(value)
         masked_length = len(value_str) - (self.visible_prefix + self.visible_suffix)
-        return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
+
+        # Handle the case where visible_suffix is 0 to avoid showing the entire string
+        if self.visible_suffix == 0:
+            return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}"
+        else:
+            return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
 
     def is_sensitive_key(self, key: str) -> bool:
         key_lower = str(key).lower()

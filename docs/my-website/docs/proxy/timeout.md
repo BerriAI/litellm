@@ -38,9 +38,15 @@ $ litellm --config /path/to/config.yaml
 </TabItem>
 </Tabs>
 
-### Custom Timeouts, Stream Timeouts - Per Model
-For each model you can set `timeout` & `stream_timeout` under `litellm_params`
+### Custom Timeouts & Stream Timeouts (Per Model)
 
+For each model, you can set `timeout` and `stream_timeout` under `litellm_params`:
+
+- **`timeout`** → maximum time for the *complete response*.  
+  Use this to cap long-running completions.
+
+- **`stream_timeout`** → maximum time to wait for the *first chunk* (i.e., first token) in a streaming response.  
+  Use this to abort “hanging” providers (e.g., Bedrock slow start) and retry another model.
 <Tabs>
 <TabItem value="sdk" label="SDK">
 

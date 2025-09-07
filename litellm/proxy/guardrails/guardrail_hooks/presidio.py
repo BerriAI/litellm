@@ -403,11 +403,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if call_type in [
                 LitellmCallTypes.completion.value,
                 LitellmCallTypes.acompletion.value,
-            ]:
-
+            ] or call_type == "mcp_call":
                 messages = data["messages"]
                 tasks = []
-
                 for m in messages:
                     content = m.get("content", None)
                     if content is None:

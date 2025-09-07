@@ -119,7 +119,7 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
         assert response.choices[0].message.content is not None
-
+    
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
         base_completion_call_args = self.get_base_completion_call_args()
@@ -140,6 +140,108 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
+
+    
+    def test_tool_call_with_property_type_array(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages = [
+                {
+                "role": "user",
+                "content": "Tell me if the shoe brand Air Jordan has more models than the shoe brand Nike."
+                }
+            ],    
+            tools = [
+                {
+                "type": "function",
+                "function": {
+                    "name": "shoe_get_id",
+                    "description": "Get information about a show by its ID or name",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "shoe_id": {
+                                "type": ["string", "number"],
+                                "description": "The shoe ID or name"
+                            }
+                        },
+                        "required": ["shoe_id"],
+                        "additionalProperties": False,
+                        "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                }
+                },
+            ]
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
+    def test_tool_call_with_empty_enum_property(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages = [
+                {
+                    "role": "user",
+                    "content": "Search for the latest iPhone models and tell me which storage options are available."
+                }
+            ],    
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_product_search",
+                        "description": "Search for product information and specifications.\n\nSupports filtering by category, brand, price range, and availability.\nCan retrieve detailed product specifications, pricing, and stock information.\nSupports different search modes and result formatting options.\n",
+                        "parameters": {
+                            "properties": {
+                                "search_mode": {
+                                    "default": "",
+                                    "description": "The search strategy to use for finding products.",
+                                    "enum": [
+                                        "",
+                                        "product_search",
+                                        "product_search_with_filters",
+                                        "product_search_with_sorting",
+                                        "product_search_with_pagination",
+                                        "product_search_with_aggregation",
+                                    ],
+                                    "title": "Search Mode",
+                                    "type": "string"
+                                },
+                            },
+                            "required": [
+                                "search_mode"
+                            ],
+                            "title": "product_search_arguments",
+                            "type": "object"
+                        }
+                    }
+                }
+            ]
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
+
 
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""
@@ -1200,96 +1302,99 @@ class BaseLLMChatTest(ABC):
         from litellm.utils import supports_function_calling
         from litellm import completion
         litellm._turn_on_debug()
+        try:
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_function_calling(base_completion_call_args["model"], None):
-            print("Model does not support function calling")
-            pytest.skip("Model does not support function calling")
-        
-        def get_weather(city: str):
-            return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+            
+            def get_weather(city: str):
+                return f"City: {city}, Weather: Sunny with 34 degree Celcius"
 
-        TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather in a city",
-                    "parameters": {
-                        "$id": "https://some/internal/name",
-                        "$schema": "https://json-schema.org/draft-07/schema",
-                        "type": "object",
-                        "properties": {
-                            "city": {
-                                "type": "string",
-                                "description": "The city to get the weather for",
-                            }
+            TOOLS = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather in a city",
+                        "parameters": {
+                            "$id": "https://some/internal/name",
+                            "$schema": "https://json-schema.org/draft-07/schema",
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string",
+                                    "description": "The city to get the weather for",
+                                }
+                            },
+                            "required": ["city"],
+                            "additionalProperties": False,
                         },
-                        "required": ["city"],
-                        "additionalProperties": False,
+                        "strict": True,
                     },
-                    "strict": True,
-                },
-            }
-        ]
+                }
+            ]
 
 
-        messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
-        response, iteration = "", 0
-        while True:
-            if response:
-                break
-            # Create a streaming response with tool calling enabled
-            stream = completion(
-                **base_completion_call_args,
-                messages=messages,
-                tools=TOOLS,
-                stream=True,
-            )
+            messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
+            response, iteration = "", 0
+            while True:
+                if response:
+                    break
+                # Create a streaming response with tool calling enabled
+                stream = completion(
+                    **base_completion_call_args,
+                    messages=messages,
+                    tools=TOOLS,
+                    stream=True,
+                )
 
-            final_tool_calls = {}
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                print(delta)
-                if delta.content:
-                    response += delta.content
-                elif delta.tool_calls:
-                    for tool_call in chunk.choices[0].delta.tool_calls or []:
-                        index = tool_call.index
-                        if index not in final_tool_calls:
-                            final_tool_calls[index] = tool_call
-                        else:
-                            final_tool_calls[
-                                index
-                            ].function.arguments += tool_call.function.arguments
-            if final_tool_calls:
-                for tool_call in final_tool_calls.values():
-                    if tool_call.function.name == "get_weather":
-                        city = json.loads(tool_call.function.arguments)["city"]
-                        tool_response = get_weather(city)
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "tool_calls": [tool_call],
-                                "content": None,
-                            }
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": tool_response,
-                            }
-                        )
-            iteration += 1
-            if iteration > 2:
-                print("Something went wrong!")
-                break
+                final_tool_calls = {}
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    print(delta)
+                    if delta.content:
+                        response += delta.content
+                    elif delta.tool_calls:
+                        for tool_call in chunk.choices[0].delta.tool_calls or []:
+                            index = tool_call.index
+                            if index not in final_tool_calls:
+                                final_tool_calls[index] = tool_call
+                            else:
+                                final_tool_calls[
+                                    index
+                                ].function.arguments += tool_call.function.arguments
+                if final_tool_calls:
+                    for tool_call in final_tool_calls.values():
+                        if tool_call.function.name == "get_weather":
+                            city = json.loads(tool_call.function.arguments)["city"]
+                            tool_response = get_weather(city)
+                            messages.append(
+                                {
+                                    "role": "assistant",
+                                    "tool_calls": [tool_call],
+                                    "content": None,
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": tool_response,
+                                }
+                            )
+                iteration += 1
+                if iteration > 2:
+                    print("Something went wrong!")
+                    break
 
-        print(response)
+            print(response)
+        except litellm.ServiceUnavailableError:
+            pass
 
     def test_reasoning_effort(self):
         """Test that reasoning_effort is passed correctly to the model"""

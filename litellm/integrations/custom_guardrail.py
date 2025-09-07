@@ -119,11 +119,8 @@ class CustomGuardrail(CustomLogger):
         """
         if "guardrails" in data:
             return data["guardrails"]
-        metadata = data.get("metadata") or {}
-        requested_guardrails = metadata.get("guardrails") or []
-        if requested_guardrails:
-            return requested_guardrails
-        return requested_guardrails
+        metadata = data.get("litellm_metadata") or data.get("metadata", {})
+        return metadata.get("guardrails") or []
 
     def _guardrail_is_in_requested_guardrails(
         self,
@@ -234,7 +231,6 @@ class CustomGuardrail(CustomLogger):
         Returns True if the guardrail should be run on the event_type
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
-
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -243,7 +239,6 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
-
         if self.default_on is True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
@@ -287,7 +282,6 @@ class CustomGuardrail(CustomLogger):
             )
             if result is not None:
                 return result
-
         return True
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:

@@ -4,9 +4,14 @@
 
 liteLLM provides `input_callbacks`, `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
 
+:::tip
+**New to LiteLLM Callbacks?** Check out our comprehensive [Callback Management Guide](./callback_management.md) to understand when to use different callback hooks like `async_log_success_event` vs `async_post_call_success_hook`.
+:::
+
 liteLLM supports:
 
 - [Custom Callback Functions](https://docs.litellm.ai/docs/observability/custom_callback)
+- [Callback Management Guide](./callback_management.md) - **Comprehensive guide for choosing the right hooks**
 - [Lunary](https://lunary.ai/docs)
 - [Langfuse](https://langfuse.com/docs)
 - [LangSmith](https://www.langchain.com/langsmith)

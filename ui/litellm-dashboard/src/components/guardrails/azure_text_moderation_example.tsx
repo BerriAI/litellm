@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Space, Card, message } from 'antd';
 import AzureTextModerationConfiguration from './azure_text_moderation_configuration';
 import { AZURE_TEXT_MODERATION_CATEGORIES } from './azure_text_moderation_types';
+import NotificationsManager from '../molecules/notifications_manager';
 
 /**
  * Example component showing how to use the AzureTextModerationConfiguration
@@ -42,14 +43,14 @@ const AzureTextModerationExample: React.FC = () => {
     };
     
     console.log('Azure Text Moderation Configuration:', config);
-    message.success('Configuration saved successfully!');
+    NotificationsManager.success('Configuration saved successfully!');
   };
 
   const handleReset = () => {
     setSelectedCategories(['Hate', 'Violence']);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({ 'Hate': 4 });
-    message.info('Configuration reset to defaults');
+    NotificationsManager.info('Configuration reset to defaults');
   };
 
   return (

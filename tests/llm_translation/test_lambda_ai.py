@@ -100,7 +100,7 @@ def test_lambda_ai_models_configuration():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     
     # Clear and repopulate lambda_ai_models list after reloading model_cost
-    litellm.lambda_ai_models = []
+    litellm.lambda_ai_models = set()
     litellm.add_known_models()
     
     # Some Lambda AI models to test
@@ -132,7 +132,7 @@ def test_lambda_ai_model_list_populated():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     
     # Clear and repopulate all model lists after reloading model_cost
-    litellm.lambda_ai_models = []
+    litellm.lambda_ai_models = set()
     litellm.add_known_models()
     
     # This should be populated by the add_known_models function

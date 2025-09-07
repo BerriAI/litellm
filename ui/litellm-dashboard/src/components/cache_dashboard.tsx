@@ -23,6 +23,7 @@ import {
   Text,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
+import NotificationsManager from "./molecules/notifications_manager";
 
 import {
   Button as Button2,
@@ -265,7 +266,7 @@ const handleRefreshClick = () => {
 
 const runCachingHealthCheck = async () => {
   try {
-    message.info("Running cache health check...");
+    NotificationsManager.info("Running cache health check...");
     setHealthCheckResponse("");
     const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
     console.log("CACHING HEALTH CHECK RESPONSE", response);

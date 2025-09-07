@@ -12,11 +12,15 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
+from litellm._logging import verbose_logger
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
+    MCPSpecVersion,
+    MCPSpecVersionType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
@@ -44,6 +48,7 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
+        protocol_version: MCPSpecVersionType = MCPSpecVersion.jun_2025,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -57,6 +62,7 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
+        self.protocol_version: MCPSpecVersionType = protocol_version
 
         # handle the basic auth value if provided
         if auth_value:
@@ -118,9 +124,18 @@ class MCPClient:
                 self._session_ctx = ClientSession(self._transport[0], self._transport[1])
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
-        except Exception:
+        except ValueError as e:
+            # Re-raise ValueError exceptions (like missing stdio_config)
+            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
             await self.disconnect()
             raise
+        except Exception as e:
+            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+            await self.disconnect()
+            # Don't raise other exceptions, let the calling code handle it gracefully
+            # This allows the server manager to continue with other servers
+            # Instead of raising, we'll let the calling code handle the failure
+            pass
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Cleanup when exiting context manager."""
@@ -169,23 +184,40 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        if not self._mcp_auth_value:
-            return {}
+        headers = {}
+        
+        if self._mcp_auth_value:
+            if self.auth_type == MCPAuth.bearer_token:
+                headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+            elif self.auth_type == MCPAuth.basic:
+                headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+            elif self.auth_type == MCPAuth.api_key:
+                headers["X-API-Key"] = self._mcp_auth_value
 
-        if self.auth_type == MCPAuth.bearer_token:
-            return {"Authorization": f"Bearer {self._mcp_auth_value}"}
-        elif self.auth_type == MCPAuth.basic:
-            return {"Authorization": f"Basic {self._mcp_auth_value}"}
-        elif self.auth_type == MCPAuth.api_key:
-            return {"X-API-Key": self._mcp_auth_value}
-        return {}
+        # Handle protocol version - it might be a string or enum
+        if hasattr(self.protocol_version, 'value'):
+            # It's an enum
+            protocol_version_str = self.protocol_version.value
+        else:
+            # It's a string
+            protocol_version_str = str(self.protocol_version)
+        
+        headers["MCP-Protocol-Version"] = protocol_version_str
+        return headers
+
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
         if not self._session:
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+                return []
+        
         if self._session is None:
-            raise ValueError("Session is not initialized")
+            verbose_logger.warning("MCP client session is not initialized")
+            return []
 
         try:
             result = await self._session.list_tools()
@@ -193,9 +225,11 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"MCP client list_tools failed: {str(e)}")
             await self.disconnect()
-            raise
+            # Return empty list instead of raising to allow graceful degradation
+            return []
 
     async def call_tool(
         self, call_tool_request_params: MCPCallToolRequestParams
@@ -204,10 +238,21 @@ class MCPClient:
         Call an MCP Tool.
         """
         if not self._session:
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+                return MCPCallToolResult(
+                    content=[TextContent(type="text", text=f"{str(e)}")],
+                    isError=True
+                )
 
         if self._session is None:
-            raise ValueError("Session is not initialized")
+            verbose_logger.warning("MCP client session is not initialized")
+            return MCPCallToolResult(
+                content=[TextContent(type="text", text="MCP client session is not initialized")],
+                isError=True,
+            )
         
         try:
             tool_result = await self._session.call_tool(
@@ -218,8 +263,13 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"MCP client call_tool failed: {str(e)}")
             await self.disconnect()
-            raise
+            # Return a default error result instead of raising
+            return MCPCallToolResult(
+                content=[TextContent(type="text", text=f"{str(e)}")],  # Empty content for error case
+                isError=True,
+            )
         
 
