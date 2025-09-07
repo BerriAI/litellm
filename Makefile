@@ -48,7 +48,7 @@ install-test-deps: install-proxy-dev
 	cd enterprise && python -m pip install -e . && cd ..
 
 install-helm-unittest:
-	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4
+	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
 
 # Formatting
 format: install-dev
