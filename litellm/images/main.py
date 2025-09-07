@@ -90,12 +90,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-        
+
         if response is None:
             raise ValueError(
                 "Unable to get Image Response. Please pass a valid llm_provider."
             )
-        
+
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -108,6 +108,8 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         )
 
 
+# fmt: off
+
 # Overload for when aimg_generation=True (returns Coroutine)
 @overload
 def image_generation(
@@ -119,7 +121,6 @@ def image_generation(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -128,8 +129,9 @@ def image_generation(
     *,
     aimg_generation: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, ImageResponse]:
+) -> Coroutine[Any, Any, ImageResponse]: 
     ...
+
 
 
 # Overload for when aimg_generation=False or not specified (returns ImageResponse)
@@ -143,7 +145,6 @@ def image_generation(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -152,8 +153,10 @@ def image_generation(
     *,
     aimg_generation: Literal[False] = False,
     **kwargs,
-) -> ImageResponse:
+) -> ImageResponse: 
     ...
+
+# fmt: on
 
 
 @client
@@ -166,7 +169,6 @@ def image_generation(  # noqa: PLR0915
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -174,9 +176,9 @@ def image_generation(  # noqa: PLR0915
     custom_llm_provider=None,
     **kwargs,
 ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ImageResponse,
+    Coroutine[Any, Any, ImageResponse],
+]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -227,7 +229,6 @@ def image_generation(  # noqa: PLR0915
             "quality",
             "size",
             "style",
-            "input_fidelity",
         ]
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
@@ -255,7 +256,6 @@ def image_generation(  # noqa: PLR0915
             size=size,
             style=style,
             user=user,
-            input_fidelity=input_fidelity,
             custom_llm_provider=custom_llm_provider,
             provider_config=image_generation_config,
             **non_default_params,
@@ -344,8 +344,10 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.GEMINI,
         ):
             if image_generation_config is None:
-                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
-            
+                raise ValueError(
+                    f"image generation config is not supported for {custom_llm_provider}"
+                )
+
             return llm_http_handler.image_generation_handler(
                 api_key=api_key,
                 model=model,
@@ -360,6 +362,7 @@ def image_generation(  # noqa: PLR0915
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
             if extra_headers is not None:
@@ -420,7 +423,7 @@ def image_generation(  # noqa: PLR0915
                 aimg_generation=aimg_generation,
                 client=client,
                 api_base=api_base,
-                api_key=api_key
+                api_key=api_key,
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -705,7 +708,7 @@ def image_edit(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
 
-        #add images / or return a single image
+        # add images / or return a single image
         images = image if isinstance(image, list) else [image]
 
         # get llm provider logic
@@ -716,11 +719,11 @@ def image_edit(
         )
 
         # get provider config
-        image_edit_provider_config: Optional[
-            BaseImageEditConfig
-        ] = ProviderConfigManager.get_provider_image_edit_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        image_edit_provider_config: Optional[BaseImageEditConfig] = (
+            ProviderConfigManager.get_provider_image_edit_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if image_edit_provider_config is None:

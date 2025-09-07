@@ -30,6 +30,10 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -43,6 +47,7 @@ from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
@@ -422,8 +427,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
+        model: Optional[str] = None,
     ) -> GeminiThinkingConfig:
-        if reasoning_effort == "low":
+        if reasoning_effort == "minimal":
+            # Use model-specific minimum thinking budget or fallback
+            # Check for exact matches first, then partial matches
+            if model and "gemini-2.5-flash-lite" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE
+            elif model and "gemini-2.5-pro" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO
+            elif model and "gemini-2.5-flash" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
+            else:
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+
+            return {
+                "thinkingBudget": budget,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
                 "includeThoughts": True,
@@ -600,7 +622,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                        value, model
+                    )
                 )
             elif param == "thinking":
                 optional_params["thinkingConfig"] = (
@@ -793,6 +817,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     content_str += _content_str
 
         return content_str, reasoning_content_str
+
+    def _extract_thinking_blocks_from_parts(
+        self, parts: List[HttpxPartType]
+    ) -> List[ChatCompletionThinkingBlock]:
+        """Extract thinking blocks from parts if present"""
+        thinking_blocks: List[ChatCompletionThinkingBlock] = []
+        for part in parts:
+            if "thoughtSignature" in part:
+                part_copy = part.copy()
+                part_copy.pop("thoughtSignature")
+                thinking_blocks.append(
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking=json.dumps(part_copy),
+                        signature=part["thoughtSignature"],
+                    )
+                )
+        return thinking_blocks
 
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -1237,6 +1279,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
         cumulative_tool_call_index: int = 0
+        thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -1270,6 +1313,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 image_response = (
                     VertexGeminiConfig()._extract_image_response_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
+                )
+
+                thinking_blocks = (
+                    VertexGeminiConfig()._extract_thinking_blocks_from_parts(
                         parts=candidate["content"]["parts"]
                     )
                 )
@@ -1309,6 +1358,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             if functions is not None:
                 chat_completion_message["function_call"] = functions
+
+            if thinking_blocks is not None:
+                chat_completion_message["thinking_blocks"] = thinking_blocks  # type: ignore
 
             if isinstance(model_response, ModelResponseStream):
                 choice = VertexGeminiConfig._create_streaming_choice(
