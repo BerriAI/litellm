@@ -519,7 +519,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        setattr(model_response, "usage", usage)
+        object.__setattr__(model_response, "usage", usage)
         model_response._hidden_params["original_response"] = completion_response
         return model_response
 
