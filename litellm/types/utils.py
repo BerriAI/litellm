@@ -721,7 +721,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.images: Optional[List[ImageURLObject]] = None
+        self.images: Optional[List[ImageURLListItem]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
