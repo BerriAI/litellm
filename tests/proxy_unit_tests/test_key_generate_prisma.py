@@ -2642,7 +2642,12 @@ async def test_reset_spend_authentication(prisma_client):
     _response = await new_user(
         data=NewUserRequest(
             tpm_limit=20,
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     generate_key = "Bearer " + _response.key
@@ -2662,7 +2667,12 @@ async def test_reset_spend_authentication(prisma_client):
         data=NewUserRequest(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             tpm_limit=20,
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     generate_key = "Bearer " + _response.key
@@ -2815,7 +2825,12 @@ async def test_update_user_role(prisma_client):
     key = await new_user(
         data=NewUserRequest(
             user_role=LitellmUserRoles.INTERNAL_USER,
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     print(key)
@@ -2844,7 +2859,12 @@ async def test_update_user_role(prisma_client):
     await user_update(
         data=UpdateUserRequest(
             user_id=key.user_id, user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     # await asyncio.sleep(3)
@@ -2868,7 +2888,12 @@ async def test_update_user_unit_test(prisma_client):
     key = await new_user(
         data=NewUserRequest(
             user_email=f"test-{uuid.uuid4()}@test.com",
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     print(key)
@@ -2882,7 +2907,12 @@ async def test_update_user_unit_test(prisma_client):
             tpm_limit=100,
             rpm_limit=100,
             metadata={"very-new-metadata": "something"},
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="admin_user_id",
+        ),
     )
 
     print("user_info", user_info)
