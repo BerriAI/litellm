@@ -1235,3 +1235,86 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags(client, monkeypatch):
+    """Test the /spend/tags endpoint"""
+    
+    # Mock the prisma client and get_spend_by_tags function
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    
+    # Mock response data
+    mock_response = [
+        {
+            "individual_request_tag": "tag1",
+            "log_count": 10,
+            "total_spend": 0.15
+        },
+        {
+            "individual_request_tag": "tag2", 
+            "log_count": 5,
+            "total_spend": 0.08
+        }
+    ]
+    
+    # Mock the get_spend_by_tags function
+    async def mock_get_spend_by_tags(prisma_client, start_date=None, end_date=None):
+        return mock_response
+    
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints.get_spend_by_tags",
+        mock_get_spend_by_tags
+    )
+    
+    # Test without date filters
+    response = client.get(
+        "/spend/tags",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["individual_request_tag"] == "tag1"
+    assert data[0]["log_count"] == 10
+    assert data[0]["total_spend"] == 0.15
+    
+    # Test with date filters
+    start_date = "2024-01-01"
+    end_date = "2024-01-31"
+    
+    response = client.get(
+        "/spend/tags",
+        params={
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+
+@pytest.mark.asyncio 
+async def test_view_spend_tags_no_database(client, monkeypatch):
+    """Test /spend/tags endpoint when database is not connected"""
+    
+    # Mock prisma_client as None
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    
+    response = client.get(
+        "/spend/tags",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    
+    assert response.status_code == 500
+    data = response.json()
+    # Check the actual error message structure
+    assert "error" in data
+    assert "Database not connected" in data["error"]["message"]
