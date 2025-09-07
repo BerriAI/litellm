@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
+import fastuuid as uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -1715,9 +1715,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=litellm_params.get(
-                                "litellm_call_id", str(uuid.uuid4())
-                            ),
+                            litellm_call_id=current_call_id
+                            if (
+                                current_call_id := litellm_params.get("litellm_call_id")
+                            )
+                            is not None
+                            else str(uuid.uuid4()),
                             print_verbose=print_verbose,
                         )
                     if callback == "wandb" and weightsBiasesLogger is not None:
