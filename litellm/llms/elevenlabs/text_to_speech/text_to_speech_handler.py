@@ -8,7 +8,7 @@ import httpx
 
 import litellm
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
 from litellm import get_secret_str
 
 class ElevenLabsTextToSpeechAPI:
@@ -26,10 +26,10 @@ class ElevenLabsTextToSpeechAPI:
         input: str,
         voice: str,
         optional_params: dict,
+        timeout: Union[float, httpx.Timeout],
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        timeout: Union[float, httpx.Timeout] = 60,
-        aspeech: Optional[bool] = None,
+        aspeech: Optional[bool] = False,
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
         """
@@ -76,7 +76,7 @@ class ElevenLabsTextToSpeechAPI:
                     "mp3": "mp3_44100_128",
                     "pcm": "pcm_44100",
                     "opus": "opus_48000_128",
-                    # wav, aac, flac not supported by ElevenLabs
+                    # ElevenLabs does not support WAV, AAC, or FLAC formats.
                 }
                 if response_format in format_map:
                     output_format = format_map[response_format]
@@ -115,10 +115,12 @@ class ElevenLabsTextToSpeechAPI:
         )
         ########## End of logging ############
 
-        ####### Send the request ###################
         if aspeech:
-            pass
+            return self.async_audio_speech(  # type: ignore
+                logging_obj=logging_obj, url=url, headers=headers, request=request_data, timeout=timeout
+            )
 
+        ####### Send the request ###################
         # Send HTTP request
         sync_handler = _get_httpx_client()
 
@@ -144,6 +146,55 @@ class ElevenLabsTextToSpeechAPI:
                 message=error_msg,
                 llm_provider="elevenlabs",
                 model=model,
+            )
+
+        ############ Process the response ############
+        # Create HttpxBinaryResponseContent from the binary audio data
+        audio_response = httpx.Response(
+            status_code=200,
+            content=response.content,
+        )
+
+        return HttpxBinaryResponseContent(response=audio_response)
+
+    async def async_audio_speech(
+        self,
+        logging_obj,
+        url: str,
+        headers: dict,
+        request: dict,
+        timeout: Union[float, httpx.Timeout],
+    ) -> HttpxBinaryResponseContent:
+        """
+        Async version of audio_speech.
+        """
+        async_handler = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.ELEVENLABS
+        )
+
+        ####### Send the request ###################
+        response = await async_handler.post(
+            url=url,
+            headers=headers,
+            json=request,  # type: ignore
+            timeout=timeout,
+        )
+
+        ############ Process the error message ############
+        if response.status_code != 200:
+            error_msg = f"ElevenLabs API error: {response.status_code}"
+            try:
+                error_data = response.json()
+                if "detail" in error_data:
+                    error_msg += f" - {error_data['detail']}"
+            except:
+                error_msg += f" - {response.text}"
+
+            raise litellm.APIError(
+                status_code=response.status_code,
+                message=error_msg,
+                llm_provider="elevenlabs",
+                model=request.get("model_id", "unknown"),
             )
 
         ############ Process the response ############
