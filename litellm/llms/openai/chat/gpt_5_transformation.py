@@ -28,7 +28,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         base_gpt_series_params.extend(gpt_5_only_params)
         if not supports_tool_choice(model=model):
             base_gpt_series_params.remove("tool_choice")
-        return base_gpt_series_params
+
+        non_supported_params = [
+            "logprobs",
+            "top_p",
+            "presence_penalty",
+            "frequency_penalty",
+            "top_logprobs",
+        ]
+
+        return [
+            param for param in base_gpt_series_params if param not in non_supported_params
+        ]
 
     def map_openai_params(
         self,

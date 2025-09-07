@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
@@ -237,6 +238,23 @@ async def _handle_team_membership_changes(user_id: str, existing_teams: List[str
         )
 
 
+async def _get_team_member_user_ids_from_team(team: LiteLLM_TeamTable) -> List[str]:
+    """
+    Get the IDs of the members from a team.
+
+    Use one source of truth for the member IDs: team.members_with_roles
+    
+    """
+    member_user_ids: List[str] = []
+    for member in team.members_with_roles or []:
+        if hasattr(member, "user_id") and member.user_id is not None:
+            member_user_ids.append(member.user_id)
+        elif isinstance(member, dict) and "user_id" in member:
+            user_id = member.get("user_id")
+            if user_id is not None:
+                member_user_ids.append(user_id)
+    return member_user_ids
+
 # Dependency to set the correct SCIM Content-Type
 async def set_scim_content_type(response: Response):
     """Sets the Content-Type header to application/scim+json"""
@@ -253,6 +271,12 @@ async def set_scim_content_type(response: Response):
 )
 async def get_service_provider_config(request: Request):
     """Return SCIM Service Provider Configuration."""
+    verbose_proxy_logger.debug(
+        "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
+        request.method,
+        request.url,
+        dict(request.headers),
+    )
     meta = {
         "resourceType": "ServiceProviderConfig",
         "location": str(request.url),
@@ -275,6 +299,12 @@ async def get_users(
     """
     Get a list of users according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET USERS request: startIndex=%s count=%s filter=%s",
+        startIndex,
+        count,
+        filter,
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -334,6 +364,7 @@ async def get_user(
     """
     Get a single user by ID according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug("SCIM GET USER request for user_id=%s", user_id)
     try:
         user = await _check_user_exists(user_id)
         
@@ -357,7 +388,9 @@ async def create_user(
     Create a user according to SCIM v2 protocol
     """
     try:
-        verbose_proxy_logger.debug("SCIM CREATE USER request: %s", user)
+        verbose_proxy_logger.debug(
+            "SCIM CREATE USER request: %s", user.model_dump()
+        )
         prisma_client = await _get_prisma_client_or_raise_exception()
         
         # Extract data from SCIM user
@@ -435,7 +468,11 @@ async def update_user(
     """
     Update a user according to SCIM v2 protocol (full replacement)
     """
-    verbose_proxy_logger.debug("SCIM PUT USER request: %s", user)
+    verbose_proxy_logger.debug(
+        "SCIM PUT USER request for user_id=%s: %s",
+        user_id,
+        user.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
@@ -497,6 +534,9 @@ async def delete_user(
     """
     Delete a user according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM DELETE USER request for user_id=%s", user_id
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
@@ -691,7 +731,11 @@ async def patch_user(
     """
     Patch a user according to SCIM v2 protocol
     """
-    verbose_proxy_logger.debug("SCIM PATCH USER request: %s", patch_ops)
+    verbose_proxy_logger.debug(
+        "SCIM PATCH USER request for user_id=%s: %s",
+        user_id,
+        patch_ops.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
@@ -744,6 +788,12 @@ async def get_groups(
     """
     Get a list of groups according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET GROUPS request: startIndex=%s count=%s filter=%s",
+        startIndex,
+        count,
+        filter,
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -814,6 +864,9 @@ async def get_group(
     """
     Get a single group by ID according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM GET GROUP request for group_id=%s", group_id
+    )
     try:
         team = await _check_team_exists(group_id)
 
@@ -839,6 +892,10 @@ async def create_group(
     """
     Create a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM CREATE GROUP request: %s",
+        group.model_dump(),
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         
@@ -892,78 +949,51 @@ async def update_group(
     """
     Update a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM PUT GROUP request for group_id=%s: %s",
+        group_id,
+        group.model_dump(),
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
 
         # Extract valid member IDs
         member_ids = await _extract_group_member_ids(group)
+        verbose_proxy_logger.debug(f"SCIM PUT GROUP member_ids: {member_ids}")
 
-        # Update team in database
+        # Prepare update data
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
         updated_metadata = {**existing_metadata, "scim_data": group.model_dump()}
         
+        update_data = {
+            "team_alias": group.displayName,
+            "metadata": safe_dumps(updated_metadata),
+        }
+
+        # Update team in database
         updated_team = await prisma_client.db.litellm_teamtable.update(
             where={"team_id": group_id},
-            data={
-                "team_alias": group.displayName,
-                "members": member_ids,
-                "metadata": safe_dumps(updated_metadata),
-            },
+            data=update_data,
         )
 
-        # Handle user-team relationships
-        current_members = existing_team.members or []
-
-        # Add new members to team
-        for member_id in member_ids:
-            if member_id not in current_members:
-                user = await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_id": member_id}
-                )
-                if user:
-                    current_user_teams = user.teams or []
-                    if group_id not in current_user_teams:
-                        await prisma_client.db.litellm_usertable.update(
-                            where={"user_id": member_id},
-                            data={"teams": {"push": group_id}},
-                        )
-
-        # Remove former members from team
-        for member_id in current_members:
-            if member_id not in member_ids:
-                user = await prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_id": member_id}
-                )
-                if user:
-                    current_user_teams = user.teams or []
-                    if group_id in current_user_teams:
-                        new_teams = [t for t in current_user_teams if t != group_id]
-                        await prisma_client.db.litellm_usertable.update(
-                            where={"user_id": member_id}, data={"teams": new_teams}
-                        )
-
-        # Get updated members for response
-        members = await _get_team_members_display(member_ids)
-
-        team_created_at = (
-            updated_team.created_at.isoformat() if updated_team.created_at else None
-        )
-        team_updated_at = (
-            updated_team.updated_at.isoformat() if updated_team.updated_at else None
+        # Handle user-team relationship changes using the same approach as patch_group
+        current_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        verbose_proxy_logger.debug(f"SCIM PUT GROUP current_members: {current_members}")
+        final_members = set(member_ids)
+        verbose_proxy_logger.debug(f"SCIM PUT GROUP final_members: {final_members}")
+        
+        await _handle_group_membership_changes(
+            group_id=group_id,
+            current_members=current_members,
+            final_members=final_members,
         )
 
-        return SCIMGroup(
-            schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
-            id=group_id,
-            displayName=updated_team.team_alias or group_id,
-            members=members,
-            meta={
-                "resourceType": "Group",
-                "created": team_created_at,
-                "lastModified": team_updated_at,
-            },
+        # Convert to SCIM format and return
+        scim_group = await ScimTransformations.transform_litellm_team_to_scim_group(
+            updated_team
         )
+        return scim_group
 
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -980,6 +1010,9 @@ async def delete_group(
     """
     Delete a group according to SCIM v2 protocol
     """
+    verbose_proxy_logger.debug(
+        "SCIM DELETE GROUP request for group_id=%s", group_id
+    )
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_team = await _check_team_exists(group_id)
@@ -1135,7 +1168,11 @@ async def patch_group(
     """
     Patch a group according to SCIM v2 protocol
     """
-    verbose_proxy_logger.debug("SCIM PATCH GROUP request: %s", patch_ops)
+    verbose_proxy_logger.debug(
+        "SCIM PATCH GROUP request for group_id=%s: %s",
+        group_id,
+        patch_ops.model_dump(),
+    )
 
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
@@ -1147,7 +1184,7 @@ async def patch_group(
         )
         
         # Track current members for comparison
-        current_members = set(existing_team.members or [])
+        current_members = set(await _get_team_member_user_ids_from_team(existing_team))
 
         # Apply updates to the database
         updated_team = await _apply_group_patch_updates(

@@ -757,7 +757,7 @@ def test_optional_combine_thinking_block_with_none_content(
 
     # Second chunk with reasoning_content and None content
     second_chunk = {
-        "id": "chunk2", 
+        "id": "chunk2",
         "object": "chat.completion.chunk",
         "created": 1741037891,
         "model": "deepseek-reasoner",
@@ -776,16 +776,13 @@ def test_optional_combine_thinking_block_with_none_content(
     # Final chunk with actual content - should add </think> tag
     final_chunk = {
         "id": "chunk3",
-        "object": "chat.completion.chunk", 
+        "object": "chat.completion.chunk",
         "created": 1741037892,
         "model": "deepseek-reasoner",
         "choices": [
             {
                 "index": 0,
-                "delta": {
-                    "content": "The answer is 42",
-                    "reasoning_content": None
-                },
+                "delta": {"content": "The answer is 42", "reasoning_content": None},
                 "finish_reason": None,
             }
         ],
@@ -796,12 +793,15 @@ def test_optional_combine_thinking_block_with_none_content(
     initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
         first_response
     )
-    assert first_response.choices[0].delta.content == "<think>Let me think about this problem"
+    assert (
+        first_response.choices[0].delta.content
+        == "<think>Let me think about this problem"
+    )
     assert not hasattr(first_response.choices[0].delta, "reasoning_content")
     assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
 
     # Process second chunk - should work with continued reasoning
-    second_response = ModelResponseStream(**second_chunk) 
+    second_response = ModelResponseStream(**second_chunk)
     initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
         second_response
     )
@@ -822,76 +822,99 @@ def test_has_special_delta_content(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
     """Test the _has_special_delta_content helper method"""
-    
+
     # Test empty choices
     empty_response = ModelResponseStream(
         id="test", created=1742056047, model=None, choices=[]
     )
-    assert not initialized_custom_stream_wrapper._has_special_delta_content(empty_response)
-    
+    assert not initialized_custom_stream_wrapper._has_special_delta_content(
+        empty_response
+    )
+
     # Test with tool_calls (simulate with mock object)
     tool_call_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
             StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content=None, tool_calls=[{"id": "test"}])
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "test",
+                            "function": {"arguments": "{}", "name": "test_func"},
+                        }
+                    ],
+                ),
             )
-        ]
+        ],
     )
-    assert initialized_custom_stream_wrapper._has_special_delta_content(tool_call_response)
-    
+    assert initialized_custom_stream_wrapper._has_special_delta_content(
+        tool_call_response
+    )
+
     # Test with function_call (simulate with mock object)
     function_call_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
             StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content=None, function_call={"name": "test_func"})
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content=None, function_call={"name": "test_func", "arguments": "{}"}
+                ),
             )
-        ]
+        ],
     )
-    assert initialized_custom_stream_wrapper._has_special_delta_content(function_call_response)
-    
+    assert initialized_custom_stream_wrapper._has_special_delta_content(
+        function_call_response
+    )
+
     # Test with audio (simulate by adding audio attribute)
     audio_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
-            StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content=None)
-            )
-        ]
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=None))
+        ],
     )
     # Manually add audio attribute to delta
     audio_response.choices[0].delta.audio = {"transcript": "test"}
     assert initialized_custom_stream_wrapper._has_special_delta_content(audio_response)
-    
+
     # Test with image (simulate by adding image attribute)
     image_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
-            StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content=None)
-            )
-        ]
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=None))
+        ],
     )
     # Manually add image attribute to delta
-    image_response.choices[0].delta.image = {"url": "test.jpg"}
+    image_response.choices[0].delta.images = [{"url": "test.jpg"}]
     assert initialized_custom_stream_wrapper._has_special_delta_content(image_response)
-    
+
     # Test with regular content (should return False)
     regular_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
             StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content="Hello world")
+                finish_reason=None, index=0, delta=Delta(content="Hello world")
             )
-        ]
+        ],
     )
-    assert not initialized_custom_stream_wrapper._has_special_delta_content(regular_response)
+    assert not initialized_custom_stream_wrapper._has_special_delta_content(
+        regular_response
+    )
 
 
 def test_handle_special_delta_content(
@@ -899,21 +922,26 @@ def test_handle_special_delta_content(
 ):
     """Test the _handle_special_delta_content helper method"""
     test_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
             StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content="test", role="assistant")
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="test", role="assistant"),
             )
-        ]
+        ],
     )
-    
+
     # The method should call strip_role_from_delta
-    result = initialized_custom_stream_wrapper._handle_special_delta_content(test_response)
-    
+    result = initialized_custom_stream_wrapper._handle_special_delta_content(
+        test_response
+    )
+
     # Should return the same response object (modified)
     assert result is test_response
-    
+
     # Should have set sent_first_chunk to True
     assert initialized_custom_stream_wrapper.sent_first_chunk is True
 
@@ -922,32 +950,38 @@ def test_has_any_special_delta_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
     """Test the _has_any_special_delta_attributes helper method"""
-    
+
     # Test with delta that has audio attribute
     class MockDelta:
         def __init__(self):
             self.audio = {"transcript": "Hello world"}
-    
+
     audio_delta = MockDelta()
-    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(audio_delta)
+    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(
+        audio_delta
+    )
     assert result is True
-    
+
     # Test with delta that has image attribute
     class MockDeltaImage:
         def __init__(self):
-            self.image = {"url": "test.jpg"}
-    
+            self.images = [{"url": "test.jpg"}]
+
     image_delta = MockDeltaImage()
-    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(image_delta)
+    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(
+        image_delta
+    )
     assert result is True
-    
+
     # Test with delta that has no special attributes
     class MockDeltaRegular:
         def __init__(self):
             self.content = "regular content"
-    
+
     regular_delta = MockDeltaRegular()
-    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(regular_delta)
+    result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(
+        regular_delta
+    )
     assert result is False
 
 
@@ -955,81 +989,93 @@ def test_handle_special_delta_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
     """Test the _handle_special_delta_attributes helper method"""
-    
+
     # Create a model response
     model_response = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
-            StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content="test")
-            )
-        ]
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="test"))
+        ],
     )
-    
+
     # Test with delta that has audio attribute
     class MockDelta:
         def __init__(self):
             self.audio = {"transcript": "Hello world"}
-    
+
     audio_delta = MockDelta()
-    initialized_custom_stream_wrapper._handle_special_delta_attributes(audio_delta, model_response)
-    
+    initialized_custom_stream_wrapper._handle_special_delta_attributes(
+        audio_delta, model_response
+    )
+
     # Should copy the audio attribute
     assert hasattr(model_response.choices[0].delta, "audio")
     assert model_response.choices[0].delta.audio == {"transcript": "Hello world"}
-    
+
     # Test with delta that has image attribute
     class MockDeltaImage:
         def __init__(self):
-            self.image = {"url": "test.jpg"}
-    
+            self.images = [{"url": "test.jpg"}]
+
     image_delta = MockDeltaImage()
     model_response2 = ModelResponseStream(
-        id="test", created=1742056047, model=None,
+        id="test",
+        created=1742056047,
+        model=None,
         choices=[
-            StreamingChoices(
-                finish_reason=None, index=0,
-                delta=Delta(content="test")
-            )
-        ]
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="test"))
+        ],
     )
-    
-    initialized_custom_stream_wrapper._handle_special_delta_attributes(image_delta, model_response2)
-    
+
+    initialized_custom_stream_wrapper._handle_special_delta_attributes(
+        image_delta, model_response2
+    )
+
     # Should copy the image attribute
-    assert hasattr(model_response2.choices[0].delta, "image")
-    assert model_response2.choices[0].delta.image == {"url": "test.jpg"}
+    print(f"delta: {model_response2.choices[0].delta}")
+    assert hasattr(model_response2.choices[0].delta, "images")
+    print(f"images: {model_response2.choices[0].delta.images}")
+    assert model_response2.choices[0].delta.images[0] == {"url": "test.jpg"}
 
 
 def test_has_special_delta_attribute(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
     """Test the _has_special_delta_attribute helper method"""
-    
+
     # Test with None delta
-    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(None, "audio")
-    
+    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(
+        None, "audio"
+    )
+
     # Test with delta that has the attribute
     class MockDelta:
         def __init__(self):
             self.audio = {"transcript": "test"}
-    
+
     delta_with_audio = MockDelta()
-    assert initialized_custom_stream_wrapper._has_special_delta_attribute(delta_with_audio, "audio")
-    
+    assert initialized_custom_stream_wrapper._has_special_delta_attribute(
+        delta_with_audio, "audio"
+    )
+
     # Test with delta that doesn't have the attribute
     class MockDeltaNoAudio:
         def __init__(self):
             self.content = "test"
-    
+
     delta_without_audio = MockDeltaNoAudio()
-    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(delta_without_audio, "audio")
-    
+    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(
+        delta_without_audio, "audio"
+    )
+
     # Test with delta that has the attribute but it's None
     class MockDeltaNone:
         def __init__(self):
             self.audio = None
-    
+
     delta_with_none = MockDeltaNone()
-    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(delta_with_none, "audio")
+    assert not initialized_custom_stream_wrapper._has_special_delta_attribute(
+        delta_with_none, "audio"
+    )

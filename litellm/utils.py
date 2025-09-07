@@ -32,7 +32,6 @@ import textwrap
 import threading
 import time
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -41,6 +40,7 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
+import fastuuid as uuid
 import httpx
 import openai
 import tiktoken
@@ -234,6 +234,7 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -541,9 +542,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -837,14 +838,12 @@ async def _client_async_logging_helper(
         # Async Logging Worker
         ################################################
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine = logging_obj.async_success_handler(
-                result=result,
-                start_time=start_time, 
-                end_time=end_time
+            async_coroutine=logging_obj.async_success_handler(
+                result=result, start_time=start_time, end_time=end_time
             )
         )
-
 
         ################################################
         # Sync Logging Worker
@@ -1299,9 +1298,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2352,6 +2351,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             split_string = key.split("/", 1)
             if key not in litellm.openrouter_models:
                 litellm.openrouter_models.add(split_string[1])
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            if key not in litellm.vercel_ai_gateway_models:
+                litellm.vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             if key not in litellm.vertex_text_models:
                 litellm.vertex_text_models.add(key)
@@ -2394,7 +2396,7 @@ def _should_drop_param(k, additional_drop_params) -> bool:
 
 
 def _get_non_default_params(
-    passed_params: dict, default_params: dict, additional_drop_params: Optional[bool]
+    passed_params: dict, default_params: dict, additional_drop_params: Optional[list]
 ) -> dict:
     non_default_params = {}
     for k, v in passed_params.items():
@@ -2506,9 +2508,8 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
-    additional_drop_params: Optional[bool] = None,
+    additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
@@ -2543,7 +2544,6 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
-        "input_fidelity": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -2627,9 +2627,20 @@ def get_optional_params_image_gen(
             )  # Default to square if size not recognized
             optional_params["aspectRatio"] = aspect_ratio
 
-    for k in passed_params.keys():
-        if k not in default_params.keys():
-            optional_params[k] = passed_params[k]
+    openai_params: list[str] = list(default_params.keys())
+    if provider_config is not None:
+        supported_params = provider_config.get_supported_openai_params(
+            model=model or ""
+        )
+        openai_params = list(supported_params)
+
+    optional_params = add_provider_specific_params_to_optional_params(
+        optional_params=optional_params,
+        passed_params=passed_params,
+        custom_llm_provider=custom_llm_provider or "",
+        openai_params=openai_params,
+        additional_drop_params=additional_drop_params,
+    )
     return optional_params
 
 
@@ -3106,10 +3117,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3226,6 +3237,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
@@ -3236,16 +3248,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -3300,6 +3312,7 @@ def get_optional_params(  # noqa: PLR0915
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    safety_identifier: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
@@ -3589,6 +3602,17 @@ def get_optional_params(  # noqa: PLR0915
                 )
         elif model in litellm.vertex_ai_ai21_models:
             optional_params = litellm.VertexAIAi21Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif provider_config is not None:
+            optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -3902,7 +3926,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4062,7 +4085,7 @@ def add_provider_specific_params_to_optional_params(
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in openai_params:
+                if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
             initial_extra_body = {
@@ -4084,7 +4107,7 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params.keys():
-            if k not in openai_params:
+            if k not in openai_params and passed_params[k] is not None:
                 optional_params[k] = passed_params[k]
     return optional_params
 
@@ -4339,9 +4362,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -5297,6 +5320,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "vercel_ai_gateway":
+            if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
         elif custom_llm_provider == "datarobot":
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
@@ -5520,6 +5548,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        ## vercel_ai_gateway
+        elif model in litellm.vercel_ai_gateway_models:
+            if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
         ## datarobot
         elif model in litellm.datarobot_models:
             if "DATAROBOT_API_TOKEN" in os.environ:
@@ -6851,6 +6885,12 @@ class ProviderConfigManager:
                 return litellm.VertexGeminiConfig()
             elif "claude" in model:
                 return litellm.VertexAIAnthropicConfig()
+            elif "gpt-oss" in model:
+                from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
+                    VertexAIGPTOSSTransformation,
+                )
+
+                return VertexAIGPTOSSTransformation()
             elif model in litellm.vertex_mistral_models:
                 if "codestral" in model:
                     return litellm.CodestralTextCompletionConfig()
@@ -6904,6 +6944,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
+            return litellm.VercelAIGatewayConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIConfig()
         elif litellm.LlmProviders.DATAROBOT == provider:
@@ -7077,6 +7119,12 @@ class ProviderConfigManager:
             )
 
             return JinaAIEmbeddingConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.embedding.transformation import (
+                VolcEngineEmbeddingConfig,
+            )
+
+            return VolcEngineEmbeddingConfig()
         return None
 
     @staticmethod
@@ -7258,6 +7306,21 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 
             return VertexAIFilesConfig()
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+            return BedrockFilesConfig()
+        return None
+
+    @staticmethod
+    def get_provider_batches_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseBatchesConfig]:
+        if LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+
+            return BedrockBatchesConfig()
         return None
 
     @staticmethod

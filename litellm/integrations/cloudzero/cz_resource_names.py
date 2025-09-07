@@ -17,9 +17,14 @@
 """CloudZero Resource Names (CZRN) generation and validation for LiteLLM resources."""
 
 import re
+from enum import Enum
 from typing import Any, cast
 
 import litellm
+
+
+class CZEntityType(str, Enum):
+    TEAM = "team"
 
 
 class CZRNGenerator:
@@ -49,8 +54,8 @@ class CZRNGenerator:
         region = 'cross-region'
 
         # Use the actual entity_id (team_id or user_id) as the owner account
-        entity_id = row.get('entity_id', 'unknown')
-        owner_account_id = self._normalize_component(entity_id)
+        team_id = row.get('team_id', 'unknown')
+        owner_account_id = self._normalize_component(team_id)
 
         resource_type = 'llm-usage'
 
