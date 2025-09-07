@@ -232,6 +232,8 @@ class OllamaChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        if api_key is not None and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(

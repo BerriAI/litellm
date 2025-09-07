@@ -204,6 +204,21 @@ class OllamaConfig(BaseConfig):
                 return v
         return None
 
+    @staticmethod
+    def get_api_key() -> Optional[str]:
+        """Get API key from environment variables or litellm configuration"""
+        import os
+
+        import litellm
+        from litellm.secret_managers.main import get_secret_str
+
+        return (
+            os.environ.get("OLLAMA_API_KEY")
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OLLAMA_API_KEY")
+        )
+
     def get_model_info(self, model: str) -> ModelInfoBase:
         """
         curl http://localhost:11434/api/show -d '{
@@ -213,11 +228,14 @@ class OllamaConfig(BaseConfig):
         if model.startswith("ollama/") or model.startswith("ollama_chat/"):
             model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+        api_key = self.get_api_key()
+        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
 
         try:
             response = litellm.module_level_client.post(
                 url=f"{api_base}/api/show",
                 json={"name": model},
+                headers=headers,
             )
         except Exception as e:
             raise Exception(
