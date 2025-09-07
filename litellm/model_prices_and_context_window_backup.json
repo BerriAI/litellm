@@ -5817,16 +5817,6 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
-    "groq/llama3-8b-8192": {
-        "max_tokens": 8192,
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 8e-08,
-        "litellm_provider": "groq",
-        "mode": "chat",
-        "supports_tool_choice": true
-    },
     "groq/llama-3.2-1b-preview": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -5906,17 +5896,6 @@
         "supports_vision": true,
         "supports_tool_choice": true,
         "deprecation_date": "2025-04-14"
-    },
-    "groq/llama3-70b-8192": {
-        "max_tokens": 8192,
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 5.9e-07,
-        "output_cost_per_token": 7.9e-07,
-        "litellm_provider": "groq",
-        "mode": "chat",
-        "supports_response_schema": true,
-        "supports_tool_choice": true
     },
     "groq/llama-3.1-8b-instant": {
         "max_tokens": 8192,
@@ -6178,21 +6157,7 @@
         "supports_tool_choice": true,
         "source": "https://inference-docs.cerebras.ai/support/pricing"
     },
-    "cerebras/openai/gpt-oss-20b": {
-        "max_tokens": 32768,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 7e-08,
-        "output_cost_per_token": 3e-07,
-        "litellm_provider": "cerebras",
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_reasoning": true,
-        "supports_tool_choice": true,
-        "source": "https://inference-docs.cerebras.ai/support/pricing"
-    },
+
     "cerebras/openai/gpt-oss-120b": {
         "max_tokens": 32768,
         "max_input_tokens": 131072,
@@ -8027,8 +7992,8 @@
         "max_pdf_size_mb": 30,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 2.5e-06,
-        "output_cost_per_reasoning_token": 2.5e-06,
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_reasoning_token": 3e-05,
         "output_cost_per_image": 0.039,
         "litellm_provider": "gemini",
         "mode": "chat",
@@ -8391,8 +8356,8 @@
         "max_pdf_size_mb": 30,
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 2.5e-06,
-        "output_cost_per_reasoning_token": 2.5e-06,
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_reasoning_token": 3e-05,
         "output_cost_per_image": 0.039,
         "litellm_provider": "vertex_ai-language-models",
         "mode": "chat",
@@ -9519,6 +9484,48 @@
         "source": "https://aistudio.google.com",
         "supports_tool_choice": true
     },
+    "gemini/veo-3.0-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.75,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "gemini/veo-3.0-fast-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.40,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "gemini/veo-2.0-generate-001": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.35,
+        "litellm_provider": "gemini",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
     "vertex_ai/claude-opus-4-1": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -9904,6 +9911,28 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true
+    },
+    "vertex_ai/openai/gpt-oss-20b-maas": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.075e-06,
+        "output_cost_per_token": 0.30e-06,
+        "litellm_provider": "vertex_ai-openai_models",
+        "mode": "chat",
+        "supports_reasoning": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/gpt-oss-120b-maas"
+    },
+    "vertex_ai/openai/gpt-oss-120b-maas": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.15e-06,
+        "output_cost_per_token": 0.60e-06,
+        "litellm_provider": "vertex_ai-openai_models",
+        "mode": "chat",
+        "supports_reasoning": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/openai/model-garden/gpt-oss-120b-maas"
     },
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
         "max_tokens": 32768,
@@ -10313,6 +10342,48 @@
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/veo-3.0-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.75,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "vertex_ai/veo-3.0-fast-generate-preview": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.40,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
+    },
+    "vertex_ai/veo-2.0-generate-001": {
+        "max_tokens": 1024,
+        "max_input_tokens": 1024,
+        "output_cost_per_second": 0.35,
+        "litellm_provider": "vertex_ai-video-models",
+        "mode": "video_generation",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/video"
     },
     "text-embedding-004": {
         "max_tokens": 2048,
@@ -20961,6 +21032,66 @@
         "source": "https://docs.aimlapi.com/",
         "metadata": {
             "notes": "DALL-E 2 via AI/ML API - Reliable text-to-image generation"
+        }
+    },
+    "doubao-embedding-large": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - large version with 2048 dimensions"
+        }
+    },
+    "doubao-embedding-large-text-250515": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-250515 version with 2048 dimensions"
+        }
+    },
+    "doubao-embedding-large-text-240915": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-240915 version with 4096 dimensions"
+        }
+    },
+    "doubao-embedding": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2560,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - standard version with 2560 dimensions"
+        }
+    },
+    "doubao-embedding-text-240715": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "output_vector_size": 2560,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "volcengine",
+        "mode": "embedding",
+        "metadata": {
+            "notes": "Volcengine Doubao embedding model - text-240715 version with 2560 dimensions"
         }
     }
 }

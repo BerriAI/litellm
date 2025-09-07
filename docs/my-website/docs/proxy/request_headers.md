@@ -14,6 +14,8 @@ Special headers that are supported by LiteLLM.
 
 `x-litellm-num-retries`: Optional[int]: The number of retries for the request.
 
+`x-litellm-spend-logs-metadata`: Optional[str]: JSON string containing custom metadata to include in spend logs. Example: `{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}`. [Learn More](../proxy/enterprise#tracking-spend-with-custom-metadata)
+
 ## Anthropic Headers
 
 `anthropic-version` Optional[str]: The version of the Anthropic API to use.  

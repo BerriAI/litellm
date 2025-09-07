@@ -565,7 +565,7 @@ def test_groq_response_cost_tracking(is_streaming):
 
     response_cost = litellm.response_cost_calculator(
         response_object=response,
-        model="groq/llama3-70b-8192",
+        model="groq/llama-3.3-70b-versatile",
         custom_llm_provider="groq",
         call_type=CallTypes.acompletion.value,
         optional_params={},

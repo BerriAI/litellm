@@ -38,6 +38,7 @@ try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:
     PrometheusLogger = None
+from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
@@ -86,6 +87,7 @@ class CustomLoggerRegistry:
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
+        "cloudzero": CloudZeroLogger,
     }
 
     try:

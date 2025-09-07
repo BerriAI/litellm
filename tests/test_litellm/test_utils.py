@@ -170,7 +170,9 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.volcengine import VolcEngineConfig
+    from litellm.llms.volcengine.chat.transformation import (
+        VolcEngineChatConfig as VolcEngineConfig,
+    )
 
     assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
         model="llama3"
@@ -549,6 +551,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "completion",
                         "embedding",
                         "image_generation",
+                        "video_generation",
                         "moderation",
                         "rerank",
                         "responses",
@@ -636,7 +639,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["text", "image", "audio", "code"],
+                        "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
@@ -687,6 +690,7 @@ def test_get_model_info_gemini():
             and not "gemma" in model
             and not "learnlm" in model
             and not "imagen" in model
+            and not "veo" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -979,10 +983,10 @@ class TestProxyFunctionCalling:
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
-                "groq/llama3-70b-8192",
-                "litellm_proxy/groq/llama3-70b-8192",
-                False,
-            ),  # This model doesn't support function calling
+                "groq/llama-3.3-70b-versatile",
+                "litellm_proxy/groq/llama-3.3-70b-versatile",
+                True,
+            ),
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],

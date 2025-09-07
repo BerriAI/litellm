@@ -109,7 +109,6 @@ async def create_streaming_response(
     final_status_code = default_status_code
 
     try:
-
         # Handle coroutine that returns a generator
         if asyncio.iscoroutine(generator):
             generator = await generator
@@ -118,7 +117,6 @@ async def create_streaming_response(
         first_chunk_value = await generator.__anext__()
 
         if first_chunk_value is not None:
-
             try:
                 error_code_from_chunk = await _parse_event_data_for_error(
                     first_chunk_value
@@ -132,7 +130,6 @@ async def create_streaming_response(
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
-
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
@@ -145,7 +142,6 @@ async def create_streaming_response(
             status_code=default_status_code,
         )
     except Exception as e:
-
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(
             f"Error consuming first chunk from generator: {e}"
@@ -168,7 +164,6 @@ async def create_streaming_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield first_chunk_value
         async for chunk in generator:
-
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
@@ -462,7 +457,6 @@ class ProxyBaseLLMRequestProcessing:
         ) or self._is_streaming_response(
             response
         ):  # use generate_responses to stream responses
-
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -480,7 +474,6 @@ class ProxyBaseLLMRequestProcessing:
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
-
                     if asyncio.iscoroutine(response):
                         generator = await response
                     else:
@@ -501,7 +494,6 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                     )
             else:
-
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,
@@ -740,7 +732,11 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in response:
+            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+            ):
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
                 )

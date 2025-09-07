@@ -50,7 +50,7 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -94,7 +94,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None,
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -109,7 +109,7 @@ def create_file(
     try:
         _is_async = kwargs.pop("acreate_file", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_params_dict = get_litellm_params(**kwargs)
+        litellm_params_dict = dict(**kwargs)
         logging_obj = cast(
             Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
         )
