@@ -358,7 +358,8 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
-    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
+    safety_identifier: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -495,6 +496,7 @@ async def acompletion(
         "api_key": api_key,
         "model_list": model_list,
         "reasoning_effort": reasoning_effort,
+        "safety_identifier": safety_identifier,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -502,7 +504,7 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=completion_kwargs.get("base_url", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=completion_kwargs.get("base_url", None)
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -897,7 +899,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -908,6 +910,7 @@ def completion(  # type: ignore # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
+    safety_identifier: Optional[str] = None,
     # soon to be deprecated params by OpenAI
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
@@ -1245,6 +1248,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "reasoning_effort": reasoning_effort,
             "thinking": thinking,
             "web_search_options": web_search_options,
+            "safety_identifier": safety_identifier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
         optional_params = get_optional_params(
@@ -2204,8 +2208,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/complete"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/complete"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/complete")
+            ):
                 api_base += "/v1/complete"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/complete suffix"
+                )
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -2241,8 +2255,18 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.anthropic.com/v1/messages"
             )
 
-            if api_base is not None and not api_base.endswith("/v1/messages"):
+            # Check if we should disable automatic URL suffix appending
+            disable_url_suffix = get_secret_bool("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX")
+            if (
+                api_base is not None
+                and not disable_url_suffix
+                and not api_base.endswith("/v1/messages")
+            ):
                 api_base += "/v1/messages"
+            elif disable_url_suffix:
+                verbose_logger.debug(
+                    "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX is set, skipping /v1/messages suffix"
+                )
 
             response = anthropic_chat_completions.completion(
                 model=model,
@@ -2668,6 +2692,70 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 custom_llm_provider="openrouter",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=openai.api_key, original_response=response
+            )
+        elif custom_llm_provider == "vercel_ai_gateway":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
+                or "https://ai-gateway.vercel.sh/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret("VERCEL_AI_GATEWAY_API_KEY")
+            )
+
+            vercel_site_url = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+            vercel_app_name = get_secret("VERCEL_APP_NAME") or "liteLLM"
+
+            vercel_headers = {
+                "http-referer": vercel_site_url,
+                "x-title": vercel_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                vercel_headers.update(_headers)
+
+            headers = vercel_headers
+            
+            ## Load Config
+            config = litellm.VercelAIGatewayConfig.get_config()
+            for k, v in config.items():
+                if k == "extra_body":
+                    # we use openai 'extra_body' to pass vercel specific params - providerOptions
+                    if "extra_body" in optional_params:
+                        optional_params[k].update(v)
+                    else:
+                        optional_params[k] = v
+                elif k not in optional_params:
+                    optional_params[k] = v
+
+            data = {"model": model, "messages": messages, **optional_params}
+
+            ## COMPLETION CALL
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="vercel_ai_gateway",
                 timeout=timeout,
                 headers=headers,
                 encoding=encoding,
@@ -3614,7 +3702,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Embedding ###
     kwargs["aembedding"] = True
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(embedding, *args, **kwargs)
@@ -3624,7 +3712,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
+            model=model, custom_llm_provider=custom_llm_provider, api_base=kwargs.get("api_base", None)
         )
 
         # Await normally
@@ -4445,6 +4533,36 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "volcengine":
+            volcengine_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("ARK_API_KEY")
+                or get_secret_str("VOLCENGINE_API_KEY")
+            )
+            if volcengine_key is None:
+                raise ValueError(
+                    "Missing API key for Volcengine. Set ARK_API_KEY or VOLCENGINE_API_KEY environment variable or pass api_key parameter."
+                )
+            if extra_headers is not None and isinstance(extra_headers, dict):
+                headers = extra_headers
+            else:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params={},
+                model_response=EmbeddingResponse(),
+                api_key=volcengine_key,
+                client=client,
+                aembedding=aembedding,
+                headers=headers,
             )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None

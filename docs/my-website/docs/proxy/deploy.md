@@ -12,10 +12,7 @@ To start using Litellm, run the following commands in a shell:
 
 ```bash
 # Get the code
-git clone https://github.com/BerriAI/litellm
-
-# Go to folder
-cd litellm
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env

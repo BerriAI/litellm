@@ -271,6 +271,16 @@ class LiteLLMProxyRequestSetup:
         if timeout_header is not None:
             return float(timeout_header)
         return None
+    
+    @staticmethod
+    def _get_stream_timeout_from_request(headers: dict) -> Optional[float]:
+        """
+        Get the `stream_timeout` from the request headers.
+        """
+        stream_timeout_header = headers.get("x-litellm-stream-timeout", None)
+        if stream_timeout_header is not None:
+            return float(stream_timeout_header)
+        return None
 
     @staticmethod
     def _get_num_retries_from_request(headers: dict) -> Optional[int]:
@@ -280,6 +290,17 @@ class LiteLLMProxyRequestSetup:
         num_retries_header = headers.get("x-litellm-num-retries", None)
         if num_retries_header is not None:
             return int(num_retries_header)
+        return None
+    
+    @staticmethod
+    def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
+        """
+        Get the `spend_logs_metadata` from the request headers.
+        """
+        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+        spend_logs_metadata_header = headers.get("x-litellm-spend-logs-metadata", None)
+        if spend_logs_metadata_header is not None:
+            return safe_json_loads(spend_logs_metadata_header)
         return None
 
     @staticmethod
@@ -439,11 +460,39 @@ class LiteLLMProxyRequestSetup:
         timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
+        
+        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+        if stream_timeout is not None:
+            data["stream_timeout"] = stream_timeout
 
         num_retries = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
         if num_retries is not None:
             data["num_retries"] = num_retries
 
+        return data
+    
+    @staticmethod
+    def add_litellm_metadata_from_request_headers(
+        headers: dict,
+        data: dict,
+        _metadata_variable_name: str,
+    ) -> dict:
+        """
+        Add litellm metadata from request headers
+
+        Relevant issue: https://github.com/BerriAI/litellm/issues/14008
+        """
+        from litellm.proxy._types import LitellmMetadataFromRequestHeaders
+        metadata_from_headers = LitellmMetadataFromRequestHeaders()
+        spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
+        if spend_logs_metadata is not None:
+            metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
+        
+        #########################################################################################
+        # Finally update the requests metadata with the `metadata_from_headers`
+        #########################################################################################
+        if isinstance(data[_metadata_variable_name], dict):
+            data[_metadata_variable_name].update(metadata_from_headers)
         return data
 
     @staticmethod
@@ -628,7 +677,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-    safe_add_api_version_from_query_params(data, request)
 
     _headers = clean_headers(
         request.headers,
@@ -639,11 +687,37 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         ),
     )
 
+    ##########################################################
+    # Init - Proxy Server Request
+    # we do this as soon as entering so we track the original request
+    ##########################################################
+    data["proxy_server_request"] = {
+        "url": str(request.url),
+        "method": request.method,
+        "headers": _headers,
+        "body": copy.copy(data),  # use copy instead of deepcopy
+    }
+
+    safe_add_api_version_from_query_params(data, request)
+    _metadata_variable_name = _get_metadata_variable_name(request)
+    if data.get(_metadata_variable_name, None) is None:
+        data[_metadata_variable_name] = {}
+
+
+
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
             user_api_key_dict=user_api_key_dict,
             general_settings=general_settings,
+        )
+    )
+
+    data.update(
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=_headers,
+            data=data,
+            _metadata_variable_name=_metadata_variable_name,
         )
     )
 
@@ -660,13 +734,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    # Include original request and headers in the data
-    data["proxy_server_request"] = {
-        "url": str(request.url),
-        "method": request.method,
-        "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
-    }
 
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
@@ -696,11 +763,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data["ttl"] = cache_dict.get("s-maxage")
 
     verbose_proxy_logger.debug("receiving data: %s", data)
-
-    _metadata_variable_name = _get_metadata_variable_name(request)
-
-    if data.get(_metadata_variable_name, None) is None:
-        data[_metadata_variable_name] = {}
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:

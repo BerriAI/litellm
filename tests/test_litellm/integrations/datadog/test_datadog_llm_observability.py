@@ -195,6 +195,32 @@ class TestDataDogLLMObsLogger:
             assert metadata["cache_hit"] == True
             assert metadata["cache_key"] == "test-cache-key-789"
 
+    def test_apm_id_included(self, mock_env_vars, mock_response_obj):
+        """Test that the current APM trace ID is attached to the payload"""
+        with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+             patch('asyncio.create_task'):
+            fake_tracer = MagicMock()
+            fake_span = MagicMock()
+            fake_span.trace_id = 987654321
+            fake_tracer.current_span.return_value = fake_span
+
+            with patch('litellm.integrations.datadog.datadog_llm_obs.tracer', fake_tracer):
+                logger = DataDogLLMObsLogger()
+
+                standard_payload = create_standard_logging_payload_with_cache()
+
+                kwargs = {
+                    "standard_logging_object": standard_payload,
+                    "litellm_params": {"metadata": {}}
+                }
+
+                start_time = datetime.now()
+                end_time = datetime.now()
+
+                payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
+
+                assert payload["apm_id"] == str(fake_span.trace_id)
+
     def test_cache_metadata_fields(self, mock_env_vars, mock_response_obj):
         """Test that cache-related metadata fields are correctly tracked"""
         with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \

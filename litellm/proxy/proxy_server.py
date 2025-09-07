@@ -248,7 +248,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -295,7 +297,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -3807,13 +3811,13 @@ class ProxyStartupEvent:
         ########################################################
         # CloudZero Background Job
         ########################################################
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
         from litellm.proxy.spend_tracking.cloudzero_endpoints import (
-            init_cloudzero_background_job,
-            is_cloudzero_setup_in_db,
+            is_cloudzero_setup,
         )
 
-        if await is_cloudzero_setup_in_db():
-            await init_cloudzero_background_job()
+        if await is_cloudzero_setup():
+            await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job

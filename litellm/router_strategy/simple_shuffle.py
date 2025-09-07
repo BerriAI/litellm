@@ -9,7 +9,6 @@ import random
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.core_helpers import safe_divide
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router

@@ -51,7 +51,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
-    ImageURLObject,
+    ImageURLListItem,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -573,7 +573,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
-    image: Optional[ImageURLObject] = None
+    images: Optional[List[ImageURLListItem]] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -590,7 +590,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        image: Optional[ImageURLObject] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
@@ -624,8 +624,8 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
-        if image is not None:
-            init_values["image"] = image
+        if images is not None:
+            init_values["images"] = images
 
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
@@ -646,10 +646,10 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             if hasattr(self, "audio"):
                 del self.audio
-        
-        if image is None:
-            if hasattr(self, "image"):
-                del self.image
+
+        if images is None:
+            if hasattr(self, "images"):
+                del self.images
 
         if annotations is None:
             # ensure default response matches OpenAI spec
@@ -703,7 +703,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
-        image: Optional[ImageURLObject] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[
@@ -721,7 +721,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.image: Optional[ImageURLObject] = None
+        self.images: Optional[List[ImageURLListItem]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
@@ -741,11 +741,11 @@ class Delta(OpenAIObject):
             self.annotations = annotations
         else:
             del self.annotations
-        
-        if image is not None:
-            self.image = image
+
+        if images is not None and len(images) > 0:
+            self.images = images
         else:
-            del self.image
+            del self.images
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -1927,7 +1927,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
-    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
+    cold_storage_object_key: Optional[
+        str
+    ]  # S3/GCS object key for cold storage retrieval
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2352,6 +2354,7 @@ class LlmProviders(str, Enum):
     COMETAPI = "cometapi"
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
+    VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
 
 

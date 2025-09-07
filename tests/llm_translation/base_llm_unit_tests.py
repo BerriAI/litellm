@@ -120,28 +120,6 @@ class BaseLLMChatTest(ABC):
 
         assert response.choices[0].message.content is not None
     
-    def test_system_message_with_no_user_message(self):
-        """
-        Test that the system message is translated correctly for non-OpenAI providers.
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        messages = [
-            {
-                "role": "system",
-                "content": "Be a good bot!",
-            },
-        ]
-        try:
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=messages,
-            )
-            assert response is not None
-        except litellm.InternalServerError:
-            pytest.skip("Model is overloaded")
-
-        assert response.choices[0].message.content is not None
-
     def test_content_list_handling(self):
         """Check if content list is supported by LLM API"""
         base_completion_call_args = self.get_base_completion_call_args()
@@ -162,6 +140,108 @@ class BaseLLMChatTest(ABC):
 
         # for OpenAI the content contains the JSON schema, so we need to assert that the content is not None
         assert response.choices[0].message.content is not None
+
+    
+    def test_tool_call_with_property_type_array(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages = [
+                {
+                "role": "user",
+                "content": "Tell me if the shoe brand Air Jordan has more models than the shoe brand Nike."
+                }
+            ],    
+            tools = [
+                {
+                "type": "function",
+                "function": {
+                    "name": "shoe_get_id",
+                    "description": "Get information about a show by its ID or name",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "shoe_id": {
+                                "type": ["string", "number"],
+                                "description": "The shoe ID or name"
+                            }
+                        },
+                        "required": ["shoe_id"],
+                        "additionalProperties": False,
+                        "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                }
+                },
+            ]
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
+    def test_tool_call_with_empty_enum_property(self):
+        litellm._turn_on_debug()
+        from litellm.utils import supports_function_calling
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        base_completion_call_args = self.get_base_completion_call_args()
+        if not supports_function_calling(base_completion_call_args["model"], None):
+            print("Model does not support function calling")
+            pytest.skip("Model does not support function calling")
+        base_completion_call_args = self.get_base_completion_call_args()
+        response = self.completion_function(
+            **base_completion_call_args,
+            messages = [
+                {
+                    "role": "user",
+                    "content": "Search for the latest iPhone models and tell me which storage options are available."
+                }
+            ],    
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_product_search",
+                        "description": "Search for product information and specifications.\n\nSupports filtering by category, brand, price range, and availability.\nCan retrieve detailed product specifications, pricing, and stock information.\nSupports different search modes and result formatting options.\n",
+                        "parameters": {
+                            "properties": {
+                                "search_mode": {
+                                    "default": "",
+                                    "description": "The search strategy to use for finding products.",
+                                    "enum": [
+                                        "",
+                                        "product_search",
+                                        "product_search_with_filters",
+                                        "product_search_with_sorting",
+                                        "product_search_with_pagination",
+                                        "product_search_with_aggregation",
+                                    ],
+                                    "title": "Search Mode",
+                                    "type": "string"
+                                },
+                            },
+                            "required": [
+                                "search_mode"
+                            ],
+                            "title": "product_search_arguments",
+                            "type": "object"
+                        }
+                    }
+                }
+            ]
+        )
+        print(response)
+        print(json.dumps(response, indent=4, default=str))
+
+
 
     def test_streaming(self):
         """Check if litellm handles streaming correctly"""

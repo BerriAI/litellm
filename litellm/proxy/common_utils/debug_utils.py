@@ -5,10 +5,12 @@ import os
 import tracemalloc
 from collections import Counter
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
@@ -84,7 +86,9 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
 
 
 @router.get("/memory-usage-in-mem-cache", include_in_schema=False)
-async def memory_usage_in_mem_cache():
+async def memory_usage_in_mem_cache(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     # returns the size of all in-memory caches on the proxy server
     """
     1. user_api_key_cache
@@ -121,7 +125,9 @@ async def memory_usage_in_mem_cache():
 
 
 @router.get("/memory-usage-in-mem-cache-items", include_in_schema=False)
-async def memory_usage_in_mem_cache_items():
+async def memory_usage_in_mem_cache_items(
+    _: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     # returns the size of all in-memory caches on the proxy server
     """
     1. user_api_key_cache

@@ -516,9 +516,9 @@ async def test_key_budget_metrics():
         ), "remaining budget should be less than 10.0 after first request"
         assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
         print("first_budget['remaining_hours']", first_budget["remaining_hours"])
-        # The budget reset time is now midnight, not exactly 7 days (168 hours) from creation
-        # So we'll check if it's within a reasonable range (5-7 days)
-        assert 120 <= first_budget["remaining_hours"] <= 168, "Budget remaining hours should be within a reasonable range (5-7 days)"
+        # The budget reset time is now standardized - for "7d" it resets on Monday at midnight
+        # So we'll check if it's within a reasonable range (0-7 days depending on current day of week)
+        assert 0 <= first_budget["remaining_hours"] <= 168, "Budget remaining hours should be within a reasonable range (0-7 days depending on day of week)"
 
         # Get key info and verify spend matches prometheus metrics
         key_info = await get_key_info(session, key)

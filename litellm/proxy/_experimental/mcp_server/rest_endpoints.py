@@ -1,5 +1,5 @@
 import importlib
-from typing import Optional, Dict
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -21,9 +21,10 @@ router = APIRouter(
 )
 
 if MCP_AVAILABLE:
+    from litellm.experimental_mcp_client.client import MCPTool
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
         _convert_protocol_version_to_enum,
+        global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
@@ -100,7 +101,9 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools"
         }
         """
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
         
         try:
             # Extract auth headers from request
@@ -172,9 +175,10 @@ if MCP_AVAILABLE:
         """
         REST API to call a specific MCP tool with the provided arguments
         """
-        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
-        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from fastapi import HTTPException
+
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
 
         try:
             data = await request.json()
@@ -230,13 +234,19 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
     )
-    @router.post("/test/connection")
-    async def test_connection(
-        request: NewMCPServerRequest,
-    ):
+    
+    async def _execute_with_mcp_client(request: NewMCPServerRequest, operation):
         """
-        Test if we can connect to the provided MCP server before adding it
+        Common helper to create MCP client, execute operation, and ensure proper cleanup.
+        
+        Args:
+            request: MCP server configuration
+            operation: Async function that takes a client and returns the operation result
+            
+        Returns:
+            Operation result or error response
         """
+        client = None
         try:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
@@ -250,12 +260,31 @@ if MCP_AVAILABLE:
                 ),
                 mcp_auth_header=None,
             )
-
-            await client.connect()
+            
+            return await operation(client)
+            
         except Exception as e:
-            verbose_logger.error(f"Error in test_connection: {e}", exc_info=True)
+            verbose_logger.error(f"Error in MCP operation: {e}", exc_info=True)
             return {"status": "error", "message": "An internal error has occurred."}
-        return {"status": "ok"}
+        finally:
+            # Ensure client is properly disconnected before response is sent
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception as e:
+                    verbose_logger.warning(f"Error disconnecting MCP client: {e}")
+    @router.post("/test/connection")
+    async def test_connection(
+        request: NewMCPServerRequest,
+    ):
+        """
+        Test if we can connect to the provided MCP server before adding it
+        """
+        async def _test_connection_operation(client):
+            await client.connect()
+            return {"status": "ok"}
+        
+        return await _execute_with_mcp_client(request, _test_connection_operation)
         
     
     @router.post("/test/tools/list")
@@ -266,25 +295,13 @@ if MCP_AVAILABLE:
         """
         Preview tools available from MCP server before adding it
         """
-        try:
-            client = global_mcp_server_manager._create_mcp_client(
-                server=MCPServer(
-                    server_id=request.server_id or "",
-                    name=request.alias or request.server_name or "",
-                    url=request.url,
-                    transport=request.transport,
-                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
-                    auth_type=request.auth_type,
-                    mcp_info=request.mcp_info,
-                ),
-                mcp_auth_header=None,
-            )
-            list_tools_result = await client.list_tools()
-        except Exception as e:
-            verbose_logger.error(f"Error in test_tools_list: {e}", exc_info=True)
-            return {"status": "error", "message": "An internal error has occurred."}
-        return {
-            "tools": list_tools_result,
-            "error": None,
-            "message": "Successfully retrieved tools"
-        }
+        async def _list_tools_operation(client):
+            list_tools_result: List[MCPTool] = await client.list_tools()
+            model_dumped_tools: List[dict] = [tool.model_dump() for tool in list_tools_result]
+            return {
+                "tools": model_dumped_tools,
+                "error": None,
+                "message": "Successfully retrieved tools"
+            }
+        
+        return await _execute_with_mcp_client(request, _list_tools_operation)
