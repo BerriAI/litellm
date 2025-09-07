@@ -898,7 +898,7 @@ def test_has_special_delta_content(
         ],
     )
     # Manually add image attribute to delta
-    image_response.choices[0].delta.image = {"url": "test.jpg"}
+    image_response.choices[0].delta.images = [{"url": "test.jpg"}]
     assert initialized_custom_stream_wrapper._has_special_delta_content(image_response)
 
     # Test with regular content (should return False)
@@ -965,7 +965,7 @@ def test_has_any_special_delta_attributes(
     # Test with delta that has image attribute
     class MockDeltaImage:
         def __init__(self):
-            self.image = {"url": "test.jpg"}
+            self.images = [{"url": "test.jpg"}]
 
     image_delta = MockDeltaImage()
     result = initialized_custom_stream_wrapper._has_any_special_delta_attributes(
@@ -1017,7 +1017,7 @@ def test_handle_special_delta_attributes(
     # Test with delta that has image attribute
     class MockDeltaImage:
         def __init__(self):
-            self.image = {"url": "test.jpg"}
+            self.images = [{"url": "test.jpg"}]
 
     image_delta = MockDeltaImage()
     model_response2 = ModelResponseStream(
@@ -1034,8 +1034,10 @@ def test_handle_special_delta_attributes(
     )
 
     # Should copy the image attribute
-    assert hasattr(model_response2.choices[0].delta, "image")
-    assert model_response2.choices[0].delta.image == {"url": "test.jpg"}
+    print(f"delta: {model_response2.choices[0].delta}")
+    assert hasattr(model_response2.choices[0].delta, "images")
+    print(f"images: {model_response2.choices[0].delta.images}")
+    assert model_response2.choices[0].delta.images[0] == {"url": "test.jpg"}
 
 
 def test_has_special_delta_attribute(
