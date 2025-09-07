@@ -565,7 +565,7 @@ def add_provider_specific_fields(
 ):
     if not provider_specific_fields:  # set if provider_specific_fields is not empty
         return
-    setattr(object, "provider_specific_fields", provider_specific_fields)
+    object.__dict__["provider_specific_fields"] = provider_specific_fields
 
 
 class Message(OpenAIObject):
@@ -642,31 +642,24 @@ class Message(OpenAIObject):
             **params,
         )
 
+        # ensure default response matches OpenAI spec
+        # Some OpenAI compatible APIs raise an error if annotations are passed in
+        # correct way to do this would be to use exclude_none/exclude_unset in model_dump()
+        # this would require analyzing and potentially changing consumer code as well.
         if audio is None:
-            # delete audio from self
-            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, "audio"):
-                del self.audio
+            self.__dict__.pop("audio", None)
 
         if images is None:
-            if hasattr(self, "images"):
-                del self.images
+            self.__dict__.pop("images", None)
 
         if annotations is None:
-            # ensure default response matches OpenAI spec
-            # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, "annotations"):
-                del self.annotations
+            self.__dict__.pop("annotations", None)
 
         if reasoning_content is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "reasoning_content"):
-                del self.reasoning_content
+            self.__dict__.pop("reasoning_content", None)
 
         if thinking_blocks is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "thinking_blocks"):
-                del self.thinking_blocks
+            self.__dict__.pop("thinking_blocks", None)
 
         add_provider_specific_fields(self, provider_specific_fields)
 
@@ -718,53 +711,49 @@ class Delta(OpenAIObject):
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
         self.content = content
         self.role = role
-        # Set default values and correct types
-        self.function_call: Optional[Union[FunctionCall, Any]] = None
-        self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
-        self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.images: Optional[List[ImageURLListItem]] = None
-        self.annotations: Optional[List[ChatCompletionAnnotation]] = None
+        # Merely for typing
+        self.function_call: Optional[Union[FunctionCall, Any]]
+        self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]]
+        self.audio: Optional[ChatCompletionAudioResponse]
+        self.images: Optional[List[ImageURLListItem]]
+        self.annotations: Optional[List[ChatCompletionAnnotation]]
 
+        # skip pydantic internal logic
+        fields_values = self.__dict__
         if reasoning_content is not None:
-            self.reasoning_content = reasoning_content
+            fields_values["reasoning_content"] = reasoning_content
         else:
-            # ensure default response matches OpenAI spec
-            del self.reasoning_content
+            fields_values.pop("reasoning_content")
 
         if thinking_blocks is not None:
-            self.thinking_blocks = thinking_blocks
+            fields_values["thinking_blocks"] = thinking_blocks
         else:
-            # ensure default response matches OpenAI spec
-            del self.thinking_blocks
+            fields_values.pop("thinking_blocks")
 
-        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
+        extra_values = self.__pydantic_extra__
         if annotations is not None:
-            self.annotations = annotations
-        else:
-            del self.annotations
+            extra_values["annotations"] = annotations
 
-        if images is not None and len(images) > 0:
-            self.images = images
-        else:
-            del self.images
+        if images is not None:
+            extra_values["images"] = images
 
         if function_call is not None and isinstance(function_call, dict):
-            self.function_call = FunctionCall(**function_call)
+            extra_values["function_call"] = FunctionCall(**function_call)
         else:
-            self.function_call = function_call
+            extra_values["function_call"] = function_call
         if tool_calls is not None and isinstance(tool_calls, list):
-            self.tool_calls = []
+            model_tool_calls = extra_values["tool_calls"] = []
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = 0
-                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                    model_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
-                    self.tool_calls.append(tool_call)
+                    model_tool_calls.append(tool_call)
         else:
-            self.tool_calls = tool_calls
+            extra_values["tool_calls"] = tool_calls
 
-        self.audio = audio
+        extra_values["audio"] = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -828,12 +817,14 @@ class Choices(OpenAIObject):
         if enhancements is not None:
             self.enhancements = enhancements
 
-        self.provider_specific_fields = provider_specific_fields
-
+        fields_values = self.__dict__
         if self.logprobs is None:
-            del self.logprobs
+            fields_values.pop("logprobs")
+
         if self.provider_specific_fields is None:
-            del self.provider_specific_fields
+            fields_values.pop("provider_specific_fields")
+        else:
+            fields_values.__dict__["provider_specific_fields"] = provider_specific_fields
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -882,14 +873,18 @@ class PromptTokensDetailsWrapper(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        fields_values = self.__dict__
         if self.character_count is None:
-            del self.character_count
+            fields_values.pop("character_count")
+
         if self.image_count is None:
-            del self.image_count
+            fields_values.pop("image_count")
+
         if self.video_length_seconds is None:
-            del self.video_length_seconds
+            fields_values.pop("video_length_seconds")
+
         if self.web_search_requests is None:
-            del self.web_search_requests
+            fields_values.pop("web_search_requests")
 
 
 class ServerToolUse(BaseModel):
@@ -993,35 +988,44 @@ class Usage(CompletionUsage):
             prompt_tokens_details=_prompt_tokens_details or None,
         )
 
-        if server_tool_use is not None:
-            self.server_tool_use = server_tool_use
-        else:  # maintain openai compatibility in usage object if possible
-            del self.server_tool_use
-
-        if cost is not None:
-            self.cost = cost
+        fields_values = self.__dict__
+        if server_tool_use is None:
+            fields_values.pop("server_tool_use", None)
         else:
-            del self.cost
+            fields_values["server_tool_use"] = server_tool_use
+
+        if cost is None:
+            fields_values.pop("cost", None)
+        else:
+            fields_values["cost"] = cost
+
+        private_attrs = self.__pydantic_private__
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
             params["cache_creation_input_tokens"], int
         ):
-            self._cache_creation_input_tokens = params["cache_creation_input_tokens"]
+            private_attrs["_cache_creation_input_tokens"] = params["cache_creation_input_tokens"]
+        else:
+            private_attrs["_cache_creation_input_tokens"] = params.pop(
+            "_cache_creation_input_tokens", 0
+        )
 
         if "cache_read_input_tokens" in params and isinstance(
             params["cache_read_input_tokens"], int
         ):
-            self._cache_read_input_tokens = params["cache_read_input_tokens"]
-
+            private_attrs["_cache_read_input_tokens"] = params["cache_read_input_tokens"]
         ## DEEPSEEK MAPPING ##
-        if "prompt_cache_hit_tokens" in params and isinstance(
+        elif "prompt_cache_hit_tokens" in params and isinstance(
             params["prompt_cache_hit_tokens"], int
         ):
-            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+            private_attrs["_cache_read_input_tokens"] = params["prompt_cache_hit_tokens"]
+        else:
+            private_attrs["_cache_read_input_tokens"] = params.pop(
+                "_cache_read_input_tokens", 0
+            )
 
-        for k, v in params.items():
-            setattr(self, k, v)
+        self.__pydantic_extra__.update(params)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
