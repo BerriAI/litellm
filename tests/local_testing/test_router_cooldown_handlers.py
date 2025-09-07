@@ -27,9 +27,9 @@ from litellm.router_utils.cooldown_handlers import (
     _should_run_cooldown_logic,
 )
 from litellm.types.router import (
+    AllowedFailsPolicy,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
-    AllowedFailsPolicy,
 )
 
 

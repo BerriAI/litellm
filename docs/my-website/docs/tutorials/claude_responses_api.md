@@ -12,6 +12,12 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 
 :::
 
+<br />
+
+### Video Walkthrough
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/3c17d683cdb74d36a3698763cc558f56" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) installed
@@ -83,10 +89,16 @@ curl -X POST http://0.0.0.0:4000/v1/messages \
 
 Configure Claude Code to use LiteLLM's unified endpoint:
 
+Either a virtual key / master key can be used here
+
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
 export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
+
+:::tip
+LITELLM_MASTER_KEY gives claude access to all proxy models, whereas a virtual key would be limited to the models set in UI
+:::
 
 #### Method 2: Provider-specific Pass-through Endpoint
 

@@ -50,7 +50,6 @@ def get_current_weather(location, unit="fahrenheit"):
         "claude-3-haiku-20240307",
         "gemini/gemini-1.5-pro",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "groq/llama-3.1-8b-instant",
         "cohere_chat/command-r",
     ],
 )

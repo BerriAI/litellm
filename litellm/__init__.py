@@ -67,6 +67,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
@@ -145,8 +146,11 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
+    "cloudzero",
 ]
-configured_cold_storage_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
+configured_cold_storage_logger: Optional[
+    _custom_logger_compatible_callbacks_literal
+] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -432,43 +436,10 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
-BEDROCK_CONVERSE_MODELS = [
-    "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0",
-    "anthropic.claude-opus-4-1-20250805-v1:0",
-    "anthropic.claude-opus-4-20250514-v1:0",
-    "anthropic.claude-sonnet-4-20250514-v1:0",
-    "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "ai21.jamba-1-5-mini-v1:0",
-    "ai21.jamba-1-5-large-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "meta.llama3-8b-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-    "mistral.mistral-large-2402-v1:0",
-    "mistral.mistral-small-2402-v1:0",
-    "meta.llama3-2-1b-instruct-v1:0",
-    "meta.llama3-2-3b-instruct-v1:0",
-    "meta.llama3-2-11b-instruct-v1:0",
-    "meta.llama3-2-90b-instruct-v1:0",
-]
 
 ####### COMPLETION MODELS ###################
-from typing import Set  
+from typing import Set
+
 open_ai_chat_completion_models: Set = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
@@ -483,6 +454,7 @@ vertex_vision_models: Set = set()
 vertex_chat_models: Set = set()
 vertex_code_chat_models: Set = set()
 vertex_ai_image_models: Set = set()
+vertex_ai_video_models: Set = set()
 vertex_text_models: Set = set()
 vertex_code_text_models: Set = set()
 vertex_embedding_models: Set = set()
@@ -491,6 +463,7 @@ vertex_llama3_models: Set = set()
 vertex_deepseek_models: Set = set()
 vertex_ai_ai21_models: Set = set()
 vertex_mistral_models: Set = set()
+vertex_openai_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -544,6 +517,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
+volcengine_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -637,6 +611,12 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-image-models":
             key = key.replace("vertex_ai/", "")
             vertex_ai_image_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-video-models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_video_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-openai_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_openai_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -748,6 +728,8 @@ def add_known_models():
             cometapi_models.add(key)
         elif value.get("litellm_provider") == "oci":
             oci_models.add(key)
+        elif value.get("litellm_provider") == "volcengine":
+            volcengine_models.add(key)
 
 
 add_known_models()
@@ -840,6 +822,7 @@ model_list = list(
     | cometapi_models
     | oci_models
     | vercel_ai_gateway_models
+    | volcengine_models
 )
 
 model_list_set = set(model_list)
@@ -860,7 +843,12 @@ models_by_provider: dict = {
     "openrouter": openrouter_models,
     "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
+    "vertex_ai": vertex_chat_models
+    | vertex_text_models
+    | vertex_anthropic_models
+    | vertex_vision_models
+    | vertex_language_models
+    | vertex_deepseek_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -914,6 +902,7 @@ models_by_provider: dict = {
     "recraft": recraft_models,
     "cometapi": cometapi_models,
     "oci": oci_models,
+    "volcengine": volcengine_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1157,7 +1146,9 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import (
+    VoyageContextualEmbeddingConfig,
+)
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
@@ -1221,7 +1212,9 @@ from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine import VolcEngineConfig
+from .llms.volcengine.chat.transformation import (
+    VolcEngineChatConfig as VolcEngineConfig,
+)
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
