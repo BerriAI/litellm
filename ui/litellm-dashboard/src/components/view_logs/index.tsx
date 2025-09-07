@@ -80,6 +80,7 @@ export default function SpendLogsTable({
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null)
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null)
   const [selectedStatus, setSelectedStatus] = useState("")
+  const [selectedEndUser, setSelectedEndUser] = useState("")
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole))
   const [activeTab, setActiveTab] = useState("request logs")
 
@@ -193,6 +194,7 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
+        selectedEndUser,
         selectedStatus,
         selectedModel,
       )
@@ -280,6 +282,7 @@ export default function SpendLogsTable({
     }
     setSelectedStatus(filters["Status"] || "")
     setSelectedModel(filters["Model"] || "")
+    setSelectedEndUser(filters["End User"] || "")
 
     if (filters["Key Hash"]) {
       setSelectedKeyHash(filters["Key Hash"])

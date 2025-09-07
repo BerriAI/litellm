@@ -8,6 +8,7 @@ import {
   useReactTable,
   ColumnResizeMode,
   VisibilityState,
+  PaginationState,
 } from "@tanstack/react-table";
 import React from "react";
 import {
@@ -18,7 +19,7 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TableIcon } from "@heroicons/react/outline";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
