@@ -468,6 +468,12 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+            
+         # Add any extra body params passed to the request body
+        extra_body = optional_params.get("extra_body", {})
+        if extra_body is not None:
+            data = {**extra_body, **data}
+            
     except Exception as e:
         raise e
 
