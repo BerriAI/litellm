@@ -720,22 +720,20 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
 
     key_alias: Optional[str] = None
     duration: Optional[str] = None
-    models: Optional[list] = []
+    models: Optional[list] = Field(default_factory=list)
     spend: Optional[float] = 0
     max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
-    metadata: Optional[dict] = {}
+    metadata: Optional[dict] = Field(default_factory=dict)
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
-    allowed_cache_controls: Optional[list] = []
-    config: Optional[dict] = {}
-    permissions: Optional[dict] = {}
-    model_max_budget: Optional[dict] = (
-        {}
-    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    allowed_cache_controls: Optional[list] = Field(default_factory=list)
+    config: Optional[dict] = Field(default_factory=dict)
+    permissions: Optional[dict] = Field(default_factory=dict)
+    model_max_budget: Optional[dict] = Field(default_factory=dict)  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -743,7 +741,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
-    aliases: Optional[dict] = {}
+    aliases: Optional[dict] = Field(default_factory=dict)
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -752,7 +750,7 @@ class KeyRequestBase(GenerateRequestBase):
     budget_id: Optional[str] = None
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
-    allowed_routes: Optional[list] = []
+    allowed_routes: Optional[list] = Field(default_factory=list)
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -1220,9 +1218,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     team_alias: Optional[str] = None
     team_id: Optional[str] = None
     organization_id: Optional[str] = None
-    admins: list = []
-    members: list = []
-    members_with_roles: List[Member] = []
+    admins: list = Field(default_factory=list)
+    members: list = Field(default_factory=list)
+    members_with_roles: List[Member] = Field(default_factory=list)
     team_member_permissions: Optional[List[str]] = None
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
@@ -1232,7 +1230,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
 
-    models: list = []
+    models: list = Field(default_factory=list)
     blocked: bool = False
 
 
@@ -1350,11 +1348,11 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
 
 
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
-    success_callback: Optional[List[str]] = []
-    failure_callback: Optional[List[str]] = []
-    callbacks: Optional[List[str]] = []
+    success_callback: Optional[List[str]] = Field(default_factory=list)
+    failure_callback: Optional[List[str]] = Field(default_factory=list)
+    callbacks: Optional[List[str]] = Field(default_factory=list)
     # for now - only supported for langfuse
-    callback_vars: Optional[Dict[str, str]] = {}
+    callback_vars: Optional[Dict[str, str]] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -1393,9 +1391,9 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_ObjectPermissionTable record"""
 
     object_permission_id: str
-    mcp_servers: Optional[List[str]] = []
-    mcp_access_groups: Optional[List[str]] = []
-    vector_stores: Optional[List[str]] = []
+    mcp_servers: Optional[List[str]] = Field(default_factory=list)
+    mcp_access_groups: Optional[List[str]] = Field(default_factory=list)
+    vector_stores: Optional[List[str]] = Field(default_factory=list)
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -1495,7 +1493,7 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
 class NewOrganizationRequest(LiteLLM_BudgetTable):
     organization_id: Optional[str] = None
     organization_alias: str
-    models: List = []
+    models: List = Field(default_factory=list)
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
 
@@ -1552,7 +1550,7 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         description="The URL to which requests for this path should be forwarded."
     )
     headers: dict = Field(
-        default={},
+        default_factory=dict,
         description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
     )
     include_subpath: bool = Field(
@@ -1744,22 +1742,22 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     max_budget: Optional[float] = None
     expires: Optional[Union[str, datetime]] = None
-    models: List = []
-    aliases: Dict = {}
-    config: Dict = {}
+    models: List = Field(default_factory=list)
+    aliases: Dict = Field(default_factory=dict)
+    config: Dict = Field(default_factory=dict)
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
-    metadata: Dict = {}
+    metadata: Dict = Field(default_factory=dict)
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
-    allowed_cache_controls: Optional[list] = []
-    allowed_routes: Optional[list] = []
-    permissions: Dict = {}
-    model_spend: Dict = {}
-    model_max_budget: Dict = {}
+    allowed_cache_controls: Optional[list] = Field(default_factory=list)
+    allowed_routes: Optional[list] = Field(default_factory=list)
+    permissions: Dict = Field(default_factory=dict)
+    model_spend: Dict = Field(default_factory=dict)
+    model_max_budget: Dict = Field(default_factory=dict)
     soft_budget_cooldown: bool = False
     blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
@@ -1784,7 +1782,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: Optional[int] = None
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
-    team_models: List = []
+    team_models: List = Field(default_factory=list)
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
@@ -1935,16 +1933,16 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
     max_budget: Optional[float] = None
     spend: float = 0.0
-    model_max_budget: Optional[Dict] = {}
-    model_spend: Optional[Dict] = {}
+    model_max_budget: Optional[Dict] = Field(default_factory=dict)
+    model_spend: Optional[Dict] = Field(default_factory=dict)
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
-    models: list = []
+    models: list = Field(default_factory=list)
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     user_role: Optional[str] = None
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
-    teams: List[str] = []
+    teams: List[str] = Field(default_factory=list)
     sso_user_id: Optional[str] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
@@ -1991,8 +1989,8 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     """Returned by the /organization/info endpoint and /organization/list endpoint"""
 
-    members: List[LiteLLM_OrganizationMembershipTable] = []
-    teams: List[LiteLLM_TeamTable] = []
+    members: List[LiteLLM_OrganizationMembershipTable] = Field(default_factory=list)
+    teams: List[LiteLLM_TeamTable] = Field(default_factory=list)
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     created_at: datetime
     updated_at: datetime
@@ -2045,7 +2043,7 @@ class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    metadata: Optional[Json] = {}
+    metadata: Optional[Json] = Field(default_factory=dict)
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
@@ -2060,7 +2058,7 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     model_group: Optional[str] = ""
     litellm_model_name: Optional[str] = ""
     model_id: Optional[str] = ""
-    request_kwargs: Optional[dict] = {}
+    request_kwargs: Optional[dict] = Field(default_factory=dict)
     exception_type: Optional[str] = ""
     status_code: Optional[str] = ""
     exception_string: Optional[str] = ""
@@ -2223,82 +2221,76 @@ class CallbackOnUI(LiteLLMPydanticObjectBase):
 
 
 class AllCallbacks(LiteLLMPydanticObjectBase):
-    langfuse: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="langfuse",
-        ui_callback_name="Langfuse",
-        litellm_callback_params=[
-            "LANGFUSE_PUBLIC_KEY",
-            "LANGFUSE_SECRET_KEY",
-            "LANGFUSE_HOST",
-        ],
+    langfuse: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="langfuse",
+            litellm_callback_params=["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+            ui_callback_name="Langfuse",
+        )
     )
 
-    otel: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="otel",
-        ui_callback_name="OpenTelemetry",
-        litellm_callback_params=[
-            "OTEL_EXPORTER",
-            "OTEL_ENDPOINT",
-            "OTEL_HEADERS",
-        ],
+    otel: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="otel",
+            litellm_callback_params=["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"],
+            ui_callback_name="OpenTelemetry",
+        )
     )
 
-    s3: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="s3",
-        ui_callback_name="s3 Bucket (AWS)",
-        litellm_callback_params=[
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_REGION_NAME",
-        ],
+    s3: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="s3",
+            litellm_callback_params=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"],
+            ui_callback_name="s3 Bucket (AWS)",
+        )
     )
 
-    openmeter: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="openmeter",
-        ui_callback_name="OpenMeter",
-        litellm_callback_params=[
-            "OPENMETER_API_ENDPOINT",
-            "OPENMETER_API_KEY",
-        ],
+    openmeter: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="openmeter",
+            litellm_callback_params=["OPENMETER_API_ENDPOINT", "OPENMETER_API_KEY"],
+            ui_callback_name="OpenMeter",
+        )
     )
 
-    custom_callback_api: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="custom_callback_api",
-        litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
-        ui_callback_name="Custom Callback API",
+    custom_callback_api: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="custom_callback_api",
+            litellm_callback_params=["GENERIC_LOGGER_ENDPOINT"],
+            ui_callback_name="Custom Callback API",
+        )
     )
 
-    datadog: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="datadog",
-        litellm_callback_params=["DD_API_KEY", "DD_SITE"],
-        ui_callback_name="Datadog",
+    datadog: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="datadog",
+            litellm_callback_params=["DD_API_KEY", "DD_SITE"],
+            ui_callback_name="Datadog",
+        )
     )
 
-    braintrust: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY", "BRAINTRUST_API_BASE"],
-        ui_callback_name="Braintrust",
+    braintrust: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="braintrust",
+            litellm_callback_params=["BRAINTRUST_API_KEY", "BRAINTRUST_API_BASE"],
+            ui_callback_name="Braintrust",
+        )
     )
 
-    langsmith: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="langsmith",
-        litellm_callback_params=[
-            "LANGSMITH_API_KEY",
-            "LANGSMITH_PROJECT",
-            "LANGSMITH_DEFAULT_RUN_NAME",
-        ],
-        ui_callback_name="Langsmith",
+    langsmith: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="langsmith",
+            litellm_callback_params=["LANGSMITH_API_KEY", "LANGSMITH_PROJECT", "LANGSMITH_DEFAULT_RUN_NAME"],
+            ui_callback_name="Langsmith",
+        )
     )
 
-    lago: CallbackOnUI = CallbackOnUI(
-        litellm_callback_name="lago",
-        litellm_callback_params=[
-            "LAGO_API_BASE",
-            "LAGO_API_KEY",
-            "LAGO_API_EVENT_CODE",
-            "LAGO_API_CHARGE_BY",
-        ],
-        ui_callback_name="Lago Billing",
+    lago: CallbackOnUI = Field(
+        default_factory=lambda: CallbackOnUI(
+            litellm_callback_name="lago",
+            litellm_callback_params=["LAGO_API_BASE", "LAGO_API_KEY", "LAGO_API_EVENT_CODE", "LAGO_API_CHARGE_BY"],
+            ui_callback_name="Lago Billing",
+        )
     )
 
 
@@ -3011,9 +3003,7 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     Maps provider names to their budget configs.
     """
 
-    providers: Dict[str, ProviderBudgetResponseObject] = (
-        {}
-    )  # Dictionary mapping provider names to their budget configurations
+    providers: Dict[str, ProviderBudgetResponseObject] = Field(default_factory=dict)  # Dictionary mapping provider names to their budget configurations
 
 
 class ProxyStateVariables(TypedDict):
@@ -3114,19 +3104,19 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
 
     admin_jwt_scope: str = "litellm_proxy_admin"
-    admin_allowed_routes: List[str] = [
+    admin_allowed_routes: List[str] = Field(default_factory=lambda: [
         "management_routes",
         "spend_tracking_routes",
         "global_spend_tracking_routes",
         "info_routes",
-    ]
+    ])
     team_id_jwt_field: Optional[str] = None
     team_id_upsert: bool = False
     team_ids_jwt_field: Optional[str] = None
     upsert_sso_user_to_team: bool = False
     team_allowed_routes: List[
         Literal["openai_routes", "info_routes", "management_routes"]
-    ] = ["openai_routes", "info_routes"]
+    ] = Field(default_factory=lambda: ["openai_routes", "info_routes"])
     team_id_default: Optional[str] = Field(
         default=None,
         description="If no team_id given, default permissions/spend-tracking to this team.s",
@@ -3143,7 +3133,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     end_user_id_jwt_field: Optional[str] = None
     public_key_ttl: float = 600
-    public_allowed_routes: List[str] = ["public_routes"]
+    public_allowed_routes: List[str] = Field(default_factory=lambda: ["public_routes"])
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None

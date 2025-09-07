@@ -1,11 +1,11 @@
 from typing import List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EmbeddingRequest(BaseModel):
     model: str
-    input: List[str] = []
+    input: List[str] = Field(default_factory=list)
     timeout: int = 600
     api_base: Optional[str] = None
     api_version: Optional[str] = None

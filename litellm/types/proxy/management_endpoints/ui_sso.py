@@ -133,7 +133,7 @@ class DefaultTeamSSOParams(LiteLLMPydanticObjectBase):
     """
 
     models: List[str] = Field(
-        default=[],
+        default_factory=list,
         description="Default list of models that new automatically created teams can access",
     )
     max_budget: Optional[float] = Field(

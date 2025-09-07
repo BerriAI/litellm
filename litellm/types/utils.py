@@ -1312,7 +1312,7 @@ class ModelResponse(ModelResponseBase):
 
 
 class Embedding(OpenAIObject):
-    embedding: Union[list, str] = []
+    embedding: Union[list, str] = Field(default_factory=list)
     index: int
     object: Literal["embedding"]
 
