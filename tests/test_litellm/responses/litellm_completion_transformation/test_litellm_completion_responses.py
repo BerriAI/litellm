@@ -541,7 +541,8 @@ class TestFunctionCallTransformation:
         result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model="gemini/gemini-2.0-flash",
             input=test_input,
-            responses_api_request=responses_api_request
+            responses_api_request=responses_api_request,
+            extra_headers={"X-Test-Header": "test-value"}
         )
         
         assert "messages" in result
@@ -562,6 +563,8 @@ class TestFunctionCallTransformation:
         
         tool_msg = messages[2]
         assert tool_msg["role"] == "tool"
+
+        assert result["extra_headers"] == {"X-Test-Header": "test-value"}
 
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""

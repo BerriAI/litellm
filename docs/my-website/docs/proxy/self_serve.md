@@ -309,6 +309,37 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 </TabItem>
 </Tabs>
 
+### Team Member Rate Limits
+
+Set a default tpm/rpm limit for an individual team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_team_member_rate_limits.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_member_rpm_limit": 100,
+    "team_member_tpm_limit": 1000
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 ### Set default params for new teams
 
 When you connect litellm to your SSO provider, litellm can auto-create teams. Use this to set the default `models`, `max_budget`, `budget_duration` for these auto-created teams. 

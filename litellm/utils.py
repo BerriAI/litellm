@@ -32,7 +32,6 @@ import textwrap
 import threading
 import time
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
@@ -41,6 +40,7 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
+import fastuuid as uuid
 import httpx
 import openai
 import tiktoken
@@ -833,10 +833,22 @@ async def _client_async_logging_helper(
         print_verbose(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
-        # check if user does not want this to be logged
-        asyncio.create_task(
-            logging_obj.async_success_handler(result, start_time, end_time)
+        ################################################
+        # Async Logging Worker
+        ################################################
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine = logging_obj.async_success_handler(
+                result=result,
+                start_time=start_time, 
+                end_time=end_time
+            )
         )
+
+
+        ################################################
+        # Sync Logging Worker
+        ################################################
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
@@ -2255,7 +2267,17 @@ def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
         if v is not None:
             # Convert stringified numbers to appropriate numeric types
-            existing_dict[k] = _convert_stringified_numbers(v)
+            if isinstance(v, str):
+                existing_dict[k] = _convert_stringified_numbers(v)
+            elif isinstance(v, dict):
+                existing_nested_dict = existing_dict.get(k)
+                if isinstance(existing_nested_dict, dict):
+                    existing_nested_dict.update(v)
+                    existing_dict[k] = existing_nested_dict
+                else:
+                    existing_dict[k] = v
+            else:
+                existing_dict[k] = v
 
     return existing_dict
 
@@ -2316,47 +2338,50 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
-                litellm.open_ai_chat_completion_models.append(key)
+                litellm.open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
             if key not in litellm.open_ai_text_completion_models:
-                litellm.open_ai_text_completion_models.append(key)
+                litellm.open_ai_text_completion_models.add(key)
         elif value.get("litellm_provider") == "cohere":
             if key not in litellm.cohere_models:
-                litellm.cohere_models.append(key)
+                litellm.cohere_models.add(key)
         elif value.get("litellm_provider") == "anthropic":
             if key not in litellm.anthropic_models:
-                litellm.anthropic_models.append(key)
+                litellm.anthropic_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             split_string = key.split("/", 1)
             if key not in litellm.openrouter_models:
-                litellm.openrouter_models.append(split_string[1])
+                litellm.openrouter_models.add(split_string[1])
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            if key not in litellm.vercel_ai_gateway_models:
+                litellm.vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             if key not in litellm.vertex_text_models:
-                litellm.vertex_text_models.append(key)
+                litellm.vertex_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-text-models":
             if key not in litellm.vertex_code_text_models:
-                litellm.vertex_code_text_models.append(key)
+                litellm.vertex_code_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-chat-models":
             if key not in litellm.vertex_chat_models:
-                litellm.vertex_chat_models.append(key)
+                litellm.vertex_chat_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
             if key not in litellm.vertex_code_chat_models:
-                litellm.vertex_code_chat_models.append(key)
+                litellm.vertex_code_chat_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if key not in litellm.ai21_models:
-                litellm.ai21_models.append(key)
+                litellm.ai21_models.add(key)
         elif value.get("litellm_provider") == "nlp_cloud":
             if key not in litellm.nlp_cloud_models:
-                litellm.nlp_cloud_models.append(key)
+                litellm.nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             if key not in litellm.aleph_alpha_models:
-                litellm.aleph_alpha_models.append(key)
+                litellm.aleph_alpha_models.add(key)
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
-                litellm.bedrock_models.append(key)
+                litellm.bedrock_models.add(key)
         elif value.get("litellm_provider") == "novita":
             if key not in litellm.novita_models:
-                litellm.novita_models.append(key)
+                litellm.novita_models.add(key)
     return model_cost
 
 
@@ -2802,12 +2827,22 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params={},
-            model=model,
-            drop_params=drop_params if drop_params is not None else False,
-        )
+        if litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
+            optional_params = (
+                litellm.VoyageContextualEmbeddingConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params={},
+                    model=model,
+                    drop_params=drop_params if drop_params is not None else False,
+                )
+            )
+        else:
+            optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params={},
+                model=model,
+                drop_params=drop_params if drop_params is not None else False,
+            )
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
             model=model,
@@ -3056,6 +3091,7 @@ def pre_process_non_default_params(
     model: str,
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
+    provider_config: Optional[BaseConfig] = None,
 ) -> dict:
     """
     Pre-process non-default params to a standardized format
@@ -3070,14 +3106,6 @@ def pre_process_non_default_params(
         default_param_values=DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
         additional_endpoint_specific_params=["messages"],
     )
-
-    provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
 
     if "response_format" in non_default_params:
         if provider_config is not None:
@@ -3201,6 +3229,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "bedrock"
             and custom_llm_provider != "ollama_chat"
             and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
@@ -3877,7 +3906,6 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -5207,6 +5235,7 @@ def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
 ) -> dict:
     """
     Checks if the environment variables are valid for the given model.
@@ -5271,6 +5300,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "vercel_ai_gateway":
+            if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
         elif custom_llm_provider == "datarobot":
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
@@ -5361,6 +5395,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "baseten":
+            if "BASETEN_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BASETEN_API_KEY")
         elif custom_llm_provider == "xai":
             if "XAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5489,6 +5528,12 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        ## vercel_ai_gateway
+        elif model in litellm.vercel_ai_gateway_models:
+            if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
         ## datarobot
         elif model in litellm.datarobot_models:
             if "DATAROBOT_API_TOKEN" in os.environ:
@@ -5552,19 +5597,18 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("NEBIUS_API_KEY")
 
+    def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
+        """Filter out keys that contain the exclude_pattern (case insensitive)."""
+        return [key for key in keys if exclude_pattern not in key.lower()]
+
     if api_key is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_key" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_key")
 
     if api_base is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_base" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_base")
+
+    if api_version is not None:
+        missing_keys = filter_missing_keys(missing_keys, "api_version")
 
     if len(missing_keys) == 0:  # no missing keys
         keys_in_environment = True
@@ -6874,6 +6918,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
+            return litellm.VercelAIGatewayConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIConfig()
         elif litellm.LlmProviders.DATAROBOT == provider:
@@ -6916,6 +6962,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimConfig()
         elif litellm.LlmProviders.CEREBRAS == provider:
             return litellm.CerebrasConfig()
+        elif litellm.LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
@@ -7013,7 +7061,14 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseEmbeddingConfig]:
-        if litellm.LlmProviders.VOYAGE == provider:
+        if (
+            litellm.LlmProviders.VOYAGE == provider
+            and litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
+                model
+            )
+        ):
+            return litellm.VoyageContextualEmbeddingConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
             return litellm.TritonEmbeddingConfig()
@@ -7305,6 +7360,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.AIML == provider:
+            from litellm.llms.aiml.image_generation import (
+                get_aiml_image_generation_config,
+            )
+
+            return get_aiml_image_generation_config(model)
         elif LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.image_generation import (
                 get_gemini_image_generation_config,

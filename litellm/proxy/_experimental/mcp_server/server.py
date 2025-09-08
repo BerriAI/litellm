@@ -40,6 +40,7 @@ except ImportError as e:
 
 # Global variables to track initialization
 _SESSION_MANAGERS_INITIALIZED = False
+_INITIALIZATION_LOCK = asyncio.Lock()
 
 if MCP_AVAILABLE:
     from mcp.server import Server
@@ -113,21 +114,23 @@ if MCP_AVAILABLE:
         """Initialize the session managers. Can be called from main app lifespan."""
         global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
 
-        if _SESSION_MANAGERS_INITIALIZED:
-            return
+        # Use async lock to prevent concurrent initialization
+        async with _INITIALIZATION_LOCK:
+            if _SESSION_MANAGERS_INITIALIZED:
+                return
 
-        verbose_logger.info("Initializing MCP session managers...")
+            verbose_logger.info("Initializing MCP session managers...")
 
-        # Start the session managers with context managers
-        _session_manager_cm = session_manager.run()
-        _sse_session_manager_cm = sse_session_manager.run()
+            # Start the session managers with context managers
+            _session_manager_cm = session_manager.run()
+            _sse_session_manager_cm = sse_session_manager.run()
 
-        # Enter the context managers
-        await _session_manager_cm.__aenter__()
-        await _sse_session_manager_cm.__aenter__()
+            # Enter the context managers
+            await _session_manager_cm.__aenter__()
+            await _sse_session_manager_cm.__aenter__()
 
-        _SESSION_MANAGERS_INITIALIZED = True
-        verbose_logger.info("MCP Server started with StreamableHTTP and SSE session managers!")
+            _SESSION_MANAGERS_INITIALIZED = True
+            verbose_logger.info("MCP Server started with StreamableHTTP and SSE session managers!")
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""

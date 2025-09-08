@@ -21,6 +21,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     create_pass_through_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
+    bedrock_llm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
@@ -853,3 +854,63 @@ async def test_is_streaming_request_fn():
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.form = AsyncMock(return_value={"stream": "true"})
     assert await is_streaming_request_fn(mock_request) is True
+
+class TestBedrockLLMProxyRoute:
+    @pytest.mark.asyncio
+    async def test_bedrock_llm_proxy_route_application_inference_profile(self):
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_response = Mock()
+        mock_user_api_key_dict = Mock()
+        mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
+        mock_processor = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body", return_value=mock_request_body), \
+             patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=mock_processor):
+            
+            # Test application-inference-profile endpoint
+            endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
+            
+            result = await bedrock_llm_proxy_route(
+                endpoint=endpoint,
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            
+            mock_processor.base_passthrough_process_llm_request.assert_called_once()
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            
+            # For application-inference-profile, model should be "arn:aws:bedrock:us-east-1:026090525607:application-inference-profile/r742sbn2zckd"
+            assert call_kwargs["model"] == "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd"
+            assert result == "success"
+            
+    @pytest.mark.asyncio
+    async def test_bedrock_llm_proxy_route_regular_model(self):
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_response = Mock()
+        mock_user_api_key_dict = Mock()
+        mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
+        mock_processor = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body", return_value=mock_request_body), \
+             patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=mock_processor):
+            
+            # Test regular model endpoint
+            endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
+            
+            result = await bedrock_llm_proxy_route(
+                endpoint=endpoint,
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            mock_processor.base_passthrough_process_llm_request.assert_called_once()
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            
+            # For regular models, model should be just the model ID
+            assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
+            assert result == "success"

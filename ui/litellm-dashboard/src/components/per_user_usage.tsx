@@ -51,6 +51,8 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
   selectedTags,
   formatAbbreviatedNumber,
 }) => {
+  // Maximum number of user agent categories to show in charts to prevent color palette overflow
+  const MAX_USER_AGENTS = 8;
   const [perUserData, setPerUserData] = useState<PerUserAnalyticsResponse>({
     results: [],
     total_count: 0,
@@ -188,6 +190,18 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
             
                         <BarChart
               data={(() => {
+                // Get top user agents by frequency first
+                const userAgentCounts = new Map<string, number>();
+                perUserData.results.forEach((item: PerUserMetrics) => {
+                  const agent = item.user_agent || "Unknown";
+                  userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
+                });
+                
+                const topUserAgents = Array.from(userAgentCounts.entries())
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, MAX_USER_AGENTS)
+                  .map(([agent]) => agent);
+                
                 // Categorize users by successful request count and user agent
                 const categories = {
                   "1-9 requests": { range: [1, 9], agents: {} as Record<string, number> },
@@ -198,34 +212,30 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
                   "100K+ requests": { range: [100000, Infinity], agents: {} as Record<string, number> },
                 };
                 
-                // Count users in each category by user agent
+                // Count users in each category by user agent (only for top user agents)
                 perUserData.results.forEach((item: PerUserMetrics) => {
                   const successCount = item.successful_requests;
                   const userAgent = item.user_agent || "Unknown";
                   
-                  Object.entries(categories).forEach(([categoryName, category]) => {
-                    if (successCount >= category.range[0] && successCount <= category.range[1]) {
-                      if (!category.agents[userAgent]) {
-                        category.agents[userAgent] = 0;
+                  // Only process if this is one of the top user agents
+                  if (topUserAgents.includes(userAgent)) {
+                    Object.entries(categories).forEach(([categoryName, category]) => {
+                      if (successCount >= category.range[0] && successCount <= category.range[1]) {
+                        if (!category.agents[userAgent]) {
+                          category.agents[userAgent] = 0;
+                        }
+                        category.agents[userAgent]++;
                       }
-                      category.agents[userAgent]++;
-                    }
-                  });
+                    });
+                  }
                 });
-                
-                // Get all unique user agents
-                const allUserAgents = new Set<string>();
-                Object.values(categories).forEach(category => {
-                  Object.keys(category.agents).forEach(agent => allUserAgents.add(agent));
-                });
-                const userAgentsList = Array.from(allUserAgents).sort();
                 
                 // Convert to chart data format for stacked bar chart
                 return Object.entries(categories).map(([categoryName, category]) => {
                   const dataPoint: Record<string, any> = { category: categoryName };
                   
-                  // Add count for each user agent
-                  userAgentsList.forEach(agent => {
+                  // Add count for each top user agent
+                  topUserAgents.forEach(agent => {
                     dataPoint[agent] = category.agents[agent] || 0;
                   });
                   
@@ -234,12 +244,18 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
               })()}
               index="category"
               categories={(() => {
-                // Get all unique user agents for the chart categories
-                const allUserAgents = new Set<string>();
+                // Count user agents by frequency and get top ones
+                const userAgentCounts = new Map<string, number>();
                 perUserData.results.forEach((item: PerUserMetrics) => {
-                  allUserAgents.add(item.user_agent || "Unknown");
+                  const agent = item.user_agent || "Unknown";
+                  userAgentCounts.set(agent, (userAgentCounts.get(agent) || 0) + 1);
                 });
-                return Array.from(allUserAgents).sort();
+                
+                // Sort by frequency (most common first) and limit to top MAX_USER_AGENTS
+                return Array.from(userAgentCounts.entries())
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, MAX_USER_AGENTS)
+                  .map(([agent]) => agent);
               })()}
               colors={["blue", "green", "orange", "red", "purple", "yellow", "pink", "indigo"]}
               valueFormatter={(value: number) => `${value} users`}

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
 
 import httpx
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 from ..common_utils import OpenAIError
 
@@ -25,38 +26,28 @@ else:
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.OPENAI
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
         """
-        return [
-            "input",
-            "model",
-            "include",
-            "instructions",
-            "max_output_tokens",
-            "metadata",
-            "parallel_tool_calls",
-            "previous_response_id",
-            "reasoning",
-            "store",
-            "background",
-            "stream",
-            "prompt",
-            "temperature",
-            "text",
-            "tool_choice",
-            "tools",
-            "top_p",
-            "truncation",
-            "user",
-            "service_tier",
-            "safety_identifier",
-            "extra_headers",
-            "extra_query",
-            "extra_body",
-            "timeout",
-        ]
+        supported_params = get_type_hints(ResponsesAPIRequestParams).keys()
+        return list(
+            set(
+                [
+                    "input",
+                    "model",
+                    "extra_headers",
+                    "extra_query",
+                    "extra_body",
+                    "timeout",
+                ]
+                + list(supported_params)
+            )
+        )
 
     def map_openai_params(
         self,
@@ -85,8 +76,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
 
         return final_request_params
-    
-    def _validate_input_param(self, input: Union[str, ResponseInputParam]) -> Union[str, ResponseInputParam]:
+
+    def _validate_input_param(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, ResponseInputParam]:
         """
         Ensure all input fields if pydantic are converted to dict
 
@@ -114,7 +107,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """No transform applied since outputs are in OpenAI spec already"""
         try:
             raw_response_json = raw_response.json()
-            raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+            raw_response_json["created_at"] = _safe_convert_created_field(
+                raw_response_json["created_at"]
+            )
         except Exception:
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code

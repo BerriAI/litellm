@@ -531,6 +531,19 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             subpath = subpath[1:]
 
         return base_target + subpath
+    
+    @staticmethod
+    def _update_stream_param_based_on_request_body(
+        parsed_body: dict, 
+        stream: Optional[bool] = None,
+    ) -> Optional[bool]:
+        """
+        If stream is provided in the request body, use it.
+        Otherwise, use the stream parameter passed to the `pass_through_request` function
+        """
+        if "stream" in parsed_body:
+            return parsed_body.get("stream", stream)
+        return stream
 
 
 async def pass_through_request(  # noqa: PLR0915
@@ -686,6 +699,11 @@ async def pass_through_request(  # noqa: PLR0915
                 "headers": headers,
             },
         )
+        stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+            parsed_body=_parsed_body,
+            stream=stream,
+        )
+
         if stream:
             req = async_client.build_request(
                 "POST",

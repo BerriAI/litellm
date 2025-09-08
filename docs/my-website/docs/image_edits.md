@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # /images/edits
 
-LiteLLM provides image editing functionality that maps to OpenAI's `/images/edits` API endpoint.
+LiteLLM provides image editing functionality that maps to OpenAI's `/images/edits` API endpoint. Now supports both single and multiple image editing.
 
 | Feature | Supported | Notes |
 |---------|-----------|--------|
@@ -13,7 +13,7 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | End-user Tracking | ✅ | |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
-| Supported operations | Create image edits | |
+| Supported operations | Create image edits | Single and multiple images supported |
 | Supported LiteLLM SDK Versions | 1.63.8+ | |
 | Supported LiteLLM Proxy Versions | 1.71.1+ | |
 | Supported LLM providers | **OpenAI** | Currently only `openai` is supported |
@@ -34,6 +34,26 @@ response = litellm.image_edit(
     model="gpt-image-1",
     image=open("original_image.png", "rb"),
     prompt="Add a red hat to the person in the image",
+    n=1,
+    size="1024x1024"
+)
+
+print(response)
+```
+
+#### Multiple Images Edit
+```python showLineNumbers title="OpenAI Multiple Images Edit"
+import litellm
+
+# Edit multiple images with a prompt
+response = litellm.image_edit(
+    model="gpt-image-1",
+    image=[
+        open("image1.png", "rb"),
+        open("image2.png", "rb"),
+        open("image3.png", "rb")
+    ],
+    prompt="Apply vintage filter to all images",
     n=1,
     size="1024x1024"
 )
@@ -77,6 +97,30 @@ async def edit_image():
 
 # Run the async function
 response = asyncio.run(edit_image())
+print(response)
+```
+
+#### Async Multiple Images Edit
+```python showLineNumbers title="Async OpenAI Multiple Images Edit"
+import litellm
+import asyncio
+
+async def edit_multiple_images():
+    response = await litellm.aimage_edit(
+        model="gpt-image-1",
+        image=[
+            open("portrait1.png", "rb"),
+            open("portrait2.png", "rb")
+        ],
+        prompt="Add professional lighting to the portraits",
+        n=1,
+        size="1024x1024",
+        response_format="url"
+    )
+    return response
+
+# Run the async function
+response = asyncio.run(edit_multiple_images())
 print(response)
 ```
 
@@ -158,6 +202,20 @@ curl -X POST "http://localhost:4000/v1/images/edits" \
   -F "image=@original_image.png" \
   -F "mask=@mask_image.png" \
   -F "prompt=Add a beautiful sunset in the background" \
+  -F "n=1" \
+  -F "size=1024x1024" \
+  -F "response_format=url"
+```
+
+#### cURL Multiple Images Example
+```bash showLineNumbers title="cURL Multiple Images Edit Request"
+curl -X POST "http://localhost:4000/v1/images/edits" \
+  -H "Authorization: Bearer your-api-key" \
+  -F "model=gpt-image-1" \
+  -F "image=@image1.png" \
+  -F "image=@image2.png" \
+  -F "image=@image3.png" \
+  -F "prompt=Apply artistic filter to all images" \
   -F "n=1" \
   -F "size=1024x1024" \
   -F "response_format=url"

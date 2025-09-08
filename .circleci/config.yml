@@ -439,6 +439,7 @@ jobs:
           paths:
             - auth_ui_unit_tests_coverage.xml
             - auth_ui_unit_tests_coverage
+
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
       - image: cimg/python:3.11
@@ -469,7 +470,55 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing tests/router_unit_tests --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_router_coverage.xml
+            mv .coverage litellm_router_coverage
+      # Store test results
+      - store_test_results:
+          path: test-results
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_router_coverage.xml
+            - litellm_router_coverage
+  
+  litellm_router_unit_testing: # Runs all tests with the "router" keyword
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "respx==0.22.0"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-asyncio==0.21.1"
+            pip install semantic_router --no-deps
+            pip install aurelio_sdk --no-deps
+            pip install "pytest-xdist==3.6.1"
+      # Run pytest and generate JUnit XML report
+      - setup_litellm_enterprise_pip
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/router_unit_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1242,6 +1291,7 @@ jobs:
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
+            pip install "fastuuid==0.12.0"
             pip install jsonschema
       - setup_litellm_enterprise_pip
       - run:
@@ -2982,6 +3032,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_router_unit_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - check_code_and_doc_quality:
           filters:
             branches:
@@ -3128,6 +3184,7 @@ workflows:
             - image_gen_testing
             - logging_testing
             - litellm_router_testing
+            - litellm_router_unit_testing
             - caching_unit_tests
             - litellm_proxy_unit_testing
             - litellm_security_tests
@@ -3187,6 +3244,7 @@ workflows:
             - image_gen_testing
             - logging_testing
             - litellm_router_testing
+            - litellm_router_unit_testing
             - caching_unit_tests
             - langfuse_logging_unit_tests
             - litellm_assistants_api_testing

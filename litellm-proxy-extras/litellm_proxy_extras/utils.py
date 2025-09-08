@@ -298,7 +298,7 @@ class ProxyExtrasDBManager:
                             and "database schema is not empty" in e.stderr
                         ):
                             logger.info(
-                                "Database schema is not empty, creating baseline migration"
+                                "Database schema is not empty, creating baseline migration. In read-only file system, please set an environment variable `LITELLM_MIGRATION_DIR` to a writable directory to enable migrations. Learn more - https://docs.litellm.ai/docs/proxy/prod#read-only-file-system"
                             )
                             ProxyExtrasDBManager._create_baseline_migration(schema_path)
                             logger.info(

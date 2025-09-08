@@ -8,6 +8,7 @@ It searches the vector store for relevant context and appends it to the messages
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 import litellm
+import litellm.vector_stores
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
@@ -192,4 +193,4 @@ class VectorStorePreCallHook(CustomLogger):
             modified_messages.insert(-1, cast(AllMessageValues, context_message))
             return modified_messages
         
-        return messages 
+        return messages

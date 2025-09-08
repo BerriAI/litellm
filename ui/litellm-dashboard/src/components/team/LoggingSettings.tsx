@@ -173,7 +173,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                         <img 
                           src={logo} 
                           alt={callbackName} 
-                          className="w-4 h-4 object-contain" 
+                          className="w-4 h-4 object-contain"
+                          onError={(e) => {
+                            // Create a div with callback initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                              fallbackDiv.textContent = callbackName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
                         />
                       )}
                       <span>{callbackName}</span>
@@ -269,7 +280,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                                   <img 
                                     src={logo} 
                                     alt={callbackName} 
-                                    className="w-4 h-4 object-contain" 
+                                    className="w-4 h-4 object-contain"
+                                    onError={(e) => {
+                                      // Create a div with callback initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement('div');
+                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        fallbackDiv.textContent = callbackName.charAt(0);
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
                                   />
                                 )}
                                 <span>{callbackName}</span>

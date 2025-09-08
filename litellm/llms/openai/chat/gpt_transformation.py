@@ -348,6 +348,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             for message in messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
+
                 if (
                     message_role == "user"
                     and message_content

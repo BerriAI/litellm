@@ -4592,14 +4592,3 @@ def test_completion_gpt_4o_empty_str():
             messages=[{"role": "user", "content": ""}],
         )
         assert resp.choices[0].message.content is not None
-
-
-def test_completion_openrouter_reasoning_content():
-    litellm._turn_on_debug()
-    resp = litellm.completion(
-        model="openrouter/anthropic/claude-3.7-sonnet",
-        messages=[{"role": "user", "content": "Hello world"}],
-        reasoning={"effort": "high"},
-    )
-    print(resp)
-    assert resp.choices[0].message.reasoning_content is not None

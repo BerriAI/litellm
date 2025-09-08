@@ -119,3 +119,4 @@ curl http://0.0.0.0:4000/rerank \
 | HuggingFace|   [Usage](../docs/providers/huggingface_rerank)                 |  
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
 | vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  
+| DeepInfra|   [Usage](../docs/providers/deepinfra#rerank-endpoint)                 |  

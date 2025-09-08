@@ -11,9 +11,20 @@ sys.path.insert(
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+from fastapi import HTTPException
 
-from litellm.proxy.management_endpoints.key_management_endpoints import _list_key_helper
+from litellm.proxy._types import (
+    GenerateKeyRequest,
+    LiteLLM_VerificationToken,
+    LitellmUserRoles,
+    UpdateKeyRequest,
+)
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _common_key_generation_helper,
+    _list_key_helper,
+    prepare_key_update_data,
+)
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
@@ -492,3 +503,74 @@ def test_get_new_token_with_invalid_key():
 
     assert exc_info.value.status_code == 400
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
+
+
+
+@pytest.mark.asyncio
+async def test_generate_service_account_requires_team_id():
+    with pytest.raises(HTTPException):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                metadata={"service_account_id": "sa"},
+                team_id=None,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_service_account_works_with_team_id():
+    from unittest.mock import patch
+
+    # Mock the database and router dependencies from proxy_server
+    with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma, \
+         patch('litellm.proxy.proxy_server.llm_router') as mock_router, \
+         patch('litellm.proxy.proxy_server.premium_user', False), \
+         patch('litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn') as mock_generate_key:
+        
+        # Configure mocks
+        mock_prisma.return_value = AsyncMock()
+        mock_router.return_value = None
+        # Mock the response from generate_key_helper_fn
+        mock_generate_key.return_value = {
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": "IJ"
+        }
+        
+        # This should not raise an exception since team_id is provided
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                metadata={"service_account_id": "sa"},
+                team_id="IJ",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+
+
+@pytest.mark.asyncio
+async def test_update_service_account_requires_team_id():
+    data = UpdateKeyRequest(key="sk-1", metadata={"service_account_id": "sa"})
+    existing_key = LiteLLM_VerificationToken(token="hashed", team_id=None)
+
+    with pytest.raises(HTTPException):
+        await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
+
+@pytest.mark.asyncio
+async def test_update_service_account_works_with_team_id():
+    data = UpdateKeyRequest(key="sk-1", metadata={"service_account_id": "sa"}, team_id="IJ")
+    existing_key = LiteLLM_VerificationToken(token="hashed")
+
+    await prepare_key_update_data(data=data, existing_key_row=existing_key)
+
