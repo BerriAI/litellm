@@ -535,11 +535,9 @@ jobs:
             - litellm_router_coverage.xml
             - litellm_router_coverage
   litellm_security_tests:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: large
     working_directory: ~/project
     steps:
       - checkout
@@ -549,31 +547,22 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
       - run:
-          name: Install Dependencies
+          name: Install Python and Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "pytest-cov==5.0.0"
-      - run:
-          name: Install Trivy
-          command: |
+            # Install Python 3.11
             sudo apt-get update
-            sudo apt-get install wget apt-transport-https gnupg lsb-release
-            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-            sudo apt-get update
-            sudo apt-get install trivy
+            sudo apt-get install -y python3.11 python3.11-pip python3.11-venv
+            python3.11 -m pip install --upgrade pip
+            python3.11 -m pip install -r requirements.txt
+            python3.11 -m pip install "pytest==7.3.1"
+            python3.11 -m pip install "pytest-retry==1.6.3"
+            python3.11 -m pip install "pytest-asyncio==0.21.1"
+            python3.11 -m pip install "pytest-cov==5.0.0"
       - run:
-          name: Run Trivy scan on LiteLLM Docs
+          name: Run Security Scans
           command: |
-            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
-      - run:
-          name: Run Trivy scan on LiteLLM UI
-          command: |
-            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+            chmod +x ci_cd/security_scans.sh
+            ./ci_cd/security_scans.sh
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -587,7 +576,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+            python3.11 -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1593,23 +1582,6 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
-      - run:
-          name: Install Grype
-          command: |
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
-      - run:
-          name: Build and Scan Docker Images
-          command: |
-            # Build and scan Dockerfile.database
-            echo "Building and scanning Dockerfile.database..."
-            docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
-            grype litellm-database:latest --fail-on critical
-
-
-            # Build and scan main Dockerfile
-            echo "Building and scanning main Dockerfile..."
-            docker build -t litellm:latest .
-            grype litellm:latest --fail-on critical
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
