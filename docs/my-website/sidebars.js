@@ -259,6 +259,7 @@ const sidebars = {
             "completion/input",
             "completion/output",
             "completion/usage",
+            "completion/http_handler_config",
           ],
         },
         "response_api",
