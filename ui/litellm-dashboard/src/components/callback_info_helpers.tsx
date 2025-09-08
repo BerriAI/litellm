@@ -41,7 +41,7 @@ export const mapDisplayToInternalNames = (displayValues: string[]): string[] => 
   return displayValues.map(value => callback_map[value] || value);
 };
 
-const asset_logos_folder = '/assets/logos/';
+const asset_logos_folder = '/ui/assets/logos/';
 
 interface CallbackInfo {
   logo: string;
