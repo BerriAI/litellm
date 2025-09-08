@@ -417,7 +417,7 @@ async def new_user(
         special_keys = ["token", "token_id"]
         response_dict = {}
         for key, value in response.items():
-            if key in NewUserResponse.model_fields.keys() and key not in special_keys:
+            if key in NewUserResponse.__pydantic_fields__.keys() and key not in special_keys:
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")

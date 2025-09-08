@@ -770,7 +770,7 @@ def _extract_fields_recursive(
 
     fields = {}
 
-    for field_name, field in model.model_fields.items():
+    for field_name, field in model.__pydantic_fields__.items():
         # Skip optional_params if it's not meaningfully overridden
         if field_name == "optional_params":
             field_annotation = field.annotation

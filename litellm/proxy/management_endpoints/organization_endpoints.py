@@ -152,7 +152,7 @@ async def new_organization(
 
         If none provided, create one based on provided values
         """
-        budget_params = LiteLLM_BudgetTable.model_fields.keys()
+        budget_params = LiteLLM_BudgetTable.__pydantic_fields__.keys()
 
         # Only include Budget Params when creating an entry in litellm_budgettable
         _json_data = data.json(exclude_none=True)

@@ -144,7 +144,7 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
     """
     Return a new budget object if new budget params are passed.
     """
-    budget_params = BudgetNewRequest.model_fields.keys()
+    budget_params = BudgetNewRequest.__pydantic_fields__.keys()
     budget_kv_pairs = {}
 
     # Get the actual values from the data object using getattr
@@ -282,7 +282,7 @@ async def new_end_user(
         _user_data = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k not in BudgetNewRequest.model_fields.keys():
+            if k not in BudgetNewRequest.__pydantic_fields__.keys():
                 new_end_user_obj[k] = v
 
         ## WRITE TO DB ##
@@ -459,10 +459,10 @@ async def update_end_user(
         budget_table_data = {}
         update_end_user_table_data = {}
         for k, v in non_default_values.items():
-            if k in LiteLLM_BudgetTable.model_fields.keys():
+            if k in LiteLLM_BudgetTable.__pydantic_fields__.keys():
                 budget_table_data[k] = v
 
-            if k in LiteLLM_EndUserTable.model_fields.keys():
+            if k in LiteLLM_EndUserTable.__pydantic_fields__.keys():
                 update_end_user_table_data[k] = v
 
         ## Check if budget id is set ##

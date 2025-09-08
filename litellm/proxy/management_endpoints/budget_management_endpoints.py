@@ -206,7 +206,7 @@ async def budget_settings(
 
     return_val = []
 
-    for field_name, field_info in BudgetNewRequest.model_fields.items():
+    for field_name, field_info in BudgetNewRequest.__pydantic_fields__.items():
         if field_name in allowed_args:
             _stored_in_db = True
 

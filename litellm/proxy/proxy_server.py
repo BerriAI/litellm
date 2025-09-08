@@ -7351,7 +7351,7 @@ async def alerting_settings(
     )
     return_val.append(_response_obj)
 
-    for field_name, field_info in SlackAlertingArgs.model_fields.items():
+    for field_name, field_info in SlackAlertingArgs.__pydantic_fields__.items():
         if field_name in allowed_args:
             _stored_in_db: Optional[bool] = None
             if field_name in alerting_args_dict:
@@ -8420,7 +8420,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    if data.field_name not in ConfigGeneralSettings.model_fields:
+    if data.field_name not in ConfigGeneralSettings.__pydantic_fields__:
         raise HTTPException(
             status_code=400,
             detail={"error": "Invalid field={} passed in.".format(data.field_name)},
@@ -8495,7 +8495,7 @@ async def get_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    if field_name not in ConfigGeneralSettings.model_fields:
+    if field_name not in ConfigGeneralSettings.__pydantic_fields__:
         raise HTTPException(
             status_code=400,
             detail={"error": "Invalid field={} passed in.".format(field_name)},
@@ -8584,7 +8584,7 @@ async def get_config_list(
 
     return_val = []
 
-    for field_name, field_info in ConfigGeneralSettings.model_fields.items():
+    for field_name, field_info in ConfigGeneralSettings.__pydantic_fields__.items():
         if field_name in allowed_args:
             ## HANDLE TYPED DICT
 
@@ -8613,7 +8613,7 @@ async def get_config_list(
                     for (
                         sub_field,
                         sub_field_info,
-                    ) in pydantic_class.model_fields.items():
+                    ) in pydantic_class.__class__.__pydantic_fields__.items():
                         if (
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
@@ -8700,7 +8700,7 @@ async def delete_config_general_settings(
             },
         )
 
-    if data.field_name not in ConfigGeneralSettings.model_fields:
+    if data.field_name not in ConfigGeneralSettings.__pydantic_fields__:
         raise HTTPException(
             status_code=400,
             detail={"error": "Invalid field={} passed in.".format(data.field_name)},
