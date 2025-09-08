@@ -251,7 +251,7 @@ response = completion(
 {
     "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
     "created": 1734366691,
-    "model": "claude-3-sonnet-20240229",
+    "model": "gpt-4o-2024-08-06",
     "object": "chat.completion",
     "system_fingerprint": null,
     "choices": [
