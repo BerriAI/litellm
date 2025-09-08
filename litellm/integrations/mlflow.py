@@ -1,9 +1,14 @@
 import json
 import threading
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+
+if TYPE_CHECKING:
+    from litellm.types.utils import StandardLoggingPayload
+else:
+    StandardLoggingPayload = Any
 
 
 class MlflowLogger(CustomLogger):
@@ -55,10 +60,7 @@ class MlflowLogger(CustomLogger):
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [
-            c.message.model_dump(exclude_none=True)
-            for c in getattr(response_obj, "choices", [])
-        ]
+        output_messages = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -163,6 +165,10 @@ class MlflowLogger(CustomLogger):
         for key in ["functions", "tools", "stream", "tool_choice", "user"]:
             if value := kwargs.get("optional_params", {}).pop(key, None):
                 inputs[key] = value
+
+        if prediction := kwargs.get("prediction"):
+            inputs["prediction"] = prediction
+
         return inputs
 
     def _extract_attributes(self, kwargs):
@@ -178,20 +184,21 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj = kwargs.get("standard_logging_object")
+        standard_obj: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
         if standard_obj:
             attributes.update(
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "usage": {
-                        "completion_tokens": standard_obj.get("completion_tokens"),
-                        "prompt_tokens": standard_obj.get("prompt_tokens"),
+                    "mlflow.chat.tokenUsage": {
+                        "input_tokens": standard_obj.get("prompt_tokens"),
+                        "output_tokens": standard_obj.get("completion_tokens"),
                         "total_tokens": standard_obj.get("total_tokens"),
                     },
                     "raw_llm_response": standard_obj.get("response"),
                     "response_cost": standard_obj.get("response_cost"),
                     "saved_cache_cost": standard_obj.get("saved_cache_cost"),
+                    "request_tags": standard_obj.get("request_tags"),
                 }
             )
         else:
@@ -237,7 +244,7 @@ class MlflowLogger(CustomLogger):
         if active_span := mlflow.get_current_active_span():  # type: ignore
             return self._client.start_span(
                 name=span_name,
-                request_id=active_span.request_id,
+                trace_id=active_span.request_id,
                 parent_id=active_span.span_id,
                 span_type=span_type,
                 inputs=inputs,
@@ -250,21 +257,25 @@ class MlflowLogger(CustomLogger):
                 span_type=span_type,
                 inputs=inputs,
                 attributes=attributes,
+                tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
                 start_time_ns=start_time_ns,
             )
+
+    def _transform_tag_list_to_dict(self, tag_list: list) -> dict:
+        return {tag: "" for tag in tag_list}
 
     def _end_span_or_trace(self, span, outputs, end_time_ns, status):
         """End an MLflow span or a trace."""
         if span.parent_id is None:
             self._client.end_trace(
-                request_id=span.request_id,
+                trace_id=span.request_id,
                 outputs=outputs,
                 status=status,
                 end_time_ns=end_time_ns,
             )
         else:
             self._client.end_span(
-                request_id=span.request_id,
+                trace_id=span.request_id,
                 span_id=span.span_id,
                 outputs=outputs,
                 status=status,

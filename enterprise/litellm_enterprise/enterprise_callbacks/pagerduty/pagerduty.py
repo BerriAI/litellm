@@ -115,6 +115,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_team_alias=_meta.get("user_api_key_team_alias"),
                 user_api_key_end_user_id=_meta.get("user_api_key_end_user_id"),
                 user_api_key_user_email=_meta.get("user_api_key_user_email"),
+                user_api_key_request_route=_meta.get("user_api_key_request_route"),
             )
         )
 
@@ -146,6 +147,7 @@ class PagerDutyAlerting(SlackAlerting):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Union[Exception, str, dict]]:
         """
@@ -195,6 +197,7 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_user_email=user_api_key_dict.user_email,
+                user_api_key_request_route=user_api_key_dict.request_route,
             )
         )
 

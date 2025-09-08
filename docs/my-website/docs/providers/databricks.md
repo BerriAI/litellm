@@ -282,6 +282,11 @@ ModelResponse(
 )
 ```
 
+### Citations
+
+Anthropic models served through Databricks can return citation metadata. LiteLLM
+exposes these via `response.choices[0].message.provider_specific_fields["citations"]`.
+
 ### Pass `thinking` to Anthropic models
 
 You can also pass the `thinking` parameter to Anthropic models.

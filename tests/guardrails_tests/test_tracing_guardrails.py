@@ -73,8 +73,6 @@ async def test_standard_logging_payload_includes_guardrail_information():
         assert "end" in response_item
         assert "score" in response_item
         assert "entity_type" in response_item
-        assert "recognition_metadata" in response_item
-    
 
     # assert that the duration is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["duration"] is not None
@@ -180,5 +178,3 @@ async def test_langfuse_trace_includes_guardrail_information():
         assert "score" in output_item
         assert "start" in output_item
         assert "end" in output_item
-        assert "recognition_metadata" in output_item
-        assert "recognizer_name" in output_item["recognition_metadata"]

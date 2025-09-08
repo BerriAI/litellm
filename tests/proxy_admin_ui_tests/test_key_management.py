@@ -53,7 +53,6 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
@@ -81,7 +80,6 @@ from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
@@ -93,6 +91,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 

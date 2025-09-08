@@ -17,7 +17,7 @@ from typing import List, Optional
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
@@ -38,11 +38,38 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = ["reasoning_effort"]
+        o_series_only_param = self._get_o_series_only_params(model)
+
         all_openai_params.extend(o_series_only_param)
         return [
             param for param in all_openai_params if param not in non_supported_params
         ]
+    
+    def _get_o_series_only_params(self, model: str) -> list:
+        """
+        Helper function to get the o-series only params for the model
+
+        - reasoning_effort
+        """
+        o_series_only_param = []
+        
+
+        #########################################################
+        # Case 1: If the model is recognized and in litellm model cost map
+        # then check if it supports reasoning
+        #########################################################
+        if model in litellm.model_list_set:
+            if supports_reasoning(model):
+                o_series_only_param.append("reasoning_effort")
+        #########################################################
+        # Case 2: If the model is not recognized, then we assume it supports reasoning
+        # This is critical because several users tend to use custom deployment names 
+        # for azure o-series models.
+        #########################################################
+        else:
+            o_series_only_param.append("reasoning_effort")
+        
+        return o_series_only_param
 
     def should_fake_stream(
         self,
