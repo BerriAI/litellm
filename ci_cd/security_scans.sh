@@ -62,33 +62,25 @@ run_grype_scans() {
     echo "Restoring original .dockerignore..."
     mv .dockerignore.backup .dockerignore
     
-    # Scan the regular LiteLLM image from GHCR for vulnerabilities with CVSS >= 4.0
-    echo "Scanning LiteLLM GHCR image for high-severity vulnerabilities..."
-    LATEST_TAG=$(curl -s "https://api.github.com/repos/BerriAI/litellm/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "main-latest")
-    echo "Using LiteLLM image tag: ${LATEST_TAG}"
-    
-    # Pull and scan the image, checking for vulnerabilities with CVSS >= 4.0
-    docker pull ghcr.io/berriai/litellm:${LATEST_TAG} || {
-        echo "Failed to pull ghcr.io/berriai/litellm:${LATEST_TAG}, trying with main-latest..."
-        docker pull ghcr.io/berriai/litellm:main-latest
-        LATEST_TAG="main-latest"
-    }
+    # Scan the locally built LiteLLM image for vulnerabilities with CVSS >= 4.0
+    echo "Scanning locally built LiteLLM image for high-severity vulnerabilities..."
+    echo "Using locally built image: litellm:latest"
     
     # Run grype scan and check for vulnerabilities with CVSS >= 4.0
     echo "Checking for vulnerabilities with CVSS score >= 4.0..."
-    HIGH_SEVERITY_COUNT=$(grype ghcr.io/berriai/litellm:${LATEST_TAG} -o json | jq -r '.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) | .vulnerability.id' | wc -l)
+    HIGH_SEVERITY_COUNT=$(grype litellm:latest -o json | jq -r '.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) | .vulnerability.id' | wc -l)
     
     if [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
-        echo "ERROR: Found $HIGH_SEVERITY_COUNT vulnerabilities with CVSS score >= 4.0 in ghcr.io/berriai/litellm:${LATEST_TAG}"
+        echo "ERROR: Found $HIGH_SEVERITY_COUNT vulnerabilities with CVSS score >= 4.0 in litellm:latest"
         echo "Detailed vulnerability report:"
-        grype ghcr.io/berriai/litellm:${LATEST_TAG} -o json | jq -r '
+        grype litellm:latest -o json | jq -r '
         ["Package", "Version", "Vulnerability ID", "CVSS Score", "Severity", "Fix Version", "Description"],
         (.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) |
         [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, .vulnerability.severity, (.vulnerability.fix.versions[0] // "No fix available"), .vulnerability.description]) |
         @tsv' | column -t -s $'\t'
         exit 1
     else
-        echo "No high-severity vulnerabilities (CVSS >= 4.0) found in ghcr.io/berriai/litellm:${LATEST_TAG}"
+        echo "No high-severity vulnerabilities (CVSS >= 4.0) found in litellm:latest"
     fi
     
     echo "Grype scans completed successfully"
