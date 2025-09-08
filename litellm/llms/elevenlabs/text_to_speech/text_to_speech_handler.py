@@ -1,6 +1,5 @@
 """
 ElevenLabs Text-to-Speech API handler.
-Following Vertex AI text_to_speech pattern.
 """
 
 import os
