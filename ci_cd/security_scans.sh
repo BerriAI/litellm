@@ -43,6 +43,11 @@ run_trivy_scans() {
 run_grype_scans() {
     echo "Running Grype scans..."
     
+    # Temporarily add wheel files to .dockerignore for security scans
+    echo "Temporarily modifying .dockerignore to exclude problematic wheel files..."
+    cp .dockerignore .dockerignore.backup 2>/dev/null || touch .dockerignore.backup
+    echo "/*.whl" >> .dockerignore
+    
     # Build and scan Dockerfile.database
     echo "Building and scanning Dockerfile.database..."
     docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
@@ -52,6 +57,10 @@ run_grype_scans() {
     echo "Building and scanning main Dockerfile..."
     docker build -t litellm:latest .
     grype litellm:latest --fail-on critical
+    
+    # Restore original .dockerignore
+    echo "Restoring original .dockerignore..."
+    mv .dockerignore.backup .dockerignore
     
     # Scan the regular LiteLLM image from GHCR for vulnerabilities with CVSS >= 4.0
     echo "Scanning LiteLLM GHCR image for high-severity vulnerabilities..."
