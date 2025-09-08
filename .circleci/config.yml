@@ -547,17 +547,14 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
       - run:
-          name: Install Python and Dependencies
+          name: Install Python Dependencies
           command: |
-            # Install Python 3.11
-            sudo apt-get update
-            sudo apt-get install -y python3.11 python3.11-pip python3.11-venv
-            python3.11 -m pip install --upgrade pip
-            python3.11 -m pip install -r requirements.txt
-            python3.11 -m pip install "pytest==7.3.1"
-            python3.11 -m pip install "pytest-retry==1.6.3"
-            python3.11 -m pip install "pytest-asyncio==0.21.1"
-            python3.11 -m pip install "pytest-cov==5.0.0"
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r requirements.txt
+            python3 -m pip install "pytest==7.3.1"
+            python3 -m pip install "pytest-retry==1.6.3"
+            python3 -m pip install "pytest-asyncio==0.21.1"
+            python3 -m pip install "pytest-cov==5.0.0"
       - run:
           name: Run Security Scans
           command: |
@@ -576,7 +573,7 @@ jobs:
           command: |
             pwd
             ls
-            python3.11 -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+            python3 -m pytest tests/proxy_security_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
