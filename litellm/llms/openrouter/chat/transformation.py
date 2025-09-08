@@ -6,13 +6,13 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from typing import Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
@@ -43,10 +43,23 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params[
-            "extra_body"
-        ] = extra_body  # openai client supports `extra_body` param
+        mapped_openai_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
         return mapped_openai_params
+
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        if "claude" in model.lower():  # don't remove 'cache_control' flag
+            return messages, tools
+        else:
+            return super().remove_cache_control_flag_from_messages_and_tools(
+                model, messages, tools
+            )
 
     def transform_request(
         self,

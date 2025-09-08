@@ -265,8 +265,10 @@ class MyCustomLLM(CustomLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
-        aembedding=None,
     ) -> EmbeddingResponse:
         model_response.model = model
 
@@ -289,6 +291,9 @@ class MyCustomLLM(CustomLLM):
         print_verbose: Callable,
         logging_obj: Any,
         optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
         litellm_params=None,
     ) -> EmbeddingResponse:
         model_response.model = model

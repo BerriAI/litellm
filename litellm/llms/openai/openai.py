@@ -47,6 +47,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from .chat.gpt_5_transformation import OpenAIGPT5Config
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -55,6 +56,7 @@ from .common_utils import (
 )
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 
 class MistralEmbeddingConfig:
@@ -183,6 +185,8 @@ class OpenAIConfig(BaseConfig):
         """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.get_supported_openai_params(model=model)
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
@@ -212,6 +216,13 @@ class OpenAIConfig(BaseConfig):
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,

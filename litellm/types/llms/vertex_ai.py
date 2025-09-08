@@ -1,11 +1,12 @@
 import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from typing_extensions import (
     Protocol,
     Required,
     Self,
+    TypedDict,
     TypeGuard,
     get_origin,
     override,
@@ -40,6 +41,7 @@ class PartType(TypedDict, total=False):
     function_call: FunctionCall
     function_response: FunctionResponse
     thought: bool
+    thoughtSignature: str
 
 
 class HttpxFunctionCall(TypedDict):
@@ -71,6 +73,7 @@ class HttpxPartType(TypedDict, total=False):
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
+    thoughtSignature: str
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -89,7 +92,7 @@ class SystemInstructions(TypedDict):
 
 class Schema(TypedDict, total=False):
     type: Literal["STRING", "INTEGER", "BOOLEAN", "NUMBER", "ARRAY", "OBJECT"]
-    format: str
+    format: Literal["enum", "date-time"]
     title: str
     description: str
     nullable: bool
@@ -110,6 +113,7 @@ class Schema(TypedDict, total=False):
     pattern: str
     example: Any
     anyOf: List["Schema"]
+    additionalProperties: Any
 
 
 class FunctionDeclaration(TypedDict, total=False):
@@ -176,6 +180,18 @@ class GeminiThinkingConfig(TypedDict, total=False):
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
 
+class PrebuiltVoiceConfig(TypedDict):
+    voiceName: str
+
+
+class VoiceConfig(TypedDict):
+    prebuiltVoiceConfig: PrebuiltVoiceConfig
+
+
+class SpeechConfig(TypedDict, total=False):
+    voiceConfig: VoiceConfig
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -199,6 +215,7 @@ class Tools(TypedDict, total=False):
     googleSearch: dict
     googleSearchRetrieval: dict
     enterpriseWebSearch: dict
+    url_context: dict
     code_execution: dict
     retrieval: Retrieval
 
@@ -228,6 +245,18 @@ class UsageMetadata(TypedDict, total=False):
     responseTokensDetails: List[PromptTokensDetails]
 
 
+class TokenCountDetailsResponse(TypedDict):
+    """
+    Response structure for token count details with modality breakdown.
+
+    Example:
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+    """
+
+    totalTokens: int
+    promptTokensDetails: List[PromptTokensDetails]
+
+
 class CachedContent(TypedDict, total=False):
     ttl: TTL
     expire_time: str
@@ -252,6 +281,7 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -322,6 +352,15 @@ class LogprobsResult(TypedDict, total=False):
     chosenCandidates: List[LogprobsCandidate]
 
 
+class UrlMetadata(TypedDict, total=False):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class UrlContextMetadata(TypedDict, total=False):
+    urlMetadata: List[UrlMetadata]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -341,6 +380,7 @@ class Candidates(TypedDict, total=False):
     groundingMetadata: GroundingMetadata
     finishMessage: str
     logprobsResult: LogprobsResult
+    urlContextMetadata: UrlContextMetadata
 
 
 class PromptFeedback(TypedDict):
@@ -353,6 +393,7 @@ class GenerateContentResponseBody(TypedDict, total=False):
     candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+    responseId: str
 
 
 class FineTuneHyperparameters(TypedDict, total=False):
@@ -577,3 +618,10 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
 
 
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
+
+
+class VertexPartnerProvider(str, Enum):
+    mistralai = "mistralai"
+    llama = "llama"
+    ai21 = "ai21"
+    claude = "claude"

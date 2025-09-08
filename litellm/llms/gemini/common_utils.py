@@ -1,15 +1,16 @@
 import base64
 import datetime
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import TokenCountResponse
 
 
 class GeminiError(BaseLLMException):
@@ -44,11 +45,19 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return api_key or (get_secret_str("GEMINI_API_KEY"))
+        return api_key or (get_secret_str("GOOGLE_API_KEY")) or (get_secret_str("GEMINI_API_KEY"))
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
         return model.replace("gemini/", "")
+
+    def process_model_name(self, models: List[Dict[str, str]]) -> List[str]:
+        litellm_model_names = []
+        for model in models:
+            stripped_model_name = model["name"].replace("models/", "")
+            litellm_model_name = "gemini/" + stripped_model_name
+            litellm_model_names.append(litellm_model_name)
+        return litellm_model_names
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
@@ -58,7 +67,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         endpoint = f"/{self.api_version}/models"
         if api_base is None or api_key is None:
             raise ValueError(
-                "GEMINI_API_BASE or GEMINI_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
+                "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response = litellm.module_level_client.get(
@@ -72,11 +81,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
         models = response.json()["models"]
 
-        litellm_model_names = []
-        for model in models:
-            stripped_model_name = model["name"].strip("models/")
-            litellm_model_name = "gemini/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
+        litellm_model_names = self.process_model_name(models)
         return litellm_model_names
 
     def get_error_class(
@@ -85,6 +90,16 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return GeminiError(
             status_code=status_code, message=error_message, headers=headers
         )
+    
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return GoogleAIStudioTokenCounter()
 
 
 def encode_unserializable_types(
@@ -129,3 +144,50 @@ def encode_unserializable_types(
         else:
             processed_data[key] = value
     return processed_data
+
+
+def get_api_key_from_env() -> Optional[str]:
+    return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
+
+
+class GoogleAIStudioTokenCounter(BaseTokenCounter):
+    """Token counter implementation for Google AI Studio provider."""
+    def should_use_token_counting_api(
+        self, 
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.GEMINI.value
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[TokenCountResponse]:
+        import copy
+
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        deployment = deployment or {}
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params = {
+            "model": model_to_use,
+            "contents": contents,
+        }
+        count_tokens_params_request.update(count_tokens_params)
+        result = await GoogleAIStudioTokenCounter().acount_tokens(
+            **count_tokens_params_request,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result.get("totalTokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
+        
+        return None
