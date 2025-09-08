@@ -21,14 +21,11 @@ import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.passthrough.utils import CommonUtils
 from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
-from .utils import BasePassthroughUtils
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -66,6 +63,8 @@ async def allm_passthrough_route(
     try:
         loop = asyncio.get_event_loop()
         kwargs["allm_passthrough_route"] = True
+
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, custom_llm_provider, api_key, api_base = get_llm_provider(
             model=model,
@@ -130,6 +129,8 @@ async def allm_passthrough_route(
         # For passthrough routes, we need to get the provider config to properly handle errors
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
+
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         # Get the provider using the same logic as llm_passthrough_route
         _, resolved_custom_llm_provider, _, _ = get_llm_provider(
@@ -208,6 +209,8 @@ def llm_passthrough_route(
 
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -245,6 +248,7 @@ def llm_passthrough_route(
     
     # need to encode the id of application-inference-profile for bedrock
     if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
+        from litellm.passthrough.utils import CommonUtils
         encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
     
@@ -261,6 +265,7 @@ def llm_passthrough_route(
         api_base=base_target_url,
     )
 
+    from .utils import BasePassthroughUtils
     headers = BasePassthroughUtils.forward_headers_from_request(
         request_headers=request_headers or {},
         headers=auth_headers,
