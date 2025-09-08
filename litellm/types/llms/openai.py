@@ -196,9 +196,15 @@ class ImageFileObject(TypedDict):
     detail: Optional[str]
 
 
-class ImageURLObject(TypedDict):
+class ImageURLObject(TypedDict, total=False):
     url: Required[str]
     detail: Optional[str]
+
+
+class ImageURLListItem(TypedDict):
+    image_url: ImageURLObject
+    index: int
+    type: Literal["image_url"]
 
 
 class MessageContentTextObject(TypedDict):
@@ -914,7 +920,6 @@ OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "us
 
 OpenAIImageGenerationOptionalParams = Literal[
     "background",
-    "input_fidelity",
     "moderation",
     "n",
     "output_compression",

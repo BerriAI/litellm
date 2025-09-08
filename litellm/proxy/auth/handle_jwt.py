@@ -7,7 +7,6 @@ JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import fnmatch
-import json
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
 
@@ -484,7 +483,7 @@ class JWTHandler:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
+        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"]
 
         audience = os.getenv("JWT_AUDIENCE")
         decode_options = None
@@ -492,7 +491,7 @@ class JWTHandler:
             decode_options = {"verify_aud": False}
 
         import jwt
-        from jwt.algorithms import RSAAlgorithm
+        from jwt.api_jwk import PyJWK
 
         header = jwt.get_unverified_header(token)
 
@@ -512,14 +511,21 @@ class JWTHandler:
                 jwk["n"] = public_key["n"]
             if "e" in public_key:
                 jwk["e"] = public_key["e"]
+            if "x" in public_key:
+                jwk["x"] = public_key["x"]
+            if "y" in public_key:
+                jwk["y"] = public_key["y"]
+            if "crv" in public_key:
+                jwk["crv"] = public_key["crv"]
 
-            public_key_rsa = RSAAlgorithm.from_jwk(json.dumps(jwk))
+            # parse RSA/EC/OKP keys
+            public_key_obj = PyJWK.from_dict(jwk).key
 
             try:
                 # decode the token using the public key
                 payload = jwt.decode(
                     token,
-                    public_key_rsa,  # type: ignore
+                    public_key_obj,  # type: ignore
                     algorithms=algorithms,
                     options=decode_options,
                     audience=audience,
@@ -534,9 +540,7 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
         elif public_key is not None and isinstance(public_key, str):
             try:
-                cert = x509.load_pem_x509_certificate(
-                    public_key.encode(), default_backend()
-                )
+                cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
 
                 # Extract public key
                 key = cert.public_key().public_bytes(
@@ -561,7 +565,7 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
 
         raise Exception("Invalid JWT Submitted")
-
+    
     async def close(self):
         await self.http_handler.close()
 

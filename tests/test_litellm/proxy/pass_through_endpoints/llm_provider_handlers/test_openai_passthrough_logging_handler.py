@@ -3,10 +3,10 @@ import os
 import sys
 from datetime import datetime
 from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import httpx
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -88,7 +88,8 @@ class TestOpenAIPassthroughLoggingHandler:
 
     def test_get_provider_config(self):
         """Test that the handler returns an OpenAI config"""
-        config = OpenAIPassthroughLoggingHandler.get_provider_config(model="gpt-4o")
+        handler = OpenAIPassthroughLoggingHandler()
+        config = handler.get_provider_config(model="gpt-4o")
         assert config is not None
         # Verify it's an OpenAI config by checking if it has the expected methods
         assert hasattr(config, 'transform_response')
@@ -364,7 +365,9 @@ class TestOpenAIPassthroughLoggingHandler:
         """Test that static methods work correctly"""
         # Test static method calls
         assert OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route("https://api.openai.com/v1/chat/completions") == True
-        assert OpenAIPassthroughLoggingHandler.get_provider_config("gpt-4o") is not None
+        # Test instance method
+        handler = OpenAIPassthroughLoggingHandler()
+        assert handler.get_provider_config("gpt-4o") is not None
 
 
 class TestOpenAIPassthroughIntegration:

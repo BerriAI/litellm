@@ -146,8 +146,11 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
+    "cloudzero",
 ]
-configured_cold_storage_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
+configured_cold_storage_logger: Optional[
+    _custom_logger_compatible_callbacks_literal
+] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -236,6 +239,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -435,7 +439,8 @@ config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 
 ####### COMPLETION MODELS ###################
-from typing import Set  
+from typing import Set
+
 open_ai_chat_completion_models: Set = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
@@ -478,6 +483,7 @@ azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
 infinity_models: Set = set()
+heroku_models: Set = set() 
 databricks_models: Set = set()
 cloudflare_models: Set = set()
 codestral_models: Set = set()
@@ -513,6 +519,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
+volcengine_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -705,6 +712,8 @@ def add_known_models():
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "heroku":
+            heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -723,6 +732,8 @@ def add_known_models():
             cometapi_models.add(key)
         elif value.get("litellm_provider") == "oci":
             oci_models.add(key)
+        elif value.get("litellm_provider") == "volcengine":
+            volcengine_models.add(key)
 
 
 add_known_models()
@@ -814,7 +825,9 @@ model_list = list(
     | recraft_models
     | cometapi_models
     | oci_models
+    | heroku_models
     | vercel_ai_gateway_models
+    | volcengine_models
 )
 
 model_list_set = set(model_list)
@@ -835,7 +848,12 @@ models_by_provider: dict = {
     "openrouter": openrouter_models,
     "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
+    "vertex_ai": vertex_chat_models
+    | vertex_text_models
+    | vertex_anthropic_models
+    | vertex_vision_models
+    | vertex_language_models
+    | vertex_deepseek_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -880,6 +898,7 @@ models_by_provider: dict = {
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
+    "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
@@ -889,6 +908,7 @@ models_by_provider: dict = {
     "recraft": recraft_models,
     "cometapi": cometapi_models,
     "oci": oci_models,
+    "volcengine": volcengine_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1132,7 +1152,9 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import (
+    VoyageContextualEmbeddingConfig,
+)
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
@@ -1196,12 +1218,15 @@ from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
 from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineConfig
+from .llms.volcengine.chat.transformation import (
+    VolcEngineChatConfig as VolcEngineConfig,
+)
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config

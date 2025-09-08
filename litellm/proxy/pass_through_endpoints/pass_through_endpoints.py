@@ -57,6 +57,9 @@ router = APIRouter()
 
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
+# Global registry to track registered pass-through routes and prevent memory leaks
+_registered_pass_through_routes: Dict[str, Dict[str, str]] = {}
+
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
     try:
@@ -996,8 +999,19 @@ class InitPassThroughEndpointHelpers:
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
         cost_per_request: Optional[float],
+        endpoint_id: str,
     ):
         """Add exact path route for pass-through endpoint"""
+        route_key = f"{endpoint_id}:exact:{path}"
+        
+        # Check if this exact route is already registered
+        if route_key in _registered_pass_through_routes:
+            verbose_proxy_logger.debug(
+                "Skipping duplicate exact pass through endpoint: %s (already registered)",
+                path,
+            )
+            return
+            
         verbose_proxy_logger.debug(
             "adding exact pass through endpoint: %s, dependencies: %s",
             path,
@@ -1018,6 +1032,13 @@ class InitPassThroughEndpointHelpers:
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
+        
+        # Register the route to prevent duplicates
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": endpoint_id,
+            "path": path,
+            "type": "exact"
+        }
 
     @staticmethod
     def add_subpath_route(
@@ -1029,9 +1050,20 @@ class InitPassThroughEndpointHelpers:
         merge_query_params: Optional[bool],
         dependencies: Optional[List],
         cost_per_request: Optional[float],
+        endpoint_id: str,
     ):
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
+        route_key = f"{endpoint_id}:subpath:{path}"
+        
+        # Check if this subpath route is already registered
+        if route_key in _registered_pass_through_routes:
+            verbose_proxy_logger.debug(
+                "Skipping duplicate wildcard pass through endpoint: %s (already registered)",
+                wildcard_path,
+            )
+            return
+            
         verbose_proxy_logger.debug(
             "adding wildcard pass through endpoint: %s, dependencies: %s",
             wildcard_path,
@@ -1053,6 +1085,26 @@ class InitPassThroughEndpointHelpers:
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
+        
+        # Register the route to prevent duplicates
+        _registered_pass_through_routes[route_key] = {
+            "endpoint_id": endpoint_id,
+            "path": path,
+            "type": "subpath"
+        }
+
+    @staticmethod
+    def remove_endpoint_routes(endpoint_id: str):
+        """Remove all routes for a specific endpoint ID from the registry"""
+        keys_to_remove = [
+            key for key, value in _registered_pass_through_routes.items()
+            if value["endpoint_id"] == endpoint_id
+        ]
+        for key in keys_to_remove:
+            del _registered_pass_through_routes[key]
+            verbose_proxy_logger.debug(
+                "Removed pass-through route from registry: %s", key
+            )
 
 
 async def initialize_pass_through_endpoints(
@@ -1081,6 +1133,9 @@ async def initialize_pass_through_endpoints(
         if endpoint.get("id") is None:
             endpoint["id"] = str(uuid.uuid4())
 
+        # Get the endpoint_id as a string (guaranteed to be set at this point)
+        endpoint_id: str = endpoint["id"]
+
         _target = endpoint.get("target", None)
         _path: Optional[str] = endpoint.get("path", None)
         if _path is None:
@@ -1108,7 +1163,7 @@ async def initialize_pass_through_endpoints(
 
         # Add exact path route
         verbose_proxy_logger.debug(
-            "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint.get("id")
+            "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
         )
         InitPassThroughEndpointHelpers.add_exact_path_route(
             app=app,
@@ -1119,6 +1174,7 @@ async def initialize_pass_through_endpoints(
             merge_query_params=_merge_query_params,
             dependencies=_dependencies,
             cost_per_request=endpoint.get("cost_per_request", None),
+            endpoint_id=endpoint_id,
         )
 
         # Add wildcard route for sub-paths
@@ -1132,10 +1188,11 @@ async def initialize_pass_through_endpoints(
                 merge_query_params=_merge_query_params,
                 dependencies=_dependencies,
                 cost_per_request=endpoint.get("cost_per_request", None),
+                endpoint_id=endpoint_id,
             )
 
         verbose_proxy_logger.debug(
-            "Added new pass through endpoint: %s (ID: %s)", _path, endpoint.get("id")
+            "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
         )
 
 
@@ -1275,6 +1332,9 @@ async def update_pass_through_endpoints(
 
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
+
+    # Remove old routes from registry before they get re-registered
+    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
 
     ## Update db
     updated_data = ConfigFieldUpdate(
@@ -1419,6 +1479,9 @@ async def delete_pass_through_endpoints(
     # Remove the endpoint
     pass_through_endpoint_data.pop(endpoint_index)
     response_obj = found_endpoint
+
+    # Remove routes from registry  
+    InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
 
     ## Update db
     updated_data = ConfigFieldUpdate(

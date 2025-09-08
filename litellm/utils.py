@@ -542,9 +542,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1298,9 +1298,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2508,7 +2508,6 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
-    input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -2545,7 +2544,6 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
-        "input_fidelity": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -3119,10 +3117,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3250,16 +3248,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4087,7 +4085,7 @@ def add_provider_specific_params_to_optional_params(
         ):
             extra_body = passed_params.pop("extra_body", {})
             for k in passed_params.keys():
-                if k not in openai_params:
+                if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
             initial_extra_body = {
@@ -4109,7 +4107,7 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params.keys():
-            if k not in openai_params:
+            if k not in openai_params and passed_params[k] is not None:
                 optional_params[k] = passed_params[k]
     return optional_params
 
@@ -4364,9 +4362,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -6891,6 +6889,7 @@ class ProviderConfigManager:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
                     VertexAIGPTOSSTransformation,
                 )
+
                 return VertexAIGPTOSSTransformation()
             elif model in litellm.vertex_mistral_models:
                 if "codestral" in model:
@@ -7077,6 +7076,8 @@ class ProviderConfigManager:
             return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
+        elif litellm.LlmProviders.HEROKU == provider:
+            return litellm.HerokuChatConfig()
         elif litellm.LlmProviders.OCI == provider:
             return litellm.OCIChatConfig()
         elif litellm.LlmProviders.HYPERBOLIC == provider:
@@ -7310,7 +7311,7 @@ class ProviderConfigManager:
 
             return BedrockFilesConfig()
         return None
-    
+
     @staticmethod
     def get_provider_batches_config(
         model: str,
@@ -7318,6 +7319,7 @@ class ProviderConfigManager:
     ) -> Optional[BaseBatchesConfig]:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+
             return BedrockBatchesConfig()
         return None
 

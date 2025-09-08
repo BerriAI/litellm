@@ -29,7 +29,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import LlmProviders, PassthroughCallTypes
+from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
 
 
@@ -42,8 +42,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     def llm_provider_name(self) -> LlmProviders:
         return LlmProviders.OPENAI
 
-    @staticmethod
-    def get_provider_config(model: str) -> OpenAIConfigType:
+    def get_provider_config(self, model: str) -> OpenAIConfigType:
         """Get OpenAI provider configuration for the given model."""
         return OpenAIConfig()
 
@@ -92,8 +91,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             and "/v1/images/edits" in parsed_url.path
         )
 
-    @staticmethod
     def _get_user_from_metadata(
+        self,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
     ) -> Optional[str]:
         """Extract user information from passthrough logging payload."""
@@ -202,20 +201,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         )
 
         if not (is_chat_completions or is_image_generation or is_image_editing):
-            # For unsupported endpoints, use the base handler without cost tracking
-            base_handler = OpenAIPassthroughLoggingHandler()
-            return base_handler.passthrough_chat_handler(
-                httpx_response=httpx_response,
-                response_body=response_body,
-                logging_obj=logging_obj,
-                url_route=url_route,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                request_body=request_body,
-                **kwargs,
-            )
+            # For unsupported endpoints, return None to let the system fall back to generic behavior
+            return {
+                "result": None,
+                "kwargs": kwargs,
+            }
 
         # Extract model from request or response
         model = request_body.get("model", response_body.get("model", ""))
@@ -239,13 +229,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         try:
             response_cost = 0.0
-            litellm_model_response = None
+            litellm_model_response: Optional[Union[ModelResponse, TextCompletionResponse, ImageResponse]] = None
+            handler_instance = OpenAIPassthroughLoggingHandler()
 
             if is_chat_completions:
                 # Handle chat completions with existing logic
-                provider_config = OpenAIPassthroughLoggingHandler.get_provider_config(
-                    model=model
-                )
+                provider_config = handler_instance.get_provider_config(model=model)
                 litellm_model_response = provider_config.transform_response(
                     raw_response=httpx_response,
                     model_response=litellm.ModelResponse(),
@@ -284,8 +273,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 except Exception:
                     pass
                 # Create a simple response object for logging
-                from litellm.types.utils import ImageResponse
-
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
                     model=model,
@@ -311,8 +298,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 except Exception:
                     pass
                 # Create a simple response object for logging
-                from litellm.types.utils import ImageResponse
-
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
                     model=model,
@@ -332,7 +317,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 PassthroughStandardLoggingPayload
             ] = kwargs.get("passthrough_logging_payload")
             if passthrough_logging_payload:
-                user = OpenAIPassthroughLoggingHandler._get_user_from_metadata(
+                user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
@@ -369,7 +354,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             return {
-                "result": litellm_model_response or response_body,
+                "result": litellm_model_response,
                 "kwargs": kwargs,
             }
 
@@ -480,6 +465,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Build complete response from chunks using our streaming handler
             handler = OpenAIPassthroughLoggingHandler()
+            handler_instance = handler
             complete_response = handler._build_complete_streaming_response(
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
@@ -516,7 +502,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 "passthrough_logging_payload"
             )
             if passthrough_logging_payload:
-                user = OpenAIPassthroughLoggingHandler._get_user_from_metadata(
+                user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
