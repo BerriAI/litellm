@@ -3,21 +3,18 @@ ElevenLabs Text-to-Speech API handler.
 Following Vertex AI text_to_speech pattern.
 """
 
+import os
 from typing import Optional, Union
 import httpx
 
 import litellm
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
-from litellm import get_secret_str
 
 class ElevenLabsTextToSpeechAPI:
     """
     ElevenLabs TTS API methods.
     """
-
-    def __init__(self) -> None:
-        pass
 
     def audio_speech(
         self,
@@ -168,9 +165,7 @@ class ElevenLabsTextToSpeechAPI:
         """
         Async version of audio_speech.
         """
-        async_handler = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.ELEVENLABS
-        )
+        async_handler = get_async_httpx_client(llm_provider=litellm.LlmProviders.ELEVENLABS)
 
         ####### Send the request ###################
         response = await async_handler.post(
@@ -213,9 +208,7 @@ class ElevenLabsTextToSpeechAPI:
         output_format: Optional[str] = None,
     ) -> str:
         if api_base is None:
-            api_base = (
-                get_secret_str("ELEVENLABS_API_BASE") or "https://api.elevenlabs.io"
-            )
+            api_base = os.environ.get("ELEVENLABS_API_BASE", "https://api.elevenlabs.io")
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # ElevenLabs text-to-speech endpoint

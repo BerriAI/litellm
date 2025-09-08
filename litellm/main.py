@@ -5431,7 +5431,7 @@ def speech(  # noqa: PLR0915
     metadata: Optional[dict] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     response_format: Optional[str] = None,
-    speed: Optional[int] = None,
+    speed: Optional[float] = None,
     instructions: Optional[str] = None,
     client=None,
     headers: Optional[dict] = None,
