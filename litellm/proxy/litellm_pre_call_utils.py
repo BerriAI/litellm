@@ -489,8 +489,10 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def add_key_level_controls(
-        key_metadata: dict, data: dict, _metadata_variable_name: str
+        key_metadata: Optional[dict], data: dict, _metadata_variable_name: str
     ):
+        if key_metadata is None:
+            return data
         if "cache" in key_metadata:
             data["cache"] = {}
             if isinstance(key_metadata["cache"], dict):

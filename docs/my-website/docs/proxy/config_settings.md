@@ -236,7 +236,7 @@ Most values can also be set via `litellm_settings`. If you see overlapping value
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
   redis_host: <your-redis-host>           # string
   redis_password: <your-redis-password>   # string
   redis_port: <your-redis-port>           # string
@@ -335,12 +335,16 @@ router_settings:
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
+| AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
+| AWS_REGION | AWS region for service interactions (takes precedence over AWS_DEFAULT_REGION)
 | AWS_REGION_NAME | Default AWS region for service interactions
+| AWS_ROLE_ARN | ARN of the AWS IAM role to assume for authentication
 | AWS_ROLE_NAME | Role name for AWS IAM usage
 | AWS_SECRET_ACCESS_KEY | Secret Access Key for AWS services
 | AWS_SESSION_NAME | Name for AWS session
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
+| AWS_WEB_IDENTITY_TOKEN_FILE | Path to file containing web identity token for AWS
 | AZURE_API_VERSION | Version of the Azure API being used
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
@@ -554,6 +558,7 @@ router_settings:
 | LITERAL_API_KEY | API key for Literal integration
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
+| LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
 | LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
@@ -566,6 +571,7 @@ router_settings:
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_LOG_FILE | File path to write LiteLLM logs to. When set, logs will be written to both console and the specified file
 | LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
@@ -576,6 +582,7 @@ router_settings:
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
+| MAX_STRING_LENGTH_PROMPT_IN_DB | Maximum length for strings in spend logs when sanitizing request bodies. Strings longer than this will be truncated. Default is 1000
 | MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
 | MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the long side of high-resolution images. Default is 2000
 | MAX_REDIS_BUFFER_DEQUEUE_COUNT | Maximum count for Redis buffer dequeue operations. Default is 100

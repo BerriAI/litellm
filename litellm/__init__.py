@@ -146,6 +146,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vector_store_pre_call_hook",
     "dotprompt",
 ]
+configured_cold_storage_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -225,6 +226,7 @@ vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
@@ -303,7 +305,6 @@ default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
-model_group_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
@@ -467,79 +468,82 @@ BEDROCK_CONVERSE_MODELS = [
 ]
 
 ####### COMPLETION MODELS ###################
-open_ai_chat_completion_models: List = []
-open_ai_text_completion_models: List = []
-cohere_models: List = []
-cohere_chat_models: List = []
-mistral_chat_models: List = []
-text_completion_codestral_models: List = []
-anthropic_models: List = []
-openrouter_models: List = []
-datarobot_models: List = []
-vertex_language_models: List = []
-vertex_vision_models: List = []
-vertex_chat_models: List = []
-vertex_code_chat_models: List = []
-vertex_ai_image_models: List = []
-vertex_text_models: List = []
-vertex_code_text_models: List = []
-vertex_embedding_models: List = []
-vertex_anthropic_models: List = []
-vertex_llama3_models: List = []
-vertex_deepseek_models: List = []
-vertex_ai_ai21_models: List = []
-vertex_mistral_models: List = []
-ai21_models: List = []
-ai21_chat_models: List = []
-nlp_cloud_models: List = []
-aleph_alpha_models: List = []
-bedrock_models: List = []
-bedrock_converse_models: List = BEDROCK_CONVERSE_MODELS
-fireworks_ai_models: List = []
-fireworks_ai_embedding_models: List = []
-deepinfra_models: List = []
-perplexity_models: List = []
-watsonx_models: List = []
-gemini_models: List = []
-xai_models: List = []
-deepseek_models: List = []
-azure_ai_models: List = []
-jina_ai_models: List = []
-voyage_models: List = []
-infinity_models: List = []
-databricks_models: List = []
-cloudflare_models: List = []
-codestral_models: List = []
-friendliai_models: List = []
-featherless_ai_models: List = []
-palm_models: List = []
-groq_models: List = []
-azure_models: List = []
-azure_text_models: List = []
-anyscale_models: List = []
-cerebras_models: List = []
-galadriel_models: List = []
-sambanova_models: List = []
-sambanova_embedding_models: List = []
-novita_models: List = []
-assemblyai_models: List = []
-snowflake_models: List = []
-gradient_ai_models: List = []
-llama_models: List = []
-nscale_models: List = []
-nebius_models: List = []
-nebius_embedding_models: List = []
-deepgram_models: List = []
-elevenlabs_models: List = []
-dashscope_models: List = []
-moonshot_models: List = []
-v0_models: List = []
-morph_models: List = []
-lambda_ai_models: List = []
-hyperbolic_models: List = []
-recraft_models: List = []
-cometapi_models: List = []
-oci_models: List = []
+from typing import Set  
+open_ai_chat_completion_models: Set = set()
+open_ai_text_completion_models: Set = set()
+cohere_models: Set = set()
+cohere_chat_models: Set = set()
+mistral_chat_models: Set = set()
+text_completion_codestral_models: Set = set()
+anthropic_models: Set = set()
+openrouter_models: Set = set()
+datarobot_models: Set = set()
+vertex_language_models: Set = set()
+vertex_vision_models: Set = set()
+vertex_chat_models: Set = set()
+vertex_code_chat_models: Set = set()
+vertex_ai_image_models: Set = set()
+vertex_text_models: Set = set()
+vertex_code_text_models: Set = set()
+vertex_embedding_models: Set = set()
+vertex_anthropic_models: Set = set()
+vertex_llama3_models: Set = set()
+vertex_deepseek_models: Set = set()
+vertex_ai_ai21_models: Set = set()
+vertex_mistral_models: Set = set()
+ai21_models: Set = set()
+ai21_chat_models: Set = set()
+nlp_cloud_models: Set = set()
+aleph_alpha_models: Set = set()
+bedrock_models: Set = set()
+bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
+fireworks_ai_models: Set = set()
+fireworks_ai_embedding_models: Set = set()
+deepinfra_models: Set = set()
+perplexity_models: Set = set()
+watsonx_models: Set = set()
+gemini_models: Set = set()
+xai_models: Set = set()
+deepseek_models: Set = set()
+azure_ai_models: Set = set()
+jina_ai_models: Set = set()
+voyage_models: Set = set()
+infinity_models: Set = set()
+databricks_models: Set = set()
+cloudflare_models: Set = set()
+codestral_models: Set = set()
+friendliai_models: Set = set()
+featherless_ai_models: Set = set()
+palm_models: Set = set()
+groq_models: Set = set()
+azure_models: Set = set()
+azure_text_models: Set = set()
+anyscale_models: Set = set()
+cerebras_models: Set = set()
+galadriel_models: Set = set()
+sambanova_models: Set = set()
+sambanova_embedding_models: Set = set()
+novita_models: Set = set()
+assemblyai_models: Set = set()
+snowflake_models: Set = set()
+gradient_ai_models: Set = set()
+llama_models: Set = set()
+nscale_models: Set = set()
+nebius_models: Set = set()
+nebius_embedding_models: Set = set()
+aiml_models: Set = set()
+deepgram_models: Set = set()
+elevenlabs_models: Set = set()
+dashscope_models: Set = set()
+moonshot_models: Set = set()
+v0_models: Set = set()
+morph_models: Set = set()
+lambda_ai_models: Set = set()
+hyperbolic_models: Set = set()
+recraft_models: Set = set()
+cometapi_models: Set = set()
+oci_models: Set = set()
+vercel_ai_gateway_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -580,166 +584,170 @@ def add_known_models():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):
-            open_ai_chat_completion_models.append(key)
+            open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
-            open_ai_text_completion_models.append(key)
+            open_ai_text_completion_models.add(key)
         elif value.get("litellm_provider") == "azure_text":
-            azure_text_models.append(key)
+            azure_text_models.add(key)
         elif value.get("litellm_provider") == "cohere":
-            cohere_models.append(key)
+            cohere_models.add(key)
         elif value.get("litellm_provider") == "cohere_chat":
-            cohere_chat_models.append(key)
+            cohere_chat_models.add(key)
         elif value.get("litellm_provider") == "mistral":
-            mistral_chat_models.append(key)
+            mistral_chat_models.add(key)
         elif value.get("litellm_provider") == "anthropic":
-            anthropic_models.append(key)
+            anthropic_models.add(key)
         elif value.get("litellm_provider") == "empower":
-            empower_models.append(key)
+            empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
-            openrouter_models.append(key)
+            openrouter_models.add(key)
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
-            datarobot_models.append(key)
+            datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
-            vertex_text_models.append(key)
+            vertex_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-text-models":
-            vertex_code_text_models.append(key)
+            vertex_code_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-language-models":
-            vertex_language_models.append(key)
+            vertex_language_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-vision-models":
-            vertex_vision_models.append(key)
+            vertex_vision_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-chat-models":
-            vertex_chat_models.append(key)
+            vertex_chat_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
-            vertex_code_chat_models.append(key)
+            vertex_code_chat_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-embedding-models":
-            vertex_embedding_models.append(key)
+            vertex_embedding_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
             key = key.replace("vertex_ai/", "")
-            vertex_anthropic_models.append(key)
+            vertex_anthropic_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-llama_models":
             key = key.replace("vertex_ai/", "")
-            vertex_llama3_models.append(key)
+            vertex_llama3_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-deepseek_models":
             key = key.replace("vertex_ai/", "")
-            vertex_deepseek_models.append(key)
+            vertex_deepseek_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-mistral_models":
             key = key.replace("vertex_ai/", "")
-            vertex_mistral_models.append(key)
+            vertex_mistral_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-ai21_models":
             key = key.replace("vertex_ai/", "")
-            vertex_ai_ai21_models.append(key)
+            vertex_ai_ai21_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-image-models":
             key = key.replace("vertex_ai/", "")
-            vertex_ai_image_models.append(key)
+            vertex_ai_image_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
-                ai21_chat_models.append(key)
+                ai21_chat_models.add(key)
             else:
-                ai21_models.append(key)
+                ai21_models.add(key)
         elif value.get("litellm_provider") == "nlp_cloud":
-            nlp_cloud_models.append(key)
+            nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
-            aleph_alpha_models.append(key)
+            aleph_alpha_models.add(key)
         elif value.get(
             "litellm_provider"
         ) == "bedrock" and not is_bedrock_pricing_only_model(key):
-            bedrock_models.append(key)
+            bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":
-            bedrock_converse_models.append(key)
+            bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
-            deepinfra_models.append(key)
+            deepinfra_models.add(key)
         elif value.get("litellm_provider") == "perplexity":
-            perplexity_models.append(key)
+            perplexity_models.add(key)
         elif value.get("litellm_provider") == "watsonx":
-            watsonx_models.append(key)
+            watsonx_models.add(key)
         elif value.get("litellm_provider") == "gemini":
-            gemini_models.append(key)
+            gemini_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
-                fireworks_ai_models.append(key)
+                fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
-                fireworks_ai_embedding_models.append(key)
+                fireworks_ai_embedding_models.add(key)
         elif value.get("litellm_provider") == "text-completion-codestral":
-            text_completion_codestral_models.append(key)
+            text_completion_codestral_models.add(key)
         elif value.get("litellm_provider") == "xai":
-            xai_models.append(key)
+            xai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
-            deepseek_models.append(key)
+            deepseek_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
-            llama_models.append(key)
+            llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
-            nscale_models.append(key)
+            nscale_models.add(key)
         elif value.get("litellm_provider") == "azure_ai":
-            azure_ai_models.append(key)
+            azure_ai_models.add(key)
         elif value.get("litellm_provider") == "voyage":
-            voyage_models.append(key)
+            voyage_models.add(key)
         elif value.get("litellm_provider") == "infinity":
-            infinity_models.append(key)
+            infinity_models.add(key)
         elif value.get("litellm_provider") == "databricks":
-            databricks_models.append(key)
+            databricks_models.add(key)
         elif value.get("litellm_provider") == "cloudflare":
-            cloudflare_models.append(key)
+            cloudflare_models.add(key)
         elif value.get("litellm_provider") == "codestral":
-            codestral_models.append(key)
+            codestral_models.add(key)
         elif value.get("litellm_provider") == "friendliai":
-            friendliai_models.append(key)
+            friendliai_models.add(key)
         elif value.get("litellm_provider") == "palm":
-            palm_models.append(key)
+            palm_models.add(key)
         elif value.get("litellm_provider") == "groq":
-            groq_models.append(key)
+            groq_models.add(key)
         elif value.get("litellm_provider") == "azure":
-            azure_models.append(key)
+            azure_models.add(key)
         elif value.get("litellm_provider") == "anyscale":
-            anyscale_models.append(key)
+            anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
-            cerebras_models.append(key)
+            cerebras_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
-            galadriel_models.append(key)
+            galadriel_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
-            sambanova_models.append(key)
+            sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
-            sambanova_embedding_models.append(key)
+            sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
-            novita_models.append(key)
+            novita_models.add(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
-            nebius_models.append(key)
+            nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
-            nebius_embedding_models.append(key)
+            nebius_embedding_models.add(key)
+        elif value.get("litellm_provider") == "aiml":
+            aiml_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
-            assemblyai_models.append(key)
+            assemblyai_models.add(key)
         elif value.get("litellm_provider") == "jina_ai":
-            jina_ai_models.append(key)
+            jina_ai_models.add(key)
         elif value.get("litellm_provider") == "snowflake":
-            snowflake_models.append(key)
+            snowflake_models.add(key)
         elif value.get("litellm_provider") == "gradient_ai":
-            gradient_ai_models.append(key)
+            gradient_ai_models.add(key)
         elif value.get("litellm_provider") == "featherless_ai":
-            featherless_ai_models.append(key)
+            featherless_ai_models.add(key)
         elif value.get("litellm_provider") == "deepgram":
-            deepgram_models.append(key)
+            deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
-            elevenlabs_models.append(key)
+            elevenlabs_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
-            dashscope_models.append(key)
+            dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
-            moonshot_models.append(key)
+            moonshot_models.add(key)
         elif value.get("litellm_provider") == "v0":
-            v0_models.append(key)
+            v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
-            morph_models.append(key)
+            morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
-            lambda_ai_models.append(key)
+            lambda_ai_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
-            hyperbolic_models.append(key)
+            hyperbolic_models.add(key)
         elif value.get("litellm_provider") == "recraft":
-            recraft_models.append(key)
+            recraft_models.add(key)
         elif value.get("litellm_provider") == "cometapi":
-            cometapi_models.append(key)
+            cometapi_models.add(key)
         elif value.get("litellm_provider") == "oci":
-            oci_models.append(key)
+            oci_models.add(key)
 
 
 add_known_models()
@@ -769,68 +777,69 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
-model_list = (
+model_list = list(
     open_ai_chat_completion_models
-    + open_ai_text_completion_models
-    + cohere_models
-    + cohere_chat_models
-    + anthropic_models
-    + replicate_models
-    + openrouter_models
-    + datarobot_models
-    + huggingface_models
-    + vertex_chat_models
-    + vertex_text_models
-    + ai21_models
-    + ai21_chat_models
-    + together_ai_models
-    + baseten_models
-    + aleph_alpha_models
-    + nlp_cloud_models
-    + ollama_models
-    + bedrock_models
-    + deepinfra_models
-    + perplexity_models
-    + maritalk_models
-    + vertex_language_models
-    + watsonx_models
-    + gemini_models
-    + text_completion_codestral_models
-    + xai_models
-    + deepseek_models
-    + azure_ai_models
-    + voyage_models
-    + infinity_models
-    + databricks_models
-    + cloudflare_models
-    + codestral_models
-    + friendliai_models
-    + palm_models
-    + groq_models
-    + azure_models
-    + anyscale_models
-    + cerebras_models
-    + galadriel_models
-    + sambanova_models
-    + azure_text_models
-    + novita_models
-    + assemblyai_models
-    + jina_ai_models
-    + snowflake_models
-    + gradient_ai_models
-    + llama_models
-    + featherless_ai_models
-    + nscale_models
-    + deepgram_models
-    + elevenlabs_models
-    + dashscope_models
-    + moonshot_models
-    + v0_models
-    + morph_models
-    + lambda_ai_models
-    + recraft_models
-    + cometapi_models
-    + oci_models
+    | open_ai_text_completion_models
+    | cohere_models
+    | cohere_chat_models
+    | anthropic_models
+    | set(replicate_models)
+    | openrouter_models
+    | datarobot_models
+    | set(huggingface_models)
+    | vertex_chat_models
+    | vertex_text_models
+    | ai21_models
+    | ai21_chat_models
+    | set(together_ai_models)
+    | set(baseten_models)
+    | aleph_alpha_models
+    | nlp_cloud_models
+    | set(ollama_models)
+    | bedrock_models
+    | deepinfra_models
+    | perplexity_models
+    | set(maritalk_models)
+    | vertex_language_models
+    | watsonx_models
+    | gemini_models
+    | text_completion_codestral_models
+    | xai_models
+    | deepseek_models
+    | azure_ai_models
+    | voyage_models
+    | infinity_models
+    | databricks_models
+    | cloudflare_models
+    | codestral_models
+    | friendliai_models
+    | palm_models
+    | groq_models
+    | azure_models
+    | anyscale_models
+    | cerebras_models
+    | galadriel_models
+    | sambanova_models
+    | azure_text_models
+    | novita_models
+    | assemblyai_models
+    | jina_ai_models
+    | snowflake_models
+    | gradient_ai_models
+    | llama_models
+    | featherless_ai_models
+    | nscale_models
+    | deepgram_models
+    | elevenlabs_models
+    | dashscope_models
+    | moonshot_models
+    | v0_models
+    | morph_models
+    | lambda_ai_models
+    | recraft_models
+    | cometapi_models
+    | oci_models
+    | vercel_ai_gateway_models
 )
 
 model_list_set = set(model_list)
@@ -839,9 +848,9 @@ provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
 
 
 models_by_provider: dict = {
-    "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
+    "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
     "text-completion-openai": open_ai_text_completion_models,
-    "cohere": cohere_models + cohere_chat_models,
+    "cohere": cohere_models | cohere_chat_models,
     "cohere_chat": cohere_chat_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
@@ -849,15 +858,11 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models
-    + vertex_text_models
-    + vertex_anthropic_models
-    + vertex_vision_models
-    + vertex_language_models
-    + vertex_deepseek_models,
+    "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
     "ai21": ai21_models,
-    "bedrock": bedrock_models + bedrock_converse_models,
+    "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
     "ollama_chat": ollama_models,
@@ -866,7 +871,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models + fireworks_ai_embedding_models,
+    "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
     "xai": xai_models,
@@ -882,14 +887,15 @@ models_by_provider: dict = {
     "friendliai": friendliai_models,
     "palm": palm_models,
     "groq": groq_models,
-    "azure": azure_models + azure_text_models,
+    "azure": azure_models | azure_text_models,
     "azure_text": azure_text_models,
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
-    "sambanova": sambanova_models + sambanova_embedding_models,
+    "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
-    "nebius": nebius_models + nebius_embedding_models,
+    "nebius": nebius_models | nebius_embedding_models,
+    "aiml": aiml_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -936,12 +942,12 @@ longer_context_model_fallback_dict: dict = {
 
 all_embedding_models = (
     open_ai_embedding_models
-    + cohere_embedding_models
-    + bedrock_embedding_models
-    + vertex_embedding_models
-    + fireworks_ai_embedding_models
-    + nebius_embedding_models
-    + sambanova_embedding_models
+    | set(cohere_embedding_models)
+    | set(bedrock_embedding_models)
+    | vertex_embedding_models
+    | fireworks_ai_embedding_models
+    | nebius_embedding_models
+    | sambanova_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -1151,12 +1157,15 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import (
+    AzureOpenAIOSeriesResponsesAPIConfig,
+)
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
@@ -1164,6 +1173,7 @@ from .llms.openai.chat.o_series_transformation import (
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
+
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
@@ -1194,6 +1204,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
+from .llms.baseten.chat import BasetenConfig
 from .llms.sambanova.chat import SambanovaConfig
 from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
@@ -1209,6 +1220,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
@@ -1241,6 +1253,7 @@ from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1272,7 +1285,6 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
-from .vector_stores import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
