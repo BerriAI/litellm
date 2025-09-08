@@ -1,0 +1,89 @@
+name: LLM Translation Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_candidate_tag:
+        description: 'Release candidate tag/version'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*-rc*'  # Triggers on release candidate tags like v1.0.0-rc1
+  
+jobs:
+  run-llm-translation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_candidate_tag || github.ref }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+      
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pypoetry
+            .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+      
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
+          poetry run pip install pytest-xdist pytest-timeout
+      
+      - name: Create test results directory
+        run: mkdir -p test-results
+      
+      - name: Run LLM Translation Tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
+          AZURE_API_BASE: ${{ secrets.AZURE_API_BASE }}
+          AZURE_API_VERSION: ${{ secrets.AZURE_API_VERSION }}
+          # Add other API keys as needed
+        run: |
+          python .github/workflows/run_llm_translation_tests.py \
+            --tag "${{ github.event.inputs.release_candidate_tag || github.ref_name }}" \
+            --commit "${{ github.sha }}" \
+            || true  # Continue even if tests fail
+      
+      - name: Display test summary
+        if: always()
+        run: |
+          if [ -f "test-results/llm_translation_report.md" ]; then
+            echo "Test report generated successfully!"
+            echo "Artifact will contain:"
+            echo "- test-results/junit.xml (JUnit XML results)"
+            echo "- test-results/llm_translation_report.md (Beautiful markdown report)"
+          else
+            echo "Warning: Test report was not generated"
+          fi
+      
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LLM-Translation-Artifact-${{ github.event.inputs.release_candidate_tag || github.ref_name }}
+          path: test-results/
+          retention-days: 30

@@ -230,6 +230,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
+            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                data = litellm.AzureOpenAIGPT5Config().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers or {},
+                )
             else:
                 data = litellm.AzureOpenAIConfig().transform_request(
                     model=model,
@@ -771,10 +779,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            error_text = str(e)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+                error_text = error_response.text
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=error_text, headers=error_headers
             )
 
     async def make_async_azure_httpx_request(

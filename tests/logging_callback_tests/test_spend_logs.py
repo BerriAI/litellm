@@ -25,7 +25,7 @@ from typing import Optional
 import pytest
 
 import litellm
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload, _sanitize_request_body_for_spend_logs_payload
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 
 
@@ -396,3 +396,91 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     payload_disabled: SpendLogsPayload = get_logging_payload(**input_args)
     assert payload_disabled["messages"] == "{}"
     assert payload_disabled["response"] == "{}"
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, LITELLM_TRUNCATED_PAYLOAD_FIELD
+    
+    # Create a large string that exceeds the threshold
+    large_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": large_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+    assert len(truncated_content) > MAX_STRING_LENGTH_PROMPT_IN_DB  # includes truncation message
+    assert truncated_content.startswith("x" * MAX_STRING_LENGTH_PROMPT_IN_DB)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "500 chars" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+    
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": small_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "500")
+    
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+    
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_request_body_for_spend_logs_payload
+    
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 500
+    
+    # Test truncation with the custom value
+    large_content = "y" * 750  # 250 chars over the custom limit
+    
+    request_body = {
+        "messages": [
+            {"role": "user", "content": large_content}
+        ],
+        "model": "gpt-4"
+    }
+    
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    
+    # Verify truncation occurred at the custom threshold
+    truncated_content = sanitized["messages"][0]["content"] 
+    assert truncated_content.startswith("y" * 500)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "250 chars" in truncated_content

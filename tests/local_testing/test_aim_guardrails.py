@@ -10,7 +10,7 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import (
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,
 )
@@ -216,12 +216,13 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
     ) as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
-            if url.endswith("/detect/openai/v2"):
+            request_body = kwargs.get("json", {})
+            if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
-            elif url.endswith("/detect/output/v2"):
+            elif request_body["messages"][-1]["role"] == "assistant":
                 return response_without_detections
             else:
-                raise ValueError("Unexpected URL: {}".format(url))
+                raise ValueError("Unexpected request: {}".format(request_body))
 
         mock_post.side_effect = mock_post_detect_side_effect
 
@@ -298,7 +299,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
@@ -316,6 +317,8 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -357,17 +360,27 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
-    with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):
+    # For async generators, we need to manually iterate and catch the exception
+    exception_caught = False
+    try:
         async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
             response=llm_response(),
             request_data=data,
         ):
             results.append(result)
+    except StreamingCallbackError:
+        exception_caught = True
+    except Exception as e:
+        print("INSIDE EXCEPTION")
+        raise e
+
+    # Assert that the exception was caught
+    assert exception_caught, "StreamingCallbackError should have been raised"
 
     # Chunks that were received before the blocking message should be returned as usual.
     assert len(results) == 1

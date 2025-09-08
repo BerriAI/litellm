@@ -9,7 +9,7 @@ import {
 } from "antd";
 import { modelDeleteCall } from "./networking";
 import { TrashIcon } from "@heroicons/react/outline";
-
+import NotificationsManager from "./molecules/notifications_manager";
 interface DeleteModelProps {
     modelID: string;
     accessToken: string;
@@ -25,12 +25,12 @@ const DeleteModelButton: React.FC<DeleteModelProps> = ({
 
     const handleDelete = async () => {
         try {
-            message.info("Making API Call");
+            NotificationsManager.info("Making API Call");
             setIsModalVisible(true);
             const response = await modelDeleteCall(accessToken, modelID);
 
             console.log("model delete Response:", response);
-            message.success(`Model ${modelID} deleted successfully`);
+            NotificationsManager.success(`Model ${modelID} deleted successfully`);
             setIsModalVisible(false);
             callback && setTimeout(callback, 4000) //added timeout  of 4 seconds as deleted model is taking time to reflect in get models
         } catch (error) {

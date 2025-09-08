@@ -19,6 +19,7 @@ LiteLLM supports the following OIDC identity providers:
 | CircleCI v2              | `circleci_v2`| No               |
 | GitHub Actions           | `github`     | Yes              |
 | Azure Kubernetes Service | `azure`      | No               |
+| Azure AD                 | `azure`      | Yes              |
 | File                     | `file`       | No               |
 | Environment Variable     | `env`        | No               |
 | Environment Path         | `env_path`   | No               |
@@ -261,3 +262,15 @@ The custom role below is the recommended minimum permissions for the Azure appli
 _Note: Your UUIDs will be different._
 
 Please contact us for paid enterprise support if you need help setting up Azure AD applications.
+
+### Azure AD -> Amazon Bedrock
+```yaml
+model list:
+  - model_name: aws/claude-3-5-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      aws_region_name: "eu-central-1"
+      aws_role_name: "arn:aws:iam::12345678:role/bedrock-role"
+      aws_web_identity_token: "oidc/azure/api://123-456-789-9d04"
+      aws_session_name: "litellm-session"
+```

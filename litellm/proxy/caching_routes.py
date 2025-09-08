@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -159,6 +159,23 @@ async def cache_delete(request: Request):
         )
 
 
+def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
+    """
+    Helper function to safely get Redis client list information.
+
+    Returns:
+        tuple: (client_list, num_clients) where num_clients is -1 if CLIENT LIST is unavailable
+    """
+    try:
+        client_list = cache_instance.client_list()
+        return client_list, len(client_list)
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"CLIENT LIST command failed (likely restricted on managed Redis): {str(e)}"
+        )
+        return ["CLIENT LIST command not available on this Redis instance"], -1
+
+
 @router.get(
     "/redis/info",
     dependencies=[Depends(user_api_key_auth)],
@@ -172,22 +189,27 @@ async def cache_redis_info():
             raise HTTPException(
                 status_code=503, detail="Cache not initialized. litellm.cache is None"
             )
-        if litellm.cache.type == "redis" and isinstance(
-            litellm.cache.cache, RedisCache
+
+        if not (
+            litellm.cache.type == "redis"
+            and isinstance(litellm.cache.cache, RedisCache)
         ):
-            client_list = litellm.cache.cache.client_list()
-            redis_info = litellm.cache.cache.info()
-            num_clients = len(client_list)
-            return {
-                "num_clients": num_clients,
-                "clients": client_list,
-                "info": redis_info,
-            }
-        else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Cache type {litellm.cache.type} does not support flushing",
+                detail=f"Cache type {litellm.cache.type} does not support redis info",
             )
+
+        # Get client information (handles CLIENT LIST restrictions gracefully)
+        client_list, num_clients = _get_redis_client_info(litellm.cache.cache)
+
+        # Get Redis server information
+        redis_info = litellm.cache.cache.info()
+
+        return {
+            "num_clients": num_clients,
+            "clients": client_list,
+            "info": redis_info,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=503,

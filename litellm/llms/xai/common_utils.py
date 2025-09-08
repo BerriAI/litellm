@@ -6,9 +6,21 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class XAIModelInfo(BaseLLMModelInfo):
+    def get_provider_info(
+        self,
+        model: str,
+    ) -> Optional[ProviderSpecificModelInfo]:
+        """
+        Default values all models of this provider support.
+        """
+        return {
+            "supports_web_search": True,
+        }
+
     def validate_environment(
         self,
         headers: dict,

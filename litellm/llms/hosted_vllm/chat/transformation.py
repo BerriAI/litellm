@@ -21,6 +21,11 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        params = super().get_supported_openai_params(model)
+        params.append("reasoning_effort")
+        return params
+
     def map_openai_params(
         self,
         non_default_params: dict,

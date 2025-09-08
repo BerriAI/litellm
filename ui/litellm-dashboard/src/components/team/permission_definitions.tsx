@@ -10,6 +10,7 @@ export interface PermissionInfo {
  */
 export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   '/key/generate': 'Member can generate a virtual key for this team',
+  '/key/service-account/generate': 'Member can generate a service account key (not belonging to any user) for this team',
   '/key/update': 'Member can update a virtual key belonging to this team',
   '/key/delete': 'Member can delete a virtual key belonging to this team',
   '/key/info': 'Member can get info about a virtual key belonging to this team',

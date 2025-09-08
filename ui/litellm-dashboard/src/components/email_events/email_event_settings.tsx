@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, Text, Grid, Button } from "@tremor/react";
-import { Typography, message, Divider, Spin, Checkbox } from "antd";
+import { Typography, Divider, Spin, Checkbox } from "antd";
+import NotificationsManager from "../molecules/notifications_manager";
 import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";
 import { EmailEvent } from "../../types";
 import { EmailEventSetting } from "./types";
@@ -31,7 +32,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({
       setEventSettings(response.settings);
     } catch (error) {
       console.error("Failed to fetch email event settings:", error);
-      message.error("Failed to fetch email event settings");
+      NotificationsManager.fromBackend(error);
     } finally {
       setLoading(false);
     }
@@ -49,10 +50,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({
 
     try {
       await updateEmailEventSettings(accessToken, { settings: eventSettings });
-      message.success("Email event settings updated successfully");
+      NotificationsManager.success("Email event settings updated successfully");
     } catch (error) {
       console.error("Failed to update email event settings:", error);
-      message.error("Failed to update email event settings");
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -61,12 +62,12 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({
 
     try {
       await resetEmailEventSettings(accessToken);
-      message.success("Email event settings reset to defaults");
+      NotificationsManager.success("Email event settings reset to defaults");
       // Refresh settings after reset
       fetchEventSettings();
     } catch (error) {
       console.error("Failed to reset email event settings:", error);
-      message.error("Failed to reset email event settings");
+      NotificationsManager.fromBackend(error);
     }
   };
 

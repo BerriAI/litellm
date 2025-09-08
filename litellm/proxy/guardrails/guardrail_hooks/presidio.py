@@ -69,6 +69,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
         pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
+        presidio_language: Optional[str] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -83,6 +84,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
             pii_entities_config or {}
         )
+        self.presidio_language = presidio_language or "en"
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -161,7 +163,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
             text=text,
-            language="en",
+            language=self.presidio_language,
         )
         ##################################################################
         ###### Check if user has configured any params for this guardrail
@@ -334,6 +336,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     presidio_config=presidio_config,
                     request_data=request_data,
                 )
+
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 ####################################################
@@ -400,10 +403,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if call_type in [
                 LitellmCallTypes.completion.value,
                 LitellmCallTypes.acompletion.value,
-            ]:
+            ] or call_type == "mcp_call":
                 messages = data["messages"]
                 tasks = []
-
                 for m in messages:
                     content = m.get("content", None)
                     if content is None:

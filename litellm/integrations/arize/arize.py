@@ -12,6 +12,7 @@ from litellm.integrations.arize import _utils
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
+from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -102,3 +103,41 @@ class ArizeLogger(OpenTelemetry):
     ):
         """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
         pass
+    
+
+    def construct_dynamic_otel_headers(
+        self, 
+        standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[dict]:
+        """
+        Construct dynamic Arize headers from standard callback dynamic params
+
+        This is used for team/key based logging.
+
+        Returns:
+            dict: A dictionary of dynamic Arize headers
+        """
+        dynamic_headers = {}
+
+        #########################################################
+        # `arize-space-id` handling
+        # the suggested param is `arize_space_key`
+        #########################################################
+        if standard_callback_dynamic_params.get("arize_space_id"):
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
+                "arize_space_id"
+            )
+        if standard_callback_dynamic_params.get("arize_space_key"):
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
+                "arize_space_key"
+            )
+        
+        #########################################################
+        # `api_key` handling
+        #########################################################
+        if standard_callback_dynamic_params.get("arize_api_key"):
+            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
+                "arize_api_key"
+            )
+        
+        return dynamic_headers

@@ -47,6 +47,11 @@ class BaseLLMAIOHTTPHandler:
             self.client_session = aiohttp.ClientSession()
             return self.client_session
 
+    async def close(self):
+        """Close the aiohttp client session if it exists."""
+        if self.client_session and not self.client_session.closed:
+            await self.client_session.close()
+
     async def _make_common_async_call(
         self,
         async_client_session: Optional[ClientSession],

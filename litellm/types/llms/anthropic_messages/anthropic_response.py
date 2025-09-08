@@ -2,6 +2,11 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from typing_extensions import TypeAlias
 
+from litellm.types.llms.anthropic import (
+    AnthropicResponseContentBlockText,
+    AnthropicResponseContentBlockToolUse,
+)
+
 
 class AnthropicResponseTextBlock(TypedDict, total=False):
     """
@@ -71,7 +76,15 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     Anthropic Messages API Response: https://docs.anthropic.com/en/api/messages
     """
 
-    content: Optional[List[AnthropicResponseContentBlock]]
+    content: Optional[
+        List[
+            Union[
+                AnthropicResponseContentBlock,
+                AnthropicResponseContentBlockText,
+                AnthropicResponseContentBlockToolUse,
+            ]
+        ]
+    ]
     id: str
     model: Optional[str]  # This represents the Model type from Anthropic
     role: Optional[Literal["assistant"]]

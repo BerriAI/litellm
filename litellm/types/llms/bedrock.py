@@ -36,6 +36,16 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
+BedrockVideoTypes = Literal[
+    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
+]
+
+
+class VideoBlock(TypedDict):
+    format: Union[BedrockVideoTypes, str]
+    source: SourceBlock
+
+
 BedrockDocumentTypes = Literal[
     "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
 ]
@@ -85,6 +95,7 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    video: VideoBlock
     document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
@@ -466,12 +477,35 @@ class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
     images: List[str]
 
 
+class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Inpainting API
+    """
+
+    text: str
+    maskImage: str
+    inputImage: str
+    negativeText: str
+
+
+class AmazonNovaCanvasInpaintingRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Inpainting API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["INPAINTING"]
+    inpaintingParams: AmazonNovaCanvasInpaintingParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
     AWSPreparedRequest = Any
-
-from pydantic import BaseModel
 
 
 class BedrockPreparedRequest(TypedDict):
@@ -539,3 +573,84 @@ class AmazonDeepSeekR1StreamingResponse(TypedDict):
     generation_token_count: int
     stop_reason: Optional[str]
     prompt_token_count: int
+
+
+################ Bedrock Batch Types #################
+
+
+class BedrockS3InputDataConfig(TypedDict):
+    """S3 input data configuration for Bedrock batch jobs."""
+    s3Uri: str
+
+
+class BedrockInputDataConfig(TypedDict):
+    """Input data configuration for Bedrock batch jobs."""
+    s3InputDataConfig: BedrockS3InputDataConfig
+
+
+class BedrockS3OutputDataConfig(TypedDict):
+    """S3 output data configuration for Bedrock batch jobs."""
+    s3Uri: str
+
+
+class BedrockOutputDataConfig(TypedDict):
+    """Output data configuration for Bedrock batch jobs."""
+    s3OutputDataConfig: BedrockS3OutputDataConfig
+
+
+class BedrockCreateBatchRequest(TypedDict, total=False):
+    """
+    Request structure for creating a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+    jobName: str
+    roleArn: str
+    modelId: str
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]
+    tags: Optional[List[dict]]
+
+
+BedrockBatchJobStatus = Literal[
+    "Submitted",
+    "InProgress", 
+    "Completed",
+    "Failed",
+    "Stopping",
+    "Stopped"
+]
+
+
+class BedrockCreateBatchResponse(TypedDict):
+    """
+    Response structure from creating a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+    jobArn: str
+    jobName: str
+    status: BedrockBatchJobStatus
+
+
+class BedrockGetBatchResponse(TypedDict, total=False):
+    """
+    Response structure from getting a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetModelInvocationJob.html
+    """
+    jobArn: str
+    jobName: str
+    modelId: str
+    roleArn: str
+    status: BedrockBatchJobStatus
+    message: Optional[str]
+    submitTime: Optional[str]
+    lastModifiedTime: Optional[str]
+    endTime: Optional[str]
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]

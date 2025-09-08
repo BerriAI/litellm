@@ -1,0 +1,13 @@
+---
+model: gpt-4
+temperature: 0.7
+max_tokens: 150
+input:
+  schema:
+    user_message: string
+    system_context?: string
+---
+
+{% if system_context %}System: {{system_context}}
+
+{% endif %}User: {{user_message}}

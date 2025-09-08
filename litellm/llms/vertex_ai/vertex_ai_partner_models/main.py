@@ -7,19 +7,13 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..vertex_llm_base import VertexBase
 
 base_llm_http_handler = BaseLLMHTTPHandler()
-
-
-class VertexPartnerProvider(str, Enum):
-    mistralai = "mistralai"
-    llama = "llama"
-    ai21 = "ai21"
-    claude = "claude"
 
 
 class VertexAIError(Exception):
@@ -34,38 +28,54 @@ class VertexAIError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
-
-def create_vertex_url(
-    vertex_location: str,
-    vertex_project: str,
-    partner: VertexPartnerProvider,
-    stream: Optional[bool],
-    model: str,
-    api_base: Optional[str] = None,
-) -> str:
-    """Return the base url for the vertex partner models"""
-    if partner == VertexPartnerProvider.llama:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
-    elif partner == VertexPartnerProvider.mistralai:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.ai21:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.claude:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+class PartnerModelPrefixes(str, Enum):
+    META_PREFIX = "meta/"
+    DEEPSEEK_PREFIX = "deepseek-ai"
+    MISTRAL_PREFIX = "mistral"
+    CODERESTAL_PREFIX = "codestral"
+    JAMBA_PREFIX = "jamba"
+    CLAUDE_PREFIX = "claude"
+    QWEN_PREFIX = "qwen"
+    GPT_OSS_PREFIX = "openai/gpt-oss-"
 
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
+
+    @staticmethod
+    def is_vertex_partner_model(model: str):
+        """
+        Check if the model string is a Vertex AI Partner Model
+        Only use this once you have confirmed that custom_llm_provider is vertex_ai
+
+        Returns:
+            bool: True if the model string is a Vertex AI Partner Model, False otherwise
+        """
+        if (
+            model.startswith(PartnerModelPrefixes.META_PREFIX)
+            or model.startswith(PartnerModelPrefixes.DEEPSEEK_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MISTRAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CODERESTAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.JAMBA_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CLAUDE_PREFIX)
+            or model.startswith(PartnerModelPrefixes.QWEN_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GPT_OSS_PREFIX)
+        ):
+            return True
+        return False
+    
+    @staticmethod
+    def should_use_openai_handler(model: str):
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
+            "llama",
+            PartnerModelPrefixes.DEEPSEEK_PREFIX,
+            PartnerModelPrefixes.QWEN_PREFIX,
+            PartnerModelPrefixes.GPT_OSS_PREFIX,
+        ]
+        if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
+            return True
+        return False
 
     def completion(
         self,
@@ -130,7 +140,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model:
+            if self.should_use_openai_handler(model):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -138,28 +148,17 @@ class VertexAIPartnerModels(VertexBase):
                 partner = VertexPartnerProvider.ai21
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
+            else:
+                raise ValueError(f"Unknown partner model: {model}")
 
-            default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
-                vertex_project=vertex_project or project_id,
-                partner=partner,  # type: ignore
+            api_base = self.get_complete_vertex_url(
+                custom_api_base=api_base,
+                vertex_location=vertex_location,
+                vertex_project=vertex_project,
+                project_id=project_id,
+                partner=partner,
                 stream=stream,
                 model=model,
-            )
-
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
-                api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
             )
 
             if "codestral" in model or "mistral" in model:
@@ -217,7 +216,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,

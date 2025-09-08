@@ -5,6 +5,7 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -79,17 +80,49 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         request_dict = cast(Dict, request)
 
         #########################################################
-        # Separate images as `files` and send other parameters as `data`
+        # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _images = request_dict.get("image") or []
-        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
+        _image = request_dict.get("image")
+        _mask = request_dict.get("mask")
+        data_without_files = {
+            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
+        }
         files_list: List[Tuple[str, Any]] = []
-        for _image in _images:
-            if isinstance(_image, BufferedReader):
-                files_list.append(("image[]", (_image.name, _image, "image/png")))
-            else:
-                files_list.append(("image[]", (_image, "image/png")))
-        return data_without_images, files_list
+
+        # Handle image parameter
+        if _image is not None:
+            # Handle case where image can be a list (extract first image)
+            if isinstance(_image, list):
+                _image = _image[0] if _image else None
+
+            if _image is not None:
+                image_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                    _image
+                )
+                if isinstance(_image, BufferedReader):
+                    files_list.append(
+                        ("image", (_image.name, _image, image_content_type))
+                    )
+                else:
+                    files_list.append(
+                        ("image", ("image.png", _image, image_content_type))
+                    )
+
+        # Handle mask parameter if provided
+        if _mask is not None:
+            # Handle case where mask can be a list (extract first mask)
+            if isinstance(_mask, list):
+                _mask = _mask[0] if _mask else None
+
+            if _mask is not None:
+                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                    _mask
+                )
+                if isinstance(_mask, BufferedReader):
+                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
+                else:
+                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+        return data_without_files, files_list
 
     def transform_image_edit_response(
         self,
@@ -127,6 +160,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def get_complete_url(
         self,
+        model: str,
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:

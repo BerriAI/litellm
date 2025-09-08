@@ -12,8 +12,11 @@ All /budget management endpoints
 """
 
 #### BUDGET TABLE MANAGEMENT ####
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import jsonify_object
@@ -42,6 +45,7 @@ async def new_budget(
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
@@ -49,6 +53,12 @@ async def new_budget(
         raise HTTPException(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    # if no budget_reset_at date is set, but a budget_duration is given, then set budget_reset_at initially to the first completed duration interval in future
+    if budget_obj.budget_reset_at is None and budget_obj.budget_duration is not None:
+        budget_obj.budget_reset_at = datetime.utcnow() + timedelta(
+            seconds=duration_in_seconds(duration=budget_obj.budget_duration)
         )
 
     budget_obj_json = budget_obj.model_dump(exclude_none=True)
@@ -85,6 +95,7 @@ async def update_budget(
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
