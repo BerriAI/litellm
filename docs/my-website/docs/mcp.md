@@ -113,6 +113,7 @@ mcp_servers:
     transport: "http"
     description: "My custom MCP server"
     auth_type: "api_key"
+    auth_value: "abc123"
     spec_version: "2025-03-26"
 ```
 
@@ -128,8 +129,42 @@ mcp_servers:
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
-- **Auth Type**: Optional authentication type
-- **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
+- **Auth Type**: Optional authentication type. Supported values:
+
+  | Value | Header sent |
+  |-------|-------------|
+  | `api_key` | `X-API-Key: <auth_value>` |
+  | `bearer_token` | `Authorization: Bearer <auth_value>` |
+  | `basic` | `Authorization: Basic <auth_value>` |
+  | `authorization` | `Authorization: <auth_value>` |
+
+- **Spec Version**: Optional MCP specification version (defaults to `2025-06-18`)
+
+Examples for each auth type:
+
+```yaml title="MCP auth examples (config.yaml)" showLineNumbers
+mcp_servers:
+  api_key_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "api_key"
+    auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
+
+  bearer_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "abc123"        # headers={"Authorization": "Bearer abc123"}
+
+  basic_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "basic"
+    auth_value: "dXNlcjpwYXNz"  # headers={"Authorization": "Basic dXNlcjpwYXNz"}
+
+  custom_auth_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "authorization"
+    auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+```
+
 
 ### MCP Aliases
 
