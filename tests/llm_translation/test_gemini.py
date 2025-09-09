@@ -265,9 +265,11 @@ def test_gemini_image_generation():
     #########################################################
     # Important: Validate we did get an image in the response
     #########################################################
-    assert response.choices[0].message.image is not None
-    assert response.choices[0].message.image["url"] is not None
-    assert response.choices[0].message.image["url"].startswith("data:image/png;base64,")
+    assert response.choices[0].message.images is not None
+    assert len(response.choices[0].message.images) > 0
+    assert response.choices[0].message.images[0]["image_url"] is not None
+    assert response.choices[0].message.images[0]["image_url"]["url"] is not None
+    assert response.choices[0].message.images[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_gemini_thinking():
