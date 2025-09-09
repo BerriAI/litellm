@@ -5780,9 +5780,8 @@ async def ahealth_check(
                 input=input or ["test"],
             ),
             "audio_speech": lambda: litellm.aspeech(
-                **_filter_model_params(model_params),
+                **{**_filter_model_params(model_params), **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params) else {})},
                 input=prompt or "test",
-                voice="alloy",
             ),
             "audio_transcription": lambda: litellm.atranscription(
                 **_filter_model_params(model_params),
