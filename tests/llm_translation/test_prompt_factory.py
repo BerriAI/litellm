@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from typing import Union
+from typing import Union, List
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
+from litellm.types.llms.openai import AllMessageValues
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -472,6 +473,20 @@ def test_vertex_only_image_user_message():
         )
 
 
+def test_no_messages_yields_user_text():
+    """
+    Test that contents are not empty and have text when called without messages
+    This is to support blha blah
+    """
+    messages: List[AllMessageValues] = []
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    expected_output = [{"role": "user", "parts": [{"text": " "}]}]
+
+    assert contents == expected_output
+
+
 def test_convert_url():
     convert_url_to_base64("https://picsum.photos/id/237/200/300")
 
@@ -630,7 +645,6 @@ def test_azure_tool_call_invoke_helper():
 def test_ensure_alternating_roles(
     messages, expected_messages, user_continue_message, assistant_continue_message
 ):
-
     messages = get_completion_messages(
         messages=messages,
         assistant_continue_message=assistant_continue_message,
@@ -651,7 +665,7 @@ def test_alternating_roles_e2e():
     http_handler = HTTPHandler()
 
     with patch.object(http_handler, "post", new=MagicMock()) as mock_post:
-        try: 
+        try:
             response = litellm.completion(
                 **{
                     "model": "databricks/databricks-meta-llama-3-1-70b-instruct",
@@ -663,7 +677,10 @@ def test_alternating_roles_e2e():
                         },
                         {"role": "user", "content": "What is Databricks?"},
                         {"role": "user", "content": "What is Azure?"},
-                        {"role": "assistant", "content": "I don't know anyything, do you?"},
+                        {
+                            "role": "assistant",
+                            "content": "I don't know anyything, do you?",
+                        },
                         {"role": "assistant", "content": "I can't repeat sentences."},
                     ],
                     "user_continue_message": {
@@ -712,7 +729,7 @@ def test_alternating_roles_e2e():
                         "role": "user",
                         "content": "Ok",
                     },
-                ]
+                ],
             }
         )
 
