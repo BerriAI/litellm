@@ -325,6 +325,7 @@ def main():
         print("These logger.info() statements may log sensitive request/response data.")
         print("Consider changing them to logger.debug() or removing sensitive data.")
         print("This is critical for PII compliance and security.")
+        print("Please contact @ishaan-jaff for more details about this check. DO NOT VIOLATE THIS CHECK.")
         
         return 1  # Exit with error code
     else:
