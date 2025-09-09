@@ -1167,6 +1167,36 @@ _lazy_load_map = {
     "HyperbolicChatConfig": (".llms.hyperbolic.chat.transformation", "HyperbolicChatConfig"),
     "VercelAIGatewayConfig": (".llms.vercel_ai_gateway.chat.transformation", "VercelAIGatewayConfig"),
 
+
+    "BudgetManager": (".budget_manager", "BudgetManager"),
+    "run_server": (".proxy.proxy_cli", "run_server"),
+    "Router": (".router", "Router"),
+    "_arealtime": (".realtime_api.main", "_arealtime"),
+    "response_cost_calculator": (".cost_calculator", "response_cost_calculator"),
+    "cost_per_token": (".cost_calculator", "cost_per_token"),
+    "close_litellm_async_clients": (".llms.custom_httpx.async_client_cleanup", "close_litellm_async_clients"),
+
+    "AuthenticationError": (".exceptions", "AuthenticationError"),
+    "InvalidRequestError": (".exceptions", "InvalidRequestError"),
+    "BadRequestError": (".exceptions", "BadRequestError"),
+    "ImageFetchError": (".exceptions", "ImageFetchError"),
+    "NotFoundError": (".exceptions", "NotFoundError"),
+    "RateLimitError": (".exceptions", "RateLimitError"),
+    "ServiceUnavailableError": (".exceptions", "ServiceUnavailableError"),
+    "OpenAIError": (".exceptions", "OpenAIError"),
+    "ContextWindowExceededError": (".exceptions", "ContextWindowExceededError"),
+    "ContentPolicyViolationError": (".exceptions", "ContentPolicyViolationError"),
+    "BudgetExceededError": (".exceptions", "BudgetExceededError"),
+    "APIError": (".exceptions", "APIError"),
+    "Timeout": (".exceptions", "Timeout"),
+    "APIConnectionError": (".exceptions", "APIConnectionError"),
+    "UnsupportedParamsError": (".exceptions", "UnsupportedParamsError"),
+    "APIResponseValidationError": (".exceptions", "APIResponseValidationError"),
+    "UnprocessableEntityError": (".exceptions", "UnprocessableEntityError"),
+    "InternalServerError": (".exceptions", "InternalServerError"),
+    "JSONSchemaValidationError": (".exceptions", "JSONSchemaValidationError"),
+    "LITELLM_EXCEPTION_TYPES": (".exceptions", "LITELLM_EXCEPTION_TYPES"),
+    "MockException": (".exceptions", "MockException"),
 }
 from importlib import import_module
 from sys import modules
@@ -1187,99 +1217,9 @@ def __getattr__(name: str) -> Any:
         return attr
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-openAIGPTAudioConfig = OpenAIGPTAudioConfig()
-openAIGPT5Config = OpenAIGPT5Config()
-
-from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
-
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
-from .llms.cerebras.chat import CerebrasConfig
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
-from .llms.xai.common_utils import XAIModelInfo
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
-from .llms.azure.azure import (
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
-from .llms.llamafile.chat.transformation import LlamafileChatConfig
-from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
-from .llms.vllm.completion.transformation import VLLMConfig
-from .llms.deepseek.chat.transformation import DeepSeekChatConfig
-from .llms.lm_studio.chat.transformation import LMStudioChatConfig
-from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
-from .llms.nscale.chat.transformation import NscaleConfig
-from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
-from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
-from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
-from .llms.github_copilot.chat.transformation import GithubCopilotConfig
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
-from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    BadRequestError,
-    ImageFetchError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    BudgetExceededError,
-    APIError,
-    Timeout,
-    APIConnectionError,
-    UnsupportedParamsError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-    InternalServerError,
-    JSONSchemaValidationError,
-    LITELLM_EXCEPTION_TYPES,
-    MockException,
-)
-from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
+
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
