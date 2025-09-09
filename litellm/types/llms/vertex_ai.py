@@ -281,6 +281,7 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+    labels: dict[str, str]
     speechConfig: SpeechConfig
 
 
