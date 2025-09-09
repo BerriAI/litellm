@@ -421,7 +421,7 @@ def get_redis_async_client(
                 from redis.exceptions import AuthenticationError
                 raise AuthenticationError("Failed to generate GCP IAM access token")
         else:
-            verbose_logger.debug(f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account={gcp_service_account}")
+            verbose_logger.debug(f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}")
         
         new_startup_nodes: List[ClusterNode] = []
 
