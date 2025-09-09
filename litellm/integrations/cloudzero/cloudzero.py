@@ -146,7 +146,7 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.debug(f"CloudZero Logger: Transmitting {len(cbf_data)} records to CloudZero")
             streamer.send_batched(cbf_data, operation=operation)
             
-            verbose_logger.info(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
+            verbose_logger.debug(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
             
         except Exception as e:
             verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {str(e)}")
