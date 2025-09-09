@@ -171,17 +171,14 @@ def test_azure_extra_headers(input, call_type, header_value):
     "api_base, model, expected_endpoint",
     [
         (
-            os.getenv("AZURE_SWEDEN_API_BASE"),
+            "https://my-endpoint-sweden-berri992.openai.azure.com",
             "dall-e-3-test",
-            os.getenv("AZURE_SWEDEN_API_BASE")
-            + "/openai/deployments/dall-e-3-test/images/generations?api-version=2023-12-01-preview",
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/dall-e-3-test/images/generations?api-version=2023-12-01-preview",
         ),
         (
-            os.getenv("AZURE_SWEDEN_API_BASE")
-            + "/openai/deployments/my-custom-deployment",
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment",
             "dall-e-3",
-            os.getenv("AZURE_SWEDEN_API_BASE")
-            + "/openai/deployments/my-custom-deployment/images/generations?api-version=2023-12-01-preview",
+            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment/images/generations?api-version=2023-12-01-preview",
         ),
     ],
 )
@@ -261,7 +258,7 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
 
     client = AzureOpenAI(
         api_key="test-api-key",
-        base_url=os.getenv("AZURE_SWEDEN_API_BASE"),
+        base_url="https://my-endpoint-sweden-berri992.openai.azure.com",
         api_version="2023-12-01-preview",
     )
 
