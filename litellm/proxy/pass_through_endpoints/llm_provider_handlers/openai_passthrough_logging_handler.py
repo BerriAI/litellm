@@ -75,13 +75,20 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             from litellm.files.main import file_content
 
             # Retrieve the file content
-            file_content = file_content(
+            file_response = file_content(
                 file_id=output_file_id,
                 custom_llm_provider="openai",  # Passthrough batches are always OpenAI
             )
 
+            # Handle both sync and async responses
+            if hasattr(file_response, 'content'):
+                content = file_response.content
+            else:
+                # If it's a coroutine, we can't handle it in sync context
+                return None
+
             # Parse the file content as JSON Lines
-            file_content_dict = _get_file_content_as_dictionary(file_content.content)
+            file_content_dict = _get_file_content_as_dictionary(content)
 
             # Extract model from the first request
             if file_content_dict and len(file_content_dict) > 0:
@@ -179,7 +186,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
             and "/v1/images/generations" in parsed_url.path
         )
-    
+
     @staticmethod
     def is_openai_batch_route(url_route: str) -> bool:
         """Check if the URL route is an OpenAI batch endpoint (only creation)."""
@@ -195,7 +202,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             and parsed_url.path
             in ["/v1/batches", "/batches"]  # Only creation endpoints
         )
-    
+
     @staticmethod
     def is_openai_batch_create_route(url_route: str, request_method: str) -> bool:
         """Check if this is specifically a batch creation request (POST)."""

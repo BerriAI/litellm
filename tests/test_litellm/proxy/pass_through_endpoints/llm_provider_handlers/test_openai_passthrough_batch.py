@@ -17,50 +17,47 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 class TestOpenAIPassthroughBatch:
     """Test cases for OpenAI passthrough batch creation and tracking."""
 
-    @pytest.mark.asyncio
-    async def test_extract_model_from_batch_output(self):
+    def test_extract_model_from_batch_output(self):
         """Test model extraction from batch output file content."""
         # Mock file content with the format you provided
         mock_file_content = b'''{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
 {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}'''
 
-        with patch('litellm.files.main.afile_content') as mock_afile_content:
+        with patch('litellm.files.main.file_content') as mock_file_content_func:
             # Mock the file content response
             mock_response = Mock()
             mock_response.content = mock_file_content
-            mock_afile_content.return_value = mock_response
+            mock_file_content_func.return_value = mock_response
 
             # Test model extraction
-            model = await OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
+            model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
             
             assert model == "gpt-3.5-turbo-0125"
-            mock_afile_content.assert_called_once_with(
+            mock_file_content_func.assert_called_once_with(
                 file_id="file-123",
                 custom_llm_provider="openai"
             )
 
-    @pytest.mark.asyncio
-    async def test_extract_model_from_batch_output_no_model(self):
+    def test_extract_model_from_batch_output_no_model(self):
         """Test model extraction when no model is found in the file content."""
         # Mock file content without model field
         mock_file_content = b'''{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"messages": [{"role": "user", "content": "Hello world!"}]}}'''
 
-        with patch('litellm.files.main.afile_content') as mock_afile_content:
+        with patch('litellm.files.main.file_content') as mock_file_content_func:
             mock_response = Mock()
             mock_response.content = mock_file_content
-            mock_afile_content.return_value = mock_response
+            mock_file_content_func.return_value = mock_response
 
-            model = await OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
+            model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
             
             assert model is None
 
-    @pytest.mark.asyncio
-    async def test_extract_model_from_batch_output_error(self):
+    def test_extract_model_from_batch_output_error(self):
         """Test model extraction when file content retrieval fails."""
-        with patch('litellm.files.main.afile_content') as mock_afile_content:
-            mock_afile_content.side_effect = Exception("File not found")
+        with patch('litellm.files.main.file_content') as mock_file_content_func:
+            mock_file_content_func.side_effect = Exception("File not found")
 
-            model = await OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
+            model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_output("file-123")
             
             assert model is None
 

@@ -15,16 +15,15 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
 class TestOpenAIPassthroughBatchIntegration:
     """Integration tests for OpenAI passthrough batch functionality."""
 
-    @pytest.mark.asyncio
-    async def test_batch_creation_with_model_extraction(self):
+    def test_batch_creation_with_model_extraction(self):
         """Test batch creation with model extraction from completed batch."""
         # Mock file content with model information
         mock_file_content = b'''{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello world!"}]}}'''
 
-        with patch('litellm.files.main.afile_content') as mock_afile_content:
+        with patch('litellm.files.main.file_content') as mock_file_content_func:
             mock_response = Mock()
             mock_response.content = mock_file_content
-            mock_afile_content.return_value = mock_response
+            mock_file_content_func.return_value = mock_response
 
             # Test the handler with a completed batch
             handler = OpenAIPassthroughLoggingHandler()
@@ -51,7 +50,7 @@ class TestOpenAIPassthroughBatchIntegration:
             }
 
             # Test the handler
-            result = await handler.openai_passthrough_handler(
+            result = handler.openai_passthrough_handler(
                 httpx_response=Mock(),
                 response_body=response_body,
                 logging_obj=Mock(),
