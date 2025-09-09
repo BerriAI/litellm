@@ -28,6 +28,7 @@ IGNORE_FUNCTIONS = [
     "_remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,
+    "get_access_token",  # max depth set.,
 ]
 
 
