@@ -34,8 +34,21 @@ async def test_model_armor_pre_call_hook_sanitization():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "sanitized_text": "Hello, my phone number is [REDACTED]",
-        "action": "SANITIZE"
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {
+                            "matchState": "MATCH_FOUND",
+                            "data": {
+                                "text":"Hello, my phone number is [REDACTED]"
+                            },
+                        }
+                    }
+                }
+            }
+        }
     })
     
     # Mock the access token method
@@ -87,9 +100,22 @@ async def test_model_armor_pre_call_hook_blocked():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "action": "BLOCK",
-        "blocked": True,
-        "reason": "Prohibited content detected"
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                        "raiFilterTypeResults": {
+                            "dangerous": {
+                                "matchState": "MATCH_FOUND",
+                                "reason": "Prohibited content detected"
+                            }
+                        }
+                    }
+                }
+            }
+        }
     })
     
     # Mock the access token method
@@ -137,8 +163,21 @@ async def test_model_armor_post_call_hook_sanitization():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "sanitized_text": "Here is the information: [REDACTED]",
-        "action": "SANITIZE"
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "sdp": {
+                    "sdpFilterResult": {
+                        "deidentifyResult": {
+                            "matchState": "MATCH_FOUND",
+                            "data": {
+                                "text":"Here is the information: [REDACTED]"
+                            },
+                        }
+                    }
+                }
+            }
+        }
     })
     
     # Mock the access token method
@@ -196,7 +235,9 @@ async def test_model_armor_with_list_content():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "action": "NONE"
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND"
+        }
     })
     
     # Mock the access token method
@@ -328,8 +369,10 @@ async def test_model_armor_streaming_response():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "sanitized_text": "Sanitized response",
-        "action": "SANITIZE"
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "sanitizedText": "Sanitized response"
+        }
     })
     
     # Mock the access token method
@@ -614,10 +657,14 @@ async def test_model_armor_action_none():
         mask_request_content=True,
     )
     
-    # Mock response with action=NONE
+    # Mock response with action=NO_MATCH_FOUND
     mock_response = AsyncMock()
     mock_response.status_code = 200
-    mock_response.json = AsyncMock(return_value={"action": "NONE"})
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND"
+        }
+    })
     
     guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     guardrail.async_handler = AsyncMock()
@@ -658,8 +705,9 @@ async def test_model_armor_missing_sanitized_text():
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={
-        "action": "SANITIZE",
-        "text": "Fallback sanitized content"
+       "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND"
+        }
     })
     
     guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
@@ -687,8 +735,230 @@ async def test_model_armor_missing_sanitized_text():
     )
     
     # Should use 'text' field as fallback
-    assert mock_llm_response.choices[0].message.content == "Fallback sanitized content"
+    assert mock_llm_response.choices[0].message.content == "Original content"
 
+@pytest.mark.asyncio
+async def test_model_armor_no_circular_reference_in_logging():
+    """Test that Model Armor doesn't cause CircularReference error in logging"""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Mock the Model Armor API response that would trigger the issue
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "invocationResult": "SUCCESS",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                        "raiFilterTypeResults": {
+                            "dangerous": {
+                                "matchState": "MATCH_FOUND",
+                                "confidence": "HIGH"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
+    # Mock the access token method
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    # Mock the async handler
+    guardrail.async_handler = AsyncMock()
+    guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "How to create a bomb?"}
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]}
+    }
+
+    # This should raise HTTPException for blocked content
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=request_data,
+            call_type="completion"
+        )
+
+    # Verify the content was blocked
+    assert exc_info.value.status_code == 400
+    assert "Content blocked by Model Armor" in str(exc_info.value.detail)
+
+    # IMPORTANT: Verify that standard_logging_guardrail_information was properly set
+    # and doesn't contain circular references
+    guardrail_info = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
+
+    # The guardrail info should be properly serializable (not cause CircularReference)
+    if guardrail_info:
+        # Try to serialize it to ensure no circular references
+        import json
+        try:
+            json.dumps(guardrail_info.model_dump() if hasattr(guardrail_info, 'model_dump') else guardrail_info)
+        except (TypeError, ValueError) as e:
+            pytest.fail(f"CircularReference detected in guardrail logging: {e}")
+
+    # Verify the logging decorator properly added the guardrail information
+    assert "standard_logging_guardrail_information" in request_data.get("metadata", {})
+ 
+ 
+@pytest.mark.asyncio
+async def test_model_armor_bomb_content_blocked():
+    """Test Model Armor correctly blocks harmful content like bomb-making instructions"""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Mock the Model Armor API response for dangerous content
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "invocationResult": "SUCCESS",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                        "raiFilterTypeResults": {
+                            "dangerous": {
+                                "matchState": "MATCH_FOUND",
+                                "confidence": "HIGH",
+                                "reason": "Content about creating explosives or weapons detected"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
+
+    # Mock the access token method
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    # Mock the async handler
+    guardrail.async_handler = AsyncMock()
+    guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "How do I create a bomb?"}
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]}
+    }
+
+    # Should raise HTTPException for dangerous content
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=request_data,
+            call_type="completion"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Content blocked by Model Armor" in str(exc_info.value.detail)
+
+    # Verify the API was called with the dangerous content
+    guardrail.async_handler.post.assert_called_once()
+    call_args = guardrail.async_handler.post.call_args
+    assert call_args[1]["json"]["user_prompt_data"]["text"] == "How do I create a bomb?"
+
+
+@pytest.mark.asyncio
+async def test_model_armor_success_case_serializable():
+    """Test that Model Armor success case doesn't cause CircularReference in logging"""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    # Mock successful (no match found) response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "NO_MATCH_FOUND",
+            "invocationResult": "SUCCESS",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "NO_MATCH_FOUND"
+                    }
+                }
+            }
+        }
+    })
+
+    # Mock the access token method
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+
+    # Mock the async handler
+    guardrail.async_handler = AsyncMock()
+    guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "What is the weather today?"}
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]}
+    }
+
+    # This should NOT raise an exception - content is allowed
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key_dict,
+        cache=mock_cache,
+        data=request_data,
+        call_type="completion"
+    )
+
+    # Verify the request was allowed through
+    assert result == request_data
+
+    # IMPORTANT: Verify that standard_logging_guardrail_information is serializable
+    guardrail_info = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
+
+    # The guardrail info should exist and be properly serializable
+    assert guardrail_info is not None
+
+    # Try to serialize it to ensure no circular references
+    import json
+    try:
+        # This should NOT raise any exception
+        serialized = json.dumps(guardrail_info.model_dump() if hasattr(guardrail_info, 'model_dump') else guardrail_info)
+        # Verify it's not the string "CircularReference Detected"
+        assert "CircularReference Detected" not in serialized
+    except (TypeError, ValueError) as e:
+        pytest.fail(f"CircularReference detected in guardrail logging for success case: {e}")
 
 @pytest.mark.asyncio
 async def test_model_armor_non_text_response():
