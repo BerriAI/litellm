@@ -523,6 +523,8 @@ router_settings:
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
 | GUARDRAILS_AI_API_BASE | Base URL for Guardrails AI API
 | HEALTH_CHECK_TIMEOUT_SECONDS | Timeout in seconds for health checks. Default is 60
+| HEROKU_API_BASE | Base URL for Heroku API
+| HEROKU_API_KEY | API key for Heroku services
 | HF_API_BASE | Base URL for Hugging Face API
 | HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
 | HCP_VAULT_CLIENT_CERT | Path to client certificate for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
