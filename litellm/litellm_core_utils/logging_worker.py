@@ -51,6 +51,8 @@ class LoggingWorker:
                 coroutine = await self._queue.get()
                 try:
                     await asyncio.wait_for(coroutine, timeout=self.timeout)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     verbose_logger.exception(f"LoggingWorker error: {e}")
                     pass
