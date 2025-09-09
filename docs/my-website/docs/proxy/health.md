@@ -128,7 +128,10 @@ model_list:
       api_key: "os.environ/OPENAI_API_KEY"
     model_info:
       mode: audio_speech
+      health_check_voice: alloy
 ```
+
+You can specify a `health_check_voice` if you need to use a voice other than "alloy".
 
 ### Rerank Models 
 
