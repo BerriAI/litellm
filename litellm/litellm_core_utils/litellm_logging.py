@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-import fastuuid as uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     cast,
 )
 
+import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
@@ -4504,7 +4504,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        verbose_logger.info(json.dumps(payload, indent=4))
+        print(json.dumps(payload, indent=4)) # noqa
 
 
 def get_standard_logging_metadata(

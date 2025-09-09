@@ -473,7 +473,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
                 str(e)
             )
@@ -2004,7 +2004,7 @@ async def _rotate_master_key(
     # 2. process model table
     if models:
         decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
         )
         new_models = []
@@ -2018,9 +2018,9 @@ async def _rotate_master_key(
             )
             if new_model:
                 new_models.append(jsonify_object(new_model.model_dump()))
-        verbose_proxy_logger.info("Resetting proxy model table")
+        verbose_proxy_logger.debug("Resetting proxy model table")
         await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.info("Creating %s models", len(new_models))
+        verbose_proxy_logger.debug("Creating %s models", len(new_models))
         await prisma_client.db.litellm_proxymodeltable.create_many(
             data=new_models,
         )

@@ -123,7 +123,7 @@ class CloudZeroLogger(CustomLogger):
             )
             
             if data.is_empty():
-                verbose_logger.info("CloudZero Logger: No usage data found to export")
+                verbose_logger.debug("CloudZero Logger: No usage data found to export")
                 return
 
             verbose_logger.debug(f"CloudZero Logger: Processing {len(data)} records")
@@ -146,7 +146,7 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.debug(f"CloudZero Logger: Transmitting {len(cbf_data)} records to CloudZero")
             streamer.send_batched(cbf_data, operation=operation)
             
-            verbose_logger.info(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
+            verbose_logger.debug(f"CloudZero Logger: Successfully exported {len(cbf_data)} records to CloudZero")
             
         except Exception as e:
             verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {str(e)}")
@@ -218,7 +218,7 @@ class CloudZeroLogger(CustomLogger):
             unique_services = len(set(record.get('resource/service', '') for record in cbf_data_dict if record.get('resource/service')))
             total_tokens = sum(record.get('usage/amount', 0) for record in cbf_data_dict)
             
-            verbose_logger.info(f"CloudZero Logger: Dry run completed for {len(cbf_data)} records")
+            verbose_logger.debug(f"CloudZero Logger: Dry run completed for {len(cbf_data)} records")
             
             return {
                 "usage_data": usage_data_sample,
