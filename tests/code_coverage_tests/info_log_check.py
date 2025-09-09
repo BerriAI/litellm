@@ -297,14 +297,14 @@ def main():
     ###################
     # Running locally
     ###################
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.join(current_dir, "..", "..")
-    base_dir = os.path.abspath(base_dir)
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # base_dir = os.path.join(current_dir, "..", "..")
+    # base_dir = os.path.abspath(base_dir)
 
     ###################
     # Running in CI/CD
     ###################
-    # base_dir = "./litellm"  # Adjust this path as needed
+    base_dir = "./litellm"  # Adjust this path as needed
     
     print(f"Checking for sensitive logging in: {base_dir}")
     
