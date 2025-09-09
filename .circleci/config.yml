@@ -594,6 +594,7 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "openai==1.100.1"
+            pip install "pytest-cov==5.0.0"
       - run:
           name: Install dockerize
           command: |
