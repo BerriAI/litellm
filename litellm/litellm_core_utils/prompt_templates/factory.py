@@ -12,7 +12,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 import litellm
 import litellm.types
 import litellm.types.llms
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *

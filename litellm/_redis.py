@@ -17,7 +17,7 @@ from typing import Callable, List, Optional, Union
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
-from litellm import get_secret, get_secret_str
+from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -394,7 +394,7 @@ def get_redis_async_client(
 
         # Handle GCP IAM authentication for async clusters
         redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
-        from litellm import get_secret_str
+        from litellm.secret_managers.main import get_secret_str
         
         # Get GCP service account - first try from redis_connect_func, then from environment
         gcp_service_account = None

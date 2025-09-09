@@ -27,7 +27,7 @@ from typing import (
 import aiohttp
 
 import litellm  # noqa: E401
-from litellm import get_secret
+from litellm.secret_managers.main import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError

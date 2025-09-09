@@ -31,9 +31,9 @@ from httpx import Response
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import json_logs
 from litellm import (
     _custom_logger_compatible_callbacks_literal,
-    json_logs,
     log_raw_request_response,
     turn_off_message_logging,
 )

@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional, Union
 
 import httpx
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 
 class BaseSecretManager(ABC):

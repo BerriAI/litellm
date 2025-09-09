@@ -25,8 +25,9 @@ from typing import (
 import httpx  # type: ignore
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -189,7 +190,7 @@ async def make_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
-    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    bedrock_invoke_provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
 ):
     try:
         if client is None:
@@ -278,7 +279,7 @@ def make_sync_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
-    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
+    bedrock_invoke_provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
 ):
     try:
         if client is None:
@@ -1159,7 +1160,7 @@ class BedrockLLM(BaseAWSLLM):
     @staticmethod
     def _get_provider_from_model_path(
         model_path: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
         """
         Helper function to get the provider from a model path with format: provider/model-name
 
@@ -1172,14 +1173,14 @@ class BedrockLLM(BaseAWSLLM):
         parts = model_path.split("/")
         if len(parts) >= 1:
             provider = parts[0]
-            if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
+            if provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
     def get_bedrock_model_id(
         self,
         optional_params: dict,
-        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL],
         model: str,
     ) -> str:
         modelId = optional_params.pop("model_id", None)

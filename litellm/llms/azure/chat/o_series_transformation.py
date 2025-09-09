@@ -15,7 +15,7 @@ Translations handled by LiteLLM:
 from typing import List, Optional
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info, supports_reasoning
 

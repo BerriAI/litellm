@@ -17,7 +17,7 @@ from httpx import Request, Response
 
 # LiteLLM imports
 import litellm
-from litellm import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrail,

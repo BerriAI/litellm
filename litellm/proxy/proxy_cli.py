@@ -708,7 +708,7 @@ def run_server(  # noqa: PLR0915
                     0, os.path.abspath("../..")
                 )  # Adds the parent directory to the system path - for litellm local dev
                 import litellm
-                from litellm import get_secret_str
+                from litellm.secret_managers.main import get_secret_str
 
                 database_url = get_secret_str(database_url, default_value=None)
                 os.chdir(original_dir)

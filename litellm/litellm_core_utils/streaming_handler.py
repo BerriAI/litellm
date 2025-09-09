@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )

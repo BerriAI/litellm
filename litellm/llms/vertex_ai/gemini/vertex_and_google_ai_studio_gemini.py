@@ -24,7 +24,7 @@ import httpx  # type: ignore
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,

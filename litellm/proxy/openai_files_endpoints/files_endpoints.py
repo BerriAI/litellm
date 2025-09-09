@@ -23,7 +23,8 @@ from fastapi import (
 )
 
 import litellm
-from litellm import CreateFileRequest, get_secret_str
+from litellm.types.llms.openai import CreateFileRequest
+from litellm.secret_managers.main import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *

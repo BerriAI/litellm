@@ -23,6 +23,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -193,7 +194,7 @@ class GuardrailsAI(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: litellm.DualCache,
+        cache: DualCache,
         data: dict,
         call_type: Literal[
             "completion",

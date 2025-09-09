@@ -18,7 +18,8 @@ import litellm
 
 # Import at the top to make the patch work correctly
 import litellm.llms.github_copilot.chat.transformation
-from litellm import Choices, Message, ModelResponse, Usage, acompletion, completion
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.main import completion, acompletion
 from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig

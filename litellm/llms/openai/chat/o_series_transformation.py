@@ -14,7 +14,7 @@ Translations handled by LiteLLM:
 from typing import Any, Coroutine, List, Literal, Optional, Union, cast, overload
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (

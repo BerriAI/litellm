@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from websockets.asyncio.client import ClientConnection, connect
 
-from litellm import DualCache
+from litellm.caching.caching import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail

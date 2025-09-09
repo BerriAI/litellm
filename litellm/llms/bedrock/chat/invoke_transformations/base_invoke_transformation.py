@@ -9,7 +9,10 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.caching import InMemoryCache
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -498,7 +501,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     @staticmethod
     def get_bedrock_invoke_provider(
         model: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
         """
         Helper function to get the bedrock provider from the model
 
@@ -512,8 +515,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             model = model.replace("invoke/", "", 1)
 
         _split_model = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
+        if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
 
         # If not a known provider, check for pattern with two slashes
         provider = AmazonInvokeConfig._get_provider_from_model_path(model)
@@ -524,7 +527,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if "nova" in model:
             return "nova"
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
             if provider in model:
                 return provider
         return None
@@ -532,7 +535,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     @staticmethod
     def _get_provider_from_model_path(
         model_path: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
         """
         Helper function to get the provider from a model path with format: provider/model-name
 
@@ -545,14 +548,14 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         parts = model_path.split("/")
         if len(parts) >= 1:
             provider = parts[0]
-            if provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
+            if provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
     def get_bedrock_model_id(
         self,
         optional_params: dict,
-        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
+        provider: Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL],
         model: str,
     ) -> str:
         modelId = optional_params.pop("model_id", None)

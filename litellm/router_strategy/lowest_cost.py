@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
 
 import litellm
-from litellm import ModelResponse, token_counter, verbose_logger
+from litellm.types.utils import ModelResponse
+from litellm.utils import token_counter
+from litellm._logging import verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger

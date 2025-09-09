@@ -2,7 +2,7 @@ from typing import Any, List, Optional, cast
 
 from httpx import Response
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _parse_content_for_reasoning,
 )

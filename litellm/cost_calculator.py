@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import litellm
 import litellm._logging
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
