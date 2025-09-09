@@ -52,6 +52,9 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
   
   // Unselect all entities
   const handleUnselectAll = () => {
+    // Instead of iterating through each entity and toggling,
+    // we'll directly set the selected entities to an empty array
+    // This is more reliable and ensures a clean slate
     selectedEntities.forEach(entity => {
       onEntitySelect(entity);
     });

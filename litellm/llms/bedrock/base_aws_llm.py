@@ -10,6 +10,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Union,
     cast,
     get_args,
 )
@@ -21,7 +22,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -113,7 +114,7 @@ class BaseAWSLLM:
             elif param is None:  # check if uppercase value in env
                 key = self.aws_authentication_params[i]
                 if key.upper() in os.environ:
-                    params_to_check[i] = os.getenv(key)
+                    params_to_check[i] = os.getenv(key.upper())
 
         # Assign updated values back to parameters
         (
@@ -177,13 +178,34 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
             )
-        elif aws_role_name is not None and aws_session_name is not None:
-            credentials, _cache_ttl = self._auth_with_aws_role(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_role_name=aws_role_name,
-                aws_session_name=aws_session_name,
-            )
+        elif aws_role_name is not None:
+            # Check if we're in IRSA and trying to assume the same role we already have
+            current_role_arn = os.getenv("AWS_ROLE_ARN")
+            web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+            
+            # In IRSA environments, we should skip role assumption if we're already running as the target role
+            # This is true when:
+            # 1. We have AWS_ROLE_ARN set (current role)
+            # 2. We have AWS_WEB_IDENTITY_TOKEN_FILE set (IRSA environment)
+            # 3. The current role matches the requested role
+            if (current_role_arn and web_identity_token_file and 
+                current_role_arn == aws_role_name):
+                verbose_logger.debug("Using IRSA same-role optimization: calling _auth_with_env_vars")
+                # We're already running as this role via IRSA, no need to assume it again
+                # Use the default boto3 credentials (which will use the IRSA credentials)
+                credentials, _cache_ttl = self._auth_with_env_vars()
+            else:
+                verbose_logger.debug("Using role assumption: calling _auth_with_aws_role")
+                # If aws_session_name is not provided, generate a default one
+                if aws_session_name is None:
+                    aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
+                credentials, _cache_ttl = self._auth_with_aws_role(
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
+                    aws_role_name=aws_role_name,
+                    aws_session_name=aws_session_name,
+                )
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)
@@ -330,10 +352,50 @@ class BaseAWSLLM:
                 and isinstance(standard_aws_region_name, str)
             ):
                 aws_region_name = standard_aws_region_name
-
         if aws_region_name is None:
-            aws_region_name = "us-west-2"
+            try:
+                import boto3
 
+                with tracer.trace("boto3.Session()"):
+                    session = boto3.Session()
+                configured_region = session.region_name
+                if configured_region:
+                    aws_region_name = configured_region
+                else:
+                    aws_region_name = "us-west-2"
+            except Exception:
+                aws_region_name = "us-west-2"
+
+        return aws_region_name
+
+    def get_aws_region_name_for_non_llm_api_calls(
+        self,
+        aws_region_name: Optional[str] = None,
+    ):
+        """
+        Get the AWS region name for non-llm api calls.
+
+        LLM API calls check the model arn and end up using that as the region name.
+
+        For non-llm api calls eg. Guardrails, Vector Stores we just need to check the dynamic param or env vars.
+        """
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(
+                litellm_aws_region_name, str
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(
+                standard_aws_region_name, str
+            ):
+                aws_region_name = standard_aws_region_name
+
+            if aws_region_name is None:
+                aws_region_name = "us-west-2"
         return aws_region_name
 
     @tracer.wrap()
@@ -402,11 +464,98 @@ class BaseAWSLLM:
         iam_creds = session.get_credentials()
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
+    def _handle_irsa_cross_account(self, irsa_role_arn: str, aws_role_name: str, 
+                                   aws_session_name: str, region: str, web_identity_token_file: str) -> dict:
+        """Handle cross-account role assumption for IRSA."""
+        import boto3
+        
+        verbose_logger.debug("Cross-account role assumption detected")
+        
+        # Read the web identity token
+        with open(web_identity_token_file, 'r') as f:
+            web_identity_token = f.read().strip()
+        
+        # Create an STS client without credentials
+        with tracer.trace("boto3.client(sts) for manual IRSA"):
+            sts_client = boto3.client('sts', region_name=region)
+        
+        # Manually assume the IRSA role with the session name
+        verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
+        irsa_response = sts_client.assume_role_with_web_identity(
+            RoleArn=irsa_role_arn,
+            RoleSessionName=aws_session_name,
+            WebIdentityToken=web_identity_token
+        )
+        
+        # Extract the credentials from the IRSA assumption
+        irsa_creds = irsa_response["Credentials"]
+        
+        # Create a new STS client with the IRSA credentials
+        with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
+            sts_client_with_creds = boto3.client(
+                'sts',
+                region_name=region,
+                aws_access_key_id=irsa_creds["AccessKeyId"],
+                aws_secret_access_key=irsa_creds["SecretAccessKey"],
+                aws_session_token=irsa_creds["SessionToken"]
+            )
+        
+        # Get current caller identity for debugging
+        try:
+            caller_identity = sts_client_with_creds.get_caller_identity()
+            verbose_logger.debug(f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}")
+        except Exception as e:
+            verbose_logger.debug(f"Failed to get caller identity: {e}")
+        
+        # Now assume the target role
+        verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
+        return sts_client_with_creds.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+    def _handle_irsa_same_account(self, aws_role_name: str, aws_session_name: str, region: str) -> dict:
+        """Handle same-account role assumption for IRSA."""
+        import boto3
+        
+        verbose_logger.debug("Same account role assumption, using automatic IRSA")
+        with tracer.trace("boto3.client(sts) with automatic IRSA"):
+            sts_client = boto3.client("sts", region_name=region)
+        
+        # Get current caller identity for debugging
+        try:
+            caller_identity = sts_client.get_caller_identity()
+            verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
+        except Exception as e:
+            verbose_logger.debug(f"Failed to get caller identity: {e}")
+        
+        # Assume the role
+        verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
+        return sts_client.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+    def _extract_credentials_and_ttl(self, sts_response: dict) -> Tuple[Credentials, Optional[int]]:
+        """Extract credentials and TTL from STS response."""
+        from botocore.credentials import Credentials
+        
+        sts_credentials = sts_response["Credentials"]
+        credentials = Credentials(
+            access_key=sts_credentials["AccessKeyId"],
+            secret_key=sts_credentials["SecretAccessKey"],
+            token=sts_credentials["SessionToken"],
+        )
+        
+        expiration_time = sts_credentials["Expiration"]
+        ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
+        
+        return credentials, ttl
+
     @tracer.wrap()
     def _auth_with_aws_role(
         self,
         aws_access_key_id: Optional[str],
         aws_secret_access_key: Optional[str],
+        aws_session_token: Optional[str],
         aws_role_name: str,
         aws_session_name: str,
     ) -> Tuple[Credentials, Optional[int]]:
@@ -416,12 +565,59 @@ class BaseAWSLLM:
         import boto3
         from botocore.credentials import Credentials
 
-        with tracer.trace("boto3.client(sts)"):
-            sts_client = boto3.client(
-                "sts",
-                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
-                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
-            )
+        # Check if we're in an EKS/IRSA environment
+        web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+        irsa_role_arn = os.getenv("AWS_ROLE_ARN")
+        
+        # If we have IRSA environment variables and no explicit credentials,
+        # we need to use the web identity token flow
+        if (web_identity_token_file and irsa_role_arn and 
+            aws_access_key_id is None and aws_secret_access_key is None):
+            # For cross-account role assumption with specific session names,
+            # we need to manually assume the IRSA role first with the correct session name
+            verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
+            
+            try:
+                # Get region from environment
+                region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+                
+                # Check if we need to do cross-account role assumption
+                if aws_role_name != irsa_role_arn:
+                    sts_response = self._handle_irsa_cross_account(
+                        irsa_role_arn, aws_role_name, aws_session_name, region, web_identity_token_file
+                    )
+                else:
+                    sts_response = self._handle_irsa_same_account(
+                        aws_role_name, aws_session_name, region
+                    )
+                
+                return self._extract_credentials_and_ttl(sts_response)
+                
+            except Exception as e:
+                verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
+                if "AccessDenied" in str(e) and "is not authorized to perform: sts:AssumeRole" in str(e):
+                    # Provide a more helpful error message for trust policy issues
+                    verbose_logger.error(
+                        f"Access denied when trying to assume role {aws_role_name}. "
+                        f"Please ensure the trust policy of {aws_role_name} allows "
+                        f"the current role to assume it. Current identity: check logs with verbose mode."
+                    )
+                # Re-raise the exception instead of falling through
+                raise
+        
+        # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
+        # This allows the web identity token to work automatically
+        if aws_access_key_id is None and aws_secret_access_key is None:
+            with tracer.trace("boto3.client(sts)"):
+                sts_client = boto3.client("sts")
+        else:
+            with tracer.trace("boto3.client(sts)"):
+                sts_client = boto3.client(
+                    "sts",
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
+                )
 
         sts_response = sts_client.assume_role(
             RoleArn=aws_role_name, RoleSessionName=aws_session_name
@@ -527,6 +723,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
+        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -540,7 +737,10 @@ class BaseAWSLLM:
         ):
             endpoint_url = env_aws_bedrock_runtime_endpoint
         else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            endpoint_url = self._select_default_endpoint_url(
+                endpoint_type=endpoint_type,
+                aws_region_name=aws_region_name,
+            )
 
         # Determine proxy_endpoint_url
         if env_aws_bedrock_runtime_endpoint and isinstance(
@@ -555,6 +755,19 @@ class BaseAWSLLM:
             proxy_endpoint_url = endpoint_url
 
         return endpoint_url, proxy_endpoint_url
+
+    def _select_default_endpoint_url(
+        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+    ) -> str:
+        """
+        Select the default endpoint url based on the endpoint type
+
+        Default endpoint url is https://bedrock-runtime.{aws_region_name}.amazonaws.com
+        """
+        if endpoint_type == "agent":
+            return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        else:
+            return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
     def _get_boto_credentials_from_optional_params(
         self, optional_params: dict, model: Optional[str] = None
@@ -613,25 +826,43 @@ class BaseAWSLLM:
         aws_region_name: str,
         extra_headers: Optional[dict],
         endpoint_url: str,
-        data: str,
+        data: Union[str, bytes],
         headers: dict,
+        api_key: Optional[str] = None,
     ) -> AWSPreparedRequest:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
+        if aws_bearer_token:
+            try:
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+        else:
+            try:
+                from botocore.auth import SigV4Auth
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+            sigv4.add_auth(request)
+            if (
+                extra_headers is not None and "Authorization" in extra_headers
+            ):  # prevent sigv4 from overwriting the auth header
+                request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
 
         return prepped
@@ -646,6 +877,7 @@ class BaseAWSLLM:
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
+        api_key: Optional[str] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         """
         Sign a request for Bedrock or Sagemaker
@@ -653,6 +885,19 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+
+        # If aws bearer token is set, use it directly in the header
+        if aws_bearer_token:
+            headers = headers or {}
+            headers["Content-Type"] = "application/json"
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            return headers, json.dumps(request_data).encode()
+
+        # If no bearer token is set, proceed with the existing SigV4 authentication
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
@@ -705,4 +950,5 @@ class BaseAWSLLM:
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header
             request_headers_dict["Authorization"] = headers["Authorization"]
+
         return request_headers_dict, request.body

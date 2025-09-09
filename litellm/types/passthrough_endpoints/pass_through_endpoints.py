@@ -5,6 +5,7 @@ from typing import Optional, TypedDict
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
     ANTHROPIC = "anthropic"
+    OPENAI = "openai"
     GENERIC = "generic"
 
 
@@ -31,4 +32,11 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     response_body: Optional[dict]  # only tracked for non-streaming responses
     """
     The body of the response
+    """
+
+    cost_per_request: Optional[float]
+    """
+    The cost per request to the target endpoint
+
+    Optional field, we use this for cost tracking only if it's set.
     """

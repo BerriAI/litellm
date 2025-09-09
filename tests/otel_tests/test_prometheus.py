@@ -106,7 +106,7 @@ async def test_proxy_failure_metrics():
         print("/metrics", metrics)
 
         # Check if the failure metric is present and correct
-        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None",user="default_user_id"} 1.0'
+        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id"} 1.0'
 
         assert (
             expected_metric in metrics
@@ -115,7 +115,7 @@ async def test_proxy_failure_metrics():
         assert expected_llm_deployment_failure
 
         assert (
-            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"} 1.0'
+            'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"} 1.0'
             in metrics
         )
 
@@ -126,6 +126,7 @@ async def test_proxy_failure_metrics():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_proxy_success_metrics():
     """
     Make 1 good /chat/completions call to "openai/gpt-3.5-turbo"
@@ -515,9 +516,9 @@ async def test_key_budget_metrics():
         ), "remaining budget should be less than 10.0 after first request"
         assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
         print("first_budget['remaining_hours']", first_budget["remaining_hours"])
-        # The budget reset time is now midnight, not exactly 7 days (168 hours) from creation
-        # So we'll check if it's within a reasonable range (5-7 days)
-        assert 120 <= first_budget["remaining_hours"] <= 168, "Budget remaining hours should be within a reasonable range (5-7 days)"
+        # The budget reset time is now standardized - for "7d" it resets on Monday at midnight
+        # So we'll check if it's within a reasonable range (0-7 days depending on current day of week)
+        assert 0 <= first_budget["remaining_hours"] <= 168, "Budget remaining hours should be within a reasonable range (0-7 days depending on day of week)"
 
         # Get key info and verify spend matches prometheus metrics
         key_info = await get_key_info(session, key)

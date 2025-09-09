@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Modal, Form, Input, Select, InputNumber, message } from "antd";
 import { Button } from "@tremor/react";
 import { userRequestModelCall } from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Option } = Select;
 
@@ -12,11 +13,7 @@ interface RequestAccessProps {
   accessToken: string;
   userID: string;
 }
-const isLocal = process.env.NODE_ENV === "development";
-const proxyBaseUrl = isLocal ? "http://localhost:4000" : null;
-if (isLocal != true) {
-  console.log = function() {};
-}
+
 function onRequestAccess(formData: Record<string, any>): void {
     // This function does nothing for now
   }
@@ -37,7 +34,7 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels, accessToken, 
 
   const handleRequestAccess = async (formValues: Record<string, any>) => {
     try {
-      message.info("Requesting access");
+      NotificationsManager.info("Requesting access");
       // Extract form values
         const { selectedModel, accessReason } = formValues;
 

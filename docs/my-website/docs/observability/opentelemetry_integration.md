@@ -105,3 +105,13 @@ for successful + failed requests
 click under `litellm_request` in the trace
 
 <Image img={require('../../img/otel_debug_trace.png')} />
+
+### Not seeing traces land on Integration
+
+If you don't see traces landing on your integration, set `OTEL_DEBUG="True"` in your LiteLLM environment and try again.
+
+```shell
+export OTEL_DEBUG="True"
+```
+
+This will emit any logging issues to the console.

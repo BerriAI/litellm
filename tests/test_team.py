@@ -492,7 +492,7 @@ async def test_team_update_sc_2():
 
 @pytest.mark.asyncio
 async def test_team_member_add_email():
-    from test_users import get_user_info
+    from tests.test_users import get_user_info
 
     async with aiohttp.ClientSession() as session:
         ## Create admin

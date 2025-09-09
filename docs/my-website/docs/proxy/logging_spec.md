@@ -60,6 +60,8 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `requester_ip_address` | `Optional[str]` | Requester's IP address |
 | `requester_metadata` | `Optional[dict]` | Additional requester metadata |
 | `vector_store_request_metadata` | `Optional[List[StandardLoggingVectorStoreRequest]]` | Vector store request metadata |
+| `requester_custom_headers` | Dict[str, str] | Any custom (`x-`) headers sent by the client to the proxy. |
+| `guardrail_information` | `Optional[StandardLoggingGuardrailInformation]` | Guardrail information |
 
 
 ## StandardLoggingVectorStoreRequest
@@ -128,3 +130,19 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 A literal type with two possible values:
 - `"success"`
 - `"failure"`
+
+## StandardLoggingGuardrailInformation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `guardrail_name` | `Optional[str]` | Guardrail name |
+| `guardrail_mode` | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode |
+| `guardrail_request` | `Optional[dict]` | Guardrail request |
+| `guardrail_response` | `Optional[Union[dict, str, List[dict]]]` | Guardrail response |
+| `guardrail_status` | `Literal["success", "failure"]` | Guardrail status |
+| `start_time` | `Optional[float]` | Start time of the guardrail |
+| `end_time` | `Optional[float]` | End time of the guardrail |
+| `duration` | `Optional[float]` | Duration of the guardrail in seconds |
+| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities |
+
+

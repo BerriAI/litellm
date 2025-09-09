@@ -14,6 +14,7 @@ from litellm.llms.anthropic.chat import ModelResponseIterator
 import httpx
 import json
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
 # from base_rerank_unit_tests import BaseLLMRerankTest
 
 load_dotenv()
@@ -185,6 +186,7 @@ def test_azure_ai_services_with_api_version():
         )
 
 
+@pytest.mark.skip(reason="Skipping due to cohere ssl issues")
 def test_completion_azure_ai_command_r():
     try:
         import os
@@ -295,3 +297,19 @@ async def test_azure_ai_request_format():
         model=model,
         messages=messages,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5", "azure/gpt-5"])
+async def test_azure_gpt5_reasoning(model):
+    litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        model="azure/gpt5_series/gpt-5",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        reasoning_effort="minimal",
+        max_tokens=10,
+        api_base=os.getenv("AZURE_GPT5_API_BASE"),
+        api_key=os.getenv("AZURE_GPT5_API_KEY"),
+    )
+    print("response: ", response)
+    assert response.choices[0].message.content is not None

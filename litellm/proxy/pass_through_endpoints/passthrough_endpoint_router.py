@@ -110,7 +110,7 @@ class PassthroughEndpointRouter:
         self,
         project_id: str,
         location: str,
-        vertex_credentials: VERTEX_CREDENTIALS_TYPES,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
     ):
         """
         Add the vertex credentials for the given project-id, location

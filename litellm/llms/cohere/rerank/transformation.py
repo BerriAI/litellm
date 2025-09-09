@@ -1,14 +1,13 @@
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
-
 import litellm
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankRequest
-from litellm.types.utils import RerankResponse
+from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
 
 from ..common_utils import CohereError
 

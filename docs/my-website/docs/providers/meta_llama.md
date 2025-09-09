@@ -45,7 +45,7 @@ os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
 messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Meta Llama call
-response = completion(model="meta_llama/Llama-3.3-70B-Instruct", messages=messages)
+response = completion(model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8", messages=messages)
 ```
 
 ### Streaming
@@ -61,7 +61,7 @@ messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # Meta Llama call with streaming
 response = completion(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=messages,
     stream=True
 )
@@ -70,6 +70,104 @@ for chunk in response:
     print(chunk)
 ```
 
+### Function Calling
+
+```python showLineNumbers title="Meta Llama Function Calling"
+import os
+import litellm
+from litellm import completion
+
+os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
+
+messages = [{"content": "What's the weather like in San Francisco?", "role": "user"}]
+
+# Define the function
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA"
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"]
+                    }
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+# Meta Llama call with function calling
+response = completion(
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto"
+)
+
+print(response.choices[0].message.tool_calls)
+```
+
+### Tool Use
+
+```python showLineNumbers title="Meta Llama Tool Use"
+import os
+import litellm
+from litellm import completion
+
+os.environ["LLAMA_API_KEY"] = ""  # your Meta Llama API key
+
+messages = [{"content": "Create a chart showing the population growth of New York City from 2010 to 2020", "role": "user"}]
+
+# Define the tools
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_chart",
+            "description": "Create a chart with the provided data",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["bar", "line", "pie", "scatter"],
+                        "description": "The type of chart to create"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "The title of the chart"
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "The data to plot in the chart"
+                    }
+                },
+                "required": ["chart_type", "title", "data"]
+            }
+        }
+    }
+]
+
+# Meta Llama call with tool use
+response = completion(
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto"
+)
+
+print(response.choices[0].message.content)
+```
 
 ## Usage - LiteLLM Proxy
 
@@ -111,7 +209,7 @@ client = OpenAI(
 
 # Non-streaming response
 response = client.chat.completions.create(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=[{"role": "user", "content": "Write a short poem about AI."}]
 )
 
@@ -129,7 +227,7 @@ client = OpenAI(
 
 # Streaming response
 response = client.chat.completions.create(
-    model="meta_llama/Llama-3.3-70B-Instruct",
+    model="meta_llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     messages=[{"role": "user", "content": "Write a short poem about AI."}],
     stream=True
 )

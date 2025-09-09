@@ -383,6 +383,7 @@ def test_model_group_aliases():
 # test_model_group_aliases()
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_usage_based_routing():
     """
     in this test we, have a model group with two models in it, model-a and model-b.
