@@ -1,4 +1,3 @@
-
 import Image from '@theme/IdealImage';
 
 
@@ -7,7 +6,6 @@ import Image from '@theme/IdealImage';
 ✨ **Enterprise**: SCIM support requires a premium license.
 
 Enables identity providers (Okta, Azure AD, OneLogin, etc.) to automate user and team (group) provisioning, updates, and deprovisioning on LiteLLM.
-
 
 This tutorial will walk you through the steps to connect your IDP to LiteLLM SCIM Endpoints.
 
@@ -20,6 +18,21 @@ Below is a list of supported SSO providers for connecting to LiteLLM SCIM Endpoi
 - Keycloak
 - Auth0
 
+### Supported Dynamic Operations
+
+| Operation         | Supported | Details & Notes                                                                 |
+|-------------------|-----------|-------------------------------------------------------------------------------|
+| User Provisioning | Yes       | Automatically create users in LiteLLM when assigned in your IdP. If the user already exists, a conflict error is returned. If no role is specified, defaults to "viewer" or your configured default. |
+| User Update       | Yes       | Update user attributes (name, email, teams, metadata) via SCIM PUT or PATCH. PATCH supports granular updates, such as changing display name or group membership. |
+| Team Membership   | Yes       | Add or remove users from teams by updating group membership in your IdP. LiteLLM reflects these changes dynamically, updating the user’s access and permissions. |
+| Team Provisioning | Yes       | SCIM can create, update, and delete teams (groups) in LiteLLM, including changing team names, adding/removing members, and storing/updating team metadata. |
+| User Deletion     | Yes       | When a user is removed from your IdP or a group, LiteLLM will remove the user from all teams, **delete all API keys and tokens associated with the user**, and remove the user account from LiteLLM. |
+| Error Handling    | Yes       | Returns standard SCIM error codes for conflicts, not found, etc.              |
+
+> **Security Note:**
+When a user is removed via SCIM, all their API keys and tokens are deleted immediately for security.
+
+## Tutorial
 
 ## 1. Get your SCIM Tenant URL and Bearer Token
 
@@ -71,6 +84,24 @@ Sign into the LiteLLM UI via SSO. You should be redirected to the Entra ID SSO p
 On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production LLM Evals Group` auto-created on LiteLLM. 
 
 <Image img={require('../../img/msft_auto_team.png')}  style={{ width: '900px', height: 'auto' }} />
+
+---
+
+
+
+---
+
+## For Developers: Test Coverage
+
+Our test suite covers:
+- User creation (including conflict and default role logic)
+- User updates (PUT/PATCH, including granular attribute and group changes)
+- Team membership management (add/remove, atomic updates)
+- Deprovisioning (user and key deletion)
+- Group/team management (metadata serialization, membership as source of truth)
+- Error handling (conflict, not found, etc.)
+
+---
 
 
 
