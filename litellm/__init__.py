@@ -1005,6 +1005,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TranscriptionResponse,
     TextCompletionResponse,
 ]
+from litellm.llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings
 
 #lazy load map, some models are called with instance, their keys are in lower case
 _lazy_load_map = {
@@ -1035,7 +1036,7 @@ _lazy_load_map = {
     "DatabricksEmbeddingConfig": (".llms.databricks.embed.transformation", "DatabricksEmbeddingConfig"),
     "PredibaseConfig": (".llms.predibase.chat.transformation", "PredibaseConfig"),
     "ReplicateConfig": (".llms.replicate.chat.transformation", "ReplicateConfig"),
-    "CohereTextConfig as CohereConfig": (".llms.cohere.completion.transformation", "CohereTextConfig as CohereConfig"),
+    "CohereConfig": (".llms.cohere.completion.transformation", "CohereTextConfig"),
     "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
     "CohereRerankConfig": (".llms.cohere.rerank.transformation", "CohereRerankConfig"),
     "CohereRerankV2Config": (".llms.cohere.rerank_v2.transformation", "CohereRerankV2Config"),
@@ -1045,7 +1046,6 @@ _lazy_load_map = {
     "DeepinfraRerankConfig": (".llms.deepinfra.rerank.transformation", "DeepinfraRerankConfig"),
     "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
     "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
-    "AI21Config": (".llms.ai21.chat.transformation", "AI21Config"),
     "LlamaAPIConfig": (".llms.meta_llama.chat.transformation", "LlamaAPIConfig"),
     "AnthropicMessagesConfig": (".llms.anthropic.experimental_pass_through.messages.transformation", "AnthropicMessagesConfig"),
     "AmazonAnthropicClaudeMessagesConfig": (".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeMessagesConfig"),
@@ -1058,11 +1058,11 @@ _lazy_load_map = {
     "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
     "AlephAlphaConfig": (".llms.deprecated_providers.aleph_alpha", "AlephAlphaConfig"),
     "VertexGeminiConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
-    "VertexGeminiConfig as VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig as VertexAIConfig"),
+    "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexAIConfig"),
     "GeminiModelInfo": (".llms.gemini.common_utils", "GeminiModelInfo"),
     "GoogleAIStudioGeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),
-    "GoogleAIStudioGeminiConfig as GeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig as GeminiConfig"),
-    "vertexAITextEmbeddingConfig": (".llms.vertex_ai.vertex_embeddings.transformation", "vertexAITextEmbeddingConfig"),
+    "GeminiConfig": (".llms.gemini.chat.transformation", "GeminiConfig"),
+    "VertexAITextEmbeddingConfig": (".llms.vertex_ai.vertex_embeddings.transformation", "VertexAITextEmbeddingConfig"),
     "VertexAIAnthropicConfig": (".llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation", "VertexAIAnthropicConfig"),
     "VertexAILlama3Config": (".llms.vertex_ai.vertex_ai_partner_models.llama3.transformation", "VertexAILlama3Config"),
     "VertexAIAi21Config": (".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation", "VertexAIAi21Config"),
@@ -1071,7 +1071,6 @@ _lazy_load_map = {
     "SagemakerConfig": (".llms.sagemaker.completion.transformation", "SagemakerConfig"),
     "SagemakerChatConfig": (".llms.sagemaker.chat.transformation", "SagemakerChatConfig"),
     "AmazonCohereChatConfig": (".llms.bedrock.chat.invoke_handler", "AmazonCohereChatConfig"),
-    "bedrock_tool_name_mappings": (".llms.bedrock.chat.invoke_handler", "bedrock_tool_name_mappings"),
     "AmazonBedrockGlobalConfig": (".llms.bedrock.common_utils", "AmazonBedrockGlobalConfig"),
     "AmazonAI21Config": (".llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation", "AmazonAI21Config"),
     "AmazonInvokeNovaConfig": (".llms.bedrock.chat.invoke_transformations.amazon_nova_transformation", "AmazonInvokeNovaConfig"),
@@ -1113,12 +1112,12 @@ _lazy_load_map = {
     "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
     "GradientAIConfig": (".llms.gradient_ai.chat.transformation", "GradientAIConfig"),
     "OpenAIGPTConfig": (".llms.openai.chat.gpt_transformation", "OpenAIGPTConfig"),
-    "openAIGPT5Config": (".llms.openai.chat.gpt_5_transformation", "openAIGPT5Config"),
+    "OpenAIGPT5Config": (".llms.openai.chat.gpt_5_transformation", "OpenAIGPT5Config"),
     "OpenAIWhisperAudioTranscriptionConfig": (".llms.openai.transcriptions.whisper_transformation", "OpenAIWhisperAudioTranscriptionConfig"),
     "OpenAIGPTAudioTranscriptionConfig": (".llms.openai.transcriptions.gpt_transformation", "OpenAIGPTAudioTranscriptionConfig"),
-    "openAIGPTAudioConfig": (".llms.openai.chat.gpt_audio_transformation", "openAIGPTAudioConfig"),
-    "nvidiaNimConfig": (".llms.nvidia_nim.chat.transformation", "nvidiaNimConfig"),
-    "nvidiaNimEmbeddingConfig": (".llms.nvidia_nim.embed", "nvidiaNimEmbeddingConfig"),
+    "OpenAIGPTAudioConfig": (".llms.openai.chat.gpt_audio_transformation", "OpenAIGPTAudioConfig"),
+    "NvidiaNimConfig": (".llms.nvidia_nim.chat.transformation", "NvidiaNimConfig"),
+    "NvidiaNimEmbeddingConfig": (".llms.nvidia_nim.embed", "NvidiaNimEmbeddingConfig"),
     "FeatherlessAIConfig": (".llms.featherless_ai.chat.transformation", "FeatherlessAIConfig"),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
@@ -1134,7 +1133,7 @@ _lazy_load_map = {
     "XAIChatConfig": (".llms.xai.chat.transformation", "XAIChatConfig"),
     "XAIModelInfo": (".llms.xai.common_utils", "XAIModelInfo"),
     "AIMLChatConfig": (".llms.aiml.chat.transformation", "AIMLChatConfig"),
-    "VolcEngineChatConfig as VolcEngineConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig as VolcEngineConfig"),
+    "VolcEngineConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig"),
     "CodestralTextCompletionConfig": (".llms.codestral.completion.transformation", "CodestralTextCompletionConfig"),
     "AzureOpenAIError": (".llms.azure.azure", "AzureOpenAIError"),
     "AzureOpenAIAssistantsAPIConfig": (".llms.azure.azure", "AzureOpenAIAssistantsAPIConfig"),
@@ -1201,8 +1200,18 @@ _lazy_load_map = {
 from importlib import import_module
 from sys import modules
 def __getattr__(name: str) -> Any:
-    if name in _lazy_load_map:
-        module_path, original_name = _lazy_load_map[name]
+    #some calls are heterogenous
+    #to keep track of case insensitive keys
+    if name[0].islower():
+        keys_lower = dict((key.lower(), key) for key in _lazy_load_map.keys())
+        if name.lower() in keys_lower:
+            key = keys_lower[name.lower()]
+        else:
+            key = name
+    else:
+        key = name
+    if key in _lazy_load_map:
+        module_path, original_name = _lazy_load_map[key]
         module = import_module(module_path, __name__)
         attr = getattr(module, original_name)
 
