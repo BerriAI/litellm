@@ -470,7 +470,7 @@ def _transform_request_body(
             metadata = litellm_params["metadata"]
             if "requester_metadata" in metadata:
                 rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if type(v) is str}
+                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields
