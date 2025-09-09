@@ -14,6 +14,11 @@ git clone https://github.com/BerriAI/litellm.git
 Tell the proxy where the UI is located
 ```bash
 export PROXY_BASE_URL="http://localhost:3000/"
+
+### ALSO ###  - set the basic env variables
+DATABASE_URL = "postgresql://<user>:<password>@<host>:<port>/<dbname>"
+LITELLM_MASTER_KEY = "sk-1234"
+STORE_MODEL_IN_DB = "True"
 ```
 
 ```bash
@@ -33,11 +38,11 @@ cd litellm/ui/litellm-dashboard
 
 npm run dev
 
-# starts on http://0.0.0.0:3000/ui
+# starts on http://0.0.0.0:3000
 ```
 
 ## 3. Go to local UI 
 
-```
-http://0.0.0.0:3000/ui
+```bash
+http://0.0.0.0:3000
 ```

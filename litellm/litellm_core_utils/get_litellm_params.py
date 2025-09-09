@@ -111,6 +111,7 @@ def get_litellm_params(
         "client_secret": kwargs.get("client_secret"),
         "azure_username": kwargs.get("azure_username"),
         "azure_password": kwargs.get("azure_password"),
+        "azure_scope": kwargs.get("azure_scope"),
         "max_retries": max_retries,
         "timeout": kwargs.get("timeout"),
         "bucket_name": kwargs.get("bucket_name"),

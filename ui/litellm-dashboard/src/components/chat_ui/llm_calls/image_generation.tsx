@@ -1,5 +1,7 @@
 import openai from "openai";
 import { message } from "antd";
+import { getProxyBaseUrl } from "@/components/networking";
+import NotificationManager from "@/components/molecules/notifications_manager";
 
 export async function makeOpenAIImageGenerationRequest(
   prompt: string,
@@ -15,9 +17,7 @@ export async function makeOpenAIImageGenerationRequest(
     console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
+  const proxyBaseUrl = getProxyBaseUrl()
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
@@ -52,7 +52,7 @@ export async function makeOpenAIImageGenerationRequest(
     if (signal?.aborted) {
       console.log("Image generation request was cancelled");
     } else {
-      message.error(`Error occurred while generating image. Please try again. Error: ${error}`, 20);
+      NotificationManager.fromBackend(`Error occurred while generating image. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

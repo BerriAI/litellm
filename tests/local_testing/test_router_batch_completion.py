@@ -44,7 +44,7 @@ async def test_batch_completion_multiple_models(mode):
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama3-8b-8192",
+                    "model": "groq/llama-3.1-8b-instant",
                 },
             },
         ]
@@ -130,6 +130,7 @@ async def test_batch_completion_fastest_response_unit_test():
 @pytest.mark.asyncio
 async def test_batch_completion_fastest_response_streaming():
     litellm.set_verbose = True
+    litellm._turn_on_debug()
 
     router = litellm.Router(
         model_list=[
@@ -142,7 +143,7 @@ async def test_batch_completion_fastest_response_streaming():
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama3-8b-8192",
+                    "model": "groq/llama-3.1-8b-instant",
                 },
             },
         ]
@@ -178,7 +179,7 @@ async def test_batch_completion_multiple_models_multiple_messages():
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama3-8b-8192",
+                    "model": "groq/llama-3.1-8b-instant",
                 },
             },
         ]

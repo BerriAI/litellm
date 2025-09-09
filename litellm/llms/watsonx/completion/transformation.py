@@ -300,9 +300,14 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             json_resp["results"][0]["stop_reason"]
         )
         if json_resp.get("created_at"):
-            model_response.created = int(
-                datetime.fromisoformat(json_resp["created_at"]).timestamp()
-            )
+            try:
+                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+            except ValueError:
+                # datetime.fromisoformat cannot handle 'Z' in Python 3.10
+                created_datetime = datetime.fromisoformat(
+                    f'{json_resp["created_at"].rstrip("Z")}+00:00'
+                )
+            model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
         usage = Usage(

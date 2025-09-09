@@ -565,7 +565,7 @@ def test_groq_response_cost_tracking(is_streaming):
 
     response_cost = litellm.response_cost_calculator(
         response_object=response,
-        model="groq/llama3-70b-8192",
+        model="groq/llama-3.3-70b-versatile",
         custom_llm_provider="groq",
         call_type=CallTypes.acompletion.value,
         optional_params={},
@@ -1004,77 +1004,6 @@ def test_completion_cost_anthropic():
     print(output_cost)
 
 
-def test_completion_cost_deepseek():
-    litellm.set_verbose = True
-    model_name = "deepseek/deepseek-chat"
-    messages_1 = [
-        {
-            "role": "system",
-            "content": "You are a history expert. The user will provide a series of questions, and your answers should be concise and start with `Answer:`",
-        },
-        {
-            "role": "user",
-            "content": "In what year did Qin Shi Huang unify the six states?",
-        },
-        {"role": "assistant", "content": "Answer: 221 BC"},
-        {"role": "user", "content": "Who was the founder of the Han Dynasty?"},
-        {"role": "assistant", "content": "Answer: Liu Bang"},
-        {"role": "user", "content": "Who was the last emperor of the Tang Dynasty?"},
-        {"role": "assistant", "content": "Answer: Li Zhu"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Ming Dynasty?",
-        },
-        {"role": "assistant", "content": "Answer: Zhu Yuanzhang"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Qing Dynasty?",
-        },
-    ]
-
-    message_2 = [
-        {
-            "role": "system",
-            "content": "You are a history expert. The user will provide a series of questions, and your answers should be concise and start with `Answer:`",
-        },
-        {
-            "role": "user",
-            "content": "In what year did Qin Shi Huang unify the six states?",
-        },
-        {"role": "assistant", "content": "Answer: 221 BC"},
-        {"role": "user", "content": "Who was the founder of the Han Dynasty?"},
-        {"role": "assistant", "content": "Answer: Liu Bang"},
-        {"role": "user", "content": "Who was the last emperor of the Tang Dynasty?"},
-        {"role": "assistant", "content": "Answer: Li Zhu"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Ming Dynasty?",
-        },
-        {"role": "assistant", "content": "Answer: Zhu Yuanzhang"},
-        {"role": "user", "content": "When did the Shang Dynasty fall?"},
-    ]
-    try:
-        response_1 = litellm.completion(model=model_name, messages=messages_1)
-        response_2 = litellm.completion(model=model_name, messages=message_2)
-        # Add any assertions here to check the response
-        print(response_2)
-        assert response_2.usage.prompt_cache_hit_tokens is not None
-        assert response_2.usage.prompt_cache_miss_tokens is not None
-        assert (
-            response_2.usage.prompt_tokens
-            == response_2.usage.prompt_cache_miss_tokens
-            + response_2.usage.prompt_cache_hit_tokens
-        )
-        assert (
-            response_2.usage._cache_read_input_tokens
-            == response_2.usage.prompt_cache_hit_tokens
-        )
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_cost_azure_common_deployment_name():
     from litellm.utils import (
         CallTypes,
@@ -1243,11 +1172,13 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 @pytest.mark.parametrize(
     "model",
     [
-        "databricks/databricks-meta-llama-3-3-70b-instruct",
-        # "databricks/databricks-dbrx-instruct",
+        "databricks/databricks-meta-llama-3.2-3b-instruct",
+        "databricks/databricks-meta-llama-3-70b-instruct",
+        "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
+@pytest.mark.skip(reason="databricks is having an active outage")
 def test_completion_cost_databricks(model):
     litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

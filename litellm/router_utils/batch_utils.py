@@ -7,9 +7,10 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 
 
 class InMemoryFile(io.BytesIO):
-    def __init__(self, content: bytes, name: str):
+    def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
         super().__init__(content)
         self.name = name
+        self.content_type = content_type
 
 
 def should_replace_model_in_jsonl(
@@ -63,7 +64,7 @@ def replace_model_in_jsonl(file_content: FileTypes, new_model_name: str) -> File
 
         # Reassemble the modified lines and return as bytes
         modified_file_content = "\n".join(modified_lines).encode("utf-8")
-        return InMemoryFile(modified_file_content, name="modified_file.jsonl")  # type: ignore
+        return InMemoryFile(modified_file_content, name="modified_file.jsonl", content_type="application/jsonl")  # type: ignore
 
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
         # return the original file content if there is an error replacing the model name
@@ -79,7 +80,7 @@ def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
     For ALL other endpoints we call this "metadata
     """
     ROUTER_METHODS_USING_LITELLM_METADATA = set(
-        ["batch", "generic_api_call", "_acreate_batch", "file"]
+        ["batch", "generic_api_call", "_acreate_batch", "file", "_ageneric_api_call_with_fallbacks"]
     )
     if function_name and any(
         method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA

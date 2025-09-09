@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -17,6 +18,7 @@ from ..chat.transformation import BaseConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.router import Router as _Router
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
@@ -32,6 +34,16 @@ class BaseFilesConfig(BaseConfig):
     @abstractmethod
     def custom_llm_provider(self) -> LlmProviders:
         pass
+
+    @property
+    def file_upload_http_method(self) -> str:
+        """
+        HTTP method to use for file uploads.
+        Override this in provider configs if they need different methods.
+        Default is POST (used by most providers like OpenAI, Anthropic).
+        S3-based providers like Bedrock should return "PUT".
+        """
+        return "POST"
 
     @abstractmethod
     def get_supported_openai_params(
@@ -115,6 +127,7 @@ class BaseFileEndpoints(ABC):
         llm_router: Router,
         target_model_names_list: List[str],
         litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
         pass
 
@@ -152,5 +165,5 @@ class BaseFileEndpoints(ABC):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> str:
+    ) -> "HttpxBinaryResponseContent":
         pass
