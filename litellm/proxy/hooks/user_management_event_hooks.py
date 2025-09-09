@@ -7,9 +7,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-    BaseEmailLogger,
-)
 from pydantic import BaseModel
 
 import litellm
@@ -111,17 +108,29 @@ class UserManagementEventHooks:
         #########################################################
         ########## V2 USER INVITATION EMAIL ################
         #########################################################
-        initialized_email_loggers = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
             )
-        )
-        if len(initialized_email_loggers) > 0:
-            for email_logger in initialized_email_loggers:
-                if isinstance(email_logger, BaseEmailLogger):
-                    await email_logger.send_user_invitation_email(
-                        event=event,
-                    )
+
+            use_enterprise_email_hooks = True
+        except ImportError:
+            verbose_proxy_logger.warning(
+                "Defaulting to using Legacy Email Hooks."
+                + CommonProxyErrors.missing_enterprise_package.value
+            )
+            use_enterprise_email_hooks = False
+
+        if use_enterprise_email_hooks:
+            initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=BaseEmailLogger  # type: ignore
+            )
+            if len(initialized_email_loggers) > 0:
+                for email_logger in initialized_email_loggers:
+                    if isinstance(email_logger, BaseEmailLogger):  # type: ignore
+                        await email_logger.send_user_invitation_email(  # type: ignore
+                            event=event,
+                        )
 
         #########################################################
         ########## LEGACY V1 USER INVITATION EMAIL ################

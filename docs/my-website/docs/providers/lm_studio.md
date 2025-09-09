@@ -153,3 +153,26 @@ response = embedding(
 )
 print(response)
 ```
+
+
+## Structured Output
+
+LM Studio supports structured outputs via JSON Schema. You can pass a pydantic model or a raw schema using `response_format`.
+LiteLLM sends the schema as `{ "type": "json_schema", "json_schema": {"schema": <your schema>} }`.
+
+```python
+from pydantic import BaseModel
+from litellm import completion
+
+class Book(BaseModel):
+    title: str
+    author: str
+    year: int
+
+response = completion(
+    model="lm_studio/llama-3-8b-instruct",
+    messages=[{"role": "user", "content": "Tell me about The Hobbit"}],
+    response_format=Book,
+)
+print(response.choices[0].message.content)
+```

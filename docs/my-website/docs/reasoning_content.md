@@ -12,12 +12,15 @@ Requires LiteLLM v1.63.0+
 Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
-- Bedrock (Anthropic + Deepseek) (`bedrock/`)
+- Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
 - XAI (`xai/`)
 - Google AI Studio (`google/`)
 - Vertex AI (`vertex_ai/`)
+- Perplexity (`perplexity/`)
+- Mistral AI (Magistral models) (`mistral/`)
+- Groq (`groq/`)
 
 LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 

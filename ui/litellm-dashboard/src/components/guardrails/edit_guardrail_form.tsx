@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Form, Typography, Select, Input, Switch, Modal, message, Divider } from 'antd';
 import { Button, TextInput } from '@tremor/react';
-import { GuardrailProviders, guardrail_provider_map, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
+import NotificationsManager from '../molecules/notifications_manager';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -59,7 +60,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         setGuardrailSettings(data);
       } catch (error) {
         console.error('Error fetching guardrail settings:', error);
-        message.error('Failed to load guardrail settings');
+        NotificationsManager.fromBackend('Failed to load guardrail settings');
       }
     };
     
@@ -165,7 +166,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             guardrailData.guardrail.guardrail_info = configObj;
           }
         } catch (error) {
-          message.error('Invalid JSON in configuration');
+          NotificationsManager.fromBackend('Invalid JSON in configuration');
           setLoading(false);
           return;
         }
@@ -193,14 +194,14 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         throw new Error(errorData || "Failed to update guardrail");
       }
 
-      message.success('Guardrail updated successfully');
+      NotificationsManager.success('Guardrail updated successfully');
       
       // Reset and close
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to update guardrail:", error);
-      message.error('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
+      NotificationsManager.fromBackend('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }
@@ -375,7 +376,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             disabled={true} // Disable changing provider in edit mode
             optionLabelProp="label"
           >
-            {Object.entries(GuardrailProviders).map(([key, value]) => (
+                            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}

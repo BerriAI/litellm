@@ -9,6 +9,8 @@ Works for:
 - Vertex AI models (Gemini + Anthropic)
 - Bedrock Models
 - Anthropic API Models
+- OpenAI API Models
+- Mistral (Only using file ID of already uploaded file, similar to OpenAI file_id input)
 
 ## Quick Start
 
@@ -277,6 +279,71 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+
+## Mistral Example
+
+Here is a sample payload for using the Mistral model for document understanding:
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm.utils import completion
+
+# pdf file_id received from files endpoint
+file_id = "fa778e5e-46ec-4562-8418-36623fe25a71"
+
+# model
+model = "mistral/mistral-large-latest"
+
+file_content = [
+    {"type": "text", "text": "What's this file about?"},
+    {
+        "type": "file",
+        "file": {
+            "file_id": file_id,
+        }
+    },
+]
+
+response = completion(
+    model=model,
+    messages=[{"role": "user", "content": file_content}],
+)
+assert response is not None
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "mistral/mistral-large-latest",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What is the content of the file?"
+                },
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "fa778e5e-46ec-4562-8418-36623fe25a71"
+                    }
+                }
+            ]
+        }
+    ]
+}
+```
+</TabItem>
+</Tabs>
 
 ## Checking if a model supports pdf input
 

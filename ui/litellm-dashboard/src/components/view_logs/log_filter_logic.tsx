@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { uiSpendLogsCall } from "../networking";
+import { modelAvailableCall, uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
@@ -14,7 +14,9 @@ export const FILTER_KEYS = {
   REQUEST_ID: "Request ID",
   MODEL: "Model",
   USER_ID: "User ID",
-  STATUS: "Status"
+  END_USER: "End User",
+  STATUS: "Status",
+  KEY_ALIAS: "Key Alias",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -27,7 +29,9 @@ export function useLogFilterLogic({
   endTime,   // Receive from SpendLogsTable
   pageSize = defaultPageSize,
   isCustomDate,
-  setCurrentPage
+  setCurrentPage,
+  userID,  
+  userRole 
 }: {
   logs: PaginatedResponse;
   accessToken: string | null;
@@ -36,6 +40,8 @@ export function useLogFilterLogic({
   pageSize?: number;
   isCustomDate: boolean;
   setCurrentPage: (page: number) => void;
+  userID: string | null; 
+  userRole: string | null; 
 }) {
   const defaultFilters = useMemo<LogFilterState>(() => ({
     [FILTER_KEYS.TEAM_ID]: "",
@@ -43,7 +49,9 @@ export function useLogFilterLogic({
     [FILTER_KEYS.REQUEST_ID]: "",
     [FILTER_KEYS.MODEL]: "",
     [FILTER_KEYS.USER_ID]: "",
-    [FILTER_KEYS.STATUS]: ""
+    [FILTER_KEYS.END_USER]: "",
+    [FILTER_KEYS.STATUS]: "",
+    [FILTER_KEYS.KEY_ALIAS]: ""
   }), []);
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
@@ -71,7 +79,9 @@ export function useLogFilterLogic({
         page,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
-        filters[FILTER_KEYS.STATUS] || undefined
+        filters[FILTER_KEYS.END_USER] || undefined,
+        filters[FILTER_KEYS.STATUS] || undefined,
+        filters[FILTER_KEYS.MODEL] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -90,6 +100,16 @@ export function useLogFilterLogic({
   useEffect(() => {
     return () => debouncedSearch.cancel();
   }, [debouncedSearch]);
+
+  const queryAllKeysQuery = useQuery({
+    queryKey: ['allKeys'],
+    queryFn: async () => {
+      if (!accessToken) throw new Error('Access token required');
+      return await fetchAllKeyAliases(accessToken);
+    },
+    enabled: !!accessToken
+  });
+  const allKeyAliases = queryAllKeysQuery.data || []
 
   // Apply filters to keys whenever logs or filters change
   useEffect(() => {
@@ -122,7 +142,43 @@ export function useLogFilterLogic({
         }
       );
     }
+
+    if (filters[FILTER_KEYS.MODEL]) {
+      filteredData = filteredData.filter(
+        log => log.model === filters[FILTER_KEYS.MODEL]
+      );
+    }
+
+    if (filters[FILTER_KEYS.KEY_HASH]) {
+      filteredData = filteredData.filter(
+        log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
+      );
+    }
+
+    if (filters[FILTER_KEYS.END_USER]) {
+      filteredData = filteredData.filter(
+        log => log.end_user === filters[FILTER_KEYS.END_USER]
+      );
+    }
     
+    // Add key alias filtering
+    if (filters[FILTER_KEYS.KEY_ALIAS]) {
+      // We need to fetch the key info to get the key hash for the selected alias
+        try {
+          // Get the key hash for the selected alias
+          const selectedKey = filters[FILTER_KEYS.KEY_ALIAS]
+
+          if (selectedKey) {
+            // Filter logs by the key hash
+            filteredData = filteredData.filter(
+              log => log.metadata?.user_api_key_alias === selectedKey
+            );
+          }
+        } catch (error) {
+          console.error("Error fetching key info for alias:", error);
+        }
+    }
+
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
       total: logs.total,
@@ -134,17 +190,9 @@ export function useLogFilterLogic({
     if (JSON.stringify(newFilteredLogs) !== JSON.stringify(filteredLogs)) {
       setFilteredLogs(newFilteredLogs);
     }
-  }, [logs, filters, filteredLogs]);
+  }, [logs, filters, filteredLogs, accessToken]);
 
-  const queryAllKeysQuery = useQuery({
-    queryKey: ['allKeys'],
-    queryFn: async () => {
-      if (!accessToken) throw new Error('Access token required');
-      return await fetchAllKeyAliases(accessToken);
-    },
-    enabled: !!accessToken
-  });
-  const allKeyAliases = queryAllKeysQuery.data || []
+  
 
   // Fetch all teams and users for potential filter dropdowns (optional, can be adapted)
   const { data: allTeams } = useQuery<Team[], Error>({

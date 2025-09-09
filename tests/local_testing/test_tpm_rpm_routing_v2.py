@@ -554,8 +554,8 @@ async def test_router_caching_ttl():
 
     increment_cache_kwargs = {}
     with patch.object(
-        router.cache.redis_cache,
-        "async_increment",
+        router.cache,
+        "async_increment_cache_pipeline",
         new=AsyncMock(),
     ) as mock_client:
         await router.acompletion(model=model, messages=messages)
@@ -564,13 +564,25 @@ async def test_router_caching_ttl():
         print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
         print(f"mock_client.call_args.args: {mock_client.call_args.args}")
 
-        increment_cache_kwargs = {
-            "key": mock_client.call_args.args[0],
-            "value": mock_client.call_args.args[1],
-            "ttl": mock_client.call_args.kwargs["ttl"],
-        }
+        # Get the increment_list from the first positional argument or the keyword argument
+        increment_list = mock_client.call_args.kwargs.get(
+            "increment_list",
+            mock_client.call_args.args[0] if mock_client.call_args.args else None,
+        )
+        assert increment_list is not None
+        assert len(increment_list) > 0
 
-        assert mock_client.call_args.kwargs["ttl"] == 60
+        # Check that TTL is set to 60 for all operations
+        for operation in increment_list:
+            assert operation["ttl"] == 60
+
+        # Get the first operation for testing the redis increment
+        first_operation = increment_list[0]
+        increment_cache_kwargs = {
+            "key": first_operation["key"],
+            "value": first_operation["increment_value"],
+            "ttl": first_operation["ttl"],
+        }
 
     ## call redis async increment and check if ttl correctly set
     await router.cache.redis_cache.async_increment(**increment_cache_kwargs)

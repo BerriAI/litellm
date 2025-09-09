@@ -54,6 +54,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
             end_user_id=end_user_id,
             prisma_client="RANDOM VALUE",  # type: ignore
             user_api_key_cache=_cache,
+            route="/v1/chat/completions",
         )
         if customer_spend > customer_budget:
             pytest.fail(
@@ -410,7 +411,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_id="test-team",
             models=team_models,
         )
-        result = await can_team_access_model(
+        result = can_team_access_model(
             model=model,
             team_object=team_object,
             llm_router=None,

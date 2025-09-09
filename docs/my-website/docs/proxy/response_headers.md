@@ -32,7 +32,7 @@ These headers are useful for clients to understand the current rate limit status
 ## Latency Headers
 | Header | Type | Description |
 |--------|------|-------------|
-| `x-litellm-response-duration-ms` | float | Total duration of the API response in milliseconds |
+| `x-litellm-response-duration-ms` | float | Total duration from the moment that a request gets to LiteLLM Proxy to the moment it gets returned to the client. |
 | `x-litellm-overhead-duration-ms` | float | LiteLLM processing overhead in milliseconds |
 
 ## Retry, Fallback Headers

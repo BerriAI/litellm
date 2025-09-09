@@ -27,7 +27,8 @@
       "prompt_management_metadata": null,
       "applied_guardrails": [],
       "mcp_tool_call_metadata": null,
-      "vector_store_request_metadata": null
+      "vector_store_request_metadata": null,
+      "guardrail_information": null
     },
     "cache_key": null,
     "response_cost": 0.00022500000000000002,

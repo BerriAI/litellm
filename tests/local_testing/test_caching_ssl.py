@@ -99,6 +99,7 @@ def test_caching_router():
 
 
 # test_caching_router()
+@pytest.mark.skip(reason="redis cloud auth errors - need to re-enable")
 @pytest.mark.asyncio
 async def test_redis_with_ssl():
     """

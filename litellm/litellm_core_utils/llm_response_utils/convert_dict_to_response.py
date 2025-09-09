@@ -40,6 +40,34 @@ from litellm.types.utils import (
 from .get_headers import get_response_headers
 
 
+def _safe_convert_created_field(created_value) -> int:
+    """
+    Safely convert a 'created' field value to an integer.
+
+    Some providers (like SambaNova) return the 'created' field as a float
+    (Unix timestamp with fractional seconds), but LiteLLM expects an integer.
+
+    Args:
+        created_value: The value from response_object["created"]
+
+    Returns:
+        int: Unix timestamp as integer
+    """
+    if created_value is None:
+        return int(time.time())
+    elif isinstance(created_value, int):
+        return created_value
+    elif isinstance(created_value, float):
+        return int(created_value)
+    else:
+        # for strings, etc
+        try:
+            return int(float(created_value))
+        except (ValueError, TypeError):
+            # Fallback to current time if conversion fails
+            return int(time.time())
+
+
 def convert_tool_call_to_json_mode(
     tool_calls: List[ChatCompletionMessageToolCall],
     convert_tool_call_to_json_mode: bool,
@@ -133,7 +161,9 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(
+            response_object["created"]
+        )
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -181,7 +211,9 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(
+            response_object["created"]
+        )
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -293,6 +325,22 @@ class LiteLLMResponseObjectHandler:
         hidden_params: Optional[dict] = None,
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
+
+        # Handle gpt-image-1 usage field with None values
+        if "usage" in response_object and response_object["usage"] is not None:
+            usage = response_object["usage"]
+            # Check if usage fields are None and provide defaults
+            if usage.get("input_tokens") is None:
+                usage["input_tokens"] = 0
+            if usage.get("output_tokens") is None:
+                usage["output_tokens"] = 0
+            if usage.get("total_tokens") is None:
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            if usage.get("input_tokens_details") is None:
+                usage["input_tokens_details"] = {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                }
 
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
@@ -513,9 +561,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields[
-                            "reasoning_content"
-                        ] = reasoning_content
+                        provider_specific_fields["reasoning_content"] = (
+                            reasoning_content
+                        )
 
                     message = Message(
                         content=content,
@@ -527,11 +575,25 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         annotations=choice["message"].get("annotations", None),
+                        images=choice["message"].get("images", None),
                     )
                     finish_reason = choice.get("finish_reason", None)
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
+                if (
+                    finish_reason == "stop"
+                    and message.tool_calls
+                    and len(message.tool_calls) > 0
+                ):
+                    finish_reason = "tool_calls"
+
+                ## PROVIDER SPECIFIC FIELDS ##
+                provider_specific_fields = {}
+                for field in choice.keys():
+                    if field not in Choices.model_fields.keys():
+                        provider_specific_fields[field] = choice[field]
+
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(
@@ -540,6 +602,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     message=message,
                     logprobs=logprobs,
                     enhancements=enhancements,
+                    provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
             model_response_object.choices = choice_list
@@ -548,8 +611,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 usage_object = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = response_object["created"] or int(
-                    time.time()
+                model_response_object.created = _safe_convert_created_field(
+                    response_object["created"]
                 )
 
             if "id" in response_object:

@@ -12,6 +12,7 @@ All exceptions can be imported from `litellm` - e.g. `from litellm import BadReq
 | 400 | UnsupportedParamsError | litellm.BadRequestError | Raised when unsupported params are passed |
 | 400         | ContextWindowExceededError| litellm.BadRequestError | Special error type for context window exceeded error messages - enables context window fallbacks |
 | 400         | ContentPolicyViolationError| litellm.BadRequestError | Special error type for content policy violation error messages - enables content policy fallbacks |
+| 400         | ImageFetchError | litellm.BadRequestError | Raised when there are errors fetching or processing images |
 | 400 | InvalidRequestError | openai.BadRequestError | Deprecated error, use BadRequestError instead |
 | 401         | AuthenticationError      | openai.AuthenticationError |
 | 403         | PermissionDeniedError    | openai.PermissionDeniedError |

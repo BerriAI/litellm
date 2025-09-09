@@ -236,20 +236,24 @@ async def test_presidio_pre_call_hook_with_different_call_types(call_type):
 def test_validate_environment_missing_http(base_url):
     pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = f"{base_url}/analyze"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = f"{base_url}/anonymize"
-    pii_masking.validate_environment()
+    # Use patch.dict to temporarily modify environment variables only for this test
+    env_vars = {
+        "PRESIDIO_ANALYZER_API_BASE": f"{base_url}/analyze",
+        "PRESIDIO_ANONYMIZER_API_BASE": f"{base_url}/anonymize"
+    }
+    with patch.dict(os.environ, env_vars):
+        pii_masking.validate_environment()
 
-    expected_url = base_url
-    if not (base_url.startswith("https://") or base_url.startswith("http://")):
-        expected_url = "http://" + base_url
+        expected_url = base_url
+        if not (base_url.startswith("https://") or base_url.startswith("http://")):
+            expected_url = "http://" + base_url
 
-    assert (
-        pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
-    ), "Got={}, Expected={}".format(
-        pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
-    )
-    assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
+        assert (
+            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+        ), "Got={}, Expected={}".format(
+            pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
+        )
+        assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
 
 
 @pytest.mark.asyncio
@@ -433,6 +437,10 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
 
 
 @pytest.mark.asyncio
+@patch.dict(os.environ, {
+    "PRESIDIO_ANALYZER_API_BASE": "http://localhost:5002",
+    "PRESIDIO_ANONYMIZER_API_BASE": "http://localhost:5001"
+})
 async def test_presidio_pii_masking_logging_output_only_logged_response_guardrails_config():
     from typing import Dict, List, Optional
 
@@ -445,9 +453,8 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     )
 
     litellm.set_verbose = True
-    os.environ["PRESIDIO_ANALYZER_API_BASE"] = "http://localhost:5002"
-    os.environ["PRESIDIO_ANONYMIZER_API_BASE"] = "http://localhost:5001"
-
+    # Environment variables are now patched via the decorator instead of setting them directly
+    
     guardrails_config: List[Dict[str, GuardrailItemSpec]] = [
         {
             "pii_masking": {
@@ -483,3 +490,105 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
     assert pii_masking_obj.should_run_guardrail(
         data={}, event_type=GuardrailEventHooks.logging_only
     )
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration():
+    """Test that presidio_language parameter is properly set and used in analyze requests"""
+    litellm._turn_on_debug()
+    
+    # Test with German language using mock testing to avoid API calls
+    presidio_guardrail_de = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_language="de",
+        mock_testing=True  # This bypasses the API validation
+    )
+    
+    test_text = "Meine Telefonnummer ist +49 30 12345678"
+    
+    # Test the analyze request configuration
+    analyze_request = presidio_guardrail_de._get_presidio_analyze_request_payload(
+        text=test_text,
+        presidio_config=None,
+        request_data={}
+    )
+    
+    # Verify the language is set to German
+    assert analyze_request["language"] == "de"
+    assert analyze_request["text"] == test_text
+    
+    # Test with Spanish language
+    presidio_guardrail_es = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_language="es",
+        mock_testing=True
+    )
+    
+    test_text_es = "Mi número de teléfono es +34 912 345 678"
+    
+    analyze_request_es = presidio_guardrail_es._get_presidio_analyze_request_payload(
+        text=test_text_es,
+        presidio_config=None,
+        request_data={}
+    )
+    
+    # Verify the language is set to Spanish
+    assert analyze_request_es["language"] == "es"
+    assert analyze_request_es["text"] == test_text_es
+    
+    # Test default language (English) when not specified
+    presidio_guardrail_default = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        mock_testing=True
+    )
+    
+    test_text_en = "My phone number is +1 555-123-4567"
+    
+    analyze_request_default = presidio_guardrail_default._get_presidio_analyze_request_payload(
+        text=test_text_en,
+        presidio_config=None,
+        request_data={}
+    )
+    
+    # Verify the language defaults to English
+    assert analyze_request_default["language"] == "en"
+    assert analyze_request_default["text"] == test_text_en
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration_with_per_request_override():
+    """Test that per-request language configuration overrides the default configured language"""
+    litellm._turn_on_debug()
+    
+    # Set up guardrail with German as default language
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_language="de",
+        mock_testing=True
+    )
+    
+    test_text = "Test text with PII"
+    
+    # Test with per-request config overriding the default language
+    presidio_config = PresidioPerRequestConfig(language="fr")
+    
+    analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text,
+        presidio_config=presidio_config,
+        request_data={}
+    )
+    
+    # Verify the per-request language (French) overrides the default (German)
+    assert analyze_request["language"] == "fr"
+    assert analyze_request["text"] == test_text
+    
+    # Test without per-request config - should use default language
+    analyze_request_default = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text,
+        presidio_config=None,
+        request_data={}
+    )
+    
+    # Verify the default language (German) is used
+    assert analyze_request_default["language"] == "de"
+    assert analyze_request_default["text"] == test_text

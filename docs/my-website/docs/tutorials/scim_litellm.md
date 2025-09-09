@@ -1,7 +1,10 @@
 
 import Image from '@theme/IdealImage';
 
+
 # SCIM with LiteLLM
+
+✨ **Enterprise**: SCIM support requires a premium license.
 
 Enables identity providers (Okta, Azure AD, OneLogin, etc.) to automate user and team (group) provisioning, updates, and deprovisioning on LiteLLM.
 
@@ -69,6 +72,7 @@ On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production 
 
 <Image img={require('../../img/msft_auto_team.png')}  style={{ width: '900px', height: 'auto' }} />
 
+> **Note:** When a user is removed from your organization via SCIM, all API keys and access tokens associated with that user will be automatically deleted from LiteLLM. This ensures that removed users lose all access immediately and securely.
 
 
 

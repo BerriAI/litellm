@@ -1,5 +1,6 @@
 import { LogEntry } from "./columns";
 import { message } from "antd";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface RequestResponsePanelProps {
   row: {
@@ -22,24 +23,58 @@ export function RequestResponsePanel({
   getRawRequest,
   formattedResponse,
 }: RequestResponsePanelProps) {
-  const handleCopyRequest = () => {
+  const copyToClipboard = async (text: string) => {
     try {
-      navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2));
-      message.success('Request copied to clipboard');
+      // Try modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } else {
+        // Fallback for non-secure contexts (like 0.0.0.0)
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (!successful) {
+          throw new Error('execCommand failed');
+        }
+        return true;
+      }
     } catch (error) {
-      message.error('Failed to copy request');
+      console.error('Copy failed:', error);
+      return false;
     }
   };
 
-  const handleCopyResponse = () => {
-    navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2));
-    message.success('Response copied to clipboard');
+  const handleCopyRequest = async () => {
+    const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
+    if (success) {
+      NotificationsManager.success('Request copied to clipboard');
+    } else {
+      NotificationsManager.fromBackend('Failed to copy request');
+    }
+  };
+
+  const handleCopyResponse = async () => {
+    const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
+    if (success) {
+      NotificationsManager.success('Response copied to clipboard');
+    } else {
+      NotificationsManager.fromBackend('Failed to copy response');
+    }
   };
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 w-full max-w-full overflow-hidden box-border">
       {/* Request Side */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">Request</h3>
           <button 
@@ -53,13 +88,13 @@ export function RequestResponsePanel({
             </svg>
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96">
-          <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(getRawRequest(), null, 2)}</pre>
+        <div className="p-4 overflow-auto max-h-96 w-full max-w-full box-border">
+          <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(getRawRequest(), null, 2)}</pre>
         </div>
       </div>
 
       {/* Response Side */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">
             Response
@@ -81,9 +116,9 @@ export function RequestResponsePanel({
             </svg>
           </button>
         </div>
-        <div className="p-4 overflow-auto max-h-96 bg-gray-50">
+        <div className="p-4 overflow-auto max-h-96 bg-gray-50 w-full max-w-full box-border">
           {hasResponse ? (
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">{JSON.stringify(formattedResponse(), null, 2)}</pre>
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all w-full max-w-full overflow-hidden break-words">{JSON.stringify(formattedResponse(), null, 2)}</pre>
           ) : (
             <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
           )}

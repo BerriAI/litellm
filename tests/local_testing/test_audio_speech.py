@@ -315,3 +315,13 @@ def test_audio_speech_cost_calc():
         ]
         print(f"standard_logging_payload: {standard_logging_payload}")
         assert standard_logging_payload["response_cost"] > 0
+
+
+def test_audio_speech_gemini():
+    result = litellm.speech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="the quick brown fox jumped over the lazy dogs",
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+
+    print(result)

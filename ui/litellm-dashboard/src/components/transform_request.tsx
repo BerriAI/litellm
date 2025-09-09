@@ -3,6 +3,7 @@ import { Button, Select, Tabs, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { Title } from '@tremor/react';
 import { transformRequestCall } from './networking';
+import NotificationsManager from "./molecules/notifications_manager";
 interface TransformRequestPanelProps {
   accessToken: string | null;
 }
@@ -67,7 +68,7 @@ ${formattedBody}
       try {
         requestBody = JSON.parse(originalRequestJSON);
       } catch (e) {
-        message.error('Invalid JSON in request body');
+        NotificationsManager.fromBackend('Invalid JSON in request body');
         setIsLoading(false);
         return;
       }
@@ -80,7 +81,7 @@ ${formattedBody}
       
       // Make the API call using fetch
       if (!accessToken) {
-        message.error('No access token found');
+        NotificationsManager.fromBackend('No access token found');
         setIsLoading(false);
         return;
       }
@@ -98,17 +99,17 @@ ${formattedBody}
         
         // Update state with the formatted curl command
         setTransformedResponse(formattedCurl);
-        message.success('Request transformed successfully');
+        NotificationsManager.success('Request transformed successfully');
       } else {
         // Handle the case where the API returns a different format
         // Try to extract the parts from a string response if needed
         const rawText = typeof data === 'string' ? data : JSON.stringify(data);
         setTransformedResponse(rawText);
-        message.info('Transformed request received in unexpected format');
+        NotificationsManager.info('Transformed request received in unexpected format');
       }
     } catch (err) {
       console.error('Error transforming request:', err);
-      message.error('Failed to transform request');
+      NotificationsManager.fromBackend('Failed to transform request');
     } finally {
       setIsLoading(false);
     }
@@ -257,7 +258,7 @@ ${formattedBody}
             size="small"
             onClick={() => {
               navigator.clipboard.writeText(transformedResponse || '');
-              message.success('Copied to clipboard');
+              NotificationsManager.success('Copied to clipboard');
             }}
           />
         </div>

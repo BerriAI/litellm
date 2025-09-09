@@ -1,20 +1,12 @@
-import os
 from typing import Dict, Literal, Type, Union
 
-from litellm.integrations.custom_logger import CustomLogger
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
-from .managed_files import _PROXY_LiteLLMManagedFiles
-from .parallel_request_limiter_v2 import _PROXY_MaxParallelRequestsHandler
+from litellm.integrations.custom_logger import CustomLogger
 
 ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
     "managed_files": _PROXY_LiteLLMManagedFiles,
 }
-
-
-## FEATURE FLAG HOOKS ##
-
-if os.getenv("EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING", "false").lower() == "true":
-    ENTERPRISE_PROXY_HOOKS["max_parallel_requests"] = _PROXY_MaxParallelRequestsHandler
 
 
 def get_enterprise_proxy_hook(
@@ -24,7 +16,7 @@ def get_enterprise_proxy_hook(
             "max_parallel_requests",
         ],
         str,
-    ]
+    ],
 ):
     """
     Factory method to get a enterprise hook instance by name

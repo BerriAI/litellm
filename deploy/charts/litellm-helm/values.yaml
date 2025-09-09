@@ -27,6 +27,9 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
+# annotations for litellm deployment
+deploymentAnnotations: {}
+# annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
 
@@ -56,6 +59,15 @@ environmentConfigMaps: []
 service:
   type: ClusterIP
   port: 4000
+  # If service type is `LoadBalancer` you can
+  # optionally specify loadBalancerClass
+  # loadBalancerClass: tailscale
+
+# Separate health app configuration
+# When enabled, health checks will use a separate port and the application
+# will receive SEPARATE_HEALTH_APP=1 and SEPARATE_HEALTH_PORT from environment variables
+separateHealthApp: false
+separateHealthPort: 8081
 
 ingress:
   enabled: false
@@ -80,6 +92,14 @@ masterkeySecretName: ""
 
 # if set, use this secret key for the master key; otherwise, use the default key
 masterkeySecretKey: ""
+
+proxyConfigMap:
+  # when true, creates a new configmap
+  create: true
+  # if create is false and name is set, use existing ConfigMap
+  # create: false
+  # name: ""
+  # key: "config.yaml"
 
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
@@ -149,6 +169,8 @@ db:
     name: postgres
     usernameKey: username
     passwordKey: password
+    # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
+    endpointKey: ""
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
@@ -194,6 +216,18 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
   ttlSecondsAfterFinished: 120
+  resources: {}
+  #  requests:
+  #    cpu: 100m
+  #    memory: 100Mi
+  extraContainers: []
+  
+  # Hook configuration
+  hooks:
+    argocd:
+      enabled: true
+    helm:
+      enabled: false
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
@@ -206,4 +240,11 @@ extraEnvVars: {
     #   value: EXTRA_ENV_VAR_VALUE
 }
 
-
+# Pod Disruption Budget
+pdb:
+  enabled: false
+  # Set exactly one of the following. If both are set, minAvailable takes precedence.
+  minAvailable: null     # e.g. "50%" or 1
+  maxUnavailable: null   # e.g. 1 or "20%"
+  annotations: {}
+  labels: {}

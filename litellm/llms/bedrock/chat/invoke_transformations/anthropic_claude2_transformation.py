@@ -59,6 +59,14 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
             and v is not None
         }
 
+    @staticmethod
+    def get_legacy_anthropic_model_names():
+        return [
+            "anthropic.claude-v2",
+            "anthropic.claude-instant-v1",
+            "anthropic.claude-v2:1",
+        ]
+
     def get_supported_openai_params(self, model: str):
         return [
             "max_tokens",

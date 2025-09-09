@@ -1,4 +1,3 @@
-version: "3.11"
 services:
   litellm:
     build:
@@ -21,18 +20,13 @@ services:
     env_file:
       - .env # Load local .env file
     depends_on:
-      - db # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
-    healthcheck: # Defines the health check configuration for the container
-      test: [
-          "CMD",
-          "curl",
-          "-f",
-          "http://localhost:4000/health/liveliness || exit 1",
-        ] # Command to execute for health check
-      interval: 30s # Perform health check every 30 seconds
-      timeout: 10s # Health check command times out after 10 seconds
-      retries: 3 # Retry up to 3 times if health check fails
-      start_period: 40s # Wait 40 seconds after container start before beginning health checks
+      - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
+    healthcheck:  # Defines the health check configuration for the container
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 http://localhost:4000/health/liveliness || exit 1" ]  # Command to execute for health check
+      interval: 30s  # Perform health check every 30 seconds
+      timeout: 10s   # Health check command times out after 10 seconds
+      retries: 3     # Retry up to 3 times if health check fails
+      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
 
   db:
     image: postgres:16
@@ -70,4 +64,3 @@ volumes:
     driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
-

@@ -5,6 +5,8 @@ import { Button } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { all_admin_roles } from "../utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+
 interface UserEditViewProps {
   userData: any;
   onCancel: () => void;
@@ -15,6 +17,7 @@ interface UserEditViewProps {
   userRole: string | null;
   userModels: string[];
   possibleUIRoles: Record<string, Record<string, string>> | null;
+  isBulkEdit?: boolean;
 }
 
 export function UserEditView({
@@ -27,6 +30,7 @@ export function UserEditView({
   userRole,
   userModels,
   possibleUIRoles,
+  isBulkEdit = false,
 }: UserEditViewProps) {
   const [form] = Form.useForm();
 
@@ -38,6 +42,7 @@ export function UserEditView({
       user_role: userData.user_info?.user_role,
       models: userData.user_info?.models || [],
       max_budget: userData.user_info?.max_budget,
+      budget_duration: userData.user_info?.budget_duration,
       metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     });
   }, [userData, form]);
@@ -62,19 +67,23 @@ export function UserEditView({
       onFinish={handleSubmit}
       layout="vertical"
     >
-      <Form.Item
-        label="User ID"
-        name="user_id"
-      >
-        <TextInput disabled />
-      </Form.Item>
+      {!isBulkEdit && (
+        <Form.Item
+          label="User ID"
+          name="user_id"
+        >
+          <TextInput disabled />
+        </Form.Item>
+      )}
 
-      <Form.Item
-        label="Email"
-        name="user_email"
-      >
-        <TextInput />
-      </Form.Item>
+      {!isBulkEdit && (
+        <Form.Item
+          label="Email"
+          name="user_email"
+        >
+          <TextInput />
+        </Form.Item>
+      )}
 
       <Form.Item label={
                   <span>
@@ -126,6 +135,9 @@ export function UserEditView({
           <Select.Option key="all-proxy-models" value="all-proxy-models">
             All Proxy Models
           </Select.Option>
+          <Select.Option key="no-default-models" value="no-default-models">
+            No Default Models
+          </Select.Option>
           {userModels.map((model) => (
             <Select.Option key={model} value={model}>
               {getModelDisplayName(model)}
@@ -145,6 +157,10 @@ export function UserEditView({
         />
       </Form.Item>
 
+      <Form.Item label="Reset Budget" name="budget_duration">
+        <BudgetDurationDropdown />
+      </Form.Item>
+
       <Form.Item
         label="Metadata"
         name="metadata"
@@ -156,7 +172,7 @@ export function UserEditView({
       </Form.Item>
 
       <div className="flex justify-end space-x-2">
-        <Button variant="secondary" onClick={onCancel}>
+        <Button variant="secondary" type="button" onClick={onCancel}>
           Cancel
         </Button>
         <Button type="submit">

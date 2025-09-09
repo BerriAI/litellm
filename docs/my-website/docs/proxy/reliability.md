@@ -117,7 +117,7 @@ response = router.completion(
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -628,7 +628,7 @@ litellm_settings:
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "gpt-4",
   "messages": [
     {
@@ -655,7 +655,7 @@ Check if your fallbacks are working as expected.
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -674,7 +674,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -693,7 +693,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "my-bad-model",
   "messages": [
     {
@@ -892,7 +892,7 @@ litellm_settings:
 
 This will default to claude-opus in case any model fails.
 
-A model-specific fallbacks (e.g. {"gpt-3.5-turbo-small": ["claude-opus"]}) overrides default fallback.
+A model-specific fallbacks (e.g. `{"gpt-3.5-turbo-small": ["claude-opus"]}`) overrides default fallback.
 
 ### EU-Region Filtering (Pre-Call Checks)
 

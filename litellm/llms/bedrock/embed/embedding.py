@@ -5,6 +5,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 from typing import Any, Callable, List, Optional, Tuple, Union
+import urllib.parse
 
 import httpx
 
@@ -156,28 +157,23 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_region_name: str,
         model: str,
         logging_obj: Any,
+        api_key: Optional[str] = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         responses: List[dict] = []
         for data in batch_data:
-            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-            request = AWSRequest(
-                method="POST", url=endpoint_url, data=json.dumps(data), headers=headers
-            )
-            sigv4.add_auth(request)
-            if (
-                extra_headers is not None and "Authorization" in extra_headers
-            ):  # prevent sigv4 from overwriting the auth header
-                request.headers["Authorization"] = extra_headers["Authorization"]
-            prepped = request.prepare()
+                
+            prepped = self.get_request_headers(
+                 credentials=credentials,
+                 aws_region_name=aws_region_name,
+                 extra_headers=extra_headers,
+                 endpoint_url=endpoint_url,
+                 data=json.dumps(data),
+                 headers=headers,
+                 api_key=api_key
+             )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -245,28 +241,23 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_region_name: str,
         model: str,
         logging_obj: Any,
+        api_key: Optional[str] = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         responses: List[dict] = []
         for data in batch_data:
-            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-            request = AWSRequest(
-                method="POST", url=endpoint_url, data=json.dumps(data), headers=headers
-            )
-            sigv4.add_auth(request)
-            if (
-                extra_headers is not None and "Authorization" in extra_headers
-            ):  # prevent sigv4 from overwriting the auth header
-                request.headers["Authorization"] = extra_headers["Authorization"]
-            prepped = request.prepare()
+                
+            prepped = self.get_request_headers(
+                 credentials=credentials,
+                 aws_region_name=aws_region_name,
+                 extra_headers=extra_headers,
+                 endpoint_url=endpoint_url,
+                 data=json.dumps(data),
+                 headers=headers,
+                 api_key=api_key,
+             )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -338,16 +329,21 @@ class BedrockEmbedding(BaseAWSLLM):
         extra_headers: Optional[dict],
         optional_params: dict,
         litellm_params: dict,
+        api_key: Optional[str] = None,
     ) -> EmbeddingResponse:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
         credentials, aws_region_name = self._load_credentials(optional_params)
 
         ### TRANSFORMATION ###
+        unencoded_model_id = (
+            optional_params.pop("model_id", None) or model
+        ) # default to model if not passed
+        modelId = urllib.parse.quote(unencoded_model_id, safe="")
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params,
+            model=model,
+            model_id=unencoded_model_id,
+        )
+
         provider = model.split(".")[0]
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
@@ -358,9 +354,6 @@ class BedrockEmbedding(BaseAWSLLM):
         inference_params.pop(
             "user", None
         )  # make sure user is not passed in for bedrock call
-        modelId = (
-            optional_params.pop("model_id", None) or model
-        )  # default to model if not passed
 
         data: Optional[CohereEmbeddingRequest] = None
         batch_data: Optional[List] = None
@@ -428,6 +421,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     aws_region_name=aws_region_name,
                     model=model,
                     logging_obj=logging_obj,
+                    api_key=api_key,
                 )
             return self._single_func_embeddings(
                 client=(
@@ -443,24 +437,24 @@ class BedrockEmbedding(BaseAWSLLM):
                 aws_region_name=aws_region_name,
                 model=model,
                 logging_obj=logging_obj,
+                api_key=api_key,
             )
         elif data is None:
             raise Exception("Unable to map Bedrock request to provider")
 
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=json.dumps(data), headers=headers
+        
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=json.dumps(data),
+            headers=headers,
+            api_key=api_key,
         )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped = request.prepare()
 
         ## ROUTING ##
         return cohere_embedding(

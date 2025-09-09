@@ -18,6 +18,7 @@ import { InputNumber, message } from "antd";
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 import DynamicForm from "./dynamic_form";
+import NotificationsManager from "../molecules/notifications_manager";
 interface alertingSettingsItem {
   field_name: string;
   field_type: string;
@@ -96,7 +97,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({
         }
       }
       // update value in state
-      message.success("Wait 10s for proxy to update.");
+      NotificationsManager.success("Wait 10s for proxy to update.");
     } catch (error) {
       // do something
     }

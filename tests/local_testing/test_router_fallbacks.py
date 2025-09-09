@@ -1139,9 +1139,9 @@ async def test_router_content_policy_fallbacks(
     router = Router(
         model_list=[
             {
-                "model_name": "claude-2.1",
+                "model_name": "claude-3-5-sonnet-latest",
                 "litellm_params": {
-                    "model": "claude-2.1",
+                    "model": "anthropic/claude-3-5-sonnet-latest",
                     "api_key": "",
                     "mock_response": mock_response,
                 },
@@ -1165,7 +1165,7 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2.1",
+                    "model": "anthropic/claude-3-5-sonnet-latest",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
@@ -1173,14 +1173,14 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "claude-2.1",
+                    "model": "anthropic/claude-3-5-sonnet-latest",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-2.1": ["my-fallback-model"]}]
+            [{"claude-3-5-sonnet-latest": ["my-fallback-model"]}]
             if fallback_type == "model-specific"
             else None
         ),
@@ -1191,12 +1191,12 @@ async def test_router_content_policy_fallbacks(
 
     if sync_mode is True:
         response = router.completion(
-            model="claude-2.1",
+            model="claude-3-5-sonnet-latest",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
         response = await router.acompletion(
-            model="claude-2.1",
+            model="claude-3-5-sonnet-latest",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 

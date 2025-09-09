@@ -52,6 +52,7 @@ from litellm import completion
 ## Set env variables
 os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
+# os.environ["HELICONE_API_BASE"] = "" # [OPTIONAL] defaults to `https://api.helicone.ai`
 
 # Set callbacks
 litellm.success_callback = ["helicone"]
