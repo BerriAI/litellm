@@ -58,7 +58,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)
-        
+
         # Then set our attributes (this ensures project_id is not overwritten)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
@@ -94,14 +94,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"model_response_data": {"text": content}}
 
-
-
     def _extract_content_from_response(
         self, response: Union[Any, ModelResponse]
     ) -> str:
         """
         Extract text content from model response.
-        
+
         Returns empty string for non-text responses (TTS, images, etc.) to skip guardrail processing.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -193,35 +191,33 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _should_block_content(self, armor_response: dict) -> bool:
         """Check if Model Armor response indicates content should be blocked."""
-         # Check the sanitizationResult from Model Armor API
+        # Check the sanitizationResult from Model Armor API
         sanitization_result = armor_response.get("sanitizationResult", {})
-
-        # Primary check: overall filter match state
-        if sanitization_result.get("filterMatchState") == "MATCH_FOUND":
-            return True
-
-        # Secondary check: individual filter results
         filter_results = sanitization_result.get("filterResults", {})
 
-        # Check RAI (Responsible AI) filters
+        # Check blocking filters (these should cause the request to be blocked)
+        # RAI (Responsible AI) filters
         rai_results = filter_results.get("rai", {}).get("raiFilterResult", {})
         if rai_results.get("matchState") == "MATCH_FOUND":
             return True
 
-        # Check prompt injection and jailbreak filters
+        # Prompt injection and jailbreak filters
         pi_jailbreak = filter_results.get("piAndJailbreakFilterResult", {})
         if pi_jailbreak.get("matchState") == "MATCH_FOUND":
             return True
-        
-        malicious_uri = filter_results.get("maliciousUriFilterResult",{})
+
+        # Malicious URI filters
+        malicious_uri = filter_results.get("maliciousUriFilterResult", {})
         if malicious_uri.get("matchState") == "MATCH_FOUND":
             return True
 
-        csam = filter_results.get("csamFilterFilterResult",{})
+        # CSAM filters
+        csam = filter_results.get("csamFilterFilterResult", {})
         if csam.get("matchState") == "MATCH_FOUND":
             return True
-        
-        virus_scan = filter_results.get("virusScanFilterResult",{})
+
+        # Virus scan filters
+        virus_scan = filter_results.get("virusScanFilterResult", {})
         if virus_scan.get("matchState") == "MATCH_FOUND":
             return True
 
@@ -230,17 +226,22 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _get_sanitized_content(self, armor_response: dict) -> Optional[str]:
         """Extract sanitized content from Model Armor response."""
         # Model Armor returns sanitized content in the sanitizationResult
-        sdp = armor_response.get("sanitizationResult", {}).get("filterResults",{}).get("sdpFilterResults")
+        sanitization_result = armor_response.get("sanitizationResult", {})
 
-        # Model Armor returns sanitized text under deindentifyResult in sdp 
-        deidentify_result = sdp.get("deidentifyResult",{})
-        sanitized_text = deidentify_result.get("data",{}).get("text","")
-        if deidentify_result.get("matchState") == "MATCH_FOUND" and sanitized_text:
-            return sanitized_text
+        # Check for sdp structure (for deidentification)
+        filter_results = sanitization_result.get("filterResults", {})
+        sdp = filter_results.get("sdp", {}).get("sdpFilterResult")
+
+        if sdp is not None:
+            # Model Armor returns sanitized text under deidentifyResult in sdp
+            deidentify_result = sdp.get("deidentifyResult", {})
+            sanitized_text = deidentify_result.get("data", {}).get("text", "")
+            if deidentify_result.get("matchState") == "MATCH_FOUND" and sanitized_text:
+                return sanitized_text
 
         # Fallback to checking root level
         return armor_response.get("sanitizedText") or armor_response.get("text")
-    
+
     def _process_response(
         self,
         response: Optional[dict],
@@ -254,7 +255,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         This prevents circular references in logging.
         """
         # Retrieve the Model Armor response & status stored on the per-request `metadata` object.
-        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+        metadata = (
+            request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+        )
 
         guardrail_response = metadata.get("_model_armor_response", {})
 
@@ -332,13 +335,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             #   This ensures each request logs its own Model Armor response instead of a potentially stale value
             #   overwritten by another coroutine.
             if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})  # ensures metadata exists and is unique per request
+                metadata = data.setdefault(
+                    "metadata", {}
+                )  # ensures metadata exists and is unique per request
                 metadata["_model_armor_response"] = armor_response
                 # Pre-compute guardrail status for downstream logging. A blocked response will eventually raise
                 #   an HTTPException, however in scenarios where the caller decides to ignore the exception (e.g.
                 #   fail_on_error=False) we still want the correct status reflected.
                 metadata["_model_armor_status"] = (
-                    "blocked" if self._should_block_content(armor_response) else "success"
+                    "blocked"
+                    if self._should_block_content(armor_response)
+                    else "success"
                 )
             # Check if content should be blocked
             if self._should_block_content(armor_response):
@@ -421,7 +428,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 metadata = data.setdefault("metadata", {})
                 metadata["_model_armor_response"] = armor_response
                 metadata["_model_armor_status"] = (
-                    "blocked" if self._should_block_content(armor_response) else "success"
+                    "blocked"
+                    if self._should_block_content(armor_response)
+                    else "success"
                 )
 
             # Check if content should be blocked
@@ -491,12 +500,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         request_data=request_data,
                     )
 
-                     # Attach Model Armor response & status to this request's metadata to avoid race conditions
+                    # Attach Model Armor response & status to this request's metadata to avoid race conditions
                     if isinstance(request_data, dict):
                         metadata = request_data.setdefault("metadata", {})
                         metadata["_model_armor_response"] = armor_response
                         metadata["_model_armor_status"] = (
-                            "blocked" if self._should_block_content(armor_response) else "success"
+                            "blocked"
+                            if self._should_block_content(armor_response)
+                            else "success"
                         )
 
                     # Check if blocked
