@@ -464,13 +464,20 @@ def _transform_request_body(
         # If the LiteLLM client sends Gemini-supported parameter "labels", add it
         # as "labels" field to the request sent to the Gemini backend.
         labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
+        if isinstance(labels, dict):
+            labels = {str(k): str(v) for k, v in labels.items() if v is not None}
+        else:
+            labels = None
+
         # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
         # as "labels" field to the request sent to the Gemini backend.
-        if labels is None and "metadata" in litellm_params:
-            metadata = litellm_params["metadata"]
-            if "requester_metadata" in metadata:
-                rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if type(v) is str}
+        meta = litellm_params.get("metadata")
+        if labels is None and isinstance(meta, dict):
+            rm = meta.get("requester_metadata")
+            if isinstance(rm, dict) and rm:
+                # Gemini labels need string->string
+                labels = {str(k): str(v) for k, v in rm.items() if v is not None}
+        
 
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields

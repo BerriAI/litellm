@@ -1058,11 +1058,10 @@ _lazy_load_map = {
     "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
     "AlephAlphaConfig": (".llms.deprecated_providers.aleph_alpha", "AlephAlphaConfig"),
     "VertexGeminiConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
-    "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexAIConfig"),
+    "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
     "GeminiModelInfo": (".llms.gemini.common_utils", "GeminiModelInfo"),
     "GoogleAIStudioGeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),
     "GeminiConfig": (".llms.gemini.chat.transformation", "GeminiConfig"),
-    "VertexAITextEmbeddingConfig": (".llms.vertex_ai.vertex_embeddings.transformation", "VertexAITextEmbeddingConfig"),
     "VertexAIAnthropicConfig": (".llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation", "VertexAIAnthropicConfig"),
     "VertexAILlama3Config": (".llms.vertex_ai.vertex_ai_partner_models.llama3.transformation", "VertexAILlama3Config"),
     "VertexAIAi21Config": (".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation", "VertexAIAi21Config"),
@@ -1108,16 +1107,10 @@ _lazy_load_map = {
     "AzureOpenAIResponsesAPIConfig": (".llms.azure.responses.transformation", "AzureOpenAIResponsesAPIConfig"),
     "AzureOpenAIOSeriesResponsesAPIConfig": (".llms.azure.responses.o_series_transformation", "AzureOpenAIOSeriesResponsesAPIConfig"),
     "OpenAIO1Config": (".llms.openai.chat.o_series_transformation", "OpenAIO1Config"),
-    "OpenAIOSeriesConfig": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),
     "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
     "GradientAIConfig": (".llms.gradient_ai.chat.transformation", "GradientAIConfig"),
-    "OpenAIGPTConfig": (".llms.openai.chat.gpt_transformation", "OpenAIGPTConfig"),
-    "OpenAIGPT5Config": (".llms.openai.chat.gpt_5_transformation", "OpenAIGPT5Config"),
     "OpenAIWhisperAudioTranscriptionConfig": (".llms.openai.transcriptions.whisper_transformation", "OpenAIWhisperAudioTranscriptionConfig"),
     "OpenAIGPTAudioTranscriptionConfig": (".llms.openai.transcriptions.gpt_transformation", "OpenAIGPTAudioTranscriptionConfig"),
-    "OpenAIGPTAudioConfig": (".llms.openai.chat.gpt_audio_transformation", "OpenAIGPTAudioConfig"),
-    "NvidiaNimConfig": (".llms.nvidia_nim.chat.transformation", "NvidiaNimConfig"),
-    "NvidiaNimEmbeddingConfig": (".llms.nvidia_nim.embed", "NvidiaNimEmbeddingConfig"),
     "FeatherlessAIConfig": (".llms.featherless_ai.chat.transformation", "FeatherlessAIConfig"),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
@@ -1197,19 +1190,38 @@ _lazy_load_map = {
     "LITELLM_EXCEPTION_TYPES": (".exceptions", "LITELLM_EXCEPTION_TYPES"),
     "MockException": (".exceptions", "MockException"),
 }
+from .llms.vertex_ai.vertex_embeddings.transformation import (
+    VertexAITextEmbeddingConfig,
+)
+
+vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+from .llms.openai.chat.o_series_transformation import (
+    OpenAIOSeriesConfig,
+)
+openaiOSeriesConfig = OpenAIOSeriesConfig()
+from .llms.openai.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+)
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
+)
+openAIGPTConfig = OpenAIGPTConfig()
+from .llms.openai.chat.gpt_audio_transformation import (
+    OpenAIGPTAudioConfig,
+)
+
+openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
+
+from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
+from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
+
+nvidiaNimConfig = NvidiaNimConfig()
+nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 from importlib import import_module
 from sys import modules
 def __getattr__(name: str) -> Any:
-    #some calls are heterogenous
-    #to keep track of case insensitive keys
-    if name[0].islower():
-        keys_lower = dict((key.lower(), key) for key in _lazy_load_map.keys())
-        if name.lower() in keys_lower:
-            key = keys_lower[name.lower()]
-        else:
-            key = name
-    else:
-        key = name
+    key = name
     if key in _lazy_load_map:
         module_path, original_name = _lazy_load_map[key]
         module = import_module(module_path, __name__)
