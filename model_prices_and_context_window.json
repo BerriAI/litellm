@@ -722,7 +722,7 @@
             "/v1/batch",
             "/v1/responses"
         ],
-        "supported_modalities": [   
+        "supported_modalities": [
             "text",
             "image"
         ],
@@ -6157,7 +6157,6 @@
         "supports_tool_choice": true,
         "source": "https://inference-docs.cerebras.ai/support/pricing"
     },
-
     "cerebras/openai/gpt-oss-120b": {
         "max_tokens": 32768,
         "max_input_tokens": 131072,
@@ -11454,19 +11453,19 @@
         "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-chat-v3.1": {
-          "max_tokens": 8192,
-          "max_input_tokens": 163840,
-          "max_output_tokens": 163840,
-          "input_cost_per_token": 2e-07,
-          "input_cost_per_token_cache_hit": 2e-08,
-          "output_cost_per_token": 8e-07,
-          "litellm_provider": "openrouter",
-          "mode": "chat",
-          "supports_function_calling": true,
-          "supports_assistant_prefill": true,
-          "supports_reasoning": true,
-          "supports_tool_choice": true,
-          "supports_prompt_caching": true
+        "max_tokens": 8192,
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "input_cost_per_token": 2e-07,
+        "input_cost_per_token_cache_hit": 2e-08,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
     },
     "openrouter/x-ai/grok-4": {
         "max_tokens": 256000,
@@ -13123,6 +13122,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_function_calling": true,
         "supports_reasoning": true
     },
     "openai.gpt-oss-120b-1:0": {
@@ -13135,6 +13135,7 @@
         "mode": "chat",
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_function_calling": true,
         "supports_reasoning": true
     },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
@@ -15278,7 +15279,7 @@
         "mode": "chat",
         "supports_tool_choice": true,
         "source": "https://www.together.ai/models/deepseek-v3-1"
-    },    
+    },
     "ollama/codegemma": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -18645,8 +18646,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 1024,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/anthropic-claude-3.5-sonnet": {
@@ -18655,8 +18660,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 1024,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/anthropic-claude-3.5-haiku": {
@@ -18665,8 +18674,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 1024,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/anthropic-claude-3-opus": {
@@ -18675,8 +18688,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 1024,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/deepseek-r1-distill-llama-70b": {
@@ -18685,8 +18702,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 8000,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/llama3.3-70b-instruct": {
@@ -18695,8 +18716,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 2048,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/llama3-8b-instruct": {
@@ -18705,8 +18730,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 512,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/mistral-nemo-instruct-2407": {
@@ -18715,8 +18744,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 512,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/openai-o3": {
@@ -18725,8 +18758,12 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 100000,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/openai-o3-mini": {
@@ -18735,32 +18772,48 @@
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 100000,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/openai-gpt-4o": {
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 16384,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/openai-gpt-4o-mini": {
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 16384,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "gradient_ai/alibaba-qwen3-32b": {
         "litellm_provider": "gradient_ai",
         "mode": "chat",
         "max_tokens": 2048,
-        "supported_endpoints": ["/v1/chat/completions"],
-        "supported_modalities": ["text"],
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
         "supports_tool_choice": false
     },
     "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
@@ -20892,7 +20945,6 @@
         "supports_response_schema": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
-
     "oci/xai.grok-4": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
@@ -20953,7 +21005,7 @@
         "supports_response_schema": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
-    "aiml/flux/kontext-pro/text-to-image":{
+    "aiml/flux/kontext-pro/text-to-image": {
         "output_cost_per_image": 0.042,
         "litellm_provider": "aiml",
         "mode": "image_generation",
@@ -20964,7 +21016,6 @@
         "metadata": {
             "notes": "Flux Pro v1.1 - Enhanced version with improved capabilities and 6x faster inference speed"
         }
-
     },
     "aiml/flux/kontext-max/text-to-image": {
         "output_cost_per_image": 0.084,
