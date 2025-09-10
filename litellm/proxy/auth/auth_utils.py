@@ -481,10 +481,22 @@ def get_end_user_id_from_request_body(
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
+    # Config gate: If `general_settings.user_header_target == "internal_user"`,
+    # we should NOT use the forwarded header to populate End User.
+    # This ensures we don't duplicate the value into both Internal and End User fields.
+    _map_to_internal_user = False
+    try:
+        _map_to_internal_user = (
+            isinstance(general_settings.get("user_header_target"), str)
+            and general_settings.get("user_header_target", "").lower()
+            == "internal_user"
+        )
+    except Exception:
+        _map_to_internal_user = False
+
     # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
-    # User query: "system not respecting user_header_name property"
-    # This implies the key in general_settings is 'user_header_name'.
-    if request_headers is not None:
+    # Skip using header as End User when mapping-to-internal-user is enabled by config.
+    if request_headers is not None and _map_to_internal_user is not True:
         user_id_header_config_key = "user_header_name"
 
         custom_header_name_to_check = general_settings.get(user_id_header_config_key)

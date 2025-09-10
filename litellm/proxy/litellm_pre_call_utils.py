@@ -729,8 +729,27 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Parse user info from headers
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
-        if user_api_key_dict.end_user_id is None:
-            user_api_key_dict.end_user_id = user
+        # Config gate: If `general_settings.user_header_target == "internal_user"`,
+        # map the forwarded user header to Internal User (user_id) instead of End User (end_user_id).
+        # Default behavior (no config) keeps mapping to End User
+        _map_to_internal_user = False
+        if general_settings is not None:
+            try:
+                _map_to_internal_user = (
+                    isinstance(general_settings.get("user_header_target"), str)
+                    and general_settings.get("user_header_target", "").lower()
+                    == "internal_user"
+                )
+            except Exception:
+                _map_to_internal_user = False
+
+        if _map_to_internal_user is True:
+            # Set Internal User
+            user_api_key_dict.user_id = user
+        else:
+            # Default behavior: set End User
+            if user_api_key_dict.end_user_id is None:
+                user_api_key_dict.end_user_id = user
         if "user" not in data:
             data["user"] = user
 
