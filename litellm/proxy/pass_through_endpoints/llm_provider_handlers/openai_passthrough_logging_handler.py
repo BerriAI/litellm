@@ -467,9 +467,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 # add it in base model first
                 litellm_model_response = LiteLLMBatch(**response_body)
 
-                if litellm_model_response.output_file_id:
+                if litellm_model_response.input_file_id:
                     extracted_model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_output(
-                        litellm_model_response.output_file_id
+                        litellm_model_response.input_file_id
                     )
                     if extracted_model:
                         model = extracted_model
