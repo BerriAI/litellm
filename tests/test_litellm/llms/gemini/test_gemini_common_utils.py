@@ -158,3 +158,136 @@ class TestGoogleAIStudioTokenCounter:
                 model=model_to_use,
                 contents=contents
             )
+
+    def test_clean_contents_for_gemini_api_removes_id_field(self):
+        """Test that _clean_contents_for_gemini_api removes unsupported 'id' field from function responses"""
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        
+        token_counter = GoogleAIStudioTokenCounter()
+        
+        # Test contents with function response containing 'id' field (camelCase)
+        contents_with_id = [
+            {
+                "parts": [
+                    {
+                        "text": "Hello world"
+                    }
+                ],
+                "role": "user"
+            },
+            {
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "read_many_files-1757526647518-730a691aac11c",  # This should be removed
+                            "name": "read_many_files",
+                            "response": {
+                                "output": "No files matching the criteria were found or all were skipped."
+                            }
+                        }
+                    }
+                ],
+                "role": "user"
+            }
+        ]
+        
+        # Clean the contents
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_with_id)
+        
+        # Verify the 'id' field was removed
+        function_response = cleaned_contents[1]["parts"][0]["functionResponse"]
+        assert "id" not in function_response
+        assert "name" in function_response
+        assert "response" in function_response
+        assert function_response["name"] == "read_many_files"
+        assert function_response["response"]["output"] == "No files matching the criteria were found or all were skipped."
+
+    def test_clean_contents_for_gemini_api_removes_id_field_snake_case(self):
+        """Test that _clean_contents_for_gemini_api removes unsupported 'id' field from function responses (snake_case)"""
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        
+        token_counter = GoogleAIStudioTokenCounter()
+        
+        # Test contents with function response containing 'id' field (snake_case)
+        contents_with_id = [
+            {
+                "parts": [
+                    {
+                        "text": "Hello world"
+                    }
+                ],
+                "role": "user"
+            },
+            {
+                "parts": [
+                    {
+                        "function_response": {  # snake_case variant
+                            "id": "read_many_files-1757526647518-730a691aac11c",  # This should be removed
+                            "name": "read_many_files",
+                            "response": {
+                                "output": "No files matching the criteria were found or all were skipped."
+                            }
+                        }
+                    }
+                ],
+                "role": "user"
+            }
+        ]
+        
+        # Clean the contents
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_with_id)
+        
+        # Verify the 'id' field was removed
+        function_response = cleaned_contents[1]["parts"][0]["function_response"]
+        assert "id" not in function_response
+        assert "name" in function_response
+        assert "response" in function_response
+        assert function_response["name"] == "read_many_files"
+        assert function_response["response"]["output"] == "No files matching the criteria were found or all were skipped."
+
+    def test_clean_contents_for_gemini_api_preserves_other_fields(self):
+        """Test that _clean_contents_for_gemini_api preserves other fields and structure"""
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        
+        token_counter = GoogleAIStudioTokenCounter()
+        
+        # Test contents without function responses
+        contents_without_function_response = [
+            {
+                "parts": [
+                    {
+                        "text": "This is a regular message"
+                    }
+                ],
+                "role": "user"
+            },
+            {
+                "parts": [
+                    {
+                        "text": "This is a model response"
+                    }
+                ],
+                "role": "model"
+            }
+        ]
+        
+        # Clean the contents
+        cleaned_contents = token_counter._clean_contents_for_gemini_api(contents_without_function_response)
+        
+        # Verify the contents are unchanged
+        assert cleaned_contents == contents_without_function_response
+
+    def test_clean_contents_for_gemini_api_handles_empty_contents(self):
+        """Test that _clean_contents_for_gemini_api handles empty or invalid contents gracefully"""
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        
+        token_counter = GoogleAIStudioTokenCounter()
+        
+        # Test with None
+        assert token_counter._clean_contents_for_gemini_api(None) is None
+        
+        # Test with empty list
+        assert token_counter._clean_contents_for_gemini_api([]) == []
+        
+        # Test with non-list input
+        assert token_counter._clean_contents_for_gemini_api("not a list") == "not a list"
