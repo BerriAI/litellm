@@ -758,7 +758,7 @@ nebius_embedding_models: set = set(
     ]
 )
 
-wandb_models: set = set(
+WANDB_MODELS: set = set(
     [
         # openai models
         "openai/gpt-oss-120b",
