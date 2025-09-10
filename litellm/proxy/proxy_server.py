@@ -248,9 +248,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -297,9 +295,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -3812,9 +3808,7 @@ class ProxyStartupEvent:
         # CloudZero Background Job
         ########################################################
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-        from litellm.proxy.spend_tracking.cloudzero_endpoints import (
-            is_cloudzero_setup,
-        )
+        from litellm.proxy.spend_tracking.cloudzero_endpoints import is_cloudzero_setup
 
         if await is_cloudzero_setup():
             await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
@@ -7601,7 +7595,10 @@ async def login(request: Request):  # noqa: PLR0915
             data=UpdateUserRequest(
                 user_id=key_user_id,
                 user_role=user_role,
-            )
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
         )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(
