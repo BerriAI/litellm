@@ -116,6 +116,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
+from .litellm_core_utils.core_helpers import safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -2772,8 +2773,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
-
-            new_params = deepcopy(optional_params)
+            new_params = safe_deep_copy(optional_params or {})
             response = vertex_chat_completion.completion(  # type: ignore
                 model=model,
                 messages=messages,
@@ -2817,7 +2817,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
-            new_params = deepcopy(optional_params)
+            new_params = safe_deep_copy(optional_params or {})
             if vertex_partner_models_chat_completion.is_vertex_partner_model(model):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
