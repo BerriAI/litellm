@@ -388,6 +388,128 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
     @staticmethod
+    def _create_mcp_streaming_response(
+        input: Union[str, Any],
+        model: str,
+        all_tools: Optional[List[Any]],
+        mcp_tools_with_litellm_proxy: List[Any],
+        call_params: Dict[str, Any],
+        previous_response_id: Optional[str],
+        **kwargs
+    ) -> Any:
+        """
+        Create MCP enhanced streaming response that handles the full MCP workflow.
+        
+        This creates a streaming iterator that:
+        1. Immediately emits MCP discovery events
+        2. Makes the LLM call and streams the response
+        3. Handles tool execution and follow-up calls
+        """
+        from litellm.responses.mcp.mcp_streaming_iterator import (
+            MCPEnhancedStreamingIterator,
+        )
+
+        # Build the complete request parameters by merging all sources
+        request_params = LiteLLM_Proxy_MCP_Handler._build_request_params(
+            input=input,
+            model=model,
+            all_tools=all_tools,
+            call_params=call_params,
+            previous_response_id=previous_response_id,
+            **kwargs
+        )
+        
+        # Create the enhanced streaming iterator that will handle everything
+        return MCPEnhancedStreamingIterator(
+            base_iterator=None,  # Will be created internally
+            mcp_events=[],  # Will be generated internally
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+            user_api_key_auth=kwargs.get("user_api_key_auth"),
+            original_request_params=request_params
+        )
+
+    @staticmethod
+    def _build_request_params(
+        input: Union[str, Any],
+        model: str,
+        all_tools: Optional[List[Any]],
+        call_params: Dict[str, Any],
+        previous_response_id: Optional[str],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Build a clean request parameters dictionary for MCP streaming.
+        
+        Combines input, model, tools with call_params and additional kwargs
+        in a clean, maintainable way.
+        """
+        # Start with the core required parameters
+        request_params = {
+            'input': input,
+            'model': model,
+            'tools': all_tools,
+        }
+        
+        # Add previous_response_id if provided
+        if previous_response_id is not None:
+            request_params['previous_response_id'] = previous_response_id
+        
+        # Merge in all call_params (which contains most of the API parameters)
+        request_params.update(call_params)
+        
+        # Merge in any additional kwargs
+        request_params.update(kwargs)
+        
+        return request_params
+
+    @staticmethod
+    def _create_tool_execution_events(
+        tool_calls: List[Any], 
+        tool_results: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """
+        Create MCP tool execution events for streaming.
+        
+        Args:
+            tool_calls: List of tool calls from the LLM response
+            tool_results: List of tool execution results
+            
+        Returns:
+            List of MCP tool execution events for streaming
+        """
+        import uuid
+
+        from litellm.responses.mcp.mcp_streaming_iterator import create_mcp_call_events
+        
+        tool_execution_events = []
+        base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        
+        # Create events for each tool execution
+        for tool_result in tool_results:
+            tool_call_id = tool_result.get("tool_call_id", "unknown")
+            result_text = tool_result.get("result", "")
+            
+            # Extract tool name from tool calls
+            tool_name = "unknown"
+            for tool_call in tool_calls:
+                call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)[2]
+                if call_id == tool_call_id:
+                    tool_name = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)[0] or "unknown"
+                    break
+            
+            execution_events = create_mcp_call_events(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                arguments="{}",  # Default arguments
+                result=result_text,
+                base_item_id=base_item_id,
+                sequence_start=len(tool_execution_events) + 1
+            )
+            tool_execution_events.extend(execution_events)
+        
+        return tool_execution_events
+
+    @staticmethod
     def _add_mcp_output_elements_to_response(
         response: ResponsesAPIResponse,
         mcp_tools_fetched: List[Any],
