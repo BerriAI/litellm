@@ -229,6 +229,25 @@ def create_mcp_call_events(
             output_index=0,
         )
         events.append(completed_event)
+        
+        # Add output_item.done event with the tool call result
+        from litellm.types.llms.openai import OutputItemDoneEvent
+        
+        output_item_done_event = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item={
+                "id": item_id,
+                "type": "mcp_call",
+                "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                "arguments": arguments,
+                "error": None,
+                "name": tool_name,
+                "output": result,
+                "server_label": "litellm"
+            },
+        )
+        events.append(output_item_done_event)
     else:
         failed_event = MCPCallFailedEvent(
             type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
@@ -518,7 +537,7 @@ class MCPEnhancedStreamingIterator:
                 user_api_key_auth=self.user_api_key_auth
             )
             
-            # Create completion events for tool execution
+            # Create completion events and output_item.done events for tool execution
             for tool_result in tool_results:
                 tool_call_id = tool_result.get("tool_call_id", "unknown")
                 result_text = tool_result.get("result", "")
@@ -533,14 +552,35 @@ class MCPEnhancedStreamingIterator:
                         tool_arguments = args or "{}"
                         break
                 
-                # Create the completion event (just the final completed event)
+                item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                
+                # Create the completion event
                 completed_event = MCPCallCompletedEvent(
                     type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
                     sequence_number=len(self.tool_execution_events) + 1,
-                    item_id=f"mcp_{uuid.uuid4().hex[:8]}",
+                    item_id=item_id,
                     output_index=0,
                 )
                 self.tool_execution_events.append(completed_event)
+                
+                # Create output_item.done event with the tool call result
+                from litellm.types.llms.openai import OutputItemDoneEvent
+                
+                output_item_done_event = OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=0,
+                    item={
+                        "id": item_id,
+                        "type": "mcp_call",
+                        "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                        "arguments": tool_arguments,
+                        "error": None,
+                        "name": tool_name,
+                        "output": result_text,
+                        "server_label": "litellm"  # or extract from tool config
+                    },
+                )
+                self.tool_execution_events.append(output_item_done_event)
             
             # Store tool results for follow-up call
             self.tool_results = tool_results
