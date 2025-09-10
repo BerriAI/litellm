@@ -8,7 +8,7 @@
 import asyncio
 import copy
 import os
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Final, Literal, Optional, Union
 from urllib.parse import urljoin
 
 from fastapi import HTTPException
@@ -24,6 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import EmbeddingResponse, ImageResponse
+
+# Constants
+USER_ROLE: Final[Literal["user"]] = "user"
+ASSISTANT_ROLE: Final[Literal["assistant"]] = "assistant"
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
@@ -203,9 +207,9 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         if self.monitor_mode:
-            await self._handle_verdict_background("user", user_message, response_json)
+            await self._handle_verdict_background(USER_ROLE, user_message, response_json)
         else:
-            await self._check_verdict("user", user_message, response_json)
+            await self._check_verdict(USER_ROLE, user_message, response_json)
 
         return user_message
 
@@ -241,9 +245,9 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         if self.monitor_mode:
-            await self._handle_verdict_background("assistant", content, response_json)
+            await self._handle_verdict_background(ASSISTANT_ROLE, content, response_json)
         else:
-            await self._check_verdict("assistant", content, response_json)
+            await self._check_verdict(ASSISTANT_ROLE, content, response_json)
 
         return content
 
@@ -283,18 +287,10 @@ class NomaGuardrail(CustomGuardrail):
         """Handle verdict from Noma API in background - logging only, never blocks"""
         try:
             if not response_json.get("verdict", True):
-                msg = str.format(
-                    "Noma guardrail blocked {type} message: {message}",
-                    type=type,
-                    message=message,
-                )
+                msg = f"Noma guardrail blocked {type} message: {message}"
                 verbose_proxy_logger.warning(msg)
             else:
-                msg = str.format(
-                    "Noma guardrail allowed {type} message: {message}",
-                    type=type,
-                    message=message,
-                )
+                msg = f"Noma guardrail allowed {type} message: {message}"
                 verbose_proxy_logger.info(msg)
         except Exception as e:
             verbose_proxy_logger.error(
@@ -460,7 +456,7 @@ class NomaGuardrail(CustomGuardrail):
             return None
 
         # Get the last user message
-        user_messages = [msg for msg in messages if msg.get("role") == "user"]
+        user_messages = [msg for msg in messages if msg.get("role") == USER_ROLE]
         if not user_messages:
             return None
 
@@ -523,11 +519,7 @@ class NomaGuardrail(CustomGuardrail):
         Check the verdict from the Noma API and raise an exception if needed
         """
         if not response_json.get("verdict", True):
-            msg = str.format(
-                "Noma guardrail blocked {type} message: {message}",
-                type=type,
-                message=message,
-            )
+            msg = f"Noma guardrail blocked {type} message: {message}"
 
             if self.monitor_mode:
                 verbose_proxy_logger.warning(msg)
@@ -536,11 +528,7 @@ class NomaGuardrail(CustomGuardrail):
                 original_response = response_json.get("originalResponse", {})
                 raise NomaBlockedMessage(original_response)
         else:
-            msg = str.format(
-                "Noma guardrail allowed {type} message: {message}",
-                type=type,
-                message=message,
-            )
+            msg = f"Noma guardrail allowed {type} message: {message}"
             if self.monitor_mode:
                 verbose_proxy_logger.info(msg)
             else:
