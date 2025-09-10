@@ -6,6 +6,7 @@ to JSON in all cache implementations without causing serialization errors.
 """
 
 import json
+import unittest
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
@@ -17,7 +18,7 @@ from litellm.caching.gcs_cache import GCSCache, TimedeltaJSONEncoder as GCSTimed
 from litellm.caching.azure_blob_cache import AzureBlobCache, TimedeltaJSONEncoder as AzureTimedeltaJSONEncoder
 
 
-class TestTimedeltaJSONEncoder:
+class TestTimedeltaJSONEncoder(unittest.TestCase):
     """Test the TimedeltaJSONEncoder class."""
 
     def test_timedelta_serialization(self):
@@ -73,8 +74,8 @@ class TestRedisCacheTimedeltaHandling:
         mock_redis_client.ping = Mock(return_value=True)
         
         # Create RedisCache instance with mocked client
-        with patch('litellm.caching.redis_cache.get_redis_client', return_value=mock_redis_client):
-            cache = RedisCache()
+        with patch('litellm._redis.get_redis_client', return_value=mock_redis_client):
+            cache = RedisCache(host="localhost", port=6379)
             
             # Test data with timedelta objects (similar to what's stored in latency routing)
             test_data = {
@@ -111,8 +112,8 @@ class TestRedisCacheTimedeltaHandling:
         mock_async_redis_client.ping = Mock(return_value=True)
         
         # Create RedisCache instance with mocked client
-        with patch('litellm.caching.redis_cache.get_redis_async_client', return_value=mock_async_redis_client):
-            cache = RedisCache()
+        with patch('litellm._redis.get_redis_async_client', return_value=mock_async_redis_client):
+            cache = RedisCache(host="localhost", port=6379)
             
             # Test data with timedelta objects
             test_data = {
@@ -150,7 +151,7 @@ class TestS3CacheTimedeltaHandling:
         mock_s3_client.put_object = Mock()
         
         # Create S3Cache instance with mocked client
-        with patch('litellm.caching.s3_cache.boto3.client', return_value=mock_s3_client):
+        with patch('boto3.client', return_value=mock_s3_client):
             cache = S3Cache(s3_bucket_name="test-bucket")
             
             # Test data with timedelta objects
@@ -182,28 +183,29 @@ class TestGCSCacheTimedeltaHandling:
         mock_client = Mock()
         mock_client.post = Mock()
         
-        # Create GCSCache instance with mocked client
-        with patch('litellm.caching.gcs_cache._get_httpx_client', return_value=mock_client):
-            cache = GCSCache(bucket_name="test-bucket")
-            
-            # Test data with timedelta objects
-            test_data = {
-                "latency": [timedelta(seconds=1.2), timedelta(milliseconds=800)],
-                "time_to_first_token": [timedelta(milliseconds=150)]
-            }
-            
-            # This should not raise an exception
-            cache.set_cache("test_key", test_data)
-            
-            # Verify that post was called with JSON-serialized data
-            mock_client.post.assert_called_once()
-            call_args = mock_client.post.call_args
-            serialized_value = call_args[1]['data']
-            
-            # Verify the serialized value is valid JSON
-            deserialized = json.loads(serialized_value)
-            assert deserialized["latency"] == [1.2, 0.8]
-            assert deserialized["time_to_first_token"] == [0.15]
+        # Create GCSCache instance and then mock its client and headers
+        cache = GCSCache(bucket_name="test-bucket")
+        cache.sync_client = mock_client
+        cache._construct_headers = Mock(return_value={"Authorization": "Bearer test-token"})
+        
+        # Test data with timedelta objects
+        test_data = {
+            "latency": [timedelta(seconds=1.2), timedelta(milliseconds=800)],
+            "time_to_first_token": [timedelta(milliseconds=150)]
+        }
+        
+        # This should not raise an exception
+        cache.set_cache("test_key", test_data)
+        
+        # Verify that post was called with JSON-serialized data
+        mock_client.post.assert_called_once()
+        call_args = mock_client.post.call_args
+        serialized_value = call_args[1]['data']
+        
+        # Verify the serialized value is valid JSON
+        deserialized = json.loads(serialized_value)
+        assert deserialized["latency"] == [1.2, 0.8]
+        assert deserialized["time_to_first_token"] == [0.15]
 
 
 class TestAzureBlobCacheTimedeltaHandling:
@@ -215,10 +217,12 @@ class TestAzureBlobCacheTimedeltaHandling:
         mock_container_client = Mock()
         mock_container_client.upload_blob = Mock()
         
-        # Create AzureBlobCache instance with mocked client
-        with patch('litellm.caching.azure_blob_cache.BlobServiceClient'):
+        # Mock the BlobServiceClient import
+        with patch('azure.storage.blob.BlobServiceClient') as mock_blob_service:
+            mock_blob_service.return_value.get_container_client.return_value = mock_container_client
+            
+            # Create AzureBlobCache instance with mocked client
             cache = AzureBlobCache(account_url="https://test.blob.core.windows.net", container="test-container")
-            cache.container_client = mock_container_client
             
             # Test data with timedelta objects
             test_data = {
