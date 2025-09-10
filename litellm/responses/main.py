@@ -166,8 +166,13 @@ async def aresponses_api_with_mcp(
             user_api_key_auth=user_api_key_auth,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         )
+        # Filter tools based on allowed_tools parameter
+        filtered_mcp_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+            mcp_tools=mcp_tools_fetched,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-            mcp_tools_fetched
+            filtered_mcp_tools
         )
 
     # Combine with other tools

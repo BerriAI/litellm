@@ -86,6 +86,33 @@ class LiteLLM_Proxy_MCP_Handler:
         )
     
     @staticmethod
+    def _filter_mcp_tools_by_allowed_tools(
+        mcp_tools: List[Any], 
+        mcp_tools_with_litellm_proxy: List[ToolParam]
+    ) -> List[Any]:
+        """Filter MCP tools based on allowed_tools parameter from the original tool configs."""
+        # Collect all allowed tool names from all MCP tool configs
+        allowed_tool_names = set()
+        for tool_config in mcp_tools_with_litellm_proxy:
+            if isinstance(tool_config, dict) and "allowed_tools" in tool_config:
+                allowed_tools = tool_config.get("allowed_tools", [])
+                if isinstance(allowed_tools, list):
+                    allowed_tool_names.update(allowed_tools)
+        
+        # If no allowed_tools specified, return all tools
+        if not allowed_tool_names:
+            return mcp_tools
+        
+        # Filter tools based on allowed names
+        filtered_tools = []
+        for mcp_tool in mcp_tools:
+            tool_name = getattr(mcp_tool, 'name', None) if hasattr(mcp_tool, 'name') else mcp_tool.get('name') if isinstance(mcp_tool, dict) else None
+            if tool_name and tool_name in allowed_tool_names:
+                filtered_tools.append(mcp_tool)
+        
+        return filtered_tools
+    
+    @staticmethod
     def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
         """Transform MCP tools to OpenAI-compatible format."""
         from litellm.experimental_mcp_client.tools import (
