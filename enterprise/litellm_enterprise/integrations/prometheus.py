@@ -95,13 +95,14 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
                 "litellm_llm_api_time_to_first_token_metric",
                 "Time to first token for a models LLM API call",
-                labelnames=[
-                    "model",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "team",
-                    "team_alias",
-                ],
+                # labelnames=[
+                #     "model",
+                #     "hashed_api_key",
+                #     "api_key_alias",
+                #     "team",
+                #     "team_alias",
+                # ],
+                labelnames=self.get_labels_for_metric("litellm_llm_api_time_to_first_token_metric"),
                 buckets=LATENCY_BUCKETS,
             )
 
@@ -109,15 +110,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_spend_metric = self._counter_factory(
                 "litellm_spend_metric",
                 "Total spend on LLM requests",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=self.get_labels_for_metric("litellm_spend_metric"),
             )
 
             # Counter for total_output_tokens
@@ -243,25 +236,18 @@ class PrometheusLogger(CustomLogger):
                 labelnames=["api_provider"],
             )
 
-            # Get all keys
-            _logged_llm_labels = [
-                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
-                UserAPIKeyLabelNames.MODEL_ID.value,
-                UserAPIKeyLabelNames.API_BASE.value,
-                UserAPIKeyLabelNames.API_PROVIDER.value,
-            ]
-
             # Metric for deployment state
             self.litellm_deployment_state = self._gauge_factory(
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
-                labelnames=_logged_llm_labels,
+                labelnames=self.get_labels_for_metric("litellm_deployment_state")
             )
 
             self.litellm_deployment_cooled_down = self._counter_factory(
                 "litellm_deployment_cooled_down",
                 "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
-                labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                # labelnames=_logged_llm_labels + [EXCEPTION_STATUS],
+                labelnames=self.get_labels_for_metric("litellm_deployment_cooled_down")
             )
 
             self.litellm_deployment_success_responses = self._counter_factory(
@@ -327,6 +313,7 @@ class PrometheusLogger(CustomLogger):
                 documentation="deprecated - use litellm_proxy_total_requests_metric. Total number of LLM calls to litellm - track total per API Key, team, user",
                 labelnames=self.get_labels_for_metric("litellm_requests_metric"),
             )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e

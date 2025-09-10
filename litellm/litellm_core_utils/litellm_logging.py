@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     cast,
 )
 
+import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
@@ -1164,7 +1164,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
-
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
@@ -1715,9 +1714,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=litellm_params.get(
-                                "litellm_call_id", str(uuid.uuid4())
-                            ),
+                            litellm_call_id=current_call_id
+                            if (
+                                current_call_id := litellm_params.get("litellm_call_id")
+                            )
+                            is not None
+                            else str(uuid.uuid4()),
                             print_verbose=print_verbose,
                         )
                     if callback == "wandb" and weightsBiasesLogger is not None:
@@ -2775,6 +2777,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Any,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        cache_hit: Optional[Any] = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -2789,6 +2792,7 @@ class Logging(LiteLLMLoggingBaseClass):
             result,
             start_time,
             end_time,
+            cache_hit,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
@@ -3361,7 +3365,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
-
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
+                    return callback  # type: ignore
+            cloudzero_logger = CloudZeroLogger()
+            _in_memory_loggers.append(cloudzero_logger)
+            return cloudzero_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -3580,6 +3591,11 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
@@ -4106,18 +4122,9 @@ class StandardLoggingPayloadSetup:
         """
         # Generate object key in same format as S3Logger
         from litellm.integrations.s3 import get_s3_object_key
-        from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
         # Only generate object key if cold storage is configured
-        try:
-            configured_cold_storage_logger = (
-                ColdStorageHandler._get_configured_cold_storage_custom_logger()
-            )
-        except Exception as e:
-            verbose_logger.debug(f"Cold storage custom logger unavailable: {e}")
-            return None
-
-        if configured_cold_storage_logger is None:
+        if litellm.configured_cold_storage_logger is None:
             return None
 
         try:
@@ -4497,7 +4504,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        verbose_logger.info(json.dumps(payload, indent=4))
+        print(json.dumps(payload, indent=4)) # noqa
 
 
 def get_standard_logging_metadata(

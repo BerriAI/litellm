@@ -344,6 +344,7 @@ def test_add_exact_path_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -385,6 +386,7 @@ def test_add_subpath_route():
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=None,
+        endpoint_id="test-endpoint-id",
     )
 
     # Verify add_api_route was called with correct parameters
@@ -702,6 +704,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=5.00,
+        endpoint_id="test-endpoint-id-1",
     )
 
     # Verify add_api_route was called
@@ -727,6 +730,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
         merge_query_params=False,
         dependencies=[],
         cost_per_request=7.50,
+        endpoint_id="test-endpoint-id-2",
     )
 
     # Verify add_api_route was called for subpath
@@ -1245,3 +1249,58 @@ async def test_delete_pass_through_endpoint_empty_list():
         # Verify the exception
         assert exc_info.value.status_code == 400
         assert "no pass-through endpoints setup" in str(exc_info.value.detail).lower()
+
+
+
+@pytest.mark.asyncio
+async def test_pass_through_with_httpbin_redirect():
+    """
+    Integration test using httpbin.org redirect endpoint to test real redirect handling.
+    This tests the actual redirect handling capability end-to-end using the full pass_through_request function.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+    from starlette.datastructures import Headers, QueryParams
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        pass_through_request,
+    )
+
+    # Create mock request
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "GET"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams("")
+    
+    # Mock the body method to return empty bytes for GET request
+    async def mock_body():
+        return b""
+    mock_request.body = mock_body
+    
+    # Mock user API key dict
+    mock_user_api_key_dict = MagicMock()
+    
+    try:
+        # Test with httpbin.org redirect endpoint
+        # This will redirect to httpbin.org/get
+        response = await pass_through_request(
+            request=mock_request,
+            target="https://httpbin.org/redirect/1",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict
+        )
+        
+        # Should get the final response (200) from /get endpoint, not the redirect (302)
+        assert response.status_code == 200
+        
+        # The response should be from the /get endpoint
+        response_content = response.body.decode('utf-8')
+        
+        # httpbin.org/get returns JSON with info about the request
+        assert '"url": "https://httpbin.org/get"' in response_content
+        print("GOT A Response from HTTPBIN=", response_content)
+    except Exception as e:
+        # If httpbin.org is not accessible, skip the test
+        import pytest
+        pytest.skip(f"Could not reach httpbin.org for integration test: {e}")

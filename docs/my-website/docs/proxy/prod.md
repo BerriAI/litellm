@@ -90,7 +90,7 @@ Recommended to do this for prod:
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 
+  routing_strategy: simple-shuffle # (default) - recommended for best performance
   # redis_url: "os.environ/REDIS_URL"
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
@@ -104,6 +104,9 @@ litellm_settings:
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
 ```
+
+> **WARNING**
+**Usage-based routing is not recommended for production due to performance impacts.** Use `simple-shuffle` (default) for optimal performance in high-traffic scenarios.
 
 ## 5. Disable 'load_dotenv'
 

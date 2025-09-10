@@ -35,6 +35,12 @@ from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
+# Constants for special delta attribute names
+AUDIO_ATTRIBUTE = "audio"
+IMAGE_ATTRIBUTE = "images"
+TOOL_CALLS_ATTRIBUTE = "tool_calls"
+FUNCTION_CALL_ATTRIBUTE = "function_call"
+
 
 def is_async_iterable(obj: Any) -> bool:
     """
@@ -766,6 +772,83 @@ class CustomStreamWrapper:
             model_response.choices[0].delta = Delta(**_initial_delta)
         return model_response
 
+    def _has_special_delta_content(self, model_response: ModelResponseStream) -> bool:
+        """
+        Check if the delta contains special content types (tool_calls, function_call, audio, or image).
+        """
+        if len(model_response.choices) == 0:
+            return False
+
+        delta = model_response.choices[0].delta
+
+        # Check for tool_calls or function_call
+        if (
+            getattr(delta, TOOL_CALLS_ATTRIBUTE, None) is not None
+            or getattr(delta, FUNCTION_CALL_ATTRIBUTE, None) is not None
+        ):
+            return True
+
+        # Check for audio
+        if (
+            hasattr(delta, AUDIO_ATTRIBUTE)
+            and getattr(delta, AUDIO_ATTRIBUTE, None) is not None
+        ):
+            return True
+
+        # Check for image
+        if (
+            hasattr(delta, IMAGE_ATTRIBUTE)
+            and getattr(delta, IMAGE_ATTRIBUTE, None) is not None
+        ):
+            return True
+
+        return False
+
+    def _handle_special_delta_content(
+        self, model_response: ModelResponseStream
+    ) -> ModelResponseStream:
+        """
+        Handle special delta content types by stripping role and returning the response.
+        """
+        return self.strip_role_from_delta(model_response)
+
+    def _has_special_delta_attribute(self, delta, attribute_name: str) -> bool:
+        """
+        Check if delta has a specific attribute and it's not None.
+        """
+        return delta is not None and getattr(delta, attribute_name, None) is not None
+
+    def _copy_delta_attribute(
+        self, source_delta, target_delta, attribute_name: str
+    ) -> None:
+        """
+        Copy a specific attribute from source delta to target delta.
+        """
+        setattr(target_delta, attribute_name, getattr(source_delta, attribute_name))
+
+    def _has_any_special_delta_attributes(self, delta) -> bool:
+        """
+        Check if delta has any special attributes (audio, image).
+        """
+        special_attributes = [AUDIO_ATTRIBUTE, IMAGE_ATTRIBUTE]
+        for attribute in special_attributes:
+            if self._has_special_delta_attribute(delta, attribute):
+                return True
+        return False
+
+    def _handle_special_delta_attributes(
+        self, delta, model_response: "ModelResponseStream"
+    ) -> None:
+        """
+        Handle special delta attributes (audio, image) by copying them to model_response.
+        """
+        special_attributes = [AUDIO_ATTRIBUTE, IMAGE_ATTRIBUTE]
+        for attribute in special_attributes:
+            if self._has_special_delta_attribute(delta, attribute):
+                self._copy_delta_attribute(
+                    delta, model_response.choices[0].delta, attribute
+                )
+
     def return_processed_chunk_logic(  # noqa
         self,
         completion_obj: Dict[str, Any],
@@ -888,20 +971,8 @@ class CustomStreamWrapper:
                 self.sent_last_chunk = True
 
             return model_response
-        elif (
-            model_response.choices[0].delta.tool_calls is not None
-            or model_response.choices[0].delta.function_call is not None
-        ):
-            model_response = self.strip_role_from_delta(model_response)
-
-            return model_response
-        elif (
-            len(model_response.choices) > 0
-            and hasattr(model_response.choices[0].delta, "audio")
-            and model_response.choices[0].delta.audio is not None
-        ):
-            model_response = self.strip_role_from_delta(model_response)
-            return model_response
+        elif self._has_special_delta_content(model_response):
+            return self._handle_special_delta_content(model_response)
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -1374,10 +1445,8 @@ class CustomStreamWrapper:
                                 )
                             )
                             model_response.choices[0].delta = Delta()
-                    elif (
-                        delta is not None and getattr(delta, "audio", None) is not None
-                    ):
-                        model_response.choices[0].delta.audio = delta.audio
+                    elif self._has_any_special_delta_attributes(delta):
+                        self._handle_special_delta_attributes(delta, model_response)
                     else:
                         try:
                             delta = (
@@ -1868,7 +1937,7 @@ class CustomStreamWrapper:
                 )
             ## Map to OpenAI Exception
             try:
-                exception_type(
+                raise exception_type(
                     model=self.model,
                     custom_llm_provider=self.custom_llm_provider,
                     original_exception=e,

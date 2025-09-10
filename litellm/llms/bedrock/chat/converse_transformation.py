@@ -10,6 +10,8 @@ from typing import List, Literal, Optional, Tuple, Union, cast, overload
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -48,14 +50,19 @@ from litellm.types.utils import (
 )
 from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
 
-from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name, get_anthropic_beta_from_headers
+from ..common_utils import (
+    BedrockError,
+    BedrockModelInfo,
+    get_anthropic_beta_from_headers,
+    get_bedrock_tool_name,
+)
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS = [
     "computer_use_preview",
     "computer_",
     "bash_",
-    "text_editor_"
+    "text_editor_",
 ]
 
 
@@ -163,7 +170,9 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if (
+        if "gpt-oss" in model:
+            supported_params.append("reasoning_effort")
+        elif (
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
@@ -233,7 +242,7 @@ class AmazonConverseConfig(BaseConfig):
         """Check if computer use tools are being used in the request."""
         if tools is None:
             return False
-        
+
         for tool in tools:
             if "type" in tool:
                 tool_type = tool["type"]
@@ -247,17 +256,17 @@ class AmazonConverseConfig(BaseConfig):
     ) -> List[dict]:
         """Transform computer use tools to Bedrock format."""
         transformed_tools: List[dict] = []
-        
+
         for tool in computer_use_tools:
             tool_type = tool.get("type", "")
-            
+
             # Check if this is a computer use tool with the startswith method
             is_computer_use_tool = False
             for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
                 if tool_type.startswith(computer_use_prefix):
                     is_computer_use_tool = True
                     break
-            
+
             transformed_tool: dict = {}
             if is_computer_use_tool:
                 if tool_type.startswith("computer_") and "function" in tool:
@@ -266,7 +275,7 @@ class AmazonConverseConfig(BaseConfig):
                     transformed_tool = {
                         "type": tool_type,
                         "name": func.get("name", "computer"),
-                        **func.get("parameters", {})
+                        **func.get("parameters", {}),
                     }
                 else:
                     # Direct tools - just need to ensure name is present
@@ -279,27 +288,29 @@ class AmazonConverseConfig(BaseConfig):
             else:
                 # Pass through other tools as-is
                 transformed_tool = dict(tool)
-                
+
             transformed_tools.append(transformed_tool)
-            
+
         return transformed_tools
 
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
-    ) -> Tuple[List[OpenAIChatCompletionToolParam], List[OpenAIChatCompletionToolParam]]:
+    ) -> Tuple[
+        List[OpenAIChatCompletionToolParam], List[OpenAIChatCompletionToolParam]
+    ]:
         """
         Separate computer use tools from regular function tools.
-        
+
         Args:
             tools: List of tools to separate
             model: The model name to check if it supports computer use
-            
+
         Returns:
             Tuple of (computer_use_tools, regular_tools)
         """
         computer_use_tools = []
         regular_tools = []
-        
+
         for tool in tools:
             if "type" in tool:
                 tool_type = tool["type"]
@@ -314,15 +325,12 @@ class AmazonConverseConfig(BaseConfig):
                     regular_tools.append(tool)
             else:
                 regular_tools.append(tool)
-            
+
         return computer_use_tools, regular_tools
-
-
 
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
-        schema_name: str = "json_tool_call",
         description: Optional[str] = None,
     ) -> ChatCompletionToolParam:
         """
@@ -344,10 +352,12 @@ class AmazonConverseConfig(BaseConfig):
                 "properties": {},
             }
         else:
+            # Use the schema as-is for Bedrock
+            # Bedrock requires the tool schema to be of type "object" and doesn't need unwrapping
             _input_schema = json_schema
 
         tool_param_function_chunk = ChatCompletionToolParamFunctionChunk(
-            name=schema_name, parameters=_input_schema
+            name=RESPONSE_FORMAT_TOOL_NAME, parameters=_input_schema
         )
         if description:
             tool_param_function_chunk["description"] = description
@@ -386,56 +396,9 @@ class AmazonConverseConfig(BaseConfig):
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
-                ignore_response_format_types = ["text"]
-                if value["type"] in ignore_response_format_types:  # value is a no-op
-                    continue
-
-                json_schema: Optional[dict] = None
-                schema_name: str = ""
-                description: Optional[str] = None
-                if "response_schema" in value:
-                    json_schema = value["response_schema"]
-                    schema_name = "json_tool_call"
-                elif "json_schema" in value:
-                    json_schema = value["json_schema"]["schema"]
-                    schema_name = value["json_schema"]["name"]
-                    description = value["json_schema"].get("description")
-
-                if "type" in value and value["type"] == "text":
-                    continue
-
-                """
-                Follow similar approach to anthropic - translate to a single tool call. 
-
-                When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
-                - You usually want to provide a single tool
-                - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
-                - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
-                """
-                _tool = self._create_json_tool_call_for_response_format(
-                    json_schema=json_schema,
-                    schema_name=schema_name if schema_name != "" else "json_tool_call",
-                    description=description,
+                optional_params = self._translate_response_format_param(
+                    value=value, model=model, optional_params=optional_params, non_default_params=non_default_params, is_thinking_enabled=is_thinking_enabled
                 )
-                optional_params = self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=[_tool]
-                )
-
-                if (
-                    litellm.utils.supports_tool_choice(
-                        model=model, custom_llm_provider=self.custom_llm_provider
-                    )
-                    and not is_thinking_enabled
-                ):
-
-                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
-                        tool=SpecificToolChoiceBlock(
-                            name=schema_name if schema_name != "" else "json_tool_call"
-                        )
-                    )
-                optional_params["json_mode"] = True
-                if non_default_params.get("stream", False) is True:
-                    optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -466,14 +429,82 @@ class AmazonConverseConfig(BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                if "gpt-oss" in model:
+                    # GPT-OSS models: keep reasoning_effort as-is
+                    # It will be passed through to additionalModelRequestFields
+                    optional_params["reasoning_effort"] = value
+                else:
+                    # Anthropic and other models: convert to thinking parameter
+                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                        value
+                    )
 
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
+        # Only update thinking tokens for non-GPT-OSS models
+        if "gpt-oss" not in model:
+            self.update_optional_params_with_thinking_tokens(
+                non_default_params=non_default_params, optional_params=optional_params
+            )
+
+        return optional_params
+    
+    def _translate_response_format_param(
+        self, 
+        value: dict, 
+        model: str, 
+        optional_params: dict,
+        non_default_params: dict,
+        is_thinking_enabled: bool,
+    ) -> dict:
+        """
+        Handles translation of response_format parameter to Bedrock format.
+
+        Returns `optional_params` with the translated response_format parameter.
+        """
+        ignore_response_format_types = ["text"]
+        if value["type"] in ignore_response_format_types:  # value is a no-op
+            return optional_params
+
+        json_schema: Optional[dict] = None
+        description: Optional[str] = None
+        if "response_schema" in value:
+            json_schema = value["response_schema"]
+        elif "json_schema" in value:
+            json_schema = value["json_schema"]["schema"]
+            description = value["json_schema"].get("description")
+
+        if "type" in value and value["type"] == "text":
+            return optional_params
+
+        """
+        Follow similar approach to anthropic - translate to a single tool call. 
+
+        When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
+        - You usually want to provide a single tool
+        - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
+        - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
+        """
+        _tool = self._create_json_tool_call_for_response_format(
+            json_schema=json_schema,
+            description=description,
+        )
+        optional_params = self._add_tools_to_optional_params(
+            optional_params=optional_params, tools=[_tool]
         )
 
+        if (
+            litellm.utils.supports_tool_choice(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+            and not is_thinking_enabled
+        ):
+
+            optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
+            )
+        optional_params["json_mode"] = True
+        if non_default_params.get("stream", False) is True:
+            optional_params["fake_stream"] = True
+        
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
@@ -597,7 +628,6 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-
     def _transform_request_helper(
         self,
         model: str,
@@ -653,36 +683,38 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         original_tools = inference_params.pop("tools", [])
-        
+
         # Initialize bedrock_tools
         bedrock_tools: List[ToolBlock] = []
-        
+
         # Collect anthropic_beta values from user headers
         anthropic_beta_list = []
         if headers:
             user_betas = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
-        
+
         # Only separate tools if computer use tools are actually present
         if original_tools and self.is_computer_use_tool_used(original_tools, model):
             # Separate computer use tools from regular function tools
             computer_use_tools, regular_tools = self._separate_computer_use_tools(
                 original_tools, model
             )
-            
+
             # Process regular function tools using existing logic
             bedrock_tools = _bedrock_tools_pt(regular_tools)
-            
+
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
                 anthropic_beta_list.append("computer-use-2024-10-22")
                 # Transform computer use tools to proper Bedrock format
-                transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
+                transformed_computer_tools = self._transform_computer_use_tools(
+                    computer_use_tools
+                )
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
             bedrock_tools = _bedrock_tools_pt(original_tools)
-        
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         if anthropic_beta_list:
             # Remove duplicates while preserving order
@@ -693,7 +725,7 @@ class AmazonConverseConfig(BaseConfig):
                     unique_betas.append(beta)
                     seen.add(beta)
             additional_request_params["anthropic_beta"] = unique_betas
-        
+
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
@@ -1119,10 +1151,37 @@ class AmazonConverseConfig(BaseConfig):
                 self._transform_thinking_blocks(reasoningContentBlocks)
             )
         chat_completion_message["content"] = content_str
-        if json_mode is True and tools is not None and len(tools) == 1:
-            # to support 'json_schema' logic on bedrock models
+        if (
+            json_mode is True
+            and tools is not None
+            and len(tools) == 1
+            and tools[0]["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ):
+            verbose_logger.debug(
+                "Processing JSON tool call response for response_format"
+            )
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
             if json_mode_content_str is not None:
+                import json
+
+                # Bedrock returns the response wrapped in a "properties" object
+                # We need to extract the actual content from this wrapper
+                try:
+
+                    response_data = json.loads(json_mode_content_str)
+
+                    # If Bedrock wrapped the response in "properties", extract the content
+                    if (
+                        isinstance(response_data, dict)
+                        and "properties" in response_data
+                        and len(response_data) == 1
+                    ):
+                        response_data = response_data["properties"]
+                        json_mode_content_str = json.dumps(response_data)
+                except json.JSONDecodeError:
+                    # If parsing fails, use the original response
+                    pass
+
                 chat_completion_message["content"] = json_mode_content_str
         else:
             chat_completion_message["tool_calls"] = tools
@@ -1182,7 +1241,6 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
-    
 
     def should_fake_stream(
         self,

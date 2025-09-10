@@ -40,7 +40,28 @@ LiteLLM supports the following MCP transports:
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
-### Adding a stdio MCP Server
+<br/>
+<br/>
+
+### Add HTTP MCP Server
+
+This video walks through adding and using an HTTP MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/e2aebce78e8d46beafeb4bacdde31f14" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add SSE MCP Server
+
+This video walks through adding and using an SSE MCP server on LiteLLM UI and using it in Cursor IDE.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/07e04e27f5e74475b9cf8ef8247d2c3e" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+<br/>
+<br/>
+
+### Add STDIO MCP Server
 
 For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
 
@@ -92,6 +113,7 @@ mcp_servers:
     transport: "http"
     description: "My custom MCP server"
     auth_type: "api_key"
+    auth_value: "abc123"
     spec_version: "2025-03-26"
 ```
 
@@ -107,8 +129,42 @@ mcp_servers:
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
-- **Auth Type**: Optional authentication type
-- **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
+- **Auth Type**: Optional authentication type. Supported values:
+
+  | Value | Header sent |
+  |-------|-------------|
+  | `api_key` | `X-API-Key: <auth_value>` |
+  | `bearer_token` | `Authorization: Bearer <auth_value>` |
+  | `basic` | `Authorization: Basic <auth_value>` |
+  | `authorization` | `Authorization: <auth_value>` |
+
+- **Spec Version**: Optional MCP specification version (defaults to `2025-06-18`)
+
+Examples for each auth type:
+
+```yaml title="MCP auth examples (config.yaml)" showLineNumbers
+mcp_servers:
+  api_key_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "api_key"
+    auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
+
+  bearer_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "abc123"        # headers={"Authorization": "Bearer abc123"}
+
+  basic_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "basic"
+    auth_value: "dXNlcjpwYXNz"  # headers={"Authorization": "Basic dXNlcjpwYXNz"}
+
+  custom_auth_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "authorization"
+    auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+```
+
 
 ### MCP Aliases
 

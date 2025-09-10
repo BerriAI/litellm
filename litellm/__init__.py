@@ -67,6 +67,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
@@ -145,7 +146,11 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
+    "cloudzero",
 ]
+configured_cold_storage_logger: Optional[
+    _custom_logger_compatible_callbacks_literal
+] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -225,6 +230,7 @@ vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
@@ -233,6 +239,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -303,7 +310,6 @@ default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
-model_group_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
@@ -431,43 +437,10 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
-BEDROCK_CONVERSE_MODELS = [
-    "openai.gpt-oss-20b-1:0",
-    "openai.gpt-oss-120b-1:0",
-    "anthropic.claude-opus-4-1-20250805-v1:0",
-    "anthropic.claude-opus-4-20250514-v1:0",
-    "anthropic.claude-sonnet-4-20250514-v1:0",
-    "anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "anthropic.claude-3-5-haiku-20241022-v1:0",
-    "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    "anthropic.claude-3-opus-20240229-v1:0",
-    "anthropic.claude-3-sonnet-20240229-v1:0",
-    "anthropic.claude-3-haiku-20240307-v1:0",
-    "anthropic.claude-v2",
-    "anthropic.claude-v2:1",
-    "anthropic.claude-v1",
-    "anthropic.claude-instant-v1",
-    "ai21.jamba-instruct-v1:0",
-    "ai21.jamba-1-5-mini-v1:0",
-    "ai21.jamba-1-5-large-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "meta.llama3-8b-instruct-v1:0",
-    "meta.llama3-1-8b-instruct-v1:0",
-    "meta.llama3-1-70b-instruct-v1:0",
-    "meta.llama3-1-405b-instruct-v1:0",
-    "meta.llama3-70b-instruct-v1:0",
-    "mistral.mistral-large-2407-v1:0",
-    "mistral.mistral-large-2402-v1:0",
-    "mistral.mistral-small-2402-v1:0",
-    "meta.llama3-2-1b-instruct-v1:0",
-    "meta.llama3-2-3b-instruct-v1:0",
-    "meta.llama3-2-11b-instruct-v1:0",
-    "meta.llama3-2-90b-instruct-v1:0",
-]
 
 ####### COMPLETION MODELS ###################
-from typing import Set  
+from typing import Set
+
 open_ai_chat_completion_models: Set = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
@@ -482,6 +455,7 @@ vertex_vision_models: Set = set()
 vertex_chat_models: Set = set()
 vertex_code_chat_models: Set = set()
 vertex_ai_image_models: Set = set()
+vertex_ai_video_models: Set = set()
 vertex_text_models: Set = set()
 vertex_code_text_models: Set = set()
 vertex_embedding_models: Set = set()
@@ -490,6 +464,7 @@ vertex_llama3_models: Set = set()
 vertex_deepseek_models: Set = set()
 vertex_ai_ai21_models: Set = set()
 vertex_mistral_models: Set = set()
+vertex_openai_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -508,6 +483,7 @@ azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
 infinity_models: Set = set()
+heroku_models: Set = set() 
 databricks_models: Set = set()
 cloudflare_models: Set = set()
 codestral_models: Set = set()
@@ -530,6 +506,7 @@ llama_models: Set = set()
 nscale_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
+aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
@@ -541,6 +518,8 @@ hyperbolic_models: Set = set()
 recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
+vercel_ai_gateway_models: Set = set()
+volcengine_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -598,6 +577,8 @@ def add_known_models():
             empower_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.add(key)
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -632,6 +613,12 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-image-models":
             key = key.replace("vertex_ai/", "")
             vertex_ai_image_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-video-models":
+            key = key.replace("vertex_ai/", "")
+            vertex_ai_video_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-openai_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_openai_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -709,6 +696,8 @@ def add_known_models():
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
             nebius_embedding_models.add(key)
+        elif value.get("litellm_provider") == "aiml":
+            aiml_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.add(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -723,6 +712,8 @@ def add_known_models():
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "heroku":
+            heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -741,6 +732,8 @@ def add_known_models():
             cometapi_models.add(key)
         elif value.get("litellm_provider") == "oci":
             oci_models.add(key)
+        elif value.get("litellm_provider") == "volcengine":
+            volcengine_models.add(key)
 
 
 add_known_models()
@@ -832,6 +825,9 @@ model_list = list(
     | recraft_models
     | cometapi_models
     | oci_models
+    | heroku_models
+    | vercel_ai_gateway_models
+    | volcengine_models
 )
 
 model_list_set = set(model_list)
@@ -850,8 +846,14 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
+    "vertex_ai": vertex_chat_models
+    | vertex_text_models
+    | vertex_anthropic_models
+    | vertex_vision_models
+    | vertex_language_models
+    | vertex_deepseek_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -886,6 +888,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
+    "aiml": aiml_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -895,6 +898,7 @@ models_by_provider: dict = {
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
+    "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
@@ -904,6 +908,7 @@ models_by_provider: dict = {
     "recraft": recraft_models,
     "cometapi": cometapi_models,
     "oci": oci_models,
+    "volcengine": volcengine_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1147,13 +1152,17 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import (
+    VoyageContextualEmbeddingConfig,
+)
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import (
+    AzureOpenAIOSeriesResponsesAPIConfig,
+)
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
@@ -1161,6 +1170,7 @@ from .llms.openai.chat.o_series_transformation import (
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
+
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
@@ -1207,12 +1217,16 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
-from .llms.volcengine import VolcEngineConfig
+from .llms.aiml.chat.transformation import AIMLChatConfig
+from .llms.volcengine.chat.transformation import (
+    VolcEngineChatConfig as VolcEngineConfig,
+)
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
@@ -1239,6 +1253,7 @@ from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1246,6 +1261,7 @@ from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
+    ImageFetchError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
@@ -1270,7 +1286,6 @@ from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
-from .vector_stores import *
 from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *

@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -32,8 +33,71 @@ DEFAULT_TIMEOUT = 600
 
 
 class BaseLLMAIOHTTPHandler:
-    def __init__(self):
-        self.client_session: Optional[aiohttp.ClientSession] = None
+    def __init__(
+        self,
+        client_session: Optional[aiohttp.ClientSession] = None,
+        transport: Optional[LiteLLMAiohttpTransport] = None,
+        connector: Optional[aiohttp.BaseConnector] = None,
+    ):
+        self.client_session = client_session
+        self._owns_session = (
+            client_session is None
+        )  # Track if we own the session for cleanup
+
+        self.transport = transport
+        self._owns_transport = (
+            transport is None
+        )  # Track if we own the transport for cleanup
+
+        self.connector = connector
+        self._owns_connector = (
+            connector is None
+        )  # Track if we own the connector for cleanup
+
+    def _get_or_create_transport(self) -> Optional[LiteLLMAiohttpTransport]:
+        """Get existing transport or create a new one if needed."""
+        if self.transport:
+            return self.transport
+
+        # Create a transport using AsyncHTTPHandler's logic
+        try:
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            self._owns_transport = True
+            return self.transport
+        except Exception:
+            # If transport creation fails, return None (will use direct session)
+            return None
+
+    def _get_connector(self) -> Optional[aiohttp.BaseConnector]:
+        """Get or create a connector for the client session."""
+        if self.connector:
+            return self.connector
+        elif self.transport and hasattr(self.transport, "client"):
+            # Extract connector from transport if available
+            client = self.transport.client
+            if callable(client):
+                # If client is a factory, we can't extract connector directly
+                return None
+            elif hasattr(client, "connector"):
+                return client.connector
+        return None
+
+    def _create_client_session_with_transport(self) -> ClientSession:
+        """Create a new client session using transport or connector configuration."""
+        connector = self._get_connector()
+
+        if self.transport and hasattr(self.transport, "_get_valid_client_session"):
+            # Use transport's session creation if available
+            session = self.transport._get_valid_client_session()
+            return session
+        elif connector:
+            # Use provided connector
+            session = aiohttp.ClientSession(connector=connector)
+            return session
+        else:
+            # Default session creation
+            session = aiohttp.ClientSession()
+            return session
 
     def _get_async_client_session(
         self, dynamic_client_session: Optional[ClientSession] = None
@@ -43,14 +107,32 @@ class BaseLLMAIOHTTPHandler:
         elif self.client_session:
             return self.client_session
         else:
-            # init client session, and then return new session
-            self.client_session = aiohttp.ClientSession()
+            # Create client session using transport/connector if available
+            self.client_session = self._create_client_session_with_transport()
+            self._owns_session = True  # We created this session, so we own it
             return self.client_session
 
     async def close(self):
-        """Close the aiohttp client session if it exists."""
-        if self.client_session and not self.client_session.closed:
+        """Close the aiohttp client session and transport if we own them."""
+        # Close client session if we own it
+        if (
+            self.client_session
+            and not self.client_session.closed
+            and self._owns_session
+        ):
             await self.client_session.close()
+
+        # Close transport if we own it
+        if (
+            self.transport
+            and self._owns_transport
+            and hasattr(self.transport, "aclose")
+        ):
+            try:
+                await self.transport.aclose()
+            except Exception:
+                # Ignore errors during transport cleanup
+                pass
 
     async def _make_common_async_call(
         self,
