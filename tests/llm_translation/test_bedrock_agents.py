@@ -20,6 +20,7 @@ import pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Skipping bedrock agents test - arn not working")
 async def test_bedrock_agents():
     litellm._turn_on_debug()
     response = litellm.completion(
@@ -44,6 +45,7 @@ async def test_bedrock_agents():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Skipping bedrock agents test - arn not working")
 async def test_bedrock_agents_with_streaming():
     # litellm._turn_on_debug()
     response = litellm.completion(
