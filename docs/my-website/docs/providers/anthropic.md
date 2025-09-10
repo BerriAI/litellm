@@ -44,7 +44,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 
 :::info
 
-Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed. To set run time defaults to a different value, use `litellm_params.max_tokens`
 
 :::
 
