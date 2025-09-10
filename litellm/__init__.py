@@ -60,7 +60,7 @@ from litellm.constants import (
     empower_models,
     together_ai_models,
     baseten_models,
-    wandb_models,
+    WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
     open_ai_embedding_models,
@@ -522,7 +522,7 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
-wandb_models: Set = set()
+wandb_models: Set = set(WANDB_MODELS)
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
