@@ -482,32 +482,73 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.responses.mcp.mcp_streaming_iterator import create_mcp_call_events
         
         tool_execution_events = []
-        base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
         
         # Create events for each tool execution
         for tool_result in tool_results:
             tool_call_id = tool_result.get("tool_call_id", "unknown")
             result_text = tool_result.get("result", "")
             
-            # Extract tool name from tool calls
+            # Extract tool name and arguments from tool calls
             tool_name = "unknown"
+            tool_arguments = "{}"
             for tool_call in tool_calls:
-                call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)[2]
+                name, args, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 if call_id == tool_call_id:
-                    tool_name = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)[0] or "unknown"
+                    tool_name = name or "unknown"
+                    tool_arguments = args or "{}"
                     break
             
             execution_events = create_mcp_call_events(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                arguments="{}",  # Default arguments
+                arguments=tool_arguments,  # Use actual arguments
                 result=result_text,
-                base_item_id=base_item_id,
+                base_item_id=f"mcp_{uuid.uuid4().hex[:8]}",  # Unique ID for each tool call
                 sequence_start=len(tool_execution_events) + 1
             )
             tool_execution_events.extend(execution_events)
         
         return tool_execution_events
+
+    @staticmethod
+    def _prepare_initial_call_params(
+        call_params: Dict[str, Any],
+        should_auto_execute: bool
+    ) -> Dict[str, Any]:
+        """
+        Prepare call parameters for the initial LLM call.
+        
+        For auto-execute scenarios, we need to disable streaming for the initial call
+        so we can process the tool calls before streaming the final response.
+        """
+        initial_params = call_params.copy()
+        
+        if should_auto_execute:
+            # Disable streaming for initial call when auto-executing tools
+            initial_params["stream"] = False
+            
+        return initial_params
+
+    @staticmethod
+    def _prepare_follow_up_call_params(
+        call_params: Dict[str, Any],
+        original_stream_setting: bool
+    ) -> Dict[str, Any]:
+        """
+        Prepare call parameters for the follow-up LLM call after tool execution.
+        
+        Restores the original streaming setting and removes tool_choice since
+        we're now providing tool results, not requesting tool calls.
+        """
+        follow_up_params = call_params.copy()
+        
+        # Restore original streaming setting for follow-up call
+        follow_up_params["stream"] = original_stream_setting
+        
+        # Remove tool_choice since we're providing results, not requesting tool calls
+        follow_up_params.pop("tool_choice", None)
+        
+        return follow_up_params
 
     @staticmethod
     def _add_mcp_output_elements_to_response(
