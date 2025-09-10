@@ -3854,7 +3854,7 @@ def embedding(  # noqa: PLR0915
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
-    azure_ad_token_provider = kwargs.pop("azure_ad_token_provider", None)
+    azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
     aembedding = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None)
