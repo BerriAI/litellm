@@ -50,7 +50,6 @@ def mock_user_api_key_dict():
         soft_budget=None,
         tpm_limit=None,
         rpm_limit=None,
-        parallel_request_limit=None,
         metadata={},
         max_parallel_requests=None,
         allowed_cache_controls=[],
@@ -291,15 +290,38 @@ class TestNomaGuardrailHooks:
             default_on=True,
         )
 
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "verdict": False,
-            "originalResponse": {"prompt": {"harmfulContent": {"result": True}}},
-        }
-        mock_response.raise_for_status = MagicMock()
+        with patch.object(
+            guardrail, "_create_background_noma_check"
+        ) as mock_create_background:
+            # Should return immediately without waiting for API call
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=mock_request_data,
+                call_type="completion",
+            )
 
-        with patch.object(guardrail.async_handler, "post", return_value=mock_response):
-            # Should not raise exception in monitor mode
+            assert result == mock_request_data
+            # Verify background task was created
+            mock_create_background.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_monitor_mode_background_task_failure(
+        self, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test pre-call hook in monitor mode when background task creation fails"""
+        guardrail = NomaGuardrail(
+            api_key="test-key",
+            monitor_mode=True,
+            guardrail_name="test-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+        with patch.object(
+            guardrail, "_create_background_noma_check", side_effect=Exception("Task creation failed")
+        ):
+            # Should still return successfully even if background task creation fails
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=mock_user_api_key_dict,
                 cache=MagicMock(),
@@ -455,6 +477,291 @@ class TestNomaGuardrailHooks:
         data = {}
         message = asyncio.run(noma_guardrail._extract_user_message(data))
         assert message is None
+
+
+class TestBackgroundProcessing:
+    """Test the new background processing functionality"""
+
+    @pytest.fixture
+    def monitor_mode_guardrail(self):
+        """Create a guardrail with monitor mode enabled"""
+        return NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            application_id="test-app",
+            monitor_mode=True,  # Enable monitor mode
+            block_failures=True,
+            guardrail_name="test-noma-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_user_message_check_monitor_mode(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test shared helper method in monitor mode"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "verdict": False,
+            "originalResponse": {"prompt": {"harmfulContent": {"result": True}}},
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            monitor_mode_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            with patch.object(
+                monitor_mode_guardrail, "_handle_verdict_background"
+            ) as mock_handle_verdict:
+                result = await monitor_mode_guardrail._process_user_message_check(
+                    mock_request_data, mock_user_api_key_dict
+                )
+
+                assert result == "Hello, how are you?"
+                mock_post.assert_called_once()
+                mock_handle_verdict.assert_called_once_with(
+                    "user", "Hello, how are you?", mock_response.json.return_value
+                )
+
+    @pytest.mark.asyncio
+    async def test_process_user_message_check_non_monitor_mode(
+        self, noma_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test shared helper method in non-monitor mode"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"verdict": True}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            with patch.object(
+                noma_guardrail, "_check_verdict"
+            ) as mock_check_verdict:
+                result = await noma_guardrail._process_user_message_check(
+                    mock_request_data, mock_user_api_key_dict
+                )
+
+                assert result == "Hello, how are you?"
+                mock_post.assert_called_once()
+                mock_check_verdict.assert_called_once_with(
+                    "user", "Hello, how are you?", mock_response.json.return_value
+                )
+
+    @pytest.mark.asyncio
+    async def test_process_llm_response_check_monitor_mode(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test LLM response processing in monitor mode"""
+        from litellm.types.utils import Choices, Message
+        
+        response = ModelResponse(
+            id="test-response-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="I'm doing well, thank you!", role="assistant"
+                    ),
+                )
+            ],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        )
+
+        mock_api_response = MagicMock()
+        mock_api_response.json.return_value = {"verdict": True}
+        mock_api_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            monitor_mode_guardrail.async_handler, "post", return_value=mock_api_response
+        ) as mock_post:
+            with patch.object(
+                monitor_mode_guardrail, "_handle_verdict_background"
+            ) as mock_handle_verdict:
+                result = await monitor_mode_guardrail._process_llm_response_check(
+                    mock_request_data, response, mock_user_api_key_dict
+                )
+
+                assert result == "I'm doing well, thank you!"
+                mock_post.assert_called_once()
+                mock_handle_verdict.assert_called_once_with(
+                    "assistant", "I'm doing well, thank you!", mock_api_response.json.return_value
+                )
+
+    @pytest.mark.asyncio
+    async def test_check_user_message_background(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test background user message check method"""
+        with patch.object(
+            monitor_mode_guardrail, "_process_user_message_check"
+        ) as mock_process:
+            await monitor_mode_guardrail._check_user_message_background(
+                mock_request_data, mock_user_api_key_dict
+            )
+
+            mock_process.assert_called_once_with(mock_request_data, mock_user_api_key_dict)
+
+    @pytest.mark.asyncio
+    async def test_check_user_message_background_exception_handling(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test background user message check handles exceptions gracefully"""
+        with patch.object(
+            monitor_mode_guardrail, "_process_user_message_check",
+            side_effect=Exception("API failed")
+        ):
+            # Should not raise exception, just log error
+            await monitor_mode_guardrail._check_user_message_background(
+                mock_request_data, mock_user_api_key_dict
+            )
+
+    @pytest.mark.asyncio
+    async def test_check_llm_response_background(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test background LLM response check method"""
+        from litellm.types.utils import Choices, Message
+        
+        response = ModelResponse(
+            id="test-response-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Test response", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        )
+
+        with patch.object(
+            monitor_mode_guardrail, "_process_llm_response_check"
+        ) as mock_process:
+            await monitor_mode_guardrail._check_llm_response_background(
+                mock_request_data, response, mock_user_api_key_dict
+            )
+
+            mock_process.assert_called_once_with(
+                mock_request_data, response, mock_user_api_key_dict
+            )
+
+    @pytest.mark.asyncio
+    async def test_handle_verdict_background_blocked(self, monitor_mode_guardrail):
+        """Test background verdict handling for blocked content"""
+        response_json = {
+            "verdict": False,
+            "originalResponse": {"prompt": {"harmfulContent": {"result": True}}},
+        }
+
+        with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
+            await monitor_mode_guardrail._handle_verdict_background(
+                "user", "test message", response_json
+            )
+            
+            mock_warning.assert_called_once()
+            assert "blocked user message" in mock_warning.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_handle_verdict_background_allowed(self, monitor_mode_guardrail):
+        """Test background verdict handling for allowed content"""
+        response_json = {"verdict": True}
+
+        with patch("litellm._logging.verbose_proxy_logger.info") as mock_info:
+            await monitor_mode_guardrail._handle_verdict_background(
+                "assistant", "test response", response_json
+            )
+            
+            mock_info.assert_called_once()
+            assert "allowed assistant message" in mock_info.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_create_background_noma_check(self, monitor_mode_guardrail):
+        """Test background task creation"""
+        async def dummy_coroutine():
+            return "completed"
+
+        with patch("asyncio.create_task") as mock_create_task:
+            monitor_mode_guardrail._create_background_noma_check(dummy_coroutine())
+            mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_background_noma_check_exception(self, monitor_mode_guardrail):
+        """Test background task creation with exception handling"""
+        async def dummy_coroutine():
+            return "completed"
+
+        with patch("asyncio.create_task", side_effect=Exception("Task creation failed")):
+            # Should not raise exception, just log error
+            monitor_mode_guardrail._create_background_noma_check(dummy_coroutine())
+
+    @pytest.mark.asyncio
+    async def test_moderation_hook_monitor_mode(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test moderation hook in monitor mode"""
+        # Update event hook to during_call
+        monitor_mode_guardrail.event_hook = "during_call"
+
+        with patch.object(
+            monitor_mode_guardrail, "_create_background_noma_check"
+        ) as mock_create_background:
+            result = await monitor_mode_guardrail.async_moderation_hook(
+                data=mock_request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="completion",
+            )
+
+            assert result == mock_request_data
+            mock_create_background.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_post_call_success_hook_monitor_mode(
+        self, monitor_mode_guardrail, mock_user_api_key_dict, mock_request_data
+    ):
+        """Test post-call success hook in monitor mode"""
+        from litellm.types.utils import Choices, Message
+        
+        # Update event hook to post_call
+        monitor_mode_guardrail.event_hook = "post_call"
+
+        response = ModelResponse(
+            id="test-response-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Test response", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        )
+
+        with patch.object(
+            monitor_mode_guardrail, "_create_background_noma_check"
+        ) as mock_create_background:
+            result = await monitor_mode_guardrail.async_post_call_success_hook(
+                data=mock_request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                response=response,
+            )
+
+            assert result == response
+            mock_create_background.assert_called_once()
 
 
 class TestIntegration:
