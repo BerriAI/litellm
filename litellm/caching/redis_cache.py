@@ -24,6 +24,16 @@ from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
 
+
+class TimedeltaJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles timedelta objects by converting them to seconds."""
+    
+    def default(self, obj):
+        if isinstance(obj, timedelta):
+            return obj.total_seconds()
+        return super().default(obj)
+
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis, RedisCluster
@@ -214,7 +224,12 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
-            self.redis_client.set(name=key, value=str(value), ex=ttl)
+            # Convert value to JSON string to handle complex objects like timedelta
+            if isinstance(value, (dict, list)) or hasattr(value, '__dict__'):
+                serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
+            else:
+                serialized_value = str(value)
+            self.redis_client.set(name=key, value=serialized_value, ex=ttl)
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -400,7 +415,7 @@ class RedisCache(BaseCache):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
             result = await _redis_client.set(
                 name=key,
-                value=json.dumps(value),
+                value=json.dumps(value, cls=TimedeltaJSONEncoder),
                 nx=nx,
                 ex=ttl,
             )
@@ -458,7 +473,7 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
             )
-            json_cache_value = json.dumps(cache_value)
+            json_cache_value = json.dumps(cache_value, cls=TimedeltaJSONEncoder)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
             if ttl is not None:

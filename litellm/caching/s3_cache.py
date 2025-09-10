@@ -20,6 +20,15 @@ from litellm._logging import print_verbose, verbose_logger
 from .base_cache import BaseCache
 
 
+class TimedeltaJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles timedelta objects by converting them to seconds."""
+    
+    def default(self, obj):
+        if isinstance(obj, timedelta):
+            return obj.total_seconds()
+        return super().default(obj)
+
+
 class S3Cache(BaseCache):
     def __init__(
         self,
@@ -65,7 +74,7 @@ class S3Cache(BaseCache):
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
-            serialized_value = json.dumps(value)
+            serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
             key = self._to_s3_key(key)
 
             if ttl is not None:

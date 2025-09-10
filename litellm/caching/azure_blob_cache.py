@@ -11,10 +11,20 @@ Has 4 methods:
 import asyncio
 import json
 from contextlib import suppress
+from datetime import timedelta
 
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
+
+
+class TimedeltaJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles timedelta objects by converting them to seconds."""
+    
+    def default(self, obj):
+        if isinstance(obj, timedelta):
+            return obj.total_seconds()
+        return super().default(obj)
 
 
 class AzureBlobCache(BaseCache):
@@ -39,7 +49,7 @@ class AzureBlobCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
             self.container_client.upload_blob(key, serialized_value)
         except Exception as e:
@@ -48,7 +58,7 @@ class AzureBlobCache(BaseCache):
 
     async def async_set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
-        serialized_value = json.dumps(value)
+        serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
         try:
             await self.async_container_client.upload_blob(key, serialized_value, overwrite=True)
         except Exception as e:
