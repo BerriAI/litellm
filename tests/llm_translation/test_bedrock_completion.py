@@ -69,7 +69,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -195,7 +195,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -232,7 +232,7 @@ def test_completion_bedrock_claude_sts_client_auth():
         litellm.set_verbose = True
 
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -904,7 +904,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-instant-v1",
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -1070,7 +1070,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-instant-v1",
+                    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
