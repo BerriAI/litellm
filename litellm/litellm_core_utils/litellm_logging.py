@@ -2108,10 +2108,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 if self.model_call_details.get("cache_hit", False) is True:
                     self.model_call_details["response_cost"] = 0.0
                 else:
-                    # check if base_model set on azure
-                    _get_base_model_from_metadata(
-                        model_call_details=self.model_call_details
-                    )
                     # base_model defaults to None if not set on model_info
                     self.model_call_details["response_cost"] = (
                         self._response_cost_calculator(
