@@ -1598,10 +1598,6 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         try:
-            ## BUILD COMPLETE STREAMED RESPONSE
-            complete_streaming_response: Optional[
-                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
-            ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
             complete_streaming_response = self._get_assembled_streaming_response(result)
