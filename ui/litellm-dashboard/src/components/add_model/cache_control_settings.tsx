@@ -62,17 +62,15 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
           
           <Form.List
             name="cache_control_injection_points"
-            initialValue={[{ location: "message" }]}
           >
             {(fields, { add, remove }) => (
               <>
                 {fields.map((field, index) => (
                   <div key={field.key} className="flex items-center mb-4 gap-4">
                     <Form.Item
-                      {...field}
-                      label="Type"
+                      key={`${field.key}-location`}
                       name={[field.name, 'location']}
-                      initialValue="message"
+                      label="Type"
                       className="mb-0"
                       style={{ width: '180px' }}
                     >
@@ -80,9 +78,9 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                     </Form.Item>
                     
                     <Form.Item
-                      {...field}
-                      label="Role"
+                      key={`${field.key}-role`}
                       name={[field.name, 'role']}
+                      label="Role"
                       className="mb-0"
                       style={{ width: '180px' }}
                       tooltip="LiteLLM will mark all messages of this role as cacheable"
@@ -96,16 +94,16 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                           { value: 'assistant', label: 'Assistant' },
                         ]}
                         onChange={() => {
-                          const values = form.getFieldValue('cache_control_points');
+                          const values = form.getFieldValue('cache_control_injection_points');
                           updateCacheControlPoints(values);
                         }}
                       />
                     </Form.Item>
                     
                     <Form.Item
-                      {...field}
-                      label="Index"
+                      key={`${field.key}-index`}
                       name={[field.name, 'index']}
+                      label="Index"
                       className="mb-0"
                       style={{ width: '180px' }}
                       tooltip="(Optional) If set litellm will mark the message at this index as cacheable"
@@ -116,7 +114,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                         step={1}
                         min={0}
                         onChange={() => {
-                          const values = form.getFieldValue('cache_control_points');
+                          const values = form.getFieldValue('cache_control_injection_points');
                           updateCacheControlPoints(values);
                         }}
                       />
@@ -128,7 +126,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                         onClick={() => {
                           remove(field.name);
                           setTimeout(() => {
-                            const values = form.getFieldValue('cache_control_points');
+                            const values = form.getFieldValue('cache_control_injection_points');
                             updateCacheControlPoints(values);
                           }, 0);
                         }}
@@ -141,7 +139,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                   <button
                     type="button"
                     className="flex items-center justify-center w-full border border-dashed border-gray-300 py-2 px-4 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-all rounded"
-                    onClick={() => add()}
+                    onClick={() => add({ location: "message" })}
                   >
                     <PlusOutlined className="mr-2" />
                     Add Injection Point
