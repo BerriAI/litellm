@@ -13,7 +13,8 @@ from urllib.parse import urljoin
 from fastapi import HTTPException
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm.caching.caching import DualCache
+from litellm.types.utils import ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (

@@ -6,7 +6,7 @@ from httpx import Response, Request
 
 import pytest
 
-from litellm import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
     LassoGuardrailMissingSecrets,

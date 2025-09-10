@@ -311,7 +311,7 @@ class ProxyInitializationHelpers:
 @click.option(
     "--num_workers",
     default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 4 uvicorn workers are used.",
+    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -708,7 +708,7 @@ def run_server(  # noqa: PLR0915
                     0, os.path.abspath("../..")
                 )  # Adds the parent directory to the system path - for litellm local dev
                 import litellm
-                from litellm import get_secret_str
+                from litellm.secret_managers.main import get_secret_str
 
                 database_url = get_secret_str(database_url, default_value=None)
                 os.chdir(original_dir)

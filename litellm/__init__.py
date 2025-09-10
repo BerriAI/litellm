@@ -1005,172 +1005,199 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TranscriptionResponse,
     TextCompletionResponse,
 ]
+from litellm.llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings
 
-from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.custom_llm import CustomLLM
-from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from .llms.openai_like.chat.handler import OpenAILikeChatConfig
-from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
-from .llms.galadriel.chat.transformation import GaladrielChatConfig
-from .llms.github.chat.transformation import GithubChatConfig
-from .llms.empower.chat.transformation import EmpowerChatConfig
-from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
-from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
-from .llms.oobabooga.chat.transformation import OobaboogaConfig
-from .llms.maritalk import MaritalkConfig
-from .llms.openrouter.chat.transformation import OpenrouterConfig
-from .llms.datarobot.chat.transformation import DataRobotConfig
-from .llms.anthropic.chat.transformation import AnthropicConfig
-from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.groq.stt.transformation import GroqSTTConfig
-from .llms.anthropic.completion.transformation import AnthropicTextConfig
-from .llms.triton.completion.transformation import TritonConfig
-from .llms.triton.completion.transformation import TritonGenerateConfig
-from .llms.triton.completion.transformation import TritonInferConfig
-from .llms.triton.embedding.transformation import TritonEmbeddingConfig
-from .llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
-from .llms.databricks.chat.transformation import DatabricksConfig
-from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
-from .llms.predibase.chat.transformation import PredibaseConfig
-from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
-from .llms.snowflake.chat.transformation import SnowflakeConfig
-from .llms.cohere.rerank.transformation import CohereRerankConfig
-from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
-from .llms.azure_ai.rerank.transformation import AzureAIRerankConfig
-from .llms.infinity.rerank.transformation import InfinityRerankConfig
-from .llms.jina_ai.rerank.transformation import JinaAIRerankConfig
-from .llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
-from .llms.clarifai.chat.transformation import ClarifaiConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.meta_llama.chat.transformation import LlamaAPIConfig
-from .llms.anthropic.experimental_pass_through.messages.transformation import (
-    AnthropicMessagesConfig,
-)
-from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from .llms.together_ai.chat import TogetherAIConfig
-from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.novita.chat.transformation import NovitaConfig
-from .llms.deprecated_providers.palm import (
-    PalmConfig,
-)  # here to prevent breaking changes
-from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.petals.completion.transformation import PetalsConfig
-from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-    VertexGeminiConfig as VertexAIConfig,
-)
-from .llms.gemini.common_utils import GeminiModelInfo
-from .llms.gemini.chat.transformation import (
-    GoogleAIStudioGeminiConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
-)
+#lazy load map, some models are called with instance, their keys are in lower case
+_lazy_load_map = {
+    "BytezChatConfig": (".llms.bytez.chat.transformation", "BytezChatConfig"),
+    "CustomLLM": (".llms.custom_llm", "CustomLLM"),
+    "AmazonConverseConfig": (".llms.bedrock.chat.converse_transformation", "AmazonConverseConfig"),
+    "OpenAILikeChatConfig": (".llms.openai_like.chat.handler", "OpenAILikeChatConfig"),
+    "AiohttpOpenAIChatConfig": (".llms.aiohttp_openai.chat.transformation", "AiohttpOpenAIChatConfig"),
+    "GaladrielChatConfig": (".llms.galadriel.chat.transformation", "GaladrielChatConfig"),
+    "GithubChatConfig": (".llms.github.chat.transformation", "GithubChatConfig"),
+    "EmpowerChatConfig": (".llms.empower.chat.transformation", "EmpowerChatConfig"),
+    "HuggingFaceChatConfig": (".llms.huggingface.chat.transformation", "HuggingFaceChatConfig"),
+    "HuggingFaceEmbeddingConfig": (".llms.huggingface.embedding.transformation", "HuggingFaceEmbeddingConfig"),
+    "OobaboogaConfig": (".llms.oobabooga.chat.transformation", "OobaboogaConfig"),
+    "MaritalkConfig": (".llms.maritalk", "MaritalkConfig"),
+    "OpenrouterConfig": (".llms.openrouter.chat.transformation", "OpenrouterConfig"),
+    "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
+    "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
+    "AnthropicModelInfo": (".llms.anthropic.common_utils", "AnthropicModelInfo"),
+    "GroqSTTConfig": (".llms.groq.stt.transformation", "GroqSTTConfig"),
+    "AnthropicTextConfig": (".llms.anthropic.completion.transformation", "AnthropicTextConfig"),
+    "TritonConfig": (".llms.triton.completion.transformation", "TritonConfig"),
+    "TritonGenerateConfig": (".llms.triton.completion.transformation", "TritonGenerateConfig"),
+    "TritonInferConfig": (".llms.triton.completion.transformation", "TritonInferConfig"),
+    "TritonEmbeddingConfig": (".llms.triton.embedding.transformation", "TritonEmbeddingConfig"),
+    "HuggingFaceRerankConfig": (".llms.huggingface.rerank.transformation", "HuggingFaceRerankConfig"),
+    "DatabricksConfig": (".llms.databricks.chat.transformation", "DatabricksConfig"),
+    "DatabricksEmbeddingConfig": (".llms.databricks.embed.transformation", "DatabricksEmbeddingConfig"),
+    "PredibaseConfig": (".llms.predibase.chat.transformation", "PredibaseConfig"),
+    "ReplicateConfig": (".llms.replicate.chat.transformation", "ReplicateConfig"),
+    "CohereConfig": (".llms.cohere.completion.transformation", "CohereTextConfig"),
+    "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
+    "CohereRerankConfig": (".llms.cohere.rerank.transformation", "CohereRerankConfig"),
+    "CohereRerankV2Config": (".llms.cohere.rerank_v2.transformation", "CohereRerankV2Config"),
+    "AzureAIRerankConfig": (".llms.azure_ai.rerank.transformation", "AzureAIRerankConfig"),
+    "InfinityRerankConfig": (".llms.infinity.rerank.transformation", "InfinityRerankConfig"),
+    "JinaAIRerankConfig": (".llms.jina_ai.rerank.transformation", "JinaAIRerankConfig"),
+    "DeepinfraRerankConfig": (".llms.deepinfra.rerank.transformation", "DeepinfraRerankConfig"),
+    "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
+    "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
+    "LlamaAPIConfig": (".llms.meta_llama.chat.transformation", "LlamaAPIConfig"),
+    "AnthropicMessagesConfig": (".llms.anthropic.experimental_pass_through.messages.transformation", "AnthropicMessagesConfig"),
+    "AmazonAnthropicClaudeMessagesConfig": (".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeMessagesConfig"),
+    "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
+    "TogetherAITextCompletionConfig": (".llms.together_ai.completion.transformation", "TogetherAITextCompletionConfig"),
+    "CloudflareChatConfig": (".llms.cloudflare.chat.transformation", "CloudflareChatConfig"),
+    "NovitaConfig": (".llms.novita.chat.transformation", "NovitaConfig"),
+    "PalmConfig": (".llms.deprecated_providers.palm", "PalmConfig"),
+    "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
+    "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
+    "AlephAlphaConfig": (".llms.deprecated_providers.aleph_alpha", "AlephAlphaConfig"),
+    "VertexGeminiConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
+    "VertexAIConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
+    "GeminiModelInfo": (".llms.gemini.common_utils", "GeminiModelInfo"),
+    "GoogleAIStudioGeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),
+    "GeminiConfig": (".llms.gemini.chat.transformation", "GeminiConfig"),
+    "VertexAIAnthropicConfig": (".llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation", "VertexAIAnthropicConfig"),
+    "VertexAILlama3Config": (".llms.vertex_ai.vertex_ai_partner_models.llama3.transformation", "VertexAILlama3Config"),
+    "VertexAIAi21Config": (".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation", "VertexAIAi21Config"),
+    "OllamaChatConfig": (".llms.ollama.chat.transformation", "OllamaChatConfig"),
+    "OllamaConfig": (".llms.ollama.completion.transformation", "OllamaConfig"),
+    "SagemakerConfig": (".llms.sagemaker.completion.transformation", "SagemakerConfig"),
+    "SagemakerChatConfig": (".llms.sagemaker.chat.transformation", "SagemakerChatConfig"),
+    "AmazonCohereChatConfig": (".llms.bedrock.chat.invoke_handler", "AmazonCohereChatConfig"),
+    "AmazonBedrockGlobalConfig": (".llms.bedrock.common_utils", "AmazonBedrockGlobalConfig"),
+    "AmazonAI21Config": (".llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation", "AmazonAI21Config"),
+    "AmazonInvokeNovaConfig": (".llms.bedrock.chat.invoke_transformations.amazon_nova_transformation", "AmazonInvokeNovaConfig"),
+    "AmazonAnthropicConfig": (".llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation", "AmazonAnthropicConfig"),
+    "AmazonAnthropicClaudeConfig": (".llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeConfig"),
+    "AmazonCohereConfig": (".llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation", "AmazonCohereConfig"),
+    "AmazonLlamaConfig": (".llms.bedrock.chat.invoke_transformations.amazon_llama_transformation", "AmazonLlamaConfig"),
+    "AmazonDeepSeekR1Config": (".llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation", "AmazonDeepSeekR1Config"),
+    "AmazonMistralConfig": (".llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation", "AmazonMistralConfig"),
+    "AmazonTitanConfig": (".llms.bedrock.chat.invoke_transformations.amazon_titan_transformation", "AmazonTitanConfig"),
+    "AmazonInvokeConfig": (".llms.bedrock.chat.invoke_transformations.base_invoke_transformation", "AmazonInvokeConfig"),
+    "AmazonStabilityConfig": (".llms.bedrock.image.amazon_stability1_transformation", "AmazonStabilityConfig"),
+    "AmazonStability3Config": (".llms.bedrock.image.amazon_stability3_transformation", "AmazonStability3Config"),
+    "AmazonNovaCanvasConfig": (".llms.bedrock.image.amazon_nova_canvas_transformation", "AmazonNovaCanvasConfig"),
+    "AmazonTitanG1Config": (".llms.bedrock.embed.amazon_titan_g1_transformation", "AmazonTitanG1Config"),
+    "AmazonTitanMultimodalEmbeddingG1Config": (".llms.bedrock.embed.amazon_titan_multimodal_transformation", "AmazonTitanMultimodalEmbeddingG1Config"),
+    "AmazonTitanV2Config": (".llms.bedrock.embed.amazon_titan_v2_transformation", "AmazonTitanV2Config"),
+    "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
+    "BedrockCohereEmbeddingConfig": (".llms.bedrock.embed.cohere_transformation", "BedrockCohereEmbeddingConfig"),
+    "OpenAIConfig": (".llms.openai.openai", "OpenAIConfig"),
+    "MistralEmbeddingConfig": (".llms.openai.openai", "MistralEmbeddingConfig"),
+    "OpenAIImageVariationConfig": (".llms.openai.image_variations.transformation", "OpenAIImageVariationConfig"),
+    "DeepInfraConfig": (".llms.deepinfra.chat.transformation", "DeepInfraConfig"),
+    "DeepgramAudioTranscriptionConfig": (".llms.deepgram.audio_transcription.transformation", "DeepgramAudioTranscriptionConfig"),
+    "TopazModelInfo": (".llms.topaz.common_utils", "TopazModelInfo"),
+    "TopazImageVariationConfig": (".llms.topaz.image_variations.transformation", "TopazImageVariationConfig"),
+    "OpenAITextCompletionConfig": ("litellm.llms.openai.completion.transformation", "OpenAITextCompletionConfig"),
+    "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "VoyageEmbeddingConfig": (".llms.voyage.embedding.transformation", "VoyageEmbeddingConfig"),
+    "VoyageContextualEmbeddingConfig": (".llms.voyage.embedding.transformation_contextual", "VoyageContextualEmbeddingConfig"),
+    "InfinityEmbeddingConfig": (".llms.infinity.embedding.transformation", "InfinityEmbeddingConfig"),
+    "AzureAIStudioConfig": (".llms.azure_ai.chat.transformation", "AzureAIStudioConfig"),
+    "MistralConfig": (".llms.mistral.chat.transformation", "MistralConfig"),
+    "OpenAIResponsesAPIConfig": (".llms.openai.responses.transformation", "OpenAIResponsesAPIConfig"),
+    "AzureOpenAIResponsesAPIConfig": (".llms.azure.responses.transformation", "AzureOpenAIResponsesAPIConfig"),
+    "AzureOpenAIOSeriesResponsesAPIConfig": (".llms.azure.responses.o_series_transformation", "AzureOpenAIOSeriesResponsesAPIConfig"),
+    "OpenAIO1Config": (".llms.openai.chat.o_series_transformation", "OpenAIO1Config"),
+    "SnowflakeConfig": (".llms.snowflake.chat.transformation", "SnowflakeConfig"),
+    "GradientAIConfig": (".llms.gradient_ai.chat.transformation", "GradientAIConfig"),
+    "OpenAIWhisperAudioTranscriptionConfig": (".llms.openai.transcriptions.whisper_transformation", "OpenAIWhisperAudioTranscriptionConfig"),
+    "OpenAIGPTAudioTranscriptionConfig": (".llms.openai.transcriptions.gpt_transformation", "OpenAIGPTAudioTranscriptionConfig"),
+    "FeatherlessAIConfig": (".llms.featherless_ai.chat.transformation", "FeatherlessAIConfig"),
+    "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
+    "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
+    "SambaNovaEmbeddingConfig": (".llms.sambanova.embedding.transformation", "SambaNovaEmbeddingConfig"),
+    "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
+    "FireworksAIConfig": (".llms.fireworks_ai.chat.transformation", "FireworksAIConfig"),
+    "FireworksAITextCompletionConfig": (".llms.fireworks_ai.completion.transformation", "FireworksAITextCompletionConfig"),
+    "FireworksAIAudioTranscriptionConfig": (".llms.fireworks_ai.audio_transcription.transformation", "FireworksAIAudioTranscriptionConfig"),
+    "FireworksAIEmbeddingConfig": (".llms.fireworks_ai.embed.fireworks_ai_transformation", "FireworksAIEmbeddingConfig"),
+    "FriendliaiChatConfig": (".llms.friendliai.chat.transformation", "FriendliaiChatConfig"),
+    "JinaAIEmbeddingConfig": (".llms.jina_ai.embedding.transformation", "JinaAIEmbeddingConfig"),
+    "XAIChatConfig": (".llms.xai.chat.transformation", "XAIChatConfig"),
+    "XAIModelInfo": (".llms.xai.common_utils", "XAIModelInfo"),
+    "AIMLChatConfig": (".llms.aiml.chat.transformation", "AIMLChatConfig"),
+    "VolcEngineConfig": (".llms.volcengine.chat.transformation", "VolcEngineChatConfig"),
+    "CodestralTextCompletionConfig": (".llms.codestral.completion.transformation", "CodestralTextCompletionConfig"),
+    "AzureOpenAIError": (".llms.azure.azure", "AzureOpenAIError"),
+    "AzureOpenAIAssistantsAPIConfig": (".llms.azure.azure", "AzureOpenAIAssistantsAPIConfig"),
+    "HerokuChatConfig": (".llms.heroku.chat.transformation", "HerokuChatConfig"),
+    "CometAPIConfig": (".llms.cometapi.chat.transformation", "CometAPIConfig"),
+    "AzureOpenAIConfig": (".llms.azure.chat.gpt_transformation", "AzureOpenAIConfig"),
+    "AzureOpenAIGPT5Config": (".llms.azure.chat.gpt_5_transformation", "AzureOpenAIGPT5Config"),
+    "AzureOpenAITextConfig": (".llms.azure.completion.transformation", "AzureOpenAITextConfig"),
+    "HostedVLLMChatConfig": (".llms.hosted_vllm.chat.transformation", "HostedVLLMChatConfig"),
+    "LlamafileChatConfig": (".llms.llamafile.chat.transformation", "LlamafileChatConfig"),
+    "LiteLLMProxyChatConfig": (".llms.litellm_proxy.chat.transformation", "LiteLLMProxyChatConfig"),
+    "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
+    "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
+    "LmStudioEmbeddingConfig": (".llms.lm_studio.embed.transformation", "LmStudioEmbeddingConfig"),
+    "NscaleConfig": (".llms.nscale.chat.transformation", "NscaleConfig"),
+    "PerplexityChatConfig": (".llms.perplexity.chat.transformation", "PerplexityChatConfig"),
+    "AzureOpenAIO1Config": (".llms.azure.chat.o_series_transformation", "AzureOpenAIO1Config"),
+    "IBMWatsonXAIConfig": (".llms.watsonx.completion.transformation", "IBMWatsonXAIConfig"),
+    "IBMWatsonXChatConfig": (".llms.watsonx.chat.transformation", "IBMWatsonXChatConfig"),
+    "IBMWatsonXEmbeddingConfig": (".llms.watsonx.embed.transformation", "IBMWatsonXEmbeddingConfig"),
+    "GithubCopilotConfig": (".llms.github_copilot.chat.transformation", "GithubCopilotConfig"),
+    "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
+    "DashScopeChatConfig": (".llms.dashscope.chat.transformation", "DashScopeChatConfig"),
+    "MoonshotChatConfig": (".llms.moonshot.chat.transformation", "MoonshotChatConfig"),
+    "V0ChatConfig": (".llms.v0.chat.transformation", "V0ChatConfig"),
+    "OCIChatConfig": (".llms.oci.chat.transformation", "OCIChatConfig"),
+    "MorphChatConfig": (".llms.morph.chat.transformation", "MorphChatConfig"),
+    "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
+    "HyperbolicChatConfig": (".llms.hyperbolic.chat.transformation", "HyperbolicChatConfig"),
+    "VercelAIGatewayConfig": (".llms.vercel_ai_gateway.chat.transformation", "VercelAIGatewayConfig"),
 
 
+    "BudgetManager": (".budget_manager", "BudgetManager"),
+    "run_server": (".proxy.proxy_cli", "run_server"),
+    "Router": (".router", "Router"),
+    "_arealtime": (".realtime_api.main", "_arealtime"),
+    "response_cost_calculator": (".cost_calculator", "response_cost_calculator"),
+    "cost_per_token": (".cost_calculator", "cost_per_token"),
+    "close_litellm_async_clients": (".llms.custom_httpx.async_client_cleanup", "close_litellm_async_clients"),
+
+    "AuthenticationError": (".exceptions", "AuthenticationError"),
+    "InvalidRequestError": (".exceptions", "InvalidRequestError"),
+    "BadRequestError": (".exceptions", "BadRequestError"),
+    "ImageFetchError": (".exceptions", "ImageFetchError"),
+    "NotFoundError": (".exceptions", "NotFoundError"),
+    "RateLimitError": (".exceptions", "RateLimitError"),
+    "ServiceUnavailableError": (".exceptions", "ServiceUnavailableError"),
+    "OpenAIError": (".exceptions", "OpenAIError"),
+    "ContextWindowExceededError": (".exceptions", "ContextWindowExceededError"),
+    "ContentPolicyViolationError": (".exceptions", "ContentPolicyViolationError"),
+    "BudgetExceededError": (".exceptions", "BudgetExceededError"),
+    "APIError": (".exceptions", "APIError"),
+    "Timeout": (".exceptions", "Timeout"),
+    "APIConnectionError": (".exceptions", "APIConnectionError"),
+    "UnsupportedParamsError": (".exceptions", "UnsupportedParamsError"),
+    "APIResponseValidationError": (".exceptions", "APIResponseValidationError"),
+    "UnprocessableEntityError": (".exceptions", "UnprocessableEntityError"),
+    "InternalServerError": (".exceptions", "InternalServerError"),
+    "JSONSchemaValidationError": (".exceptions", "JSONSchemaValidationError"),
+    "LITELLM_EXCEPTION_TYPES": (".exceptions", "LITELLM_EXCEPTION_TYPES"),
+    "MockException": (".exceptions", "MockException"),
+}
 from .llms.vertex_ai.vertex_embeddings.transformation import (
     VertexAITextEmbeddingConfig,
 )
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
-
-from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-    VertexAIAnthropicConfig,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
-    VertexAILlama3Config,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
-)
-from .llms.ollama.chat.transformation import OllamaChatConfig
-from .llms.ollama.completion.transformation import OllamaConfig
-from .llms.sagemaker.completion.transformation import SagemakerConfig
-from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.bedrock.chat.invoke_handler import (
-    AmazonCohereChatConfig,
-    bedrock_tool_name_mappings,
-)
-
-from .llms.bedrock.common_utils import (
-    AmazonBedrockGlobalConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
-    AmazonAI21Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
-    AmazonInvokeNovaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
-    AmazonAnthropicConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
-    AmazonCohereConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
-    AmazonLlamaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
-    AmazonDeepSeekR1Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
-    AmazonMistralConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
-    AmazonTitanConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
-    AmazonInvokeConfig,
-)
-
-from .llms.bedrock.image.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
-from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
-from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
-    AmazonTitanMultimodalEmbeddingG1Config,
-)
-from .llms.bedrock.embed.amazon_titan_v2_transformation import (
-    AmazonTitanV2Config,
-)
-from .llms.cohere.chat.transformation import CohereChatConfig
-from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
-from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
-from .llms.deepinfra.chat.transformation import DeepInfraConfig
-from .llms.deepgram.audio_transcription.transformation import (
-    DeepgramAudioTranscriptionConfig,
-)
-from .llms.topaz.common_utils import TopazModelInfo
-from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
-from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
-from .llms.groq.chat.transformation import GroqChatConfig
-from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import (
-    VoyageContextualEmbeddingConfig,
-)
-from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
-from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.chat.transformation import MistralConfig
-from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import (
-    AzureOpenAIOSeriesResponsesAPIConfig,
-)
 from .llms.openai.chat.o_series_transformation import (
-    OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
-
-from .llms.snowflake.chat.transformation import SnowflakeConfig
-from .llms.gradient_ai.chat.transformation import GradientAIConfig
-
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
@@ -1178,13 +1205,6 @@ from .llms.openai.chat.gpt_transformation import (
 from .llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
 )
-from .llms.openai.transcriptions.whisper_transformation import (
-    OpenAIWhisperAudioTranscriptionConfig,
-)
-from .llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
-
 openAIGPTConfig = OpenAIGPTConfig()
 from .llms.openai.chat.gpt_audio_transformation import (
     OpenAIGPTAudioConfig,
@@ -1198,91 +1218,29 @@ from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
 
 nvidiaNimConfig = NvidiaNimConfig()
 nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
+from importlib import import_module
+from sys import modules
+def __getattr__(name: str) -> Any:
+    key = name
+    if key in _lazy_load_map:
+        module_path, original_name = _lazy_load_map[key]
+        module = import_module(module_path, __name__)
+        attr = getattr(module, original_name)
 
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
-from .llms.cerebras.chat import CerebrasConfig
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.ai21.chat.transformation import AI21ChatConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
-from .llms.xai.common_utils import XAIModelInfo
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
-from .llms.azure.azure import (
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
-from .llms.llamafile.chat.transformation import LlamafileChatConfig
-from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
-from .llms.vllm.completion.transformation import VLLMConfig
-from .llms.deepseek.chat.transformation import DeepSeekChatConfig
-from .llms.lm_studio.chat.transformation import LMStudioChatConfig
-from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
-from .llms.nscale.chat.transformation import NscaleConfig
-from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
-from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
-from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
-from .llms.github_copilot.chat.transformation import GithubCopilotConfig
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
+        # cache class
+        setattr(modules[__name__], original_name, attr)
+
+        # if the request is a lowercase name → automatically instantiate
+        if name[0].islower():
+            instance = attr()
+            setattr(modules[__name__], name, instance)
+            return instance
+        return attr
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 from .main import *  # type: ignore
 from .integrations import *
-from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    BadRequestError,
-    ImageFetchError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    BudgetExceededError,
-    APIError,
-    Timeout,
-    APIConnectionError,
-    UnsupportedParamsError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-    InternalServerError,
-    JSONSchemaValidationError,
-    LITELLM_EXCEPTION_TYPES,
-    MockException,
-)
-from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
+
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
@@ -1290,11 +1248,9 @@ from .batch_completion.main import *  # type: ignore
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
-from .realtime_api.main import _arealtime
 from .fine_tuning.main import *
 from .files.main import *
 from .scheduler import *
-from .cost_calculator import response_cost_calculator, cost_per_token
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem

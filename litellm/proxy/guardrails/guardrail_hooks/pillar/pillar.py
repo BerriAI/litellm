@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type, Uni
 from fastapi import HTTPException
 
 # LiteLLM imports
-from litellm import DualCache
+from litellm.caching.caching import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,

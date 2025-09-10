@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from litellm import print_verbose
+from litellm.secret_managers.main import print_verbose
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
 

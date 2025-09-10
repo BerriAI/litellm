@@ -2,7 +2,7 @@ from typing import List, Optional, Union
 
 import httpx
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 

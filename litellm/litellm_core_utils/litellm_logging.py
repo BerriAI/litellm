@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -27,13 +26,14 @@ from typing import (
     cast,
 )
 
+import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import json_logs
 from litellm import (
     _custom_logger_compatible_callbacks_literal,
-    json_logs,
     log_raw_request_response,
     turn_off_message_logging,
 )
@@ -1714,9 +1714,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=litellm_params.get(
-                                "litellm_call_id", str(uuid.uuid4())
-                            ),
+                            litellm_call_id=current_call_id
+                            if (
+                                current_call_id := litellm_params.get("litellm_call_id")
+                            )
+                            is not None
+                            else str(uuid.uuid4()),
                             print_verbose=print_verbose,
                         )
                     if callback == "wandb" and weightsBiasesLogger is not None:
@@ -4501,7 +4504,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        verbose_logger.info(json.dumps(payload, indent=4))
+        print(json.dumps(payload, indent=4)) # noqa
 
 
 def get_standard_logging_metadata(

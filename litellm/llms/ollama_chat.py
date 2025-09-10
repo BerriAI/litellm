@@ -8,7 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,

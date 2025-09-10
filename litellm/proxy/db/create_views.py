@@ -1,6 +1,6 @@
 from typing import Any
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 _db = Any
 

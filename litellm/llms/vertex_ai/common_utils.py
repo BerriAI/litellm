@@ -4,7 +4,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_ty
 import httpx
 
 import litellm
-from litellm import supports_response_schema, supports_system_messages, verbose_logger
+from litellm.utils import supports_response_schema, supports_system_messages
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter

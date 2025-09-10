@@ -2596,7 +2596,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 async def test_bedrock_image_url_sync_client():
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     import logging
-    from litellm import verbose_logger
+    from litellm._logging import verbose_logger
 
     verbose_logger.setLevel(level=logging.DEBUG)
 

@@ -7,7 +7,7 @@ import base64
 from httpx import Response
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
 
 MAX_IMGS_IN_MEMORY = 10

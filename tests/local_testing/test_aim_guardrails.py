@@ -9,7 +9,7 @@ import pytest
 from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
-from litellm import DualCache
+from litellm.caching.caching import DualCache
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,

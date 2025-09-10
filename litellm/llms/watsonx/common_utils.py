@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

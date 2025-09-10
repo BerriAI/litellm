@@ -2,7 +2,7 @@ import json
 from typing import Optional
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,

@@ -7,7 +7,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm.caching.caching import DualCache
+from litellm.types.utils import ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs

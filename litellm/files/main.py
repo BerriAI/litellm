@@ -14,7 +14,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 import litellm
-from litellm import get_secret_str
+from litellm.secret_managers.main import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI

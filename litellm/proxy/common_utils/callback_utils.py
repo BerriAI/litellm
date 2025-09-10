@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm import get_secret
+from litellm.secret_managers.main import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.types_utils.utils import get_instance_fn

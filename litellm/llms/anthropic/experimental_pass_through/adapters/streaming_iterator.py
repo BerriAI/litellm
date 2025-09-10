@@ -6,7 +6,7 @@ import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
 
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
 

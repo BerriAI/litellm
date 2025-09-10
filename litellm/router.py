@@ -43,7 +43,7 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
-from litellm import get_secret_str
+from litellm.secret_managers.main import get_secret_str
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import (
     DualCache,
@@ -4031,7 +4031,7 @@ class Router:
             else:
                 raise
 
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Retrying request with num_retries: {num_retries}"
             )
             # decides how long to sleep before retry
@@ -4681,7 +4681,7 @@ class Router:
         elif self._has_default_fallbacks():  # default fallbacks set
             return True
 
-        verbose_router_logger.info(
+        verbose_router_logger.debug(
             "Content Policy Error occurred. No available fallbacks. Returning original response. model={}, content_policy_fallbacks={}".format(
                 model, content_policy_fallbacks
             )
