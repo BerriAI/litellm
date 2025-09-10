@@ -105,7 +105,7 @@ def test_completion_bedrock_guardrails(streaming):
     try:
         if streaming is False:
             response = completion(
-                model="anthropic.claude-v2",
+                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -133,7 +133,7 @@ def test_completion_bedrock_guardrails(streaming):
         else:
             litellm.set_verbose = True
             response = completion(
-                model="anthropic.claude-v2",
+                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
