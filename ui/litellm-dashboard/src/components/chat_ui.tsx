@@ -797,8 +797,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   style={{ width: "100%" }}
                   onChange={(value) => {
                     setApiKeySource(value as "session" | "custom");
-                    // Clear MCP tool selection when switching API key source
-                    setSelectedMCPTools('');
                   }}
                   options={[
                     { value: 'session', label: 'Current UI Session' },
@@ -865,10 +863,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
-                    // Clear MCP tools if switching away from responses endpoint
-                    if (value !== EndpointType.RESPONSES) {
-                      setSelectedMCPTools('');
-                    }
                   }}
                   className="mb-4"
                 />
@@ -900,7 +894,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip 
                     className="ml-1"
-                    title="Select an MCP tool to use in your conversation, only available for virtual keys and /v1/responses endpoint">
+                    title="Select an MCP tool to use in your conversation, only available for /v1/responses endpoint">
                     <InfoCircleOutlined />
                   </Tooltip>
                 </Text>
@@ -913,7 +907,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   className="mb-4"
                   allowClear
                   optionLabelProp="label"
-                  disabled={!(apiKeySource === 'custom' && endpointType === EndpointType.RESPONSES)}
+                  disabled={!(endpointType === EndpointType.RESPONSES)}
                 >
                   {Array.isArray(mcpTools) && mcpTools.map((tool) => (
                     <Select.Option 

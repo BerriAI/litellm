@@ -73,11 +73,8 @@ export async function makeOpenAIResponsesRequest(
     const tools = selectedMCPTool ? [{
       type: "mcp",
       server_label: "litellm",
-      server_url: `${proxyBaseUrl}/mcp`,
+      server_url: `litellm_proxy/mcp`,
       require_approval: "never",
-      headers: {
-        "x-litellm-api-key": `Bearer ${accessToken}`
-      }
     }] : undefined;
 
     // Create request to OpenAI responses API
