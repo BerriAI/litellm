@@ -472,7 +472,13 @@ async def test_streaming_responses_api_with_mcp_tools():
             model="gpt-4o",
             tools=[mcp_tool_config],
             tool_choice="required",
-            input="give me a TLDR of what BerriAI/litellm is about",
+            input=[
+                {
+                    "role": "user",
+                    "type": "message",
+                    "content": "give me a TLDR of what BerriAI/litellm is about"
+                }
+            ],
             stream=True
         )
         print("full response: ", response)
