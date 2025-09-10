@@ -7,7 +7,7 @@
 
 import copy
 import os
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union, Type
 from urllib.parse import urljoin
 
 from fastapi import HTTPException
@@ -401,3 +401,12 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
+            NomaGuardrailConfigModel,
+        )
+
+        return NomaGuardrailConfigModel
+
