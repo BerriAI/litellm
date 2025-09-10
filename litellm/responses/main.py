@@ -1,7 +1,18 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Iterable, List, Literal, Optional, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+)
 
 import httpx
 from pydantic import BaseModel
@@ -29,6 +40,11 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
+
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
+else:
+    MCPTool = Any
 
 from .streaming_iterator import BaseResponsesAPIStreamingIterator
 
@@ -143,11 +159,12 @@ async def aresponses_api_with_mcp(
 
     # Get available tools from MCP manager if we have MCP tools
     openai_tools = []
-    mcp_tools_fetched = []
+    mcp_tools_fetched: List[MCPTool] = []
     if mcp_tools_with_litellm_proxy:
         user_api_key_auth = kwargs.get("user_api_key_auth")
         mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-            user_api_key_auth
+            user_api_key_auth=user_api_key_auth,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         )
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
             mcp_tools_fetched
