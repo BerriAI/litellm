@@ -3,6 +3,7 @@ Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 """
 import json
 import asyncio
+from datetime import timedelta
 from typing import Optional
 
 from litellm._logging import print_verbose, verbose_logger
@@ -13,6 +14,15 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from .base_cache import BaseCache
+
+
+class TimedeltaJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles timedelta objects by converting them to seconds."""
+    
+    def default(self, obj):
+        if isinstance(obj, timedelta):
+            return obj.total_seconds()
+        return super().default(obj)
 
 
 class GCSCache(BaseCache):
@@ -38,7 +48,7 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             self.sync_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: set_cache() - Got exception from GCS: {e}")
@@ -49,7 +59,7 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: async_set_cache() - Got exception from GCS: {e}")
