@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
-from litellm.types.llms.openai import ResponsesAPIResponse, OpenAIMcpServerTool
+from litellm.types.llms.openai import ResponsesAPIResponse, OpenAIMcpServerTool, ToolParam
 
 
 class MockUserAPIKeyAuth:
@@ -250,4 +250,151 @@ async def test_aresponses_api_with_mcp_mock_integration():
     print(f"Auto-execute enabled: {should_auto_execute}")
     print(f"MCP tools parsed: {len(mcp_parsed)}")
     print(f"Other tools parsed: {len(other_parsed)}")
+
+
+@pytest.mark.asyncio
+async def test_mcp_allowed_tools_filtering():
+    """
+    Test the allowed_tools filtering functionality for MCP tools.
+    This test verifies that when allowed_tools is specified in MCP tool config,
+    only the allowed tools are passed to the LLM.
+    """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    # Mock MCP tools returned from the server (simulating all available tools)
+    mock_mcp_tools_from_server = [
+        # Mock MCP tool object with name attribute
+        type('MCPTool', (), {
+            'name': 'search_tiktoken_documentation',
+            'description': 'Search tiktoken documentation',
+            'inputSchema': {'type': 'object', 'properties': {'query': {'type': 'string'}}}
+        })(),
+        type('MCPTool', (), {
+            'name': 'fetch_tiktoken_documentation', 
+            'description': 'Fetch tiktoken documentation',
+            'inputSchema': {'type': 'object', 'properties': {'path': {'type': 'string'}}}
+        })(),
+        type('MCPTool', (), {
+            'name': 'list_tiktoken_functions',
+            'description': 'List tiktoken functions',
+            'inputSchema': {'type': 'object', 'properties': {}}
+        })(),
+        type('MCPTool', (), {
+            'name': 'get_tiktoken_examples',
+            'description': 'Get tiktoken examples', 
+            'inputSchema': {'type': 'object', 'properties': {}}
+        })()
+    ]
+    
+    # Test Case 1: MCP tool config with allowed_tools specified
+    mcp_tool_config_with_allowed_tools = [
+        {
+            "type": "mcp",
+            "server_label": "gitmcp",
+            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "allowed_tools": ["search_tiktoken_documentation", "fetch_tiktoken_documentation"],
+            "require_approval": "never"
+        }
+    ]
+    
+    # Filter tools using the helper function
+    filtered_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_allowed_tools)
+    )
+    
+    # Should only return the 2 allowed tools
+    assert len(filtered_tools) == 2, f"Expected 2 filtered tools, got {len(filtered_tools)}"
+    
+    # Check that only allowed tools are included
+    filtered_tool_names = [tool.name for tool in filtered_tools]
+    expected_allowed_tools = ["search_tiktoken_documentation", "fetch_tiktoken_documentation"]
+    
+    assert set(filtered_tool_names) == set(expected_allowed_tools), \
+        f"Expected tools {expected_allowed_tools}, got {filtered_tool_names}"
+    
+    # Verify excluded tools are not present
+    excluded_tools = ["list_tiktoken_functions", "get_tiktoken_examples"]
+    for excluded_tool in excluded_tools:
+        assert excluded_tool not in filtered_tool_names, \
+            f"Tool {excluded_tool} should have been filtered out"
+    
+    print("✓ Test Case 1: allowed_tools filtering works correctly")
+    
+    # Test Case 2: MCP tool config without allowed_tools (should return all tools)
+    mcp_tool_config_without_allowed_tools = [
+        {
+            "type": "mcp",
+            "server_label": "gitmcp",
+            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "require_approval": "never"
+        }
+    ]
+    
+    filtered_tools_all = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_without_allowed_tools)
+    )
+    
+    # Should return all 4 tools when no allowed_tools specified
+    assert len(filtered_tools_all) == 4, f"Expected 4 tools when no allowed_tools specified, got {len(filtered_tools_all)}"
+    
+    print("✓ Test Case 2: no allowed_tools returns all tools")
+    
+    # Test Case 3: Multiple MCP tool configs with different allowed_tools
+    multiple_mcp_configs = [
+        {
+            "type": "mcp",
+            "server_label": "gitmcp1",
+            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "allowed_tools": ["search_tiktoken_documentation"],
+            "require_approval": "never"
+        },
+        {
+            "type": "mcp",
+            "server_label": "gitmcp2", 
+            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "allowed_tools": ["fetch_tiktoken_documentation", "get_tiktoken_examples"],
+            "require_approval": "never"
+        }
+    ]
+    
+    filtered_tools_multiple = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs)
+    )
+    
+    # Should return union of all allowed tools (3 unique tools)
+    assert len(filtered_tools_multiple) == 3, f"Expected 3 tools from multiple configs, got {len(filtered_tools_multiple)}"
+    
+    filtered_multiple_names = [tool.name for tool in filtered_tools_multiple]
+    expected_multiple_tools = ["search_tiktoken_documentation", "fetch_tiktoken_documentation", "get_tiktoken_examples"]
+    
+    assert set(filtered_multiple_names) == set(expected_multiple_tools), \
+        f"Expected tools {expected_multiple_tools}, got {filtered_multiple_names}"
+    
+    print("✓ Test Case 3: multiple MCP configs with different allowed_tools works correctly")
+    
+    # Test Case 4: Empty allowed_tools list (should return no tools)
+    mcp_config_empty_allowed = [
+        {
+            "type": "mcp",
+            "server_label": "gitmcp",
+            "server_url": "https://gitmcp.io/openai/tiktoken",
+            "allowed_tools": [],
+            "require_approval": "never"
+        }
+    ]
+    
+    filtered_tools_empty = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_config_empty_allowed)
+    )
+    
+    # Should return all tools when allowed_tools is empty list (no filtering)
+    assert len(filtered_tools_empty) == 4, f"Expected 4 tools when allowed_tools is empty list, got {len(filtered_tools_empty)}"
+    
+    print("✓ Test Case 4: empty allowed_tools list returns all tools")
+    
+    print("✓ MCP allowed_tools filtering test completed successfully!")
 
