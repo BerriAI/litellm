@@ -1,26 +1,17 @@
-import asyncio
-import json
 import uuid
-from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncIterator,
     Dict,
-    Iterator,
     List,
     Optional,
     Union,
     cast,
 )
 
-import httpx
-
 from litellm._logging import verbose_logger
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
-    ResponsesAPIStreamingIterator,
-    SyncResponsesAPIStreamingIterator,
 )
 from litellm.types.llms.openai import (
     MCPCallArgumentsDeltaEvent,
