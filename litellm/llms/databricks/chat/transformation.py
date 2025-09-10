@@ -169,13 +169,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if tool is None:
             return None
 
-        kwags = {
-            "name":tool["name"],
-            "parameters":cast(dict, tool.get("input_schema") or {})
+        kwags: dict = {
+            "name": tool["name"],
+            "parameters": cast(dict, tool.get("input_schema") or {})
         }
 
-        if tool.get("description"):
-            kwags["description"] = tool.get("description")
+        description = tool.get("description")
+        if description is not None:
+            kwags["description"] = cast(Union[dict, str], description)
 
         return DatabricksTool(
             type="function",
@@ -336,8 +337,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         elif isinstance(content, list):
             content_str = ""
             for item in content:
-                if item["type"] == "text":
-                    content_str += item["text"]
+                if item.get("type") == "text":
+                    content_str += item.get("text", "")
             return content_str
         else:
             raise Exception(f"Unsupported content type: {type(content)}")
@@ -366,8 +367,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:
-                if item["type"] == "reasoning":
-                    for sum in item["summary"]:
+                if item.get("type") == "reasoning":
+                    summary_list = item.get("summary", [])
+                    for sum in summary_list:
                         if reasoning_content is None:
                             reasoning_content = ""
                         reasoning_content += sum["text"]
