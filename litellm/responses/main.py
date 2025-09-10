@@ -418,13 +418,13 @@ def responses(
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
+    local_vars = locals()
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    local_vars = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
 
@@ -465,7 +465,32 @@ def responses(
         #########################################################
         if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
             return aresponses_api_with_mcp(
-                **local_vars,
+                input=input,
+                model=model,
+                include=include,
+                instructions=instructions,
+                max_output_tokens=max_output_tokens,
+                prompt=prompt,
+                metadata=metadata,
+                parallel_tool_calls=parallel_tool_calls,
+                previous_response_id=previous_response_id,
+                reasoning=reasoning,
+                store=store,
+                background=background,
+                stream=stream,
+                temperature=temperature,
+                text=text,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_p=top_p,
+                truncation=truncation,
+                user=user,
+                extra_headers=extra_headers,
+                extra_query=extra_query,
+                extra_body=extra_body,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
             )
 
         # get provider config

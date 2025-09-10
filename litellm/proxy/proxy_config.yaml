@@ -3,5 +3,9 @@ model_list:
     litellm_params:
       model: openai/*
       api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+  - model_name: bedrock/*
+    litellm_params:
+      model: bedrock/*
+
 litellm_settings:
   callbacks: ["cloudzero"]
