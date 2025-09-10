@@ -1,10 +1,17 @@
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
 
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
+else:
+    MCPTool = Any
+
+LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
+LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
 class LiteLLM_Proxy_MCP_Handler:
     """
@@ -22,7 +29,7 @@ class LiteLLM_Proxy_MCP_Handler:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    tool.get("server_url") == "litellm_proxy"):
+                    tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL)):
                     return True
         return False
     
@@ -41,7 +48,7 @@ class LiteLLM_Proxy_MCP_Handler:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    tool.get("server_url") == "litellm_proxy"):
+                    tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL)):
                     mcp_tools_with_litellm_proxy.append(tool)
                 else:
                     other_tools.append(tool)
@@ -49,13 +56,34 @@ class LiteLLM_Proxy_MCP_Handler:
         return mcp_tools_with_litellm_proxy, other_tools
     
     @staticmethod
-    async def _get_mcp_tools_from_manager(user_api_key_auth: Any) -> List[Any]:
-        """Get available tools from the MCP server manager."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+    async def _get_mcp_tools_from_manager(
+        user_api_key_auth: Any,
+        mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
+    ) -> List[MCPTool]:
+        """
+        Get available tools from the MCP server manager.
         
-        return await global_mcp_server_manager.list_tools(user_api_key_auth=user_api_key_auth)
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+        """
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
+        mcp_servers: List[str] = []
+        if mcp_tools_with_litellm_proxy:
+            for _tool in mcp_tools_with_litellm_proxy:
+                # if user specifies servers as server_url: litellm_proxy/mcp/zapier,github then return zapier,github
+                if _tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
+                    mcp_servers.append(_tool.get("server_url", "").split("/")[-1])
+        
+        return await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=None,
+            mcp_protocol_version=None,
+        )
     
     @staticmethod
     def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
@@ -178,11 +206,12 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
+        from fastapi import HTTPException
+
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from fastapi import HTTPException
         
         tool_results = []
         tool_call_id: Optional[str] = None
