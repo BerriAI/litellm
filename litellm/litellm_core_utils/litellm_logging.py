@@ -1251,24 +1251,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return None
 
-    async def _response_cost_calculator_async(
-        self,
-        result: Union[
-            ModelResponse,
-            ModelResponseStream,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            TextCompletionResponse,
-            HttpxBinaryResponseContent,
-            RerankResponse,
-            Batch,
-            FineTuningJob,
-        ],
-        cache_hit: Optional[bool] = None,
-    ) -> Optional[float]:
-        return self._response_cost_calculator(result=result, cache_hit=cache_hit)
-
     def should_run_logging(
         self,
         event_type: Literal[
