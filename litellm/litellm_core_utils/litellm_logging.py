@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import json
@@ -11,7 +12,7 @@ import sys
 import time
 import traceback
 from datetime import datetime as dt_object
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1581,7 +1582,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return
 
     def success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+        self, result=None, start_time=None, end_time=None, cache_hit=None, *, helper_called: bool = False, **kwargs
     ):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
@@ -1590,13 +1591,15 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="sync_success"
         ):  # prevent double logging
             return
-        start_time, end_time, result = self._success_handler_helper_fn(
-            start_time=start_time,
-            end_time=end_time,
-            result=result,
-            cache_hit=cache_hit,
-            standard_logging_object=kwargs.get("standard_logging_object", None),
-        )
+
+        if not helper_called:  # see unified_success_handler
+            start_time, end_time, result = self._success_handler_helper_fn(
+                start_time=start_time,
+                end_time=end_time,
+                result=result,
+                cache_hit=cache_hit,
+                standard_logging_object=kwargs.get("standard_logging_object", None),
+            )
         try:
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -2027,8 +2030,35 @@ class Logging(LiteLLMLoggingBaseClass):
                 ),
             )
 
+    async def unified_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None):
+        # don't let _success_handler_helper_fn block the loop
+        start_time, end_time, result = await asyncio.get_event_loop().run_in_executor(
+            executor,
+            partial(
+                self._success_handler_helper_fn,
+                start_time=start_time,
+                end_time=end_time,
+                result=result,
+                cache_hit=cache_hit,
+            ),
+        )
+        self.handle_sync_success_callbacks_for_async_calls(
+            start_time=start_time,
+            end_time=end_time,
+            result=result,
+            cache_hit=cache_hit,
+            helper_called=True,
+        )
+        await self.async_success_handler(
+            start_time=start_time,
+            end_time=end_time,
+            result=result,
+            cache_hit=cache_hit,
+            helper_called=True,
+        )
+
     async def async_success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
+        self, result=None, start_time=None, end_time=None, cache_hit=None, *, helper_called: bool = False, **kwargs
     ):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
@@ -2078,13 +2108,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-        start_time, end_time, result = self._success_handler_helper_fn(
-            start_time=start_time,
-            end_time=end_time,
-            result=result,
-            cache_hit=cache_hit,
-            standard_logging_object=kwargs.get("standard_logging_object", None),
-        )
+        if not helper_called:  # see unified_success_handler
+            # don't let _success_handler_helper_fn block the loop
+            start_time, end_time, result = await asyncio.get_event_loop().run_in_executor(
+                executor,
+                partial(
+                    self._success_handler_helper_fn,
+                    start_time=start_time,
+                    end_time=end_time,
+                    result=result,
+                    cache_hit=cache_hit,
+                    standard_logging_object=kwargs.get("standard_logging_object", None),
+                ),
+            )
 
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
@@ -2700,6 +2736,8 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: Optional[Any] = None,
+        *,
+        helper_called: bool = False,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -2715,6 +2753,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time,
             end_time,
             cache_hit,
+            helper_called=helper_called,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
