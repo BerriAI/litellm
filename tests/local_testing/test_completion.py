@@ -759,6 +759,7 @@ def test_completion_base64(model):
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
+
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
@@ -3190,7 +3191,6 @@ def response_format_tests(response: litellm.ModelResponse):
         "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "anthropic.claude-instant-v1",
         "mistral.mistral-7b-instruct-v0:2",
         # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
