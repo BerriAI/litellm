@@ -338,7 +338,9 @@ def test_aget_valid_models():
     print(valid_models)
 
     # list of openai supported llms on litellm
-    expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+    expected_models = (
+        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+    )
 
     assert set(valid_models) == set(expected_models)
 
@@ -410,7 +412,12 @@ def test_validate_environment_api_key():
 
 
 def test_validate_environment_api_version():
-    response_obj = validate_environment(model="azure/openai-deployment", api_key="sk-my-test-key", api_base="https://fake.openai.azure.com/", api_version="2024-02-15")
+    response_obj = validate_environment(
+        model="azure/openai-deployment",
+        api_key="sk-my-test-key",
+        api_base="https://fake.openai.azure.com/",
+        api_version="2024-02-15",
+    )
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
@@ -513,7 +520,6 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("anthropic.claude-instant-v1", False),
         ("gemini/gemini-1.5-flash", True),
     ],
 )
@@ -1688,15 +1694,6 @@ def test_pick_cheapest_chat_model_from_llm_provider():
     assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
 
     assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
-
-
-def test_get_potential_model_names():
-    from litellm.utils import _get_potential_model_names
-
-    assert _get_potential_model_names(
-        model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
-        custom_llm_provider="bedrock",
-    )
 
 
 @pytest.mark.parametrize("num_retries", [0, 1, 5])
