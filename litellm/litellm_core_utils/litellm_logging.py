@@ -1492,7 +1492,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     total_time=float_diff,
                     standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
-
+            result = redact_message_input_output_from_logging(
+                model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
+                result=result,
+            )
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
@@ -1635,15 +1638,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 global_callbacks=litellm.success_callback,
             )
 
-            ## REDACT MESSAGES ##
-            result = redact_message_input_output_from_logging(
-                model_call_details=(
-                    self.model_call_details
-                    if hasattr(self, "model_call_details")
-                    else {}
-                ),
-                result=result,
-            )
             ## LOGGING HOOK ##
             for callback in callbacks:
                 if isinstance(callback, CustomLogger):
@@ -2176,13 +2170,6 @@ class Logging(LiteLLMLoggingBaseClass):
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
-        )
-
-        result = redact_message_input_output_from_logging(
-            model_call_details=(
-                self.model_call_details if hasattr(self, "model_call_details") else {}
-            ),
-            result=result,
         )
 
         ## LOGGING HOOK ##
