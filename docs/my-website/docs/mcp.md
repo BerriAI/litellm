@@ -272,6 +272,8 @@ print(response)
 
 You can specify which MCP tools are available by using the `allowed_tools` parameter. This allows you to restrict access to specific tools within an MCP server.
 
+To get the list of allowed tools when using LiteLLM MCP Gateway, you can naigate to the LiteLLM UI on MCP Servers > MCP Tools > Click the Tool > Copy Tool Name.
+
 <Tabs>
 <TabItem value="curl" label="cURL">
 
