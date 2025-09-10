@@ -1604,13 +1604,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ] = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
-            complete_streaming_response = self._get_assembled_streaming_response(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_async=False,
-                streaming_chunks=self.sync_streaming_chunks,
-            )
+            complete_streaming_response = self._get_assembled_streaming_response(result)
             if complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
@@ -2116,13 +2110,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return  # break out of this.
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
-        ] = self._get_assembled_streaming_response(
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-            is_async=True,
-            streaming_chunks=self.streaming_chunks,
-        )
+        ] = self._get_assembled_streaming_response(result)
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -2862,10 +2850,6 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
             Any,
         ],
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-        is_async: bool,
-        streaming_chunks: List[Any],
     ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
         if isinstance(result, ModelResponse):
             return result
@@ -2873,8 +2857,6 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ResponseCompletedEvent):
             return result.response
-        else:
-            return None
         return None
 
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
