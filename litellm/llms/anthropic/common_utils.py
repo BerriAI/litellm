@@ -107,8 +107,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Optional[List[str]] = None,
     ) -> dict:
         betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
+        # Note: prompt-caching-2024-07-31 header is no longer required for prompt caching
+        # as per current Anthropic documentation. It's now generally available.
+        # if prompt_caching_set:
+        #     betas.add("prompt-caching-2024-07-31")
         if computer_tool_used:
             betas.add("computer-use-2024-10-22")
         # if pdf_used:
@@ -176,6 +178,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             mcp_server_used=mcp_server_used,
         )
 
+        # For Vertex AI requests, remove any user-provided anthropic-beta headers
+        # since Vertex AI rejects them and they're no longer required for prompt caching
+        if optional_params.get("is_vertex_request", False):
+            headers = {k: v for k, v in headers.items() if k != "anthropic-beta"}
+        
         headers = {**headers, **anthropic_headers}
 
         return headers

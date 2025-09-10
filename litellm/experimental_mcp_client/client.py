@@ -193,6 +193,8 @@ class MCPClient:
                 headers["Authorization"] = f"Basic {self._mcp_auth_value}"
             elif self.auth_type == MCPAuth.api_key:
                 headers["X-API-Key"] = self._mcp_auth_value
+            elif self.auth_type == MCPAuth.authorization:
+                headers["Authorization"] = self._mcp_auth_value
 
         # Handle protocol version - it might be a string or enum
         if hasattr(self.protocol_version, 'value'):

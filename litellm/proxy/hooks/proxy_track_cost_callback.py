@@ -128,7 +128,7 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key = metadata.get("user_api_key", None)
                 if kwargs.get("cache_hit", False) is True:
                     response_cost = 0.0
-                    verbose_proxy_logger.info(
+                    verbose_proxy_logger.debug(
                         f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
                     )
 

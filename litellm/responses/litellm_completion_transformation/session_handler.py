@@ -1,6 +1,7 @@
 import json
 from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
@@ -235,10 +236,10 @@ class ResponsesSessionHandler:
         """
         Only check cold storage when both are true 
         1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
-        2. `ColdStorageHandler._get_configured_cold_storage_custom_logger()` is not None
+        2. `litellm.configured_cold_storage_logger` is not None
         """
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-        configured_cold_storage_custom_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
+        configured_cold_storage_custom_logger = litellm.configured_cold_storage_logger
         if configured_cold_storage_custom_logger is None:
             return False
         if proxy_server_request_dict is None:

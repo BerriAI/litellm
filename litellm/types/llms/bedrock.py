@@ -573,3 +573,84 @@ class AmazonDeepSeekR1StreamingResponse(TypedDict):
     generation_token_count: int
     stop_reason: Optional[str]
     prompt_token_count: int
+
+
+################ Bedrock Batch Types #################
+
+
+class BedrockS3InputDataConfig(TypedDict):
+    """S3 input data configuration for Bedrock batch jobs."""
+    s3Uri: str
+
+
+class BedrockInputDataConfig(TypedDict):
+    """Input data configuration for Bedrock batch jobs."""
+    s3InputDataConfig: BedrockS3InputDataConfig
+
+
+class BedrockS3OutputDataConfig(TypedDict):
+    """S3 output data configuration for Bedrock batch jobs."""
+    s3Uri: str
+
+
+class BedrockOutputDataConfig(TypedDict):
+    """Output data configuration for Bedrock batch jobs."""
+    s3OutputDataConfig: BedrockS3OutputDataConfig
+
+
+class BedrockCreateBatchRequest(TypedDict, total=False):
+    """
+    Request structure for creating a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+    jobName: str
+    roleArn: str
+    modelId: str
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]
+    tags: Optional[List[dict]]
+
+
+BedrockBatchJobStatus = Literal[
+    "Submitted",
+    "InProgress", 
+    "Completed",
+    "Failed",
+    "Stopping",
+    "Stopped"
+]
+
+
+class BedrockCreateBatchResponse(TypedDict):
+    """
+    Response structure from creating a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
+    """
+    jobArn: str
+    jobName: str
+    status: BedrockBatchJobStatus
+
+
+class BedrockGetBatchResponse(TypedDict, total=False):
+    """
+    Response structure from getting a Bedrock batch inference job.
+    
+    Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetModelInvocationJob.html
+    """
+    jobArn: str
+    jobName: str
+    modelId: str
+    roleArn: str
+    status: BedrockBatchJobStatus
+    message: Optional[str]
+    submitTime: Optional[str]
+    lastModifiedTime: Optional[str]
+    endTime: Optional[str]
+    inputDataConfig: BedrockInputDataConfig
+    outputDataConfig: BedrockOutputDataConfig
+    timeoutDurationInHours: Optional[int]
+    clientRequestToken: Optional[str]

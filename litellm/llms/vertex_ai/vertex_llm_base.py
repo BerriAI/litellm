@@ -375,10 +375,60 @@ class VertexBase:
             url=url,
         )
 
+    def _handle_reauthentication(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        credential_cache_key: Tuple,
+        error: Exception,
+    ) -> Tuple[str, str]:
+        """
+        Handle reauthentication when credentials refresh fails.
+        
+        This method clears the cached credentials and attempts to reload them once.
+        It should only be called when "Reauthentication is needed" error occurs.
+        
+        Args:
+            credentials: The original credentials
+            project_id: The project ID
+            credential_cache_key: The cache key to clear
+            error: The original error that triggered reauthentication
+            
+        Returns:
+            Tuple of (access_token, project_id)
+            
+        Raises:
+            The original error if reauthentication fails
+        """
+        verbose_logger.debug(
+            f"Handling reauthentication for project_id: {project_id}. "
+            f"Clearing cache and retrying once."
+        )
+        
+        # Clear the cached credentials
+        if credential_cache_key in self._credentials_project_mapping:
+            del self._credentials_project_mapping[credential_cache_key]
+        
+        # Retry once with _retry_reauth=True to prevent infinite recursion
+        try:
+            return self.get_access_token(
+                credentials=credentials,
+                project_id=project_id,
+                _retry_reauth=True,
+            )
+        except Exception as retry_error:
+            verbose_logger.error(
+                f"Reauthentication retry failed for project_id: {project_id}. "
+                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+            )
+            # Re-raise the original error for better context
+            raise error
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         project_id: Optional[str],
+        _retry_reauth: bool = False,
     ) -> Tuple[str, str]:
         """
         Get access token and project id
@@ -388,6 +438,14 @@ class VertexBase:
         3. Check if loaded credentials have expired
         4. If expired, refresh credentials
         5. Return access token and project id
+        
+        Args:
+            credentials: The credentials to use for authentication
+            project_id: The Google Cloud project ID
+            _retry_reauth: Internal flag to prevent infinite recursion during reauthentication
+        
+        Returns:
+            Tuple of (access_token, project_id)
         """
 
         # Convert dict credentials to string for caching
@@ -469,14 +527,26 @@ class VertexBase:
             raise ValueError("Credentials are None after loading")
 
         if _credentials.expired:
-            verbose_logger.debug(
-                f"Credentials expired, refreshing for project_id: {project_id}"
-            )
-            self.refresh_auth(_credentials)
-            self._credentials_project_mapping[credential_cache_key] = (
-                _credentials,
-                credential_project_id,
-            )
+            try:
+                verbose_logger.debug(
+                    f"Credentials expired, refreshing for project_id: {project_id}"
+                )
+                self.refresh_auth(_credentials)
+                self._credentials_project_mapping[credential_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
+            except Exception as e:
+                # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
+                # in this case, we should try to reload the credentials by clearing the cache and retrying
+                if "Reauthentication is needed" in str(e) and not _retry_reauth:
+                    return self._handle_reauthentication(
+                        credentials=credentials,
+                        project_id=project_id,
+                        credential_cache_key=credential_cache_key,
+                        error=e,
+                    )
+                raise e
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):

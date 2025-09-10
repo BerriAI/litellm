@@ -14,13 +14,15 @@ import asyncio
 import contextvars
 import os
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
@@ -31,13 +33,19 @@ from litellm.types.llms.openai import (
     RetrieveBatchRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LiteLLMBatch
-from litellm.utils import client, get_litellm_params, supports_httpx_timeout
+from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.utils import (
+    ProviderConfigManager,
+    client,
+    get_litellm_params,
+    supports_httpx_timeout,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
+base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
@@ -46,7 +54,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -94,7 +102,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -111,8 +119,8 @@ def create_batch(
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
         _is_async = kwargs.pop("acreate_batch", False) is True
-        litellm_params = get_litellm_params(**kwargs)
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
+        litellm_params = dict(GenericLiteLLMParams(**kwargs))
+        litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_logging_obj.update_environment_variables(
@@ -142,6 +150,7 @@ def create_batch(
             timeout = float(timeout)  # type: ignore
         elif timeout is None:
             timeout = 600.0
+        
 
         _create_batch_request = CreateBatchRequest(
             completion_window=completion_window,
@@ -151,6 +160,27 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
+        provider_config = ProviderConfigManager.get_provider_batches_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_config is not None:
+            response = base_llm_http_handler.create_batch(
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                create_batch_data=_create_batch_request,
+                headers=extra_headers or {},
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                logging_obj=litellm_logging_obj,
+                _is_async=_is_async,
+                client=client
+                if client is not None
+                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                else None,
+                timeout=timeout,
+            )
+            return response
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -322,20 +352,21 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_params = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        litellm_logging_obj.update_environment_variables(
-            model=None,
-            user=None,
-            optional_params=optional_params.model_dump(),
-            litellm_params=litellm_params,
-            custom_llm_provider=custom_llm_provider,
-        )
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.update_environment_variables(
+                model=None,
+                user=None,
+                optional_params=optional_params.model_dump(),
+                litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+            )
 
         if (
             timeout is not None

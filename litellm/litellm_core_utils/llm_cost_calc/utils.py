@@ -454,6 +454,15 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.AIML.value:
+            from litellm.llms.aiml.image_generation.cost_calculator import (
+                cost_calculator as aiml_image_cost_calculator,
+            )
+
+            return aiml_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,

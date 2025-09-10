@@ -428,7 +428,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         messages[index][
                             "content"
                         ] = r  # replace content with redacted string
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
                 data["messages"] = messages
@@ -513,7 +513,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[index][
                         "content"
                     ] = r  # replace content with redacted string
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {messages}"
             )
             kwargs["messages"] = messages

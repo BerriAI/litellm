@@ -62,6 +62,18 @@ class TestMCPClientUnitTests:
         )
         headers = client._get_auth_headers()
         assert headers == {"X-API-Key": "api_key_123", "MCP-Protocol-Version": "2025-06-18"}
+
+        # Custom authorization header
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.authorization,
+            auth_value="Token custom_token",
+        )
+        headers = client._get_auth_headers()
+        assert headers == {
+            "Authorization": "Token custom_token",
+            "MCP-Protocol-Version": "2025-06-18",
+        }
         
         # No auth
         client = MCPClient("http://example.com")

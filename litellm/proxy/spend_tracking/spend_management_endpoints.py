@@ -149,13 +149,6 @@ async def view_spend_tags(
     ```
     """
 
-    try:
-        from enterprise.utils import get_spend_by_tags
-    except ImportError:
-        raise Exception(
-            "Trying to use Spend by Tags"
-            + CommonProxyErrors.missing_enterprise_package_docker.value
-        )
     from litellm.proxy.proxy_server import prisma_client
 
     try:

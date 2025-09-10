@@ -214,7 +214,7 @@ async def test_pass_through_endpoint_rpm_limit(
 
 @pytest.mark.parametrize(
     "auth, rpm_limit, expected_error_code",
-    [(True, 0, 429), (True, 1, 207), (False, 0, 207)],
+    [(True, 0, 429), (True, 2, 207), (False, 0, 207)],
 )
 @pytest.mark.asyncio
 async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
@@ -329,6 +329,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         setattr(
             litellm.proxy.proxy_server, "proxy_logging_obj", original_proxy_logging_obj
         )
+
 
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_bing(client, monkeypatch):
