@@ -60,6 +60,7 @@ from litellm.constants import (
     empower_models,
     together_ai_models,
     baseten_models,
+    wandb_models,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
     open_ai_embedding_models,
@@ -239,6 +240,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
@@ -520,6 +522,7 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
+wandb_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -734,6 +737,8 @@ def add_known_models():
             oci_models.add(key)
         elif value.get("litellm_provider") == "volcengine":
             volcengine_models.add(key)
+        elif value.get("litellm_provider") == "wandb":
+            wandb_models.add(key)
 
 
 add_known_models()
@@ -828,6 +833,7 @@ model_list = list(
     | heroku_models
     | vercel_ai_gateway_models
     | volcengine_models
+    | wandb_models
 )
 
 model_list_set = set(model_list)
@@ -909,6 +915,7 @@ models_by_provider: dict = {
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,
+    "wandb": wandb_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1246,6 +1253,7 @@ from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig

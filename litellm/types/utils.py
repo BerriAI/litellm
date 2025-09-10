@@ -2356,6 +2356,7 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    WANDB = "wandb"
 
 
 # Create a set of all provider values for quick lookup

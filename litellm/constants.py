@@ -311,6 +311,7 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "wandb",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -445,6 +446,7 @@ openai_compatible_endpoints: List = [
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.inference.wandb.ai/v1",
 ]
 
 
@@ -489,6 +491,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "wandb",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -504,6 +507,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "wandb",
     ]
 )
 _openai_like_providers: List = [
@@ -751,6 +755,38 @@ nebius_embedding_models: set = set(
         "BAAI/bge-en-icl",
         "BAAI/bge-multilingual-gemma2",
         "intfloat/e5-mistral-7b-instruct",
+    ]
+)
+
+wandb_models: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+
+        # zai-org models
+        "zai-org/GLM-4.5",
+
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
     ]
 )
 
