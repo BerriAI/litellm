@@ -1612,21 +1612,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["complete_streaming_response"] = (
                     complete_streaming_response
                 )
-                self.model_call_details["response_cost"] = (
-                    self._response_cost_calculator(result=complete_streaming_response)
-                )
-                ## STANDARDIZED LOGGING PAYLOAD
-                self.model_call_details["standard_logging_object"] = (
-                    get_standard_logging_object_payload(
-                        kwargs=self.model_call_details,
-                        init_response_obj=complete_streaming_response,
-                        start_time=start_time,
-                        end_time=end_time,
-                        logging_obj=self,
-                        status="success",
-                        standard_built_in_tools_params=self.standard_built_in_tools_params,
-                    )
-                )
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
@@ -2143,18 +2128,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self.model_call_details["response_cost"] = None
 
-            ## STANDARDIZED LOGGING PAYLOAD
-            self.model_call_details["standard_logging_object"] = (
-                get_standard_logging_object_payload(
-                    kwargs=self.model_call_details,
-                    init_response_obj=complete_streaming_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=self,
-                    status="success",
-                    standard_built_in_tools_params=self.standard_built_in_tools_params,
-                )
-            )
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
