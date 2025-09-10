@@ -6,6 +6,13 @@ model_list:
   - model_name: bedrock/*
     litellm_params:
       model: bedrock/*
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+
 
 litellm_settings:
   callbacks: ["cloudzero"]

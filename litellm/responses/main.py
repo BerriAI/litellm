@@ -18,6 +18,7 @@ import httpx
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -33,10 +34,15 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseText,
     ToolChoice,
     ToolParam,
 )
+
+# Handle ResponseText import with fallback
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import ResponseText
+else:
+    ResponseText = str  # Fallback for ResponseText import
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -46,7 +52,9 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import BaseResponsesAPIStreamingIterator
+from .streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -204,23 +212,52 @@ async def aresponses_api_with_mcp(
         **kwargs,
     }
 
+    # Handle MCP streaming if requested
+    if stream and mcp_tools_with_litellm_proxy:
+        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+            input=input,
+            model=model,
+            all_tools=all_tools,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+            call_params=call_params,
+            previous_response_id=previous_response_id,
+            **kwargs
+        )
+    
+    # Determine if we should auto-execute tools
+    should_auto_execute = (
+        bool(mcp_tools_with_litellm_proxy)
+        and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+        )
+    )
+    
+    # Prepare parameters for the initial call
+    initial_call_params = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+        call_params=call_params,
+        should_auto_execute=should_auto_execute
+    )
+    
+    #########################################################
     # Make initial response API call
-    # TODO: if should auto-execute  is True, then this first response should not be streamed
+    #########################################################
     response = await aresponses(
         input=input,
         model=model,
         tools=all_tools,
         previous_response_id=previous_response_id,
-        **call_params,
+        **initial_call_params,
     )
 
-    # Check if we need to auto-execute tool calls (only for non-streaming responses)
+    verbose_logger.debug("Initial response %s", response)
+
+    #########################################################
+    # Auto-Execute Tools Handling
+    # If auto-execute tools is True, then we need to execute the tool calls
+    #########################################################
     if (
-        mcp_tools_with_litellm_proxy
+        should_auto_execute
         and isinstance(response, ResponsesAPIResponse)
-        and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-        )
     ):  # type: ignore
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
             response=response
@@ -239,16 +276,40 @@ async def aresponses_api_with_mcp(
                     response=response, tool_results=tool_results, original_input=input
                 )
 
+                # Prepare parameters for follow-up call (restores original stream setting)
+                follow_up_call_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                    call_params=call_params,
+                    original_stream_setting=stream or False
+                )
+                
+                # Create tool execution events for streaming if needed
+                tool_execution_events = []
+                if stream:
+                    tool_execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+                        tool_calls=tool_calls, 
+                        tool_results=tool_results
+                    )
+                
                 final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
                     response_id=response.id,
-                    **call_params,
+                    **follow_up_call_params,
                 )
 
-                # Add custom output elements to the final response
-                if isinstance(final_response, ResponsesAPIResponse):
+                # If streaming and we have tool execution events, wrap the response
+                if stream and tool_execution_events and (hasattr(final_response, '__aiter__') or hasattr(final_response, '__iter__')):
+                    from litellm.responses.mcp.mcp_streaming_iterator import (
+                        MCPEnhancedStreamingIterator,
+                    )
+                    final_response = MCPEnhancedStreamingIterator(
+                        base_iterator=final_response,
+                        mcp_events=tool_execution_events
+                    )
+
+                # Add custom output elements to the final response (for non-streaming)
+                elif isinstance(final_response, ResponsesAPIResponse):
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                             response=final_response,

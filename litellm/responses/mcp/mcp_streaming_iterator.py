@@ -260,7 +260,7 @@ def create_mcp_call_events(
     return events
 
 
-class MCPEnhancedStreamingIterator:
+class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
     A complete MCP streaming iterator that handles the entire flow:
     1. Immediately emits MCP discovery events
