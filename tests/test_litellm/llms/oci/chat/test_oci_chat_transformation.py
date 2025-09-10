@@ -213,6 +213,10 @@ class TestOCIChatConfig:
         assert result.usage.prompt_tokens == 10 # type: ignore
         assert result.usage.completion_tokens == 20 # type: ignore
         assert result.usage.total_tokens == 30 # type: ignore
+        # These are not handled in the transformer, TBH no idea why they are here
+        # but, for now, they seem to be always None
+        assert result.usage.completion_tokens_details is None
+        assert result.usage.prompt_tokens_details is None
 
     def test_transform_response_with_tool_calls(self):
         """
