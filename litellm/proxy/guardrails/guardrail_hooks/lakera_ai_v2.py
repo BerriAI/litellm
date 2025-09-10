@@ -232,7 +232,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
@@ -299,7 +299,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
