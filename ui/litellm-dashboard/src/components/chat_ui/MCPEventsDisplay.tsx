@@ -23,6 +23,7 @@ export interface MCPEvent {
     }>;
     name?: string;
     arguments?: string;
+    output?: string;
   };
   delta?: string;
   arguments?: string;
@@ -35,11 +36,14 @@ interface MCPEventsDisplayProps {
 }
 
 const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
+  console.log("MCPEventsDisplay: Received events:", events);
+  
   if (!events || events.length === 0) {
+    console.log("MCPEventsDisplay: No events, returning null");
     return null;
   }
 
-  // Only show the final list tools event with the actual tools
+  // Find the list tools event
   const toolsEvent = events.find(event => 
     event.type === 'response.output_item.done' && 
     event.item?.type === 'mcp_list_tools' && 
@@ -47,7 +51,17 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
     event.item.tools.length > 0
   );
 
-  if (!toolsEvent) {
+  // Find MCP call events
+  const mcpCallEvents = events.filter(event => 
+    event.type === 'response.output_item.done' && 
+    event.item?.type === 'mcp_call'
+  );
+
+  console.log("MCPEventsDisplay: toolsEvent:", toolsEvent);
+  console.log("MCPEventsDisplay: mcpCallEvents:", mcpCallEvents);
+
+  if (!toolsEvent && mcpCallEvents.length === 0) {
+    console.log("MCPEventsDisplay: No valid events found, returning null");
     return null;
   }
 
@@ -124,6 +138,53 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
           position: relative;
           z-index: 1;
         }
+        .mcp-section {
+          margin-bottom: 12px;
+          background: white;
+          position: relative;
+          z-index: 1;
+        }
+        .mcp-section:last-child {
+          margin-bottom: 0;
+        }
+        .mcp-section-header {
+          font-size: 13px;
+          color: #6b7280;
+          font-weight: 500;
+          margin-bottom: 4px;
+        }
+        .mcp-code-block {
+          background: #f9fafb;
+          border: 1px solid #f3f4f6;
+          border-radius: 6px;
+          padding: 8px;
+          font-size: 12px;
+        }
+        .mcp-json {
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          color: #374151;
+          margin: 0;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+        .mcp-approved {
+          display: flex;
+          align-items: center;
+          font-size: 13px;
+          color: #6b7280;
+        }
+        .mcp-checkmark {
+          color: #10b981;
+          margin-right: 6px;
+          font-weight: bold;
+        }
+        .mcp-response-content {
+          font-size: 13px;
+          color: #374151;
+          line-height: 1.5;
+          white-space: pre-wrap;
+          font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
       `}</style>
       <div className="openai-mcp-tools">
         <div className="openai-vertical-line"></div>
@@ -131,20 +192,68 @@ const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }
           ghost 
           size="small"
           expandIconPosition="start"
-          defaultActiveKey={['1']}
+          defaultActiveKey={toolsEvent ? ['list-tools'] : mcpCallEvents.map((_, index) => `mcp-call-${index}`)}
         >
-          <Panel 
-            header="List tools" 
-            key="1"
-          >
-            <div>
-              {toolsEvent.item?.tools?.map((tool, index) => (
-                <div key={index} className="tool-item">
-                  {tool.name}
+          {/* List Tools Panel */}
+          {toolsEvent && (
+            <Panel 
+              header="List tools" 
+              key="list-tools"
+            >
+              <div>
+                {toolsEvent.item?.tools?.map((tool, index) => (
+                  <div key={index} className="tool-item">
+                    {tool.name}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+          
+          {/* MCP Call Panels */}
+          {mcpCallEvents.map((callEvent, index) => (
+            <Panel 
+              header={callEvent.item?.name || 'Tool call'}
+              key={`mcp-call-${index}`}
+            >
+              <div>
+                {/* Request section */}
+                <div className="mcp-section">
+                  <div className="mcp-section-header">Request</div>
+                  <div className="mcp-code-block">
+                    {callEvent.item?.arguments && (
+                      <pre className="mcp-json">
+                        {(() => {
+                          try {
+                            return JSON.stringify(JSON.parse(callEvent.item.arguments), null, 2);
+                          } catch (e) {
+                            return callEvent.item.arguments;
+                          }
+                        })()}
+                      </pre>
+                    )}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </Panel>
+                
+                {/* Approved section */}
+                <div className="mcp-section">
+                  <div className="mcp-approved">
+                    <span className="mcp-checkmark">✓</span> Approved
+                  </div>
+                </div>
+                
+                {/* Response section */}
+                {callEvent.item?.output && (
+                  <div className="mcp-section">
+                    <div className="mcp-section-header">Response</div>
+                    <div className="mcp-response-content">
+                      {callEvent.item.output}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Panel>
+          ))}
         </Collapse>
       </div>
     </div>

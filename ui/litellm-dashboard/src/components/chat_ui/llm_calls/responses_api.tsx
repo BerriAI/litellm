@@ -102,7 +102,8 @@ export async function makeOpenAIResponsesRequest(
       if (typeof event === 'object' && event !== null) {
         // Handle MCP events first
         if (event.type?.startsWith('response.mcp_') || 
-            (event.type === "response.output_item.done" && event.item?.type === "mcp_list_tools")) {
+            (event.type === "response.output_item.done" && 
+             (event.item?.type === "mcp_list_tools" || event.item?.type === "mcp_call"))) {
           console.log("MCP event received:", event);
           
           if (onMCPEvent) {
@@ -110,7 +111,7 @@ export async function makeOpenAIResponsesRequest(
               type: event.type,
               sequence_number: event.sequence_number,
               output_index: event.output_index,
-              item_id: event.item_id,
+              item_id: event.item_id || event.item?.id, // Handle both structures
               item: event.item,
               delta: event.delta,
               arguments: event.arguments,
