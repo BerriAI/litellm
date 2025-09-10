@@ -467,7 +467,7 @@ print(f"\nResponse: {resp}")
 
 ## Usage - 'thinking' / 'reasoning content'
 
-This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1 + GPT-OSS models.
 
 Works on v1.61.20+.
 
