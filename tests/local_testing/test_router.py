@@ -1136,7 +1136,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            }
+            },
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
@@ -1306,41 +1306,6 @@ def test_azure_embedding_on_router():
 
 
 # test_azure_embedding_on_router()
-
-
-def test_bedrock_on_router():
-    litellm.set_verbose = True
-    print("\n Testing bedrock on router\n")
-    try:
-        model_list = [
-            {
-                "model_name": "claude-v1",
-                "litellm_params": {
-                    "model": "bedrock/anthropic.claude-instant-v1",
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-        ]
-
-        async def test():
-            router = Router(model_list=model_list)
-            response = await router.acompletion(
-                model="claude-v1",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "hello from litellm test",
-                    }
-                ],
-            )
-            print(response)
-            router.reset()
-
-        asyncio.run(test())
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_bedrock_on_router()
