@@ -94,15 +94,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
 }) => {
   const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
   const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
-  const [selectedMCPTools, setSelectedMCPTools] = useState<string>(() => {
+  const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
     const saved = sessionStorage.getItem('selectedMCPTools');
     try {
       const parsed = saved ? JSON.parse(saved) : [];
-      // Convert from array to single string if needed
-      return Array.isArray(parsed) ? (parsed[0] || '') : parsed;
+      // Convert from single string to array if needed for backward compatibility
+      return Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
     } catch (error) {
       console.error("Error parsing selectedMCPTools from sessionStorage", error);
-      return '';
+      return [];
     }
   });
   const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
@@ -215,13 +215,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
         selectedTags,
         selectedVectorStores,
         selectedGuardrails,
+        selectedMCPTools,
         endpointType,
         selectedModel,
         selectedSdk,
       });
       setGeneratedCode(code);
     }
-  }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, endpointType, selectedModel]);
+  }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, selectedMCPTools, endpointType, selectedModel]);
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -643,7 +644,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tools array
             updateChatImageUI // Pass the image callback
           );
         } else if (endpointType === EndpointType.IMAGE) {
@@ -694,7 +695,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tools array
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
             handleResponseId // Pass callback to capture new response ID
           );
@@ -714,7 +715,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools // Pass the selected tools array
           );
         }
       }
@@ -894,13 +895,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip 
                     className="ml-1"
-                    title="Select an MCP tool to use in your conversation, only available for /v1/responses endpoint">
+                    title="Select MCP tools to use in your conversation, only available for /v1/responses endpoint">
                     <InfoCircleOutlined />
                   </Tooltip>
                 </Text>
                 <Select
+                  mode="multiple"
                   style={{ width: '100%' }}
-                  placeholder="Select MCP tool"
+                  placeholder="Select MCP tools"
                   value={selectedMCPTools}
                   onChange={(value) => setSelectedMCPTools(value)}
                   loading={isLoadingMCPTools}
@@ -908,6 +910,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   allowClear
                   optionLabelProp="label"
                   disabled={!(endpointType === EndpointType.RESPONSES)}
+                  maxTagCount="responsive"
                 >
                   {Array.isArray(mcpTools) && mcpTools.map((tool) => (
                     <Select.Option 
@@ -1381,15 +1384,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ) : (
           <div className="space-y-4">
             <Text className="text-gray-600 block mb-4">
-              Select the MCP tool you want to use in your conversation.
+              Select the MCP tools you want to use in your conversation.
             </Text>
             <Select
+              mode="multiple"
               style={{ width: '100%' }}
-              placeholder="Select MCP tool"
+              placeholder="Select MCP tools"
               value={selectedMCPTools}
               onChange={(value) => setSelectedMCPTools(value)}
               optionLabelProp="label"
               allowClear
+              maxTagCount="responsive"
             >
               {mcpTools.map((tool) => (
                 <Select.Option 

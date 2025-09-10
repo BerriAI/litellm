@@ -19,7 +19,7 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string,
+  selectedMCPTools?: string[],
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void
 ) {
@@ -69,12 +69,13 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Format MCP tool if selected
-    const tools = selectedMCPTool ? [{
+    // Format MCP tools if selected
+    const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
       type: "mcp",
       server_label: "litellm",
       server_url: `litellm_proxy/mcp`,
       require_approval: "never",
+      allowed_tools: selectedMCPTools,
     }] : undefined;
 
     // Create request to OpenAI responses API
