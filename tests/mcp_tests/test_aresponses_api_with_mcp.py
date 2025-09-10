@@ -6,6 +6,7 @@ from typing import List, Any, cast
 sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
+import litellm
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import ResponsesAPIResponse, OpenAIMcpServerTool, ToolParam
 
@@ -398,3 +399,126 @@ async def test_mcp_allowed_tools_filtering():
     
     print("✓ MCP allowed_tools filtering test completed successfully!")
 
+@pytest.mark.asyncio
+async def test_streaming_responses_api_with_mcp_tools():
+    """
+    Test the streaming responses API with MCP tools when using server_url="litellm_proxy"
+
+    Under the hood the follow occurs
+
+    - MCP: responses called litellm MCP manager.list_tools (MOCKED)
+    - Request 1: Made to gpt-4o with fetched tools (REAL LLM CALL)
+    - MCP: Execute tool call from request 1 and returns result (MOCKED)
+    - Request 2: Made to gpt-4o with fetched tools and tool results (REAL LLM CALL)
+
+    Return the user the result of request 2
+    """
+    from unittest.mock import AsyncMock, patch
+    
+    #litellm._turn_on_debug()
+    
+    # Mock MCP tools that would be returned from the manager
+    mock_mcp_tools = [
+        type('MCPTool', (), {
+            'name': 'search_repo',
+            'description': 'Search BerriAI/litellm repository for information',
+            'inputSchema': {
+                "type": "object", 
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"]
+            }
+        })()
+    ]
+    
+    # Only mock the MCP-specific operations, let LLM responses be real
+    with patch.object(LiteLLM_Proxy_MCP_Handler, '_get_mcp_tools_from_manager', new_callable=AsyncMock) as mock_get_tools, \
+         patch.object(LiteLLM_Proxy_MCP_Handler, '_execute_tool_calls', new_callable=AsyncMock) as mock_execute_tools:
+        
+        # Setup MCP mocks only
+        mock_get_tools.return_value = mock_mcp_tools
+        
+        # Create a dynamic mock that will match the actual tool call ID from the LLM response
+        def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
+            """Mock function that returns results matching the actual tool call IDs from the LLM"""
+            results = []
+            for tool_call in tool_calls:
+                # Extract call_id from the tool call
+                call_id = None
+                if isinstance(tool_call, dict):
+                    call_id = tool_call.get("call_id") or tool_call.get("id")
+                elif hasattr(tool_call, 'call_id'):
+                    call_id = tool_call.call_id
+                elif hasattr(tool_call, 'id'):
+                    call_id = tool_call.id
+                
+                if call_id:
+                    results.append({
+                        "tool_call_id": call_id,
+                        "result": "LiteLLM is a unified interface for 100+ LLMs that translates inputs to provider-specific completion endpoints and provides consistent OpenAI-format output."
+                    })
+            return results
+        
+        mock_execute_tools.side_effect = mock_execute_tool_calls_side_effect
+        
+        # Make the actual call - LLM responses will be real
+        mcp_tool_config = cast(Any, {
+            "type": "mcp",
+            "server_url": "litellm_proxy", 
+            "require_approval": "never"
+        })
+        response = await litellm.aresponses(
+            model="gpt-4o",
+            tools=[mcp_tool_config],
+            tool_choice="required",
+            input="give me a TLDR of what BerriAI/litellm is about",
+            stream=True
+        )
+        print("full response: ", response)
+        print("Response type:", type(response))
+        #########################################################
+        # Assert this is a async streaming response
+        assert hasattr(response, '__aiter__'), "Response should be an async streaming response"
+        #########################################################
+
+        async for chunk in response:
+            print(f"Chunk: {chunk}")
+        
+        # # If it's a streaming response, let's see what we get
+        if hasattr(response, '__aiter__'):
+            print("✓ Got streaming response - iterating through chunks:")
+            chunks = []
+            async for chunk in response:
+                print(f"Chunk: {chunk}")
+                chunks.append(chunk)
+            print(f"Total chunks received: {len(chunks)}")
+        else:
+            print("✓ Got non-streaming response")
+        
+        # Verify MCP mocks were called
+        mock_get_tools.assert_called_once()
+        
+        # Check if tool execution was called
+        # tool_execution_called = mock_execute_tools.called
+        
+        print(f"✓ MCP tools fetched: {len(mock_mcp_tools)}")
+        print(f"✓ _get_mcp_tools_from_manager called: {mock_get_tools.called}")
+        
+
+        # Verify we got a response
+        assert response is not None
+        
+        print("✓ Streaming responses API with MCP tools test passed!")
+        print(f"✓ Response type: {type(response)}")
+        
+        # If it's a streaming response, we can iterate through it
+        if hasattr(response, '__aiter__'):
+            print("✓ Response is async iterable (streaming)")
+        elif hasattr(response, '__iter__'):
+            print("✓ Response is iterable")
+        else:
+            print(f"✓ Response: {response}")
+
+
+    
