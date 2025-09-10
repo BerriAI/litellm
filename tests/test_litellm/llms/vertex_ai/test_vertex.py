@@ -10,7 +10,7 @@ import litellm.litellm_core_utils.prompt_templates
 import litellm.litellm_core_utils.prompt_templates.factory
 
 load_dotenv()
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
