@@ -5,6 +5,7 @@
 #
 # +-------------------------------------------------------------+
 
+import asyncio
 import copy
 import os
 from typing import Any, Dict, Literal, Optional, Union
@@ -23,6 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import EmbeddingResponse, ImageResponse
+
+# Type aliases
+MessageRole = Literal["user", "assistant"]
+LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
 
 
 class NomaBlockedMessage(HTTPException):
@@ -164,6 +169,138 @@ class NomaGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
+    def _create_background_noma_check(
+        self,
+        coro,
+    ) -> None:
+        """Create a background task for Noma API calls without blocking the main flow"""
+        try:
+            asyncio.create_task(coro)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Failed to create background Noma task: {str(e)}"
+            )
+
+    async def _process_user_message_check(
+        self,
+        request_data: dict,
+        user_auth: UserAPIKeyAuth,
+    ) -> Optional[str]:
+        """Shared logic for processing user message checks"""
+        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
+
+        user_message = await self._extract_user_message(request_data)
+        if not user_message:
+            return None
+
+        payload = {"request": {"text": user_message}}
+        response_json = await self._call_noma_api(
+            payload=payload,
+            llm_request_id=None,
+            request_data=request_data,
+            user_auth=user_auth,
+            extra_data=extra_data,
+        )
+
+        if self.monitor_mode:
+            await self._handle_verdict_background("user", user_message, response_json)
+        else:
+            await self._check_verdict("user", user_message, response_json)
+
+        return user_message
+
+    async def _process_llm_response_check(
+        self,
+        request_data: dict,
+        response: LLMResponse,
+        user_auth: UserAPIKeyAuth,
+    ) -> Optional[str]:
+        """Shared logic for processing LLM response checks"""
+        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
+
+        if not isinstance(response, litellm.ModelResponse):
+            return None
+
+        content = None
+        for choice in response.choices:
+            if isinstance(choice, litellm.Choices) and choice.message.content:
+                content = choice.message.content
+                break
+
+        if not content or not isinstance(content, str):
+            return None
+
+        payload = {"response": {"text": content}}
+
+        response_json = await self._call_noma_api(
+            payload=payload,
+            llm_request_id=response.id,
+            request_data=request_data,
+            user_auth=user_auth,
+            extra_data=extra_data,
+        )
+
+        if self.monitor_mode:
+            await self._handle_verdict_background("assistant", content, response_json)
+        else:
+            await self._check_verdict("assistant", content, response_json)
+
+        return content
+
+    async def _check_user_message_background(
+        self,
+        request_data: dict,
+        user_auth: UserAPIKeyAuth,
+    ) -> None:
+        """Check user message in background for monitor mode - non-blocking"""
+        try:
+            await self._process_user_message_check(request_data, user_auth)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Noma background user message check failed: {str(e)}"
+            )
+
+    async def _check_llm_response_background(
+        self,
+        request_data: dict,
+        response: LLMResponse,
+        user_auth: UserAPIKeyAuth,
+    ) -> None:
+        """Check LLM response in background for monitor mode - non-blocking"""
+        try:
+            await self._process_llm_response_check(request_data, response, user_auth)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Noma background response check failed: {str(e)}"
+            )
+
+    async def _handle_verdict_background(
+        self,
+        type: MessageRole,
+        message: str,
+        response_json: dict,
+    ) -> None:
+        """Handle verdict from Noma API in background - logging only, never blocks"""
+        try:
+            if not response_json.get("verdict", True):
+                msg = str.format(
+                    "Noma guardrail blocked {type} message: {message}",
+                    type=type,
+                    message=message,
+                )
+                verbose_proxy_logger.warning(msg)
+            else:
+                msg = str.format(
+                    "Noma guardrail allowed {type} message: {message}",
+                    type=type,
+                    message=message,
+                )
+                verbose_proxy_logger.info(msg)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Noma background verdict handling failed: {str(e)}"
+            )
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -191,6 +328,18 @@ class NomaGuardrail(CustomGuardrail):
         ):
             return data
 
+        # In monitor mode, run Noma check in background and return immediately
+        if self.monitor_mode:
+            try:
+                self._create_background_noma_check(
+                    self._check_user_message_background(data, user_api_key_dict)
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to start background Noma pre-call check: {str(e)}"
+                )
+            return data
+
         try:
             return await self._check_user_message(data, user_api_key_dict)
         except NomaBlockedMessage:
@@ -198,7 +347,7 @@ class NomaGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"Noma pre-call hook failed: {str(e)}")
 
-            if self.block_failures and not self.monitor_mode:
+            if self.block_failures:
                 raise
             return data
 
@@ -220,6 +369,18 @@ class NomaGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
+        # In monitor mode, run Noma check in background and return immediately
+        if self.monitor_mode:
+            try:
+                self._create_background_noma_check(
+                    self._check_user_message_background(data, user_api_key_dict)
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to start background Noma moderation check: {str(e)}"
+                )
+            return data
+
         try:
             return await self._check_user_message(data, user_api_key_dict)
         except NomaBlockedMessage:
@@ -227,7 +388,7 @@ class NomaGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"Noma moderation hook failed: {str(e)}")
 
-            if self.block_failures and not self.monitor_mode:
+            if self.block_failures:
                 raise
             return data
 
@@ -235,10 +396,24 @@ class NomaGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponse,
     ):
         event_type: GuardrailEventHooks = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return response
+
+        # In monitor mode, run Noma check in background and return immediately
+        if self.monitor_mode:
+            try:
+                self._create_background_noma_check(
+                    self._check_llm_response_background(
+                        data, response, user_api_key_dict
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Failed to start background Noma post-call check: {str(e)}"
+                )
             return response
 
         try:
@@ -247,7 +422,7 @@ class NomaGuardrail(CustomGuardrail):
             raise
         except Exception as e:
             verbose_proxy_logger.error(f"Noma post-call hook failed: {str(e)}")
-            if self.block_failures and not self.monitor_mode:
+            if self.block_failures:
                 raise
             return response
 
@@ -257,55 +432,24 @@ class NomaGuardrail(CustomGuardrail):
         user_auth: UserAPIKeyAuth,
     ) -> Union[Exception, str, dict, None]:
         """Check user message for policy violations"""
-        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
-
-        user_message = await self._extract_user_message(request_data)
+        user_message = await self._process_user_message_check(request_data, user_auth)
         if not user_message:
             return request_data
-
-        payload = {"request": {"text": user_message}}
-        response_json = await self._call_noma_api(
-            payload=payload,
-            llm_request_id=None,
-            request_data=request_data,
-            user_auth=user_auth,
-            extra_data=extra_data,
-        )
-        await self._check_verdict("user", user_message, response_json)
 
         return request_data
 
     async def _check_llm_response(
         self,
         request_data: dict,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponse,
         user_auth: UserAPIKeyAuth,
     ) -> Union[Exception, ModelResponse, Any]:
         """Check LLM response for policy violations"""
-        extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
-
-        if not isinstance(response, litellm.ModelResponse):
-            return response
-
-        content = None
-        for choice in response.choices:
-            if isinstance(choice, litellm.Choices) and choice.message.content:
-                content = choice.message.content
-                break
-
-        if not content or not isinstance(content, str):
-            return response
-
-        payload = {"response": {"text": content}}
-
-        response_json = await self._call_noma_api(
-            payload=payload,
-            llm_request_id=response.id,
-            request_data=request_data,
-            user_auth=user_auth,
-            extra_data=extra_data,
+        content = await self._process_llm_response_check(
+            request_data, response, user_auth
         )
-        await self._check_verdict("assistant", content, response_json)
+        if not content:
+            return response
 
         return response
 
@@ -371,7 +515,7 @@ class NomaGuardrail(CustomGuardrail):
 
     async def _check_verdict(
         self,
-        type: Literal["user", "assistant"],
+        type: MessageRole,
         message: str,
         response_json: dict,
     ) -> None:
