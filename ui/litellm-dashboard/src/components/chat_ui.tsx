@@ -52,6 +52,7 @@ import ChatImageUpload from "./chat_ui/ChatImageUpload";
 import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
 import SessionManagement from "./chat_ui/SessionManagement";
+import MCPEventsDisplay, { MCPEvent } from "./chat_ui/MCPEventsDisplay";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -179,6 +180,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
+  const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -444,6 +446,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
+  const handleMCPEvent = (event: MCPEvent) => {
+    console.log("Received MCP event:", event);
+    setMCPEvents(prev => {
+      // Check if this is a duplicate event (same item_id and type)
+      const isDuplicate = prev.some(existingEvent => 
+        existingEvent.item_id === event.item_id && 
+        existingEvent.type === event.type &&
+        existingEvent.sequence_number === event.sequence_number
+      );
+      
+      if (isDuplicate) {
+        return prev;
+      }
+      
+      return [...prev, event];
+    });
+  };
+
   const updateImageUI = (imageUrl: string, model: string) => {
     setChatHistory((prevHistory) => [
       ...prevHistory,
@@ -618,6 +638,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
     
     setChatHistory([...chatHistory, displayMessage]);
+    setMCPEvents([]); // Clear previous MCP events for new conversation turn
     setIsLoading(true);
 
     try {
@@ -697,7 +718,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tools array
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
-            handleResponseId // Pass callback to capture new response ID
+            handleResponseId, // Pass callback to capture new response ID
+            handleMCPEvent // Pass MCP event handler
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -750,6 +772,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setChatHistory([]);
     setMessageTraceId(null);
     setResponsesSessionId(null); // Clear responses session ID
+    setMCPEvents([]); // Clear MCP events
     handleRemoveAllImages(); // Clear any uploaded images for image edits
     handleRemoveResponsesImage(); // Clear any uploaded images for responses
     handleRemoveChatImage(); // Clear any uploaded images for chat completions
@@ -1003,116 +1026,152 @@ const ChatUI: React.FC<ChatUIProps> = ({
             )}
             
             {chatHistory.map((message, index) => (
-              <div 
-                key={index} 
-                className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}
-              >
+              <div key={index}>
+                <div 
+                  className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}
+                >
+                  <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4" style={{
+                    backgroundColor: message.role === "user" ? '#f0f8ff' : '#ffffff',
+                    border: message.role === "user" ? '1px solid #e6f0fa' : '1px solid #f0f0f0',
+                    textAlign: 'left'
+                  }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-full mr-1" style={{
+                        backgroundColor: message.role === "user" ? '#e6f0fa' : '#f5f5f5',
+                      }}>
+                        {message.role === "user" ? 
+                          <UserOutlined style={{ fontSize: '12px', color: '#2563eb' }} /> : 
+                          <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
+                        }
+                      </div>
+                      <strong className="text-sm capitalize">{message.role}</strong>
+                      {message.role === "assistant" && message.model && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+                          {message.model}
+                        </span>
+                      )}
+                    </div>
+                    {message.reasoningContent && (
+                      <ReasoningContent reasoningContent={message.reasoningContent} />
+                    )}
+                    
+                    {/* Show MCP events at the start of assistant messages */}
+                    {message.role === "assistant" && 
+                     index === chatHistory.length - 1 && 
+                     mcpEvents.length > 0 && 
+                     endpointType === EndpointType.RESPONSES && (
+                      <div className="mb-3">
+                        <MCPEventsDisplay events={mcpEvents} />
+                      </div>
+                    )}
+                    
+                    <div className="whitespace-pre-wrap break-words max-w-full message-content" 
+                         style={{ 
+                           wordWrap: 'break-word', 
+                           overflowWrap: 'break-word',
+                           wordBreak: 'break-word',
+                           hyphens: 'auto'
+                         }}>
+                      {message.isImage ? (
+                        <img 
+                          src={typeof message.content === "string" ? message.content : ""} 
+                          alt="Generated image" 
+                          className="max-w-full rounded-md border border-gray-200 shadow-sm" 
+                          style={{ maxHeight: '500px' }} 
+                        />
+                      ) : (
+                        <>
+                          {/* Show attached image for user messages based on current endpoint */}
+                          {endpointType === EndpointType.RESPONSES && (
+                            <ResponsesImageRenderer message={message} />
+                          )}
+                          {endpointType === EndpointType.CHAT && (
+                            <ChatImageRenderer message={message} />
+                          )}
+                          
+                          <ReactMarkdown
+                            components={{
+                              code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                                inline?: boolean;
+                                node?: any;
+                              }) {
+                                const match = /language-(\w+)/.exec(className || '');
+                                return !inline && match ? (
+                                  <SyntaxHighlighter
+                                    style={coy as any}
+                                    language={match[1]}
+                                    PreTag="div"
+                                    className="rounded-md my-2"
+                                    wrapLines={true}
+                                    wrapLongLines={true}
+                                    {...props}
+                                  >
+                                    {String(children).replace(/\n$/, '')}
+                                  </SyntaxHighlighter>
+                                ) : (
+                                  <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              },
+                              pre: ({ node, ...props }) => (
+                                <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                              )
+                            }}
+                          >
+                            {typeof message.content === "string" ? message.content : ""}
+                          </ReactMarkdown>
+                          
+                          {/* Show generated image from chat completions */}
+                          {message.image && (
+                            <div className="mt-3">
+                              <img 
+                                src={message.image.url} 
+                                alt="Generated image" 
+                                className="max-w-full rounded-md border border-gray-200 shadow-sm" 
+                                style={{ maxHeight: '500px' }} 
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                                          
+                      {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
+                        <ResponseMetrics 
+                          timeToFirstToken={message.timeToFirstToken}
+                          usage={message.usage}
+                          toolName={message.toolName}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                
+              </div>
+            ))}
+            
+            {/* Show MCP events during loading if no assistant message exists yet */}
+            {isLoading && mcpEvents.length > 0 && endpointType === EndpointType.RESPONSES && 
+             chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === "user" && (
+              <div className="text-left mb-4">
                 <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4" style={{
-                  backgroundColor: message.role === "user" ? '#f0f8ff' : '#ffffff',
-                  border: message.role === "user" ? '1px solid #e6f0fa' : '1px solid #f0f0f0',
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #f0f0f0',
                   textAlign: 'left'
                 }}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <div className="flex items-center justify-center w-6 h-6 rounded-full mr-1" style={{
-                      backgroundColor: message.role === "user" ? '#e6f0fa' : '#f5f5f5',
+                      backgroundColor: '#f5f5f5',
                     }}>
-                      {message.role === "user" ? 
-                        <UserOutlined style={{ fontSize: '12px', color: '#2563eb' }} /> : 
-                        <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
-                      }
+                      <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
                     </div>
-                    <strong className="text-sm capitalize">{message.role}</strong>
-                    {message.role === "assistant" && message.model && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                        {message.model}
-                      </span>
-                    )}
+                    <strong className="text-sm capitalize">Assistant</strong>
                   </div>
-                  {message.reasoningContent && (
-                    <ReasoningContent reasoningContent={message.reasoningContent} />
-                  )}
-                  <div className="whitespace-pre-wrap break-words max-w-full message-content" 
-                       style={{ 
-                         wordWrap: 'break-word', 
-                         overflowWrap: 'break-word',
-                         wordBreak: 'break-word',
-                         hyphens: 'auto'
-                       }}>
-                    {message.isImage ? (
-                      <img 
-                        src={typeof message.content === "string" ? message.content : ""} 
-                        alt="Generated image" 
-                        className="max-w-full rounded-md border border-gray-200 shadow-sm" 
-                        style={{ maxHeight: '500px' }} 
-                      />
-                    ) : (
-                      <>
-                        {/* Show attached image for user messages based on current endpoint */}
-                        {endpointType === EndpointType.RESPONSES && (
-                          <ResponsesImageRenderer message={message} />
-                        )}
-                        {endpointType === EndpointType.CHAT && (
-                          <ChatImageRenderer message={message} />
-                        )}
-                        
-                        <ReactMarkdown
-                          components={{
-                            code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                              inline?: boolean;
-                              node?: any;
-                            }) {
-                              const match = /language-(\w+)/.exec(className || '');
-                              return !inline && match ? (
-                                <SyntaxHighlighter
-                                  style={coy as any}
-                                  language={match[1]}
-                                  PreTag="div"
-                                  className="rounded-md my-2"
-                                  wrapLines={true}
-                                  wrapLongLines={true}
-                                  {...props}
-                                >
-                                  {String(children).replace(/\n$/, '')}
-                                </SyntaxHighlighter>
-                              ) : (
-                                <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
-                                  {children}
-                                </code>
-                              );
-                            },
-                            pre: ({ node, ...props }) => (
-                              <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
-                            )
-                          }}
-                        >
-                          {typeof message.content === "string" ? message.content : ""}
-                        </ReactMarkdown>
-                        
-                        {/* Show generated image from chat completions */}
-                        {message.image && (
-                          <div className="mt-3">
-                            <img 
-                              src={message.image.url} 
-                              alt="Generated image" 
-                              className="max-w-full rounded-md border border-gray-200 shadow-sm" 
-                              style={{ maxHeight: '500px' }} 
-                            />
-                          </div>
-                        )}
-                      </>
-                    )}
-                                        
-                    {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
-                      <ResponseMetrics 
-                        timeToFirstToken={message.timeToFirstToken}
-                        usage={message.usage}
-                        toolName={message.toolName}
-                      />
-                    )}
-                  </div>
+                  <MCPEventsDisplay events={mcpEvents} />
                 </div>
               </div>
-            ))}
+            )}
+            
             {isLoading && (
               <div className="flex justify-center items-center my-4">
                 <Spin indicator={antIcon} />
