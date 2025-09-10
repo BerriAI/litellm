@@ -215,9 +215,9 @@ if MCP_AVAILABLE:
         """
         from fastapi import Request
 
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
-        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
         # Validate arguments
         user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
@@ -556,20 +556,25 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
-    async def extract_mcp_auth_context(scope, path):
+    def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
         """
-        Extracts mcp_servers from the path and processes the MCP request for auth context.
-        Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)
+        Get the MCP servers from the path
         """
         import re
-
-        mcp_servers_from_path = None
+        mcp_servers_from_path: Optional[List[str]] = None
         mcp_path_match = re.match(r"^/mcp/([^/]+)(/.*)?$", path)
         if mcp_path_match:
             mcp_servers_str = mcp_path_match.group(1)
             if mcp_servers_str:
                 mcp_servers_from_path = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
+        return mcp_servers_from_path
 
+    async def extract_mcp_auth_context(scope, path):
+        """
+        Extracts mcp_servers from the path and processes the MCP request for auth context.
+        Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)
+        """
+        mcp_servers_from_path = _get_mcp_servers_in_path(path)
         if mcp_servers_from_path is not None:
             (
                 user_api_key_auth,
