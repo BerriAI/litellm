@@ -473,6 +473,51 @@ def _has_user_setup_sso():
 
     return sso_setup
 
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+    """
+    Determine which header name should be used to extract the end user id
+    based on `general_settings.user_header_mappings`.
+
+    Behavior:
+    - If a mapping with role == CUSTOMER exists, return its `header_name`.
+    - else return `None`.
+
+    Accepts either a list of dicts/pydantic objects or a single dict/object.
+    Returns None if nothing usable is found.
+    """
+    try:
+        if user_id_mapping is None:
+            return None
+
+        # Normalize to list
+        items = user_id_mapping
+        if isinstance(items, dict):
+            items = [items]
+
+        # look for a mapping explicitly marked as CUSTOMER
+        for item in items:
+            if isinstance(item, dict):
+                role = item.get("litellm_user_role")
+                header_name = item.get("header_name")
+            else:
+                role = getattr(item, "litellm_user_role", None)
+                header_name = getattr(item, "header_name", None)
+
+            if role is None or header_name is None:
+                continue
+
+            role_str = str(role).lower()
+            if role_str == str(LitellmUserRoles.CUSTOMER).lower():
+                if isinstance(header_name, str) and header_name.strip() != "":
+                    return header_name
+        return None
+    except Exception as e:
+        # Be defensive; on any issue, don't block request processing
+        verbose_proxy_logger.debug(
+            f"get_customer_user_header_from_mapping error: {str(e)}"
+        )
+        return None
+
 
 def get_end_user_id_from_request_body(
     request_body: dict, request_headers: Optional[dict] = None
@@ -485,16 +530,30 @@ def get_end_user_id_from_request_body(
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        user_id_header_config_key = "user_header_name"
+        custom_header_name_to_check: Optional[str] = None
 
-        custom_header_name_to_check = general_settings.get(user_id_header_config_key)
+        # Prefer mappings (new behavior)
+        user_id_mapping = general_settings.get("user_header_mappings", None)
+        if user_id_mapping:
+            custom_header_name_to_check = get_customer_user_header_from_mapping(
+                user_id_mapping
+            )
 
-        if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
+        # Fallback to deprecated user_header_name if mapping did not specify
+        if not custom_header_name_to_check:
+            user_id_header_config_key = "user_header_name"
+            value = general_settings.get(user_id_header_config_key)
+            if isinstance(value, str) and value.strip() != "":
+                custom_header_name_to_check = value
+
+        # If we have a header name to check, try to read it from request headers
+        if isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_from_header = header_value
-                    if user_id_from_header.strip():
-                        return str(user_id_from_header)
+                    user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+                    if user_id_str.strip():
+                        return user_id_str
 
     # Check 2: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:

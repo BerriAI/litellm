@@ -16,7 +16,7 @@ from litellm.proxy._types import (
     LitellmDataForBackendLLMCall,
     SpecialHeaders,
     TeamCallbackMetadata,
-    UserAPIKeyAuth,
+    UserAPIKeyAuth, LitellmUserRoles,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
@@ -335,6 +335,34 @@ class LiteLLMProxyRequestSetup:
                 return value
         return None
 
+
+    @staticmethod
+    def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
+        if not user_header_mapping:
+            return None
+        # normalize to list for consistent processing
+        items = user_header_mapping
+        if isinstance(items, dict):
+            items = [items]
+        for item in items:
+            role = None
+            header_name = None
+            if isinstance(item, dict):
+                role = item.get("litellm_user_role")
+                header_name = item.get("header_name")
+            else:
+                role = getattr(item, "litellm_user_role", None)
+                header_name = getattr(item, "header_name", None)
+
+            if role is None or header_name is None:
+                continue
+
+            role_str = str(role).lower()
+            if role_str == str(LitellmUserRoles.INTERNAL_USER).lower():
+                if isinstance(header_name, str) and header_name.strip() != "":
+                    return header_name
+        return None
+
     @staticmethod
     def get_user_from_headers(
         headers: dict, general_settings: Optional[Dict] = None
@@ -344,8 +372,12 @@ class LiteLLMProxyRequestSetup:
         """
         if general_settings is None:
             return None
-
-        header_name = general_settings.get("user_header_name")
+        user_header_mapping = general_settings.get("user_header_mappings")
+        header_name = None
+        if user_header_mapping:
+            header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(user_header_mapping)
+        if header_name is None:
+            header_name = general_settings.get("user_header_name")
         if header_name is None or header_name == "":
             return None
 
