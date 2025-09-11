@@ -60,6 +60,7 @@ export function useLogFilterLogic({
   const performSearch = useCallback(async (filters: LogFilterState, page = 1) => {
     if (!accessToken) return;
 
+    console.log("Filters being sent to API:", filters);
     const currentTimestamp = Date.now();
     lastSearchTimestamp.current = currentTimestamp;
 
@@ -81,7 +82,8 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.USER_ID] || undefined,
         filters[FILTER_KEYS.END_USER] || undefined,
         filters[FILTER_KEYS.STATUS] || undefined,
-        filters[FILTER_KEYS.MODEL] || undefined
+        filters[FILTER_KEYS.MODEL] || undefined,
+        filters[FILTER_KEYS.KEY_ALIAS] || undefined
       );
 
       if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -123,6 +125,19 @@ export function useLogFilterLogic({
       });
       return;
     }
+
+    // Only do client-side filtering if no backend filters are active
+    const hasBackendFilters = 
+      filters[FILTER_KEYS.KEY_ALIAS] || 
+      filters[FILTER_KEYS.KEY_HASH] || 
+      filters[FILTER_KEYS.REQUEST_ID] || 
+      filters[FILTER_KEYS.USER_ID] || 
+      filters[FILTER_KEYS.END_USER];
+
+    if (hasBackendFilters) {
+      // Backend is handling filtering, don't override the results
+      return;
+    }
   
     let filteredData = [...logs.data];
   
@@ -148,7 +163,7 @@ export function useLogFilterLogic({
         log => log.model === filters[FILTER_KEYS.MODEL]
       );
     }
-
+    
     if (filters[FILTER_KEYS.KEY_HASH]) {
       filteredData = filteredData.filter(
         log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
@@ -161,24 +176,6 @@ export function useLogFilterLogic({
       );
     }
     
-    // Add key alias filtering
-    if (filters[FILTER_KEYS.KEY_ALIAS]) {
-      // We need to fetch the key info to get the key hash for the selected alias
-        try {
-          // Get the key hash for the selected alias
-          const selectedKey = filters[FILTER_KEYS.KEY_ALIAS]
-
-          if (selectedKey) {
-            // Filter logs by the key hash
-            filteredData = filteredData.filter(
-              log => log.metadata?.user_api_key_alias === selectedKey
-            );
-          }
-        } catch (error) {
-          console.error("Error fetching key info for alias:", error);
-        }
-    }
-
     const newFilteredLogs: PaginatedResponse = {
       data: filteredData,
       total: logs.total,
