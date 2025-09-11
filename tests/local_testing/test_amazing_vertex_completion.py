@@ -764,7 +764,9 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "model", ["vertex_ai_beta/gemini-2.5-flash-lite"]
+)  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -910,6 +912,10 @@ async def test_partner_models_httpx(model, region, sync_mode):
     [
         ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
+        (
+            "vertex_ai/mistral-large-2411",
+            "us-central1",
+        ),  # critical - we had this issue: https://github.com/BerriAI/litellm/issues/13888
         (
             "vertex_ai/mistral-large-2411",
             "us-central1",
@@ -2327,8 +2333,6 @@ def test_prompt_factory_nested():
         assert isinstance(
             message["parts"][0]["text"], str
         ), "'text' value not a string."
-
-
 
 
 @pytest.mark.asyncio
@@ -3777,6 +3781,7 @@ def test_vertex_ai_gemini_audio_ogg():
 async def test_vertex_ai_deepseek():
     """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
     # load_vertex_ai_credentials()
+    # load_vertex_ai_credentials()
     litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -3790,11 +3795,15 @@ async def test_vertex_ai_deepseek():
                 "message": {
                     "role": "assistant",
                     "content": "Hello! How can I help you today?",
+                    "content": "Hello! How can I help you today?",
                 },
                 "index": 0,
                 "finish_reason": "stop",
+                "finish_reason": "stop",
             }
         ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "model": "deepseek-ai/deepseek-r1-0528-maas",
         "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         "model": "deepseek-ai/deepseek-r1-0528-maas",
     }
@@ -3855,7 +3864,16 @@ def test_gemini_google_maps_tool_simple():
     litellm._turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
-    tools_with_location = [{"googleMaps": {"enableWidget": True, "latitude": 37.7749, "longitude": -122.4194, "languageCode": "en_US"}}]
+    tools_with_location = [
+        {
+            "googleMaps": {
+                "enableWidget": True,
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US",
+            }
+        }
+    ]
     try:
         for tools in [tools, tools_with_location]:
             response = completion(
@@ -3874,4 +3892,3 @@ def test_gemini_google_maps_tool_simple():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
