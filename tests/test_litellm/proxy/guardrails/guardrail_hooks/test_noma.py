@@ -1052,13 +1052,13 @@ class TestNomaAnonymizationLogic:
             ]
         }
         
-        result = anonymize_guardrail._replace_user_message_content(
+        anonymize_guardrail._replace_user_message_content(
             request_data, "My phone is *******"
         )
         
         # Should replace the last user message
-        assert result["messages"][-1]["content"] == "My phone is *******"
-        assert result["messages"][1]["content"] == "My email is test@example.com"  # Unchanged
+        assert request_data["messages"][-1]["content"] == "My phone is *******"
+        assert request_data["messages"][1]["content"] == "My email is test@example.com"  # Unchanged
 
     def test_replace_llm_response_content(self, anonymize_guardrail):
         """Test _replace_llm_response_content"""
@@ -1080,11 +1080,11 @@ class TestNomaAnonymizationLogic:
             usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         )
         
-        result = anonymize_guardrail._replace_llm_response_content(
+        anonymize_guardrail._replace_llm_response_content(
             response, "Your email is *******"
         )
         
-        assert result.choices[0].message.content == "Your email is *******"
+        assert response.choices[0].message.content == "Your email is *******"
 
 
 class TestNomaAnonymizationFlow:
@@ -1445,4 +1445,64 @@ class TestNomaAnonymizationFlow:
                     cache=MagicMock(),
                     data=request_data,
                     call_type="completion",
+                )
+
+    @pytest.mark.asyncio
+    async def test_anonymization_llm_response_no_anonymized_content_available(
+        self, anonymize_guardrail, mock_user_api_key_dict
+    ):
+        """Test behavior when LLM response has no anonymized content available"""
+        request_data = {
+            "messages": [{"role": "user", "content": "What's your email?"}],
+            "litellm_call_id": "test-call-id",
+        }
+
+        # Create LLM response with test data
+        llm_response = ModelResponse(
+            id="test-response-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="My email is admin@company.com", role="assistant"
+                    ),
+                )
+            ],
+            created=1234567890,
+            model="gpt-3.5-turbo",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        )
+
+        # Mock Noma API response with no anonymized content available
+        noma_response = {
+            "originalResponse": {
+                "response": {
+                    "dataDetector": {
+                        "dataType1": {"result": True},
+                    },
+                    "contentDetector": {"result": False},
+                },
+            },
+            "verdict": False,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = noma_response
+        mock_response.raise_for_status = MagicMock()
+
+        # Update guardrail to use post_call event hook
+        anonymize_guardrail.event_hook = "post_call"
+
+        with patch.object(
+            anonymize_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            # Should raise NomaBlockedMessage because no anonymized content available for LLM response
+            with pytest.raises(NomaBlockedMessage):
+                await anonymize_guardrail.async_post_call_success_hook(
+                    data=request_data,
+                    user_api_key_dict=mock_user_api_key_dict,
+                    response=llm_response,
                 )
