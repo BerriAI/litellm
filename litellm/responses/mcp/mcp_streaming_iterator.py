@@ -41,9 +41,6 @@ async def create_mcp_list_tools_events(
     pre_processed_mcp_tools: List[Any]
 ) -> List[ResponsesAPIStreamingResponse]:
     """Create MCP discovery events using pre-processed tools from the parent"""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-        LiteLLM_Proxy_MCP_Handler,
-    )
     
     events: List[ResponsesAPIStreamingResponse] = []
     
@@ -462,8 +459,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if not tool_calls:
                 return
             
-            # Create tool execution events
-            base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
             for tool_call in tool_calls:
                 tool_name, tool_arguments, tool_call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
