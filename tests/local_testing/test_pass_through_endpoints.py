@@ -1,6 +1,7 @@
 import os
 import sys
 import uuid
+from functools import partial
 from typing import Optional
 
 import pytest
@@ -147,12 +148,21 @@ async def test_pass_through_endpoint_rerank(client):
 
 
 @pytest.mark.parametrize(
-    "auth, rpm_limit, expected_error_code",
-    [(True, 0, 429), (True, 1, 200), (False, 0, 200)],
+    "auth, rpm_limit, requests_to_make, expected_status_codes",
+    [
+        (True, 0, 1, [429]),
+        (True, 1, 1, [200]),
+        (True, 1, 2, [200, 429]),
+        (True, 2, 4, [200, 200, 429, 429]),
+        (True, 3, 4, [200, 200, 200, 429]),
+        (True, 4, 4, [200, 200, 200, 200]),
+        (False, 0, 1, [200]),
+        (False, 0, 4, [200, 200, 200, 200]),
+    ],
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_rpm_limit(
-    client, auth, expected_error_code, rpm_limit
+    client, auth, rpm_limit, requests_to_make, expected_status_codes
 ):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
@@ -201,16 +211,23 @@ async def test_pass_through_endpoint_rpm_limit(
     }
 
     # Make a request to the pass-through endpoint
-    response = client.post(
-        "/v1/rerank",
-        json=_json_data,
-        headers={"Authorization": "Bearer {}".format(mock_api_key)},
-    )
+    tasks = []
+    for _ in range(requests_to_make):
+        task = asyncio.get_running_loop().run_in_executor(
+                None,
+                partial(
+                    client.post,
+                    "/v1/rerank",
+                    json=_json_data,
+                    headers={"Authorization": "Bearer {}".format(mock_api_key)},
+                ),
+        )
+        tasks.append(task)
 
+    responses = await asyncio.gather(*tasks)
+    status_codes = sorted([response.status_code for response in responses])
+    assert status_codes == sorted(expected_status_codes)
     print("JSON response: ", _json_data)
-
-    # Assert the response
-    assert response.status_code == expected_error_code
 
 
 @pytest.mark.parametrize(
