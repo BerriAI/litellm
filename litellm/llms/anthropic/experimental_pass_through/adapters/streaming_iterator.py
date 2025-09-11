@@ -189,16 +189,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                # Check if we need to start a new content block
-                should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
-                    self._increment_content_block_index()
-
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                    response=chunk,
-                    current_content_block_index=self.current_content_block_index,
-                )
-
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
                     self.holding_stop_reason_chunk is not None
@@ -220,18 +210,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.holding_stop_reason_chunk = None
                     return self.chunk_queue.popleft()
 
-                # Check if this processed chunk has a stop_reason - hold it for next chunk
+                # Check if we need to start a new content block
+                should_start_new_block = self._should_start_new_content_block(chunk)
+                if should_start_new_block:
+                    self._increment_content_block_index()
 
-                if should_start_new_block and not self.sent_content_block_finish:
+                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                    response=chunk,
+                    current_content_block_index=self.current_content_block_index,
+                )
+
+                if should_start_new_block:
                     # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
 
-                    # 1. Stop current content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": max(self.current_content_block_index - 1, 0),
-                        }
-                    )
+                    if not self.sent_content_block_finish:
+                        # 1. Stop current content block
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": max(self.current_content_block_index - 1, 0),
+                            }
+                        )
 
                     # 2. Start new content block
                     self.chunk_queue.append(
@@ -263,8 +262,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
                     self.sent_content_block_finish = True
-                    if processed_chunk.get("delta", {}).get("stop_reason") is not None:
 
+                    # Check if this processed chunk has a stop_reason - hold it for next chunk
+                    if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
                         self.chunk_queue.append(processed_chunk)
@@ -279,6 +279,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # Queue the current chunk
                     self.chunk_queue.append(processed_chunk)
                     return self.chunk_queue.popleft()
+
+            if not self.sent_content_block_finish:
+                self.chunk_queue.append(
+                    {
+                        "type": "content_block_stop",
+                        "index": self.current_content_block_index,
+                    }
+                )
+                self.sent_content_block_finish = True
 
             # Handle any remaining held chunks after stream ends
             if self.holding_stop_reason_chunk is not None:
