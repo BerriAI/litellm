@@ -3839,9 +3839,12 @@ class Router:
 
         if hasattr(original_exception, "message"):
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+            model_id = kwargs.get("model_info", {}).get("id")
+            model_id_str = f"\nReceived Model ID={model_id}" if model_id else ""
+            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}{}".format(  # type: ignore
                 model_group,
                 fallback_model_group,
+                model_id_str,
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
