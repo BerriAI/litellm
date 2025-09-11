@@ -37,9 +37,10 @@ else:
 async def create_mcp_list_tools_events(
     mcp_tools_with_litellm_proxy: List[ToolParam],
     user_api_key_auth: Any,
-    base_item_id: str
+    base_item_id: str,
+    pre_processed_mcp_tools: List[Any]
 ) -> List[ResponsesAPIStreamingResponse]:
-    """Create MCP discovery events by fetching tools from the MCP manager"""
+    """Create MCP discovery events using pre-processed tools from the parent"""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -65,12 +66,8 @@ async def create_mcp_list_tools_events(
         )
         events.append(in_progress_event)
         
-        # Process MCP tools through the complete pipeline (fetch + filter + deduplicate)
-        # Note: We don't transform to OpenAI format here since we need the original MCP tools for the events
-        filtered_mcp_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-            user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-        )
+        # Use the pre-processed MCP tools that were already fetched, filtered, and deduplicated by the parent
+        filtered_mcp_tools = pre_processed_mcp_tools
         
         # Convert tools to dict format for the event
         mcp_tools_dict = []
@@ -274,9 +271,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
         
         # Event queues and generation flags
-        self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = []
+        self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = mcp_events  # Pre-generated MCP discovery events
         self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
-        self.mcp_discovery_generated = False  # Flag to prevent regeneration
+        self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         
         # Iterator references
@@ -319,9 +316,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Phase 1: MCP Discovery Events
         if self.phase == "mcp_discovery":
             # Generate MCP discovery events if not already done
-            if not self.mcp_discovery_generated:
-                await self._generate_mcp_discovery_events()
-                self.mcp_discovery_generated = True
+            # MCP discovery events are already generated and available
             
             # Emit MCP discovery events
             if self.mcp_discovery_events:
@@ -405,15 +400,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         from litellm.types.llms.openai import ResponsesAPIStreamEvents
         return getattr(chunk, 'type', None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     
-    async def _generate_mcp_discovery_events(self) -> None:
-        """Generate MCP discovery events"""
-        import uuid
-        base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
-        self.mcp_discovery_events = await create_mcp_list_tools_events(
-            mcp_tools_with_litellm_proxy=self.mcp_tools_with_litellm_proxy,
-            user_api_key_auth=self.user_api_key_auth,
-            base_item_id=base_item_id
-        )
     
     async def _create_initial_response_iterator(self) -> None:
         """Create the initial response iterator by making the first LLM call"""
@@ -425,37 +411,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             params = self.original_request_params.copy()
             params['stream'] = True  # Ensure streaming
             
-            # Remove MCP-related params to avoid recursion
+            # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                if key not in ['tools']:  # Remove tools to avoid MCP processing
-                    params_for_llm[key] = value
-                elif key == 'tools':
-                    # Only include non-MCP tools
-                    non_mcp_tools = []
-                    if value:
-                        for tool in value:
-                            if not (isinstance(tool, dict) and tool.get('type') == 'mcp'):
-                                non_mcp_tools.append(tool)
-                    if non_mcp_tools:
-                        params_for_llm[key] = non_mcp_tools
+                params_for_llm[key] = value  # Copy all params as-is since tools are already processed
             
-            # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
-            from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-                LiteLLM_Proxy_MCP_Handler,
-            )
-            openai_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-                user_api_key_auth=self.user_api_key_auth,
-                mcp_tools_with_litellm_proxy=self.mcp_tools_with_litellm_proxy
-            )
-            
-            # Add the transformed tools
-            existing_tools = params_for_llm.get('tools', [])
-            all_tools = existing_tools + openai_tools
-            if all_tools:
-                params_for_llm['tools'] = all_tools
-            
-            verbose_logger.debug(f"Making LLM call with {len(all_tools)} tools")
+            tools_count = len(params_for_llm.get('tools', []))
+            verbose_logger.debug(f"Making LLM call with {tools_count} tools")
             response = await aresponses(**params_for_llm)
             
             # Set the base iterator

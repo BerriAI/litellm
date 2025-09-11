@@ -499,6 +499,7 @@ class LiteLLM_Proxy_MCP_Handler:
         model: str,
         all_tools: Optional[List[Any]],
         mcp_tools_with_litellm_proxy: List[Any],
+        mcp_discovery_events: List[Any],
         call_params: Dict[str, Any],
         previous_response_id: Optional[str],
         **kwargs
@@ -528,7 +529,7 @@ class LiteLLM_Proxy_MCP_Handler:
         # Create the enhanced streaming iterator that will handle everything
         return MCPEnhancedStreamingIterator(
             base_iterator=None,  # Will be created internally
-            mcp_events=[],  # Will be generated internally
+            mcp_events=mcp_discovery_events,  # Pre-generated MCP discovery events
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=kwargs.get("user_api_key_auth"),
             original_request_params=request_params

@@ -167,10 +167,13 @@ async def aresponses_api_with_mcp(
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     user_api_key_auth = kwargs.get("user_api_key_auth")
-    openai_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+    
+    # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
+    original_mcp_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
     )
+    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -203,11 +206,27 @@ async def aresponses_api_with_mcp(
 
     # Handle MCP streaming if requested
     if stream and mcp_tools_with_litellm_proxy:
+        # Generate MCP discovery events using the already processed tools
+        import uuid
+
+        from litellm.responses.mcp.mcp_streaming_iterator import (
+            create_mcp_list_tools_events,
+        )
+        
+        base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+        mcp_discovery_events = await create_mcp_list_tools_events(
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+            user_api_key_auth=user_api_key_auth,
+            base_item_id=base_item_id,
+            pre_processed_mcp_tools=original_mcp_tools
+        )
+        
         return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+            mcp_discovery_events=mcp_discovery_events,
             call_params=call_params,
             previous_response_id=previous_response_id,
             **kwargs
