@@ -535,11 +535,9 @@ jobs:
             - litellm_router_coverage.xml
             - litellm_router_coverage
   litellm_security_tests:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
     working_directory: ~/project
     steps:
       - checkout
@@ -549,31 +547,66 @@ jobs:
           command: |
             echo "Git commit hash: $CIRCLE_SHA1"
       - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Install Python 3.9
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.9 -y
+            conda activate myenv
+            python --version
+      - run:
           name: Install Dependencies
           command: |
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install aiohttp
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
+            pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai==0.3.2"
+            pip install "google-cloud-aiplatform==1.43.0"
+            pip install pyarrow
+            pip install "boto3==1.36.0"
+            pip install "aioboto3==13.4.0"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install "logfire==0.29.0"
+            pip install numpydoc
+            pip install prisma
+            pip install fastapi
+            pip install jsonschema
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
+            pip install "openai==1.100.1"
             pip install "pytest-cov==5.0.0"
+            pip install "apscheduler"
       - run:
-          name: Install Trivy
+          name: Install dockerize
           command: |
-            sudo apt-get update
-            sudo apt-get install wget apt-transport-https gnupg lsb-release
-            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-            sudo apt-get update
-            sudo apt-get install trivy
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
-          name: Run Trivy scan on LiteLLM Docs
+          name: Run Security Scans
           command: |
-            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
-      - run:
-          name: Run Trivy scan on LiteLLM UI
-          command: |
-            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+            chmod +x ci_cd/security_scans.sh
+            ./ci_cd/security_scans.sh
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -1424,6 +1457,7 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/info_log_check.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
@@ -1593,23 +1627,6 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
-      - run:
-          name: Install Grype
-          command: |
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
-      - run:
-          name: Build and Scan Docker Images
-          command: |
-            # Build and scan Dockerfile.database
-            echo "Building and scanning Dockerfile.database..."
-            docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
-            grype litellm-database:latest --fail-on critical
-
-
-            # Build and scan main Dockerfile
-            echo "Building and scanning main Dockerfile..."
-            docker build -t litellm:latest .
-            grype litellm:latest --fail-on critical
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .

@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     cast,
 )
 
+import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
@@ -1714,9 +1714,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=litellm_params.get(
-                                "litellm_call_id", str(uuid.uuid4())
-                            ),
+                            litellm_call_id=current_call_id
+                            if (
+                                current_call_id := litellm_params.get("litellm_call_id")
+                            )
+                            is not None
+                            else str(uuid.uuid4()),
                             print_verbose=print_verbose,
                         )
                     if callback == "wandb" and weightsBiasesLogger is not None:
@@ -2774,6 +2777,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Any,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        cache_hit: Optional[Any] = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -2788,6 +2792,7 @@ class Logging(LiteLLMLoggingBaseClass):
             result,
             start_time,
             end_time,
+            cache_hit,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
@@ -4499,7 +4504,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        verbose_logger.info(json.dumps(payload, indent=4))
+        print(json.dumps(payload, indent=4)) # noqa
 
 
 def get_standard_logging_metadata(

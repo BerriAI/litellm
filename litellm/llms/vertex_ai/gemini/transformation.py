@@ -387,6 +387,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 )
         if len(tool_call_responses) > 0:
             contents.append(ContentType(parts=tool_call_responses))
+
+        if len(contents) == 0:
+            verbose_logger.warning(
+                """
+                No contents in messages. Contents are required. See
+                https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/generateContent#request-body.
+                If the original request did not comply to OpenAI API requirements it should have failed by now,
+                but LiteLLM does not check for missing messages.
+                Setting an empty content to prevent an 400 error.
+                Relevant Issue - https://github.com/BerriAI/litellm/issues/9733
+                """
+            )
+            contents.append(ContentType(role="user", parts=[PartType(text=" ")]))
         return contents
     except Exception as e:
         raise e
@@ -448,6 +461,17 @@ def _transform_request_body(
         )  # type: ignore
         config_fields = GenerationConfig.__annotations__.keys()
 
+        # If the LiteLLM client sends Gemini-supported parameter "labels", add it
+        # as "labels" field to the request sent to the Gemini backend.
+        labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
+        # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
+        # as "labels" field to the request sent to the Gemini backend.
+        if labels is None and "metadata" in litellm_params:
+            metadata = litellm_params["metadata"]
+            if metadata is not None and "requester_metadata" in metadata:
+                rm = metadata["requester_metadata"]
+                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+
         filtered_params = {
             k: v for k, v in optional_params.items() if k in config_fields
         }
@@ -468,6 +492,8 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+        if labels is not None:
+            data["labels"] = labels
     except Exception as e:
         raise e
 
@@ -492,19 +518,21 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     if gemini_api_key is not None:
-        messages, optional_params, cached_content = (
-            context_caching_endpoints.check_and_create_cache(
-                messages=messages,
-                optional_params=optional_params,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
+        (
+            messages,
+            optional_params,
+            cached_content,
+        ) = context_caching_endpoints.check_and_create_cache(
+            messages=messages,
+            optional_params=optional_params,
+            api_key=gemini_api_key,
+            api_base=api_base,
+            model=model,
+            client=client,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            cached_content=optional_params.pop("cached_content", None),
+            logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
         cached_content = optional_params.pop("cached_content", None)
