@@ -5249,8 +5249,6 @@ def transcription(
         )
     if isinstance(response, dict):
         response["duration"] = duration
-    else:
-        setattr(response, "duration", duration)
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
