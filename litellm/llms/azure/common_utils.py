@@ -561,7 +561,9 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+                azure_ad_token_provider = get_azure_ad_token_provider(
+                    azure_scope=scope,
+                )
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
