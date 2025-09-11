@@ -9,6 +9,7 @@ client = openai.OpenAI(
     api_key="sk-1234", # paste your litellm proxy api key here
     base_url="http://localhost:4000" # paste your litellm proxy base url here
 )
+print("Making API request to Responses API with MCP tools")
 
 response = client.responses.create(
     model="gpt-5",
