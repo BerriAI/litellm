@@ -365,6 +365,11 @@ def get_azure_ad_token(
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
+        except Exception as e:
+            verbose_logger.error(
+                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+            )
+            raise e
 
         #########################################################
         # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
