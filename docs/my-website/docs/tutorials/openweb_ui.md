@@ -109,6 +109,7 @@ To track spend and usage for each Open WebUI user, configure both Open WebUI and
   - Users can modify their own usernames
   - Administrators can modify both usernames and emails of any account
 
+<Image img={require('../../img/litellm_headers_exchange_openweb.gif')} />
 
 
 ## Render `thinking` content on Open WebUI
