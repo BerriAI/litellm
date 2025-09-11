@@ -205,6 +205,9 @@ Follow this walkthrough to use your MCP on LiteLLM UI
 
 Replace `http://localhost:4000` with your LiteLLM Proxy base URL.
 
+Demo Video Using Responses API with LiteLLM Proxy: [Demo video here](https://www.loom.com/share/34587e618c5c47c0b0d67b4e4d02718f?sid=2caf3d45-ead4-4490-bcc1-8d6dd6041c02)
+
+
 <Tabs>
 <TabItem value="curl" label="cURL">
 
@@ -238,12 +241,18 @@ curl --location 'http://localhost:4000/v1/responses' \
 <TabItem value="python" label="Python SDK">
 
 ```python title="Python SDK Example" showLineNumbers
+"""
+Use LiteLLM Proxy MCP Gateway to call MCP tools.
+
+When using LiteLLM Proxy, you can use the same MCP tools across all your LLM providers.
+"""
 import openai
 
 client = openai.OpenAI(
-    api_key="sk-1234",
-    base_url="http://localhost:4000"
+    api_key="sk-1234", # paste your litellm proxy api key here
+    base_url="http://localhost:4000" # paste your litellm proxy base url here
 )
+print("Making API request to Responses API with MCP tools")
 
 response = client.responses.create(
     model="gpt-5",
@@ -266,7 +275,8 @@ response = client.responses.create(
     tool_choice="required"
 )
 
-print(response)
+for chunk in response:
+    print("response chunk: ", chunk)
 ```
 
 </TabItem>
