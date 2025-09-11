@@ -342,7 +342,72 @@ async def test_mcp_allowed_tools_filtering():
     
     print("✓ Test Case 2: no allowed_tools returns all tools")
     
-    # Test Case 3: Multiple MCP tool configs with different allowed_tools
+    # Test Case 3: Test deduplication of duplicate tools
+    mock_mcp_tools_with_duplicates = [
+        # First instance of duplicate tool
+        type('MCPTool', (), {
+            'name': 'GitMCP-fetch_litellm_documentation',
+            'description': 'Fetch entire documentation file from GitHub repository: BerriAI/litellm. Useful for general questions. Always call this tool first if asked about BerriAI/litellm.',
+            'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}
+        })(),
+        # Second instance of duplicate tool (should be filtered out)
+        type('MCPTool', (), {
+            'name': 'GitMCP-fetch_litellm_documentation',
+            'description': 'Fetch entire documentation file from GitHub repository: BerriAI/litellm. Useful for general questions. Always call this tool first if asked about BerriAI/litellm.',
+            'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}
+        })(),
+        # Other unique tools
+        type('MCPTool', (), {
+            'name': 'GitMCP-search_litellm_documentation',
+            'description': 'Semantically search within the fetched documentation from GitHub repository: BerriAI/litellm. Useful for specific queries.',
+            'inputSchema': {'type': 'object', 'properties': {'query': {'type': 'string'}}, 'required': ['query'], 'additionalProperties': False}
+        })(),
+    ]
+    
+    mcp_tool_config_with_duplicates = [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy/mcp",
+            "require_approval": "never",
+            "allowed_tools": ["GitMCP-fetch_litellm_documentation"]
+        }
+    ]
+    
+    # First filter by allowed tools
+    filtered_tools_with_duplicates = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_with_duplicates,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_duplicates)
+    )
+    
+    # Then deduplicate the filtered tools
+    filtered_tools_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        filtered_tools_with_duplicates
+    )
+    
+    # Should only return 1 tool (the duplicate should be removed)
+    assert len(filtered_tools_deduplicated) == 1, f"Expected 1 tool after deduplication, got {len(filtered_tools_deduplicated)}"
+    
+    # Check that the correct tool is present
+    assert filtered_tools_deduplicated[0].name == "GitMCP-fetch_litellm_documentation", \
+        f"Expected GitMCP-fetch_litellm_documentation, got {filtered_tools_deduplicated[0].name}"
+    
+    print("✓ Test Case 3: duplicate tools are properly deduplicated")
+    
+    # Test Case 3b: Test standalone deduplication method
+    standalone_deduplicated = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(mock_mcp_tools_with_duplicates)
+    
+    # Should return 2 unique tools (GitMCP-fetch_litellm_documentation and GitMCP-search_litellm_documentation)
+    assert len(standalone_deduplicated) == 2, f"Expected 2 unique tools after standalone deduplication, got {len(standalone_deduplicated)}"
+    
+    unique_tool_names = [tool.name for tool in standalone_deduplicated]
+    expected_unique_names = ["GitMCP-fetch_litellm_documentation", "GitMCP-search_litellm_documentation"]
+    assert set(unique_tool_names) == set(expected_unique_names), \
+        f"Expected {expected_unique_names}, got {unique_tool_names}"
+    
+    print("✓ Test Case 3b: standalone deduplication method works correctly")
+    
+    # Test Case 4: Multiple MCP tool configs with different allowed_tools
     multiple_mcp_configs = [
         {
             "type": "mcp",
