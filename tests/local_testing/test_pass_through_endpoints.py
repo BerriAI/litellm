@@ -148,32 +148,35 @@ async def test_pass_through_endpoint_rerank(client):
 
 
 @pytest.mark.parametrize(
-    "auth, rpm_limit, requests_to_make, expected_status_codes",
+    "auth, rpm_limit, requests_to_make, expected_status_codes, num_users",
     [
-        (True, 0, 1, [429]),
-        (True, 1, 1, [200]),
-        (True, 1, 2, [200, 429]),
-        (True, 2, 4, [200, 200, 429, 429]),
-        (True, 3, 4, [200, 200, 200, 429]),
-        (True, 4, 4, [200, 200, 200, 200]),
-        (False, 0, 1, [200]),
-        (False, 0, 4, [200, 200, 200, 200]),
+        # Single user tests
+        (True, 0, 1, [429], 1),
+        (True, 1, 1, [200], 1),
+        (True, 1, 2, [200, 429], 1),
+        (True, 2, 4, [200, 200, 429, 429], 1),
+        (True, 3, 4, [200, 200, 200, 429], 1),
+        (True, 4, 4, [200, 200, 200, 200], 1),
+        (False, 0, 1, [200], 1),
+        (False, 0, 4, [200, 200, 200, 200], 1),
+        # Multiple user tests (same parameters as single user)
+        (True, 0, 1, [429], 2),
+        (True, 1, 1, [200], 2),
+        (True, 1, 2, [200, 429], 2),
+        (True, 2, 4, [200, 200, 429, 429], 2),
+        (True, 3, 4, [200, 200, 200, 429], 2),
+        (True, 4, 4, [200, 200, 200, 200], 2),
+        (False, 0, 1, [200], 2),
+        (False, 0, 4, [200, 200, 200, 200], 2),
     ],
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_rpm_limit(
-    client, auth, rpm_limit, requests_to_make, expected_status_codes
+    client, auth, rpm_limit, requests_to_make, expected_status_codes, num_users
 ):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
-
-    mock_api_key = f"sk-test-{uuid.uuid4().hex}"
-    cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
-
-    _cohere_api_key = os.environ.get("COHERE_API_KEY")
-
-    user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
     proxy_logging_obj._init_litellm_callbacks()
@@ -184,6 +187,7 @@ async def test_pass_through_endpoint_rpm_limit(
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
     # Define a pass-through endpoint
+    _cohere_api_key = os.environ.get("COHERE_API_KEY")
     pass_through_endpoints = [
         {
             "path": "/v1/rerank",
@@ -201,6 +205,13 @@ async def test_pass_through_endpoint_rpm_limit(
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
+    # Setup API keys and cache
+    mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(num_users)]
+
+    for mock_api_key in mock_api_keys:
+        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
+
     _json_data = {
         "model": "rerank-english-v3.0",
         "query": "What is the capital of the United States?",
@@ -212,8 +223,9 @@ async def test_pass_through_endpoint_rpm_limit(
 
     # Make a request to the pass-through endpoint
     tasks = []
-    for _ in range(requests_to_make):
-        task = asyncio.get_running_loop().run_in_executor(
+    for mock_api_key in mock_api_keys:
+        for _ in range(requests_to_make):
+            task = asyncio.get_running_loop().run_in_executor(
                 None,
                 partial(
                     client.post,
@@ -221,12 +233,26 @@ async def test_pass_through_endpoint_rpm_limit(
                     json=_json_data,
                     headers={"Authorization": "Bearer {}".format(mock_api_key)},
                 ),
-        )
-        tasks.append(task)
+            )
+            tasks.append(task)
 
     responses = await asyncio.gather(*tasks)
-    status_codes = sorted([response.status_code for response in responses])
-    assert status_codes == sorted(expected_status_codes)
+
+    if num_users == 1:
+        status_codes = sorted([response.status_code for response in responses])
+
+        assert status_codes == sorted(expected_status_codes)
+    else:
+        first_user_responses = responses[requests_to_make:]
+        second_user_responses = responses[:requests_to_make]
+
+        first_user_status_codes = sorted([response.status_code for response in first_user_responses])
+        second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+
+        expected_status_codes.sort()
+        assert first_user_status_codes == expected_status_codes
+        assert second_user_status_codes == expected_status_codes
+
     print("JSON response: ", _json_data)
 
 
