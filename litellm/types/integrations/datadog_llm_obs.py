@@ -10,8 +10,8 @@ from litellm.types.integrations.custom_logger import StandardCustomLoggerInitPar
 
 class InputMeta(TypedDict):
     messages: List[
-        Dict[str, str]
-    ]  # Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
+        Dict[str, Any]
+    ]  # Updated to support complex messages with tool_calls - Issue: https://github.com/BerriAI/litellm/issues/9494
 
 
 class OutputMeta(TypedDict):

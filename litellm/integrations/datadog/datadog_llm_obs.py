@@ -101,6 +101,14 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
 
+            # Create separate tool spans for tool calls using the main span's ID as parent
+            tool_spans = self._create_tool_spans(kwargs, start_time, end_time, main_span_id=payload["span_id"])
+            if tool_spans:
+                verbose_logger.debug(f"DataDogLLMObs: Created {len(tool_spans)} tool spans")
+                for tool_span in tool_spans:
+                    verbose_logger.debug(f"DataDogLLMObs: Tool span - name: {tool_span['name']}, parent_id: {tool_span['parent_id']}, span_id: {tool_span['span_id']}")
+            self.log_queue.extend(tool_spans)
+
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
@@ -118,6 +126,14 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             )
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
+
+            # Create separate tool spans for tool calls using the main span's ID as parent
+            tool_spans = self._create_tool_spans(kwargs, start_time, end_time, main_span_id=payload["span_id"])
+            if tool_spans:
+                verbose_logger.debug(f"DataDogLLMObs: Created {len(tool_spans)} tool spans")
+                for tool_span in tool_spans:
+                    verbose_logger.debug(f"DataDogLLMObs: Tool span - name: {tool_span['name']}, parent_id: {tool_span['parent_id']}, span_id: {tool_span['span_id']}")
+            self.log_queue.extend(tool_spans)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
@@ -188,9 +204,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         input_meta = InputMeta(
-            messages=handle_any_messages_to_chat_completion_str_messages_conversion(
-                messages
-            )
+            messages=self._process_input_messages_preserving_tool_calls(messages)
         )
         output_meta = OutputMeta(messages=self._get_response_messages(
             response_obj=response_obj,
@@ -275,8 +289,8 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     ) -> List[Any]:
         """
         Get the messages from the response object
-
-        for now this handles logging /chat/completions responses
+        
+        This now preserves tool_calls in response messages for Datadog observability.
         """
         if response_obj is None:
             return []
@@ -287,7 +301,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 if isinstance(response_obj, dict) and "choices" in response_obj:
                     choices = response_obj["choices"]
                     if choices and len(choices) > 0 and "message" in choices[0]:
-                        return [choices[0]["message"]]
+                        message = choices[0]["message"]
+                        # Preserve the complete message object including tool_calls
+                        return [message]
                 return []
             except (KeyError, IndexError, TypeError):
                 # In case of any error accessing the response structure, return empty list
@@ -431,6 +447,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         latency_metrics = self._get_latency_metrics(standard_logging_payload)
         _metadata.update({"latency_metrics": dict(latency_metrics)})
 
+        #########################################################
+        # Extract and add tool call information to metadata
+        #########################################################
+        tool_call_metadata = self._extract_tool_call_metadata(standard_logging_payload)
+        _metadata.update(tool_call_metadata)
+
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
         )
@@ -463,3 +485,218 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
             
         return latency_metrics
+
+    def _process_input_messages_preserving_tool_calls(self, messages: List[Any]) -> List[Dict[str, Any]]:
+        """
+        Process input messages while preserving tool_calls and tool message types.
+        
+        This bypasses the lossy string conversion when tool calls are present,
+        allowing complex nested tool_calls objects to be preserved for Datadog.
+        """
+        processed = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                # Preserve messages with tool_calls or tool role as-is
+                if "tool_calls" in msg or msg.get("role") == "tool":
+                    processed.append(msg)
+                else:
+                    # For regular messages, still apply string conversion
+                    converted = handle_any_messages_to_chat_completion_str_messages_conversion([msg])
+                    processed.extend(converted)
+            else:
+                # For non-dict messages, apply string conversion
+                converted = handle_any_messages_to_chat_completion_str_messages_conversion([msg])
+                processed.extend(converted)
+        return processed
+
+    @staticmethod
+    def _tool_calls_kv_pair(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Extract tool call information into key-value pairs for Datadog metadata.
+        """
+        kv_pairs: Dict[str, Any] = {}
+        for idx, tool_call in enumerate(tool_calls):
+            try:
+                # get tool call id
+                tool_id = tool_call.get("id")
+                if tool_id:
+                    kv_pairs[f"tool_calls.{idx}.id"] = tool_id
+
+                # get tool call type
+                tool_type = tool_call.get("type") 
+                if tool_type:
+                    kv_pairs[f"tool_calls.{idx}.type"] = tool_type
+
+                # extract function name and args
+                function = tool_call.get("function")
+                if function:
+                    function_name = function.get("name")
+                    if function_name:
+                        kv_pairs[f"tool_calls.{idx}.function.name"] = function_name
+
+                    function_arguments = function.get("arguments")
+                    if function_arguments:
+                        # Store arguments as JSON string for Datadog
+                        if isinstance(function_arguments, str):
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = function_arguments
+                        else:
+                            import json
+                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = json.dumps(function_arguments)
+            except (KeyError, TypeError, ValueError) as e:
+                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}")
+                continue
+                
+        return kv_pairs
+
+    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> Dict[str, Any]:
+        """
+        Extract tool call information from both input messages and response for Datadog metadata.
+        """
+        tool_call_metadata: Dict[str, Any] = {}
+
+        try:
+            # Extract tool calls from input messages
+            messages = standard_logging_payload.get("messages", [])
+            if messages and isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and "tool_calls" in message:
+                        tool_calls = message.get("tool_calls")
+                        if tool_calls:
+                            input_tool_calls_kv = self._tool_calls_kv_pair(tool_calls)
+                            for key, value in input_tool_calls_kv.items():
+                                tool_call_metadata[f"input_{key}"] = value
+
+            # Extract tool calls from response
+            response_obj = standard_logging_payload.get("response")
+            if response_obj and isinstance(response_obj, dict):
+                choices = response_obj.get("choices", [])
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        message = choice.get("message")
+                        if message and isinstance(message, dict):
+                            tool_calls = message.get("tool_calls")
+                            if tool_calls:
+                                response_tool_calls_kv = self._tool_calls_kv_pair(tool_calls)
+                                # Prefix with "output_" to distinguish from input tool calls  
+                                for key, value in response_tool_calls_kv.items():
+                                    tool_call_metadata[f"output_{key}"] = value
+
+        except Exception as e:
+            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {str(e)}")
+
+        return tool_call_metadata
+
+    def _create_tool_spans(self, kwargs: Dict, start_time: datetime, end_time: datetime, main_span_id: Optional[str] = None) -> List[LLMObsPayload]:
+        """
+        Create separate tool spans for tool calls to improve visibility in Datadog LLM Observability.
+        
+        Returns a list of tool spans that should be logged alongside the main LLM span.
+        """
+        tool_spans: List[LLMObsPayload] = []
+        
+        try:
+            standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            if not standard_logging_payload:
+                return tool_spans
+                
+            main_trace_id = standard_logging_payload.get("trace_id", str(uuid.uuid4()))
+            # Use the provided main_span_id, fallback to metadata, then generate new UUID
+            if main_span_id is None:
+                main_span_id = kwargs.get("litellm_params", {}).get("metadata", {}).get("span_id", str(uuid.uuid4()))
+            
+            # Extract tool calls from response
+            response_obj = standard_logging_payload.get("response")
+            if response_obj and isinstance(response_obj, dict):
+                choices = response_obj.get("choices", [])
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        message = choice.get("message", {})
+                        if isinstance(message, dict):
+                            tool_calls = message.get("tool_calls", [])
+                            if tool_calls:
+                                for idx, tool_call in enumerate(tool_calls):
+                                    tool_span = self._create_single_tool_span(
+                                        tool_call=tool_call,
+                                        trace_id=main_trace_id,
+                                        parent_id=main_span_id,
+                                        start_time=start_time,
+                                        end_time=end_time,
+                                        index=idx
+                                    )
+                                    if tool_span:
+                                        tool_spans.append(tool_span)
+                                        
+        except Exception as e:
+            verbose_logger.debug(f"DataDogLLMObs: Error creating tool spans: {str(e)}")
+            
+        return tool_spans
+        
+    def _create_single_tool_span(
+        self, 
+        tool_call: Dict[str, Any], 
+        trace_id: str, 
+        parent_id: str, 
+        start_time: datetime, 
+        end_time: datetime,
+        index: int
+    ) -> Optional[LLMObsPayload]:
+        """
+        Create a single tool span for a tool call.
+        """
+        try:
+            tool_id = tool_call.get("id", f"tool_{index}")
+            function = tool_call.get("function", {})
+            function_name = function.get("name", "unknown_tool")
+            function_arguments = function.get("arguments", "")
+            
+            # Create input meta with the tool call arguments in proper format
+            input_message = {
+                "role": "tool", 
+                "content": function_arguments or "",
+                "name": function_name,
+                "tool_call_id": tool_id
+            }
+            input_meta = InputMeta(messages=[input_message])
+            
+            # Create output meta - for tool calls, this would typically be the tool's response
+            # Since we only have the tool call request, not the response, we'll create a placeholder
+            output_message = {
+                "role": "tool",
+                "content": f"Tool {function_name} called with arguments: {function_arguments}",
+                "name": function_name,
+                "tool_call_id": tool_id
+            }
+            output_meta = OutputMeta(messages=[output_message])
+            
+            meta = Meta(
+                kind="tool",
+                input=input_meta,
+                output=output_meta,
+                metadata={
+                    "tool_id": tool_id,
+                    "tool_name": function_name,
+                    "tool_type": tool_call.get("type", "function"),
+                    "function_arguments": function_arguments
+                }
+            )
+            
+            return LLMObsPayload(
+                parent_id=parent_id,
+                trace_id=trace_id,
+                span_id=str(uuid.uuid4()),
+                name=f"tool.{function_name}",
+                meta=meta,
+                start_ns=int(start_time.timestamp() * 1e9),
+                duration=int((end_time - start_time).total_seconds() * 1e9),
+                metrics={},  # No token metrics for tool calls
+                status="ok",
+                tags=[
+                    f"tool.name:{function_name}",
+                    f"tool.type:{tool_call.get('type', 'function')}",
+                    "span.kind:tool"
+                ]
+            )
+            
+        except Exception as e:
+            verbose_logger.debug(f"DataDogLLMObs: Error creating single tool span: {str(e)}")
+            return None
