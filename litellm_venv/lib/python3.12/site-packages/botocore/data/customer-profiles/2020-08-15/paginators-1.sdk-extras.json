@@ -1,0 +1,15 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "GetSimilarProfiles": {
+        "non_aggregate_keys": [
+          "MatchType",
+          "MatchId",
+          "RuleLevel",
+          "ConfidenceScore"
+        ]
+      }
+    }
+  }
+}

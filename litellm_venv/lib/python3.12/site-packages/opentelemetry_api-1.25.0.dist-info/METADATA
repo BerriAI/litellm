@@ -1,0 +1,43 @@
+Metadata-Version: 2.3
+Name: opentelemetry-api
+Version: 1.25.0
+Summary: OpenTelemetry Python API
+Project-URL: Homepage, https://github.com/open-telemetry/opentelemetry-python/tree/main/opentelemetry-api
+Author-email: OpenTelemetry Authors <cncf-opentelemetry-contributors@lists.cncf.io>
+License: Apache-2.0
+License-File: LICENSE
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Framework :: OpenTelemetry
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Typing :: Typed
+Requires-Python: >=3.8
+Requires-Dist: deprecated>=1.2.6
+Requires-Dist: importlib-metadata<=7.1,>=6.0
+Description-Content-Type: text/x-rst
+
+OpenTelemetry Python API
+============================================================================
+
+|pypi|
+
+.. |pypi| image:: https://badge.fury.io/py/opentelemetry-api.svg
+   :target: https://pypi.org/project/opentelemetry-api/
+
+Installation
+------------
+
+::
+
+    pip install opentelemetry-api
+
+References
+----------
+
+* `OpenTelemetry Project <https://opentelemetry.io/>`_

@@ -1,0 +1,50 @@
+Metadata-Version: 2.3
+Name: opentelemetry-exporter-otlp-proto-common
+Version: 1.25.0
+Summary: OpenTelemetry Protobuf encoding
+Project-URL: Homepage, https://github.com/open-telemetry/opentelemetry-python/tree/main/exporter/opentelemetry-exporter-otlp-proto-common
+Author-email: OpenTelemetry Authors <cncf-opentelemetry-contributors@lists.cncf.io>
+License: Apache-2.0
+License-File: LICENSE
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Framework :: OpenTelemetry
+Classifier: Framework :: OpenTelemetry :: Exporters
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.8
+Requires-Dist: opentelemetry-proto==1.25.0
+Description-Content-Type: text/x-rst
+
+OpenTelemetry Protobuf Encoding
+===============================
+
+|pypi|
+
+.. |pypi| image:: https://badge.fury.io/py/opentelemetry-exporter-otlp-proto-common.svg
+   :target: https://pypi.org/project/opentelemetry-exporter-otlp-proto-common/
+
+This library is provided as a convenience to encode to Protobuf. Currently used by:
+
+* opentelemetry-exporter-otlp-proto-grpc
+* opentelemetry-exporter-otlp-proto-http
+
+
+Installation
+------------
+
+::
+
+     pip install opentelemetry-exporter-otlp-proto-common
+
+
+References
+----------
+
+* `OpenTelemetry <https://opentelemetry.io/>`_
+* `OpenTelemetry Protocol Specification <https://github.com/open-telemetry/oteps/blob/main/text/0035-opentelemetry-protocol.md>`_

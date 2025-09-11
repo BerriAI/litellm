@@ -358,7 +358,9 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
-    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
+    reasoning_effort: Optional[
+        Literal["none", "minimal", "low", "medium", "high", "default"]
+    ] = None,
     safety_identifier: Optional[str] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
@@ -504,7 +506,9 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=completion_kwargs.get("base_url", None)
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=completion_kwargs.get("base_url", None),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -899,7 +903,9 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "default"]] = None,
+    reasoning_effort: Optional[
+        Literal["none", "minimal", "low", "medium", "high", "default"]
+    ] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -1066,7 +1072,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -1116,10 +1121,12 @@ def completion(  # type: ignore # noqa: PLR0915
         )
 
         if provider_specific_header is not None:
-            headers.update(ProviderSpecificHeaderUtils.get_provider_specific_headers(
-                provider_specific_header=provider_specific_header,
-                custom_llm_provider=custom_llm_provider,
-            ))
+            headers.update(
+                ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                    provider_specific_header=provider_specific_header,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            )
 
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
@@ -2020,7 +2027,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -2712,9 +2718,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             api_key = (
-                api_key
-                or litellm.api_key
-                or get_secret("VERCEL_AI_GATEWAY_API_KEY")
+                api_key or litellm.api_key or get_secret("VERCEL_AI_GATEWAY_API_KEY")
             )
 
             vercel_site_url = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
@@ -2730,7 +2734,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 vercel_headers.update(_headers)
 
             headers = vercel_headers
-            
+
             ## Load Config
             config = litellm.VercelAIGatewayConfig.get_config()
             for k, v in config.items():
@@ -3106,9 +3110,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3450,7 +3454,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -3712,7 +3715,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider, api_base=kwargs.get("api_base", None)
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=kwargs.get("api_base", None),
         )
 
         # Await normally
@@ -5029,9 +5034,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5780,7 +5785,14 @@ async def ahealth_check(
                 input=input or ["test"],
             ),
             "audio_speech": lambda: litellm.aspeech(
-                **{**_filter_model_params(model_params), **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params) else {})},
+                **{
+                    **_filter_model_params(model_params),
+                    **(
+                        {"voice": "alloy"}
+                        if "voice" not in _filter_model_params(model_params)
+                        else {}
+                    ),
+                },
                 input=prompt or "test",
             ),
             "audio_transcription": lambda: litellm.atranscription(
@@ -6011,9 +6023,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6024,9 +6036,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6037,9 +6049,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk

@@ -1,0 +1,12 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "ListGroupingStatuses": {
+        "non_aggregate_keys": [
+          "Group"
+        ]
+      }
+    }
+  }
+}

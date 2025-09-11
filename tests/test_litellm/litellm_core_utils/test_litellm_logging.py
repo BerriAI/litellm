@@ -410,28 +410,28 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
     response_id = "chatcmpl-test-12345"
     team_alias = "test-team"
-    
-    with patch("litellm.configured_cold_storage_logger", return_value="s3"), \
-         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
-        
+
+    with patch("litellm.configured_cold_storage_logger", return_value="s3"), patch(
+        "litellm.integrations.s3.get_s3_object_key"
+    ) as mock_get_s3_key:
         # Mock the S3 object key generation to return a predictable result
-        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-        
+        mock_get_s3_key.return_value = (
+            "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        )
+
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-            start_time=start_time,
-            response_id=response_id,
-            team_alias=team_alias
+            start_time=start_time, response_id=response_id, team_alias=team_alias
         )
-        
+
         # Verify the S3 function was called with correct parameters
         mock_get_s3_key.assert_called_once_with(
             s3_path="",  # Empty path as default
             team_alias_prefix="",  # No team alias prefix for cold storage
             start_time=start_time,
-            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
         )
-        
+
         # Verify the result
         assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
         assert result is not None
@@ -455,15 +455,11 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     team_alias = "another-team"
 
     # Use patch to ensure test isolation
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
+    with patch.object(litellm, "configured_cold_storage_logger", None):
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-            start_time=start_time,
-            response_id=response_id,
-            team_alias=team_alias
+            start_time=start_time, response_id=response_id, team_alias=team_alias
         )
-    
+
     # Verify the result is None when cold storage is not configured
     assert result is None
-
-

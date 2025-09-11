@@ -1,0 +1,66 @@
+Metadata-Version: 2.4
+Name: google-crc32c
+Version: 1.7.1
+Summary: A python wrapper of the C library 'Google CRC32C'
+Home-page: https://github.com/googleapis/python-crc32c
+Author: Google LLC
+Author-email: googleapis-packages@google.com
+License: Apache 2.0
+Platform: Posix
+Platform: MacOS X
+Platform: Windows
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: importlib_resources>=1.3; python_version < "3.9" and os_name == "nt"
+Provides-Extra: testing
+Requires-Dist: pytest; extra == "testing"
+Dynamic: license-file
+Dynamic: requires-dist
+
+# `google-crc32c`
+![GA](https://img.shields.io/badge/support-GA-gold.svg) [<img src="https://img.shields.io/pypi/v/google-crc32c.svg">](https://pypi.org/project/google-crc32c) ![Python Versions](https://img.shields.io/pypi/pyversions/google-crc32c)
+
+This package wraps the [`google/crc32c`](https://github.com/google/crc32c)
+hardware-based implementation of the CRC32C hashing algorithm. Multiple wheels
+are distributed as well as source. If a wheel is not published for the python
+version and platform you are using, you will need to compile crc32c using a
+C toolchain.
+
+# Currently Published Wheels
+
+Wheels are currently published for CPython 3.9, 3.10, 3.11, 3.12 and 3.13
+for multiple architectures. PyPy 3.9 and 3.10 are also supported for Linux.
+For information on building your own wheels please view [BUILDING.md](BUILDING.md).
+
+
+## Linux
+
+Wheels are published for the following platforms / architectures:
+
+- `manylinux2010` platform, `x86_64` and `1686` architectures
+- `manylinux2014` platform, `aarch64` architecture
+
+### Unsupported Platforms
+
+- `manylinux1` platform, `x86_64` architecture support has ended.
+
+See https://github.com/pypa/manylinux/issues/994.
+
+## Mac OS
+
+Wheels are published for `x86_64` and `arm64` architectures.
+
+
+## Windows
+
+Wheels are published for the `win_amd64` architecture.

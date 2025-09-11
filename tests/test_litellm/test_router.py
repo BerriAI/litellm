@@ -1053,7 +1053,6 @@ async def test_acompletion_streaming_iterator():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         result = await router._acompletion_streaming_iterator(
             model_response=mock_error_response,
@@ -1150,7 +1149,6 @@ async def test_acompletion_streaming_iterator_edge_cases():
         "async_function_with_fallbacks_common_utils",
         return_value=mock_fallback_response,
     ) as mock_fallback_utils:
-
         collected_chunks = []
         iterator = await router._acompletion_streaming_iterator(
             model_response=mock_response,

@@ -1,0 +1,207 @@
+Metadata-Version: 2.4
+Name: google-cloud-bigquery
+Version: 3.37.0
+Summary: Google BigQuery API client library
+Author-email: Google LLC <googleapis-packages@google.com>
+License: Apache 2.0
+Project-URL: Repository, https://github.com/googleapis/python-bigquery
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Internet
+Requires-Python: >=3.9
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: google-api-core[grpc]<3.0.0,>=2.11.1
+Requires-Dist: google-auth<3.0.0,>=2.14.1
+Requires-Dist: google-cloud-core<3.0.0,>=2.4.1
+Requires-Dist: google-resumable-media<3.0.0,>=2.0.0
+Requires-Dist: packaging>=24.2.0
+Requires-Dist: python-dateutil<3.0.0,>=2.8.2
+Requires-Dist: requests<3.0.0,>=2.21.0
+Provides-Extra: bqstorage
+Requires-Dist: google-cloud-bigquery-storage<3.0.0,>=2.18.0; extra == "bqstorage"
+Requires-Dist: grpcio<2.0.0,>=1.47.0; extra == "bqstorage"
+Requires-Dist: grpcio<2.0.0,>=1.49.1; python_version >= "3.11" and extra == "bqstorage"
+Requires-Dist: pyarrow>=4.0.0; extra == "bqstorage"
+Provides-Extra: pandas
+Requires-Dist: pandas>=1.3.0; extra == "pandas"
+Requires-Dist: pandas-gbq>=0.26.1; extra == "pandas"
+Requires-Dist: grpcio<2.0.0,>=1.47.0; extra == "pandas"
+Requires-Dist: grpcio<2.0.0,>=1.49.1; python_version >= "3.11" and extra == "pandas"
+Requires-Dist: pyarrow>=3.0.0; extra == "pandas"
+Requires-Dist: db-dtypes<2.0.0,>=1.0.4; extra == "pandas"
+Provides-Extra: ipywidgets
+Requires-Dist: ipywidgets>=7.7.1; extra == "ipywidgets"
+Requires-Dist: ipykernel>=6.2.0; extra == "ipywidgets"
+Provides-Extra: geopandas
+Requires-Dist: geopandas<2.0.0,>=0.9.0; extra == "geopandas"
+Requires-Dist: Shapely<3.0.0,>=1.8.4; extra == "geopandas"
+Provides-Extra: ipython
+Requires-Dist: ipython>=7.23.1; extra == "ipython"
+Requires-Dist: bigquery-magics>=0.6.0; extra == "ipython"
+Provides-Extra: matplotlib
+Requires-Dist: matplotlib<=3.9.2,>=3.7.1; python_version == "3.9" and extra == "matplotlib"
+Requires-Dist: matplotlib>=3.10.3; python_version >= "3.10" and extra == "matplotlib"
+Provides-Extra: tqdm
+Requires-Dist: tqdm<5.0.0,>=4.23.4; extra == "tqdm"
+Provides-Extra: opentelemetry
+Requires-Dist: opentelemetry-api>=1.1.0; extra == "opentelemetry"
+Requires-Dist: opentelemetry-sdk>=1.1.0; extra == "opentelemetry"
+Requires-Dist: opentelemetry-instrumentation>=0.20b0; extra == "opentelemetry"
+Provides-Extra: bigquery-v2
+Requires-Dist: proto-plus<2.0.0,>=1.22.3; extra == "bigquery-v2"
+Requires-Dist: protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<7.0.0,>=3.20.2; extra == "bigquery-v2"
+Provides-Extra: all
+Requires-Dist: google-cloud-bigquery[bigquery_v2,bqstorage,geopandas,ipython,ipywidgets,matplotlib,opentelemetry,pandas,tqdm]; extra == "all"
+Dynamic: license-file
+
+Python Client for Google BigQuery
+=================================
+
+|GA| |pypi| |versions|
+
+Querying massive datasets can be time consuming and expensive without the
+right hardware and infrastructure. Google `BigQuery`_ solves this problem by
+enabling super-fast, SQL queries against append-mostly tables, using the
+processing power of Google's infrastructure.
+
+-  `Client Library Documentation`_
+-  `Product Documentation`_
+
+.. |GA| image:: https://img.shields.io/badge/support-GA-gold.svg
+   :target: https://github.com/googleapis/google-cloud-python/blob/main/README.rst#general-availability
+.. |pypi| image:: https://img.shields.io/pypi/v/google-cloud-bigquery.svg
+   :target: https://pypi.org/project/google-cloud-bigquery/
+.. |versions| image:: https://img.shields.io/pypi/pyversions/google-cloud-bigquery.svg
+   :target: https://pypi.org/project/google-cloud-bigquery/
+.. _BigQuery: https://cloud.google.com/bigquery/what-is-bigquery
+.. _Client Library Documentation: https://cloud.google.com/python/docs/reference/bigquery/latest/summary_overview
+.. _Product Documentation: https://cloud.google.com/bigquery/docs/reference/v2/
+
+Quick Start
+-----------
+
+In order to use this library, you first need to go through the following steps:
+
+1. `Select or create a Cloud Platform project.`_
+2. `Enable billing for your project.`_
+3. `Enable the Google Cloud BigQuery API.`_
+4. `Setup Authentication.`_
+
+.. _Select or create a Cloud Platform project.: https://console.cloud.google.com/project
+.. _Enable billing for your project.: https://cloud.google.com/billing/docs/how-to/modify-project#enable_billing_for_a_project
+.. _Enable the Google Cloud BigQuery API.:  https://cloud.google.com/bigquery
+.. _Setup Authentication.: https://googleapis.dev/python/google-api-core/latest/auth.html
+
+Installation
+~~~~~~~~~~~~
+
+Install this library in a `virtualenv`_ using pip. `virtualenv`_ is a tool to
+create isolated Python environments. The basic problem it addresses is one of
+dependencies and versions, and indirectly permissions.
+
+With `virtualenv`_, it's possible to install this library without needing system
+install permissions, and without clashing with the installed system
+dependencies.
+
+.. _`virtualenv`: https://virtualenv.pypa.io/en/latest/
+
+
+Supported Python Versions
+^^^^^^^^^^^^^^^^^^^^^^^^^
+Python >= 3.9
+
+Unsupported Python Versions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Python == 2.7, Python == 3.5, Python == 3.6, Python == 3.7, and Python == 3.8.
+
+The last version of this library compatible with Python 2.7 and 3.5 is
+`google-cloud-bigquery==1.28.0`.
+
+
+Mac/Linux
+^^^^^^^^^
+
+.. code-block:: console
+
+    pip install virtualenv
+    virtualenv <your-env>
+    source <your-env>/bin/activate
+    <your-env>/bin/pip install google-cloud-bigquery
+
+
+Windows
+^^^^^^^
+
+.. code-block:: console
+
+    pip install virtualenv
+    virtualenv <your-env>
+    <your-env>\Scripts\activate
+    <your-env>\Scripts\pip.exe install google-cloud-bigquery
+
+Example Usage
+-------------
+
+Perform a query
+~~~~~~~~~~~~~~~
+
+.. code:: python
+
+    from google.cloud import bigquery
+
+    client = bigquery.Client()
+
+    # Perform a query.
+    QUERY = (
+        'SELECT name FROM `bigquery-public-data.usa_names.usa_1910_2013` '
+        'WHERE state = "TX" '
+        'LIMIT 100')
+    query_job = client.query(QUERY)  # API request
+    rows = query_job.result()  # Waits for query to finish
+
+    for row in rows:
+        print(row.name)
+
+Instrumenting With OpenTelemetry
+--------------------------------
+
+This application uses `OpenTelemetry`_ to output tracing data from
+API calls to BigQuery. To enable OpenTelemetry tracing in
+the BigQuery client the following PyPI packages need to be installed:
+
+.. _OpenTelemetry: https://opentelemetry.io
+
+.. code-block:: console
+
+    pip install google-cloud-bigquery[opentelemetry] opentelemetry-exporter-gcp-trace
+
+After installation, OpenTelemetry can be used in the BigQuery
+client and in BigQuery jobs. First, however, an exporter must be
+specified for where the trace data will be outputted to. An
+example of this can be found here:
+
+.. code-block:: python
+
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+    tracer_provider = TracerProvider()
+    tracer_provider = BatchSpanProcessor(CloudTraceSpanExporter())
+    trace.set_tracer_provider(TracerProvider())
+
+In this example all tracing data will be published to the Google
+`Cloud Trace`_ console. For more information on OpenTelemetry, please consult the `OpenTelemetry documentation`_.
+
+.. _OpenTelemetry documentation: https://opentelemetry-python.readthedocs.io
+.. _Cloud Trace: https://cloud.google.com/trace

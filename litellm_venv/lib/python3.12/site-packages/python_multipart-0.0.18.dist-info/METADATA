@@ -1,0 +1,39 @@
+Metadata-Version: 2.3
+Name: python-multipart
+Version: 0.0.18
+Summary: A streaming multipart parser for Python
+Project-URL: Homepage, https://github.com/Kludex/python-multipart
+Project-URL: Documentation, https://kludex.github.io/python-multipart/
+Project-URL: Changelog, https://github.com/Kludex/python-multipart/blob/master/CHANGELOG.md
+Project-URL: Source, https://github.com/Kludex/python-multipart
+Author-email: Andrew Dunham <andrew@du.nham.ca>, Marcelo Trylesinski <marcelotryle@gmail.com>
+License: Apache-2.0
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Web Environment
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+
+# [Python-Multipart](https://kludex.github.io/python-multipart/)
+
+[![Package version](https://badge.fury.io/py/python-multipart.svg)](https://pypi.python.org/pypi/python-multipart)
+[![Supported Python Version](https://img.shields.io/pypi/pyversions/python-multipart.svg?color=%2334D058)](https://pypi.org/project/python-multipart)
+
+---
+
+`python-multipart` is an Apache2-licensed streaming multipart parser for Python.
+Test coverage is currently 100%.
+
+## Why?
+
+Because streaming uploads are awesome for large files.

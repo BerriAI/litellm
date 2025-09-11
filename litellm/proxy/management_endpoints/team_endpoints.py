@@ -105,7 +105,7 @@ router = APIRouter()
 
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
-    
+
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
@@ -113,12 +113,14 @@ class TeamMemberBudgetHandler:
         team_member_tpm_limit: Optional[int] = None,
     ) -> bool:
         """Check if any team member limits are provided"""
-        return any([
-            team_member_budget is not None,
-            team_member_rpm_limit is not None,
-            team_member_tpm_limit is not None,
-        ])
-    
+        return any(
+            [
+                team_member_budget is not None,
+                team_member_rpm_limit is not None,
+                team_member_tpm_limit is not None,
+            ]
+        )
+
     @staticmethod
     async def create_team_member_budget_table(
         data: Union[NewTeamRequest, LiteLLM_TeamTable],
@@ -146,7 +148,7 @@ class TeamMemberBudgetHandler:
             budget_id=budget_id,
             budget_duration=data.budget_duration,
         )
-        
+
         if team_member_budget is not None:
             budget_request.max_budget = team_member_budget
         if team_member_rpm_limit is not None:
@@ -165,12 +167,12 @@ class TeamMemberBudgetHandler:
         new_team_data_json["metadata"][
             "team_member_budget_id"
         ] = team_member_budget_table.budget_id
-        
+
         # Remove team member fields from new_team_data_json
         TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
 
         return new_team_data_json
-    
+
     @staticmethod
     async def upsert_team_member_budget_table(
         team_table: LiteLLM_TeamTable,
@@ -193,14 +195,14 @@ class TeamMemberBudgetHandler:
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
             # Budget exists - create update request with only provided values
             budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
-            
+
             if team_member_budget is not None:
                 budget_request.max_budget = team_member_budget
             if team_member_rpm_limit is not None:
                 budget_request.rpm_limit = team_member_rpm_limit
             if team_member_tpm_limit is not None:
                 budget_request.tpm_limit = team_member_tpm_limit
-                
+
             budget_row = await update_budget(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
@@ -221,11 +223,11 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
             )
-        
+
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
         return updated_kv
-    
+
     @staticmethod
     def _clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
@@ -265,7 +267,6 @@ async def get_all_team_memberships(
         returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
     return returned_tm
-
 
 
 #### TEAM MANAGEMENT ####
@@ -896,12 +897,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[LiteLLM_TeamTable] = (
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
-        )
+    team_row: Optional[
+        LiteLLM_TeamTable
+    ] = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data=updated_kv,
+        include={"litellm_model_table": True},  # type: ignore
     )
 
     if team_row is None or team_row.team_id is None:
@@ -1329,14 +1330,16 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    updated_team, updated_users, updated_team_memberships = (
-        await _add_team_members_to_team(
-            data=data,
-            complete_team_data=complete_team_data,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    (
+        updated_team,
+        updated_users,
+        updated_team_memberships,
+    ) = await _add_team_members_to_team(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     # Check if updated_team is None
@@ -1871,10 +1874,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -2051,11 +2054,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id},
-                    include={"object_permission": True},
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception

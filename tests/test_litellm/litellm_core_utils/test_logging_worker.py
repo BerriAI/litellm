@@ -20,7 +20,9 @@ class TestLoggingWorker:
     async def test_graceful_shutdown_with_clear_queue(self, logging_worker):
         """Test that cancellation triggers clear_queue to prevent 'never awaited' warnings."""
         # Mock the clear_queue method to verify it's called during cancellation
-        with patch.object(logging_worker, "clear_queue", new_callable=AsyncMock) as mock_clear_queue:
+        with patch.object(
+            logging_worker, "clear_queue", new_callable=AsyncMock
+        ) as mock_clear_queue:
             # Start the worker
             logging_worker.start()
 
@@ -63,7 +65,9 @@ class TestLoggingWorker:
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
         """Test that the worker handles cancellation without throwing exceptions."""
         # Mock verbose_logger to capture debug messages
-        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
+        with patch(
+            "litellm.litellm_core_utils.logging_worker.verbose_logger"
+        ) as mock_logger:
             # Start the worker
             logging_worker.start()
 
@@ -130,12 +134,18 @@ class TestLoggingWorker:
         small_worker._ensure_queue()
 
         # Mock verbose_logger to capture exception messages
-        with patch("litellm.litellm_core_utils.logging_worker.verbose_logger") as mock_logger:
+        with patch(
+            "litellm.litellm_core_utils.logging_worker.verbose_logger"
+        ) as mock_logger:
             # Fill the queue beyond capacity
             mock_coro = AsyncMock()
             for _ in range(5):  # More than max_queue_size of 2
                 small_worker.enqueue(mock_coro())
 
             # Should have logged queue full exceptions
-            exception_calls = [call for call in mock_logger.exception.call_args_list if "queue is full" in str(call)]
+            exception_calls = [
+                call
+                for call in mock_logger.exception.call_args_list
+                if "queue is full" in str(call)
+            ]
             assert len(exception_calls) > 0

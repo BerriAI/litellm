@@ -35,7 +35,9 @@ def test_sanitize_request_body_for_spend_logs_payload_long_string():
     long_string = "a" * 2000  # Create a string longer than MAX_STRING_LENGTH
     request_body = {"text": long_string, "normal_text": "short text"}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    assert len(sanitized["text"]) == 1000 + len(f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} 1000 chars)")
+    assert len(sanitized["text"]) == 1000 + len(
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} 1000 chars)"
+    )
     assert sanitized["normal_text"] == "short text"
 
 
@@ -81,7 +83,9 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
         "nested": {"list": ["short", "a" * 2000], "dict": {"key": "a" * 2000}},
     }
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    assert len(sanitized["text"]) == 1000 + len(f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} 1000 chars)")
+    assert len(sanitized["text"]) == 1000 + len(
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} 1000 chars)"
+    )
     assert sanitized["number"] == 42
     assert sanitized["nested"]["list"][0] == "short"
     assert len(sanitized["nested"]["list"][1]) == 1000 + len(
@@ -180,21 +184,21 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
 
 def test_safe_dumps_handles_circular_references():
     """Test that safe_dumps can handle circular references without raising exceptions"""
-    
+
     # Create a circular reference
     obj1 = {"name": "obj1"}
     obj2 = {"name": "obj2", "ref": obj1}
     obj1["ref"] = obj2  # This creates a circular reference
-    
+
     # This should not raise an exception
     result = safe_dumps(obj1)
-    
+
     # Should be a valid JSON string
     assert isinstance(result, str)
-    
+
     # Should contain placeholder for circular reference
     assert "CircularReference Detected" in result
-    
+
     # Should be parseable as JSON
     parsed = json.loads(result)
     assert parsed["name"] == "obj1"
@@ -203,18 +207,18 @@ def test_safe_dumps_handles_circular_references():
 
 def test_safe_dumps_normal_objects():
     """Test that safe_dumps works correctly with normal objects"""
-    
+
     normal_obj = {
         "string": "test",
         "number": 42,
         "boolean": True,
         "null": None,
         "list": [1, 2, 3],
-        "nested": {"key": "value"}
+        "nested": {"key": "value"},
     }
-    
+
     result = safe_dumps(normal_obj)
-    
+
     # Should be a valid JSON string that can be parsed
     assert isinstance(result, str)
     parsed = json.loads(result)
@@ -223,28 +227,28 @@ def test_safe_dumps_normal_objects():
 
 def test_safe_dumps_complex_metadata_like_object():
     """Test with a complex metadata-like object similar to what caused the issue"""
-    
+
     # Simulate a complex metadata object
     metadata = {
         "user_api_key": "test-key",
         "model": "gpt-4",
         "usage": {"total_tokens": 100},
         "mcp_tool_call_metadata": {
-            "name": "test_tool", 
-            "arguments": {"param": "value"}
-        }
+            "name": "test_tool",
+            "arguments": {"param": "value"},
+        },
     }
-    
+
     # Add a potential circular reference
     usage_detail = {"parent_metadata": metadata}
     metadata["usage"]["detail"] = usage_detail
-    
+
     # This should not raise an exception
     result = safe_dumps(metadata)
-    
+
     # Should be a valid JSON string
     assert isinstance(result, str)
-    
+
     # Should be parseable as JSON
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"

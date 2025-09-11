@@ -1,0 +1,472 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://cloudlocationfinder.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Cloud Location Finder",
+"description": "",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/location-finder/docs",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "cloudlocationfinder:v1alpha",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://cloudlocationfinder.mtls.googleapis.com/",
+"name": "cloudlocationfinder",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1alpha/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "cloudlocationfinder.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1alpha/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1alpha/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "cloudlocationfinder.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. Do not use this field. It is unsupported and is ignored unless explicitly documented otherwise. This is primarily for internal usage.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1alpha/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"cloudLocations": {
+"methods": {
+"get": {
+"description": "Retrieves a resource containing information about a cloud location.",
+"flatPath": "v1alpha/projects/{projectsId}/locations/{locationsId}/cloudLocations/{cloudLocationsId}",
+"httpMethod": "GET",
+"id": "cloudlocationfinder.projects.locations.cloudLocations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudLocations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1alpha/{+name}",
+"response": {
+"$ref": "CloudLocation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists cloud locations under a given project and location.",
+"flatPath": "v1alpha/projects/{projectsId}/locations/{locationsId}/cloudLocations",
+"httpMethod": "GET",
+"id": "cloudlocationfinder.projects.locations.cloudLocations.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. A filter expression that filters resources listed in the response. The expression is in the form of field=value. For example, 'cloud_location_type=CLOUD_LOCATION_TYPE_REGION'. Multiple filter queries are space-separated. For example, 'cloud_location_type=CLOUD_LOCATION_TYPE_REGION territory_code=\"US\"' By default, each expression is an AND expression. However, you can include AND and OR expressions explicitly.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of cloud locations to return per page. The service might return fewer cloud locations than this value. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return. Provide page token returned by a previous 'ListCloudLocations' call to retrieve the next page of results. When paginating, all other parameters provided to 'ListCloudLocations' must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent, which owns this collection of cloud locations. Format: projects/{project}/locations/{location}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1alpha/{+parent}/cloudLocations",
+"response": {
+"$ref": "ListCloudLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"search": {
+"description": "Searches for cloud locations from a given source location.",
+"flatPath": "v1alpha/projects/{projectsId}/locations/{locationsId}/cloudLocations:search",
+"httpMethod": "GET",
+"id": "cloudlocationfinder.projects.locations.cloudLocations.search",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of cloud locations to return. The service might return fewer cloud locations than this value. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return. Provide Page token returned by a previous 'ListCloudLocations' call to retrieve the next page of results. When paginating, all other parameters provided to 'ListCloudLocations' must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent, which owns this collection of cloud locations. Format: projects/{project}/locations/{location}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"query": {
+"description": "Optional. The query string in search query syntax. While filter is used to filter the search results by attributes, query is used to specify the search requirements.",
+"location": "query",
+"type": "string"
+},
+"sourceCloudLocation": {
+"description": "Required. The source cloud location to search from. Example search can be searching nearby cloud locations from the source cloud location by latency.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1alpha/{+parent}/cloudLocations:search",
+"response": {
+"$ref": "SearchCloudLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250814",
+"rootUrl": "https://cloudlocationfinder.googleapis.com/",
+"schemas": {
+"CloudLocation": {
+"description": "Represents resource cloud locations.",
+"id": "CloudLocation",
+"properties": {
+"carbonFreeEnergyPercentage": {
+"description": "Optional. The carbon free energy percentage of the cloud location. This represents the average percentage of time customers' application will be running on carbon-free energy. See https://cloud.google.com/sustainability/region-carbon for more details. There is a difference between default value 0 and unset value. 0 means the carbon free energy percentage is 0%, while unset value means the carbon footprint data is not available.",
+"format": "float",
+"type": "number"
+},
+"cloudLocationType": {
+"description": "Optional. The type of the cloud location.",
+"enum": [
+"CLOUD_LOCATION_TYPE_UNSPECIFIED",
+"CLOUD_LOCATION_TYPE_REGION",
+"CLOUD_LOCATION_TYPE_ZONE",
+"CLOUD_LOCATION_TYPE_REGION_EXTENSION",
+"CLOUD_LOCATION_TYPE_GDCC_ZONE"
+],
+"enumDescriptions": [
+"Unspecified type.",
+"CloudLocation type for region.",
+"CloudLocation type for zone.",
+"CloudLocation type for region extension.",
+"CloudLocation type for Google Distributed Cloud Connected Zone."
+],
+"type": "string"
+},
+"cloudProvider": {
+"description": "Optional. The provider of the cloud location. Values can be Google Cloud or third-party providers, including AWS, Azure, or Oracle Cloud Infrastructure.",
+"enum": [
+"CLOUD_PROVIDER_UNSPECIFIED",
+"CLOUD_PROVIDER_GCP",
+"CLOUD_PROVIDER_AWS",
+"CLOUD_PROVIDER_AZURE",
+"CLOUD_PROVIDER_OCI"
+],
+"enumDescriptions": [
+"Unspecified type.",
+"Cloud provider type for Google Cloud.",
+"Cloud provider type for AWS.",
+"Cloud provider type for Azure.",
+"Cloud provider type for OCI."
+],
+"type": "string"
+},
+"containingCloudLocation": {
+"description": "Output only. The containing cloud location in the strict nesting hierarchy. For example, the containing cloud location of a zone is a region.",
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Optional. The human-readable name of the cloud location. Example: us-east-2, us-east1.",
+"type": "string"
+},
+"name": {
+"description": "Identifier. Name of the cloud location. Unique name of the cloud location including project and location using the form: `projects/{project_id}/locations/{location}/cloudLocations/{cloud_location}`",
+"type": "string"
+},
+"territoryCode": {
+"description": "Optional. The two-letter ISO 3166-1 alpha-2 code of the cloud location. Examples: US, JP, KR.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListCloudLocationsResponse": {
+"description": "Message for response to listing cloud locations.",
+"id": "ListCloudLocationsResponse",
+"properties": {
+"cloudLocations": {
+"description": "Output only. List of cloud locations.",
+"items": {
+"$ref": "CloudLocation"
+},
+"readOnly": true,
+"type": "array"
+},
+"nextPageToken": {
+"description": "Output only. The continuation token, used to page through large result sets. Provide this value in a subsequent request as page_token in subsequent requests to retrieve the next page. If this field is not present, there are no subsequent results.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"SearchCloudLocationsResponse": {
+"description": "Message for response to searching cloud locations.",
+"id": "SearchCloudLocationsResponse",
+"properties": {
+"cloudLocations": {
+"description": "Output only. List of cloud locations.",
+"items": {
+"$ref": "CloudLocation"
+},
+"readOnly": true,
+"type": "array"
+},
+"nextPageToken": {
+"description": "Output only. The continuation token, used to page through large result sets. Provide this value in a subsequent request as page_token in subsequent requests to retrieve the next page. If this field is not present, there are no subsequent results.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Cloud Location Finder API",
+"version": "v1alpha",
+"version_module": true
+}

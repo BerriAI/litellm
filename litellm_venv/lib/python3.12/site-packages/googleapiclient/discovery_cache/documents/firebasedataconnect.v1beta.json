@@ -1,0 +1,1909 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://firebasedataconnect.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Firebase Data Connect",
+"description": "Firebase Data Connect is a relational database service for mobile and web apps that lets you build and scale using a fully-managed PostgreSQL database powered by Cloud SQL. The REST API lets developers manage the connections to their database, change the schema of their database, and query the database.",
+"discoveryVersion": "v1",
+"documentationLink": "https://firebase.google.com/docs/data-connect",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "firebasedataconnect:v1beta",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://firebasedataconnect.mtls.googleapis.com/",
+"name": "firebasedataconnect",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1beta/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. Do not use this field. It is unsupported and is ignored unless explicitly documented otherwise. This is primarily for internal usage.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1beta/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "firebasedataconnect.projects.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1beta/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"services": {
+"methods": {
+"create": {
+"description": "Creates a new Service in a given project and location.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. Value of parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"serviceId": {
+"description": "Required. The ID to use for the service, which will become the final component of the service's resource name.",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Service, but do not actually create it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+parent}/services",
+"request": {
+"$ref": "Service"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Service.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "DELETE",
+"id": "firebasedataconnect.projects.locations.services.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Service is not found, the request will succeed but no action will be taken on the server.",
+"location": "query",
+"type": "boolean"
+},
+"etag": {
+"description": "Optional. The etag of the Service. If this is provided, it must match the server's etag.",
+"location": "query",
+"type": "string"
+},
+"force": {
+"description": "Optional. If set to true, any child resources (i.e. Schema, SchemaRevisions, Connectors, and ConnectorRevisions) will also be deleted. Otherwise, the request will only work if the Service has no child resources.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the service to delete, in the format: ``` projects/{project}/locations/{location}/services/{service} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Service, but do not actually delete it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"executeGraphql": {
+"description": "Execute any GraphQL query and mutation against the Firebase Data Connect's generated GraphQL schema. Grants full read and write access to the connected data sources. Note: Use introspection query to explore the generated GraphQL schema.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:executeGraphql",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.executeGraphql",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of Firebase Data Connect service, in the format: ``` projects/{project}/locations/{location}/services/{service} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:executeGraphql",
+"request": {
+"$ref": "GraphqlRequest"
+},
+"response": {
+"$ref": "GraphqlResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"executeGraphqlRead": {
+"description": "Execute any GraphQL query against the Firebase Data Connect's generated GraphQL schema. Grants full read to the connected data sources. `ExecuteGraphqlRead` is identical to `ExecuteGraphql` except it only accepts read-only query.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:executeGraphqlRead",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.executeGraphqlRead",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of Firebase Data Connect service, in the format: ``` projects/{project}/locations/{location}/services/{service} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:executeGraphqlRead",
+"request": {
+"$ref": "GraphqlRequest"
+},
+"response": {
+"$ref": "GraphqlResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single Service.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the service to retrieve, in the format: ``` projects/{project}/locations/{location}/services/{service} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Service"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Services in a given project and location.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListServices` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListServices` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Value of parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+parent}/services",
+"response": {
+"$ref": "ListServicesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the parameters of a single Service.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "PATCH",
+"id": "firebasedataconnect.projects.locations.services.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Service is not found, a new Service will be created. In this case, `update_mask` is ignored.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Identifier. The relative resource name of the Firebase Data Connect service, in the format: ``` projects/{project}/locations/{location}/services/{service} ``` Note that the service ID is specific to Firebase Data Connect and does not correspond to any of the instance IDs of the underlying data source connections.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the Service resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. If the user does not provide a mask then all fields will be overwritten.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Service, but do not actually update it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"request": {
+"$ref": "Service"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"connectors": {
+"methods": {
+"create": {
+"description": "Creates a new Connector in a given project and location. The operations are validated against and must be compatible with the active schema. If the operations and schema are not compatible or if the schema is not present, this will result in an error.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.connectors.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"connectorId": {
+"description": "Required. The ID to use for the connector, which will become the final component of the connector's resource name.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Value for parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Connector, but do not actually create it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+parent}/connectors",
+"request": {
+"$ref": "Connector"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Connector.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors/{connectorsId}",
+"httpMethod": "DELETE",
+"id": "firebasedataconnect.projects.locations.services.connectors.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Connector is not found, the request will succeed but no action will be taken on the server.",
+"location": "query",
+"type": "boolean"
+},
+"etag": {
+"description": "Optional. The etag of the Connector. If this is provided, it must match the server's etag.",
+"location": "query",
+"type": "string"
+},
+"force": {
+"description": "Optional. If set to true, any child resources (i.e. ConnectorRevisions) will also be deleted. Otherwise, the request will only work if the Connector has no child resources.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the connector to delete, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Connector, but do not actually delete it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"executeMutation": {
+"description": "Execute a predefined mutation in a Connector.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors/{connectorsId}:executeMutation",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.connectors.executeMutation",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the connector to find the predefined mutation, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:executeMutation",
+"request": {
+"$ref": "ExecuteMutationRequest"
+},
+"response": {
+"$ref": "ExecuteMutationResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"executeQuery": {
+"description": "Execute a predefined query in a Connector.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors/{connectorsId}:executeQuery",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.connectors.executeQuery",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the connector to find the predefined query, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:executeQuery",
+"request": {
+"$ref": "ExecuteQueryRequest"
+},
+"response": {
+"$ref": "ExecuteQueryResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single Connector.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors/{connectorsId}",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.connectors.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to retrieve, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Connector"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Connectors in a given project and location.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.connectors.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListConnectors` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListConnectors` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Value of parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+parent}/connectors",
+"response": {
+"$ref": "ListConnectorsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the parameters of a single Connector, and creates a new ConnectorRevision with the updated Connector. The operations are validated against and must be compatible with the live schema. If the operations and schema are not compatible or if the schema is not present, this will result in an error.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/connectors/{connectorsId}",
+"httpMethod": "PATCH",
+"id": "firebasedataconnect.projects.locations.services.connectors.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Connector is not found, a new Connector will be created. In this case, `update_mask` is ignored.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Identifier. The relative resource name of the connector, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the Connector resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. If the user does not provide a mask then all fields will be overwritten.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Connector, but do not actually update it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"request": {
+"$ref": "Connector"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"schemas": {
+"methods": {
+"create": {
+"description": "Creates a new Schema in a given project and location. Only creation of `schemas/main` is supported and calling create with any other schema ID will result in an error.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/schemas",
+"httpMethod": "POST",
+"id": "firebasedataconnect.projects.locations.services.schemas.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. Value for parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"schemaId": {
+"description": "Required. The ID to use for the schema, which will become the final component of the schema's resource name. Currently, only `main` is supported and any other schema ID will result in an error.",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Schema, but do not actually update it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+parent}/schemas",
+"request": {
+"$ref": "Schema"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Schema. Because the schema and connectors must be compatible at all times, if this is called while any connectors are active, this will result in an error.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/schemas/{schemasId}",
+"httpMethod": "DELETE",
+"id": "firebasedataconnect.projects.locations.services.schemas.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Schema is not found, the request will succeed but no action will be taken on the server.",
+"location": "query",
+"type": "boolean"
+},
+"etag": {
+"description": "Optional. The etag of the Schema. If this is provided, it must match the server's etag.",
+"location": "query",
+"type": "string"
+},
+"force": {
+"description": "Optional. If set to true, any child resources (i.e. SchemaRevisions) will also be deleted.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the schema to delete, in the format: ``` projects/{project}/locations/{location}/services/{service}/schemas/{schema} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/schemas/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Schema, but do not actually delete it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single Schema.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/schemas/{schemasId}",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.schemas.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema to retrieve, in the format: ``` projects/{project}/locations/{location}/services/{service}/schemas/{schema} ```",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/schemas/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "Schema"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Schemas in a given project and location. Note that only `schemas/main` is supported, so this will always return at most one Schema.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/schemas",
+"httpMethod": "GET",
+"id": "firebasedataconnect.projects.locations.services.schemas.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListSchemas` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListSchemas` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Value of parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+parent}/schemas",
+"response": {
+"$ref": "ListSchemasResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the parameters of a single Schema, and creates a new SchemaRevision with the updated Schema.",
+"flatPath": "v1beta/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/schemas/{schemasId}",
+"httpMethod": "PATCH",
+"id": "firebasedataconnect.projects.locations.services.schemas.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If true and the Schema is not found, a new Schema will be created. In this case, `update_mask` is ignored.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Identifier. The relative resource name of the schema, in the format: ``` projects/{project}/locations/{location}/services/{service}/schemas/{schema} ``` Right now, the only supported schema is \"main\".",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/schemas/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the Schema resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. If the user does not provide a mask then all fields will be overwritten.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the Schema, but do not actually update it.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1beta/{+name}",
+"request": {
+"$ref": "Schema"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250824",
+"rootUrl": "https://firebasedataconnect.googleapis.com/",
+"schemas": {
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"CloudSqlInstance": {
+"description": "Settings for CloudSQL instance configuration.",
+"id": "CloudSqlInstance",
+"properties": {
+"instance": {
+"description": "Required. Name of the CloudSQL instance, in the format: ``` projects/{project}/locations/{location}/instances/{instance} ```",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Connector": {
+"description": "Connector consists of a set of operations, i.e. queries and mutations.",
+"id": "Connector",
+"properties": {
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Stores small amounts of arbitrary data.",
+"type": "object"
+},
+"createTime": {
+"description": "Output only. [Output only] Create time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Optional. Mutable human-readable name. 63 character limit.",
+"type": "string"
+},
+"etag": {
+"description": "Output only. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding. [AIP-154](https://google.aip.dev/154)",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The relative resource name of the connector, in the format: ``` projects/{project}/locations/{location}/services/{service}/connectors/{connector} ```",
+"type": "string"
+},
+"reconciling": {
+"description": "Output only. A field that if true, indicates that the system is working to compile and deploy the connector.",
+"readOnly": true,
+"type": "boolean"
+},
+"source": {
+"$ref": "Source",
+"description": "Required. The source files that comprise the connector."
+},
+"uid": {
+"description": "Output only. System-assigned, unique identifier.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. [Output only] Update time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Datasource": {
+"description": "A data source that backs Firebase Data Connect services.",
+"id": "Datasource",
+"properties": {
+"postgresql": {
+"$ref": "PostgreSql",
+"description": "PostgreSQL configurations."
+}
+},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"ExecuteMutationRequest": {
+"description": "The ExecuteMutation request to Firebase Data Connect.",
+"id": "ExecuteMutationRequest",
+"properties": {
+"operationName": {
+"description": "Required. The name of the GraphQL operation name. Required because all Connector operations must be named. See https://graphql.org/learn/queries/#operation-name.",
+"type": "string"
+},
+"variables": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "Optional. Values for GraphQL variables provided in this request.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"ExecuteMutationResponse": {
+"description": "The ExecuteMutation response from Firebase Data Connect.",
+"id": "ExecuteMutationResponse",
+"properties": {
+"data": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "The result of executing the requested operation.",
+"type": "object"
+},
+"errors": {
+"description": "Errors of this response.",
+"items": {
+"$ref": "GraphqlError"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ExecuteQueryRequest": {
+"description": "The ExecuteQuery request to Firebase Data Connect.",
+"id": "ExecuteQueryRequest",
+"properties": {
+"operationName": {
+"description": "Required. The name of the GraphQL operation name. Required because all Connector operations must be named. See https://graphql.org/learn/queries/#operation-name.",
+"type": "string"
+},
+"variables": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "Optional. Values for GraphQL variables provided in this request.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"ExecuteQueryResponse": {
+"description": "The ExecuteQuery response from Firebase Data Connect.",
+"id": "ExecuteQueryResponse",
+"properties": {
+"data": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "The result of executing the requested operation.",
+"type": "object"
+},
+"errors": {
+"description": "Errors of this response.",
+"items": {
+"$ref": "GraphqlError"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"File": {
+"description": "Individual files.",
+"id": "File",
+"properties": {
+"content": {
+"description": "Required. The file's textual content.",
+"type": "string"
+},
+"path": {
+"description": "Required. The file name including folder path, if applicable. The path should be relative to a local workspace (e.g. dataconnect/(schema|connector)/*.gql) and not an absolute path (e.g. /absolute/path/(schema|connector)/*.gql).",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GraphqlError": {
+"description": "GraphqlError conforms to the GraphQL error spec. https://spec.graphql.org/draft/#sec-Errors Firebase Data Connect API surfaces `GraphqlError` in various APIs: - Upon compile error, `UpdateSchema` and `UpdateConnector` return Code.Invalid_Argument with a list of `GraphqlError` in error details. - Upon query compile error, `ExecuteGraphql` and `ExecuteGraphqlRead` return Code.OK with a list of `GraphqlError` in response body. - Upon query execution error, `ExecuteGraphql`, `ExecuteGraphqlRead`, `ExecuteMutation` and `ExecuteQuery` all return Code.OK with a list of `GraphqlError` in response body.",
+"id": "GraphqlError",
+"properties": {
+"extensions": {
+"$ref": "GraphqlErrorExtensions",
+"description": "Additional error information."
+},
+"locations": {
+"description": "The source locations where the error occurred. Locations should help developers and toolings identify the source of error quickly. Included in admin endpoints (`ExecuteGraphql`, `ExecuteGraphqlRead`, `UpdateSchema` and `UpdateConnector`) to reference the provided GraphQL GQL document. Omitted in `ExecuteMutation` and `ExecuteQuery` since the caller shouldn't have access access the underlying GQL source.",
+"items": {
+"$ref": "SourceLocation"
+},
+"type": "array"
+},
+"message": {
+"description": "The detailed error message. The message should help developer understand the underlying problem without leaking internal data.",
+"type": "string"
+},
+"path": {
+"description": "The result field which could not be populated due to error. Clients can use path to identify whether a null result is intentional or caused by a runtime error. It should be a list of string or index from the root of GraphQL query document.",
+"items": {
+"type": "any"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GraphqlErrorExtensions": {
+"description": "GraphqlErrorExtensions contains additional information of `GraphqlError`.",
+"id": "GraphqlErrorExtensions",
+"properties": {
+"code": {
+"description": "Maps to canonical gRPC codes. If not specified, it represents `Code.INTERNAL`.",
+"enum": [
+"OK",
+"CANCELLED",
+"UNKNOWN",
+"INVALID_ARGUMENT",
+"DEADLINE_EXCEEDED",
+"NOT_FOUND",
+"ALREADY_EXISTS",
+"PERMISSION_DENIED",
+"UNAUTHENTICATED",
+"RESOURCE_EXHAUSTED",
+"FAILED_PRECONDITION",
+"ABORTED",
+"OUT_OF_RANGE",
+"UNIMPLEMENTED",
+"INTERNAL",
+"UNAVAILABLE",
+"DATA_LOSS"
+],
+"enumDescriptions": [
+"Not an error; returned on success. HTTP Mapping: 200 OK",
+"The operation was cancelled, typically by the caller. HTTP Mapping: 499 Client Closed Request",
+"Unknown error. For example, this error may be returned when a `Status` value received from another address space belongs to an error space that is not known in this address space. Also errors raised by APIs that do not return enough error information may be converted to this error. HTTP Mapping: 500 Internal Server Error",
+"The client specified an invalid argument. Note that this differs from `FAILED_PRECONDITION`. `INVALID_ARGUMENT` indicates arguments that are problematic regardless of the state of the system (e.g., a malformed file name). HTTP Mapping: 400 Bad Request",
+"The deadline expired before the operation could complete. For operations that change the state of the system, this error may be returned even if the operation has completed successfully. For example, a successful response from a server could have been delayed long enough for the deadline to expire. HTTP Mapping: 504 Gateway Timeout",
+"Some requested entity (e.g., file or directory) was not found. Note to server developers: if a request is denied for an entire class of users, such as gradual feature rollout or undocumented allowlist, `NOT_FOUND` may be used. If a request is denied for some users within a class of users, such as user-based access control, `PERMISSION_DENIED` must be used. HTTP Mapping: 404 Not Found",
+"The entity that a client attempted to create (e.g., file or directory) already exists. HTTP Mapping: 409 Conflict",
+"The caller does not have permission to execute the specified operation. `PERMISSION_DENIED` must not be used for rejections caused by exhausting some resource (use `RESOURCE_EXHAUSTED` instead for those errors). `PERMISSION_DENIED` must not be used if the caller can not be identified (use `UNAUTHENTICATED` instead for those errors). This error code does not imply the request is valid or the requested entity exists or satisfies other pre-conditions. HTTP Mapping: 403 Forbidden",
+"The request does not have valid authentication credentials for the operation. HTTP Mapping: 401 Unauthorized",
+"Some resource has been exhausted, perhaps a per-user quota, or perhaps the entire file system is out of space. HTTP Mapping: 429 Too Many Requests",
+"The operation was rejected because the system is not in a state required for the operation's execution. For example, the directory to be deleted is non-empty, an rmdir operation is applied to a non-directory, etc. Service implementors can use the following guidelines to decide between `FAILED_PRECONDITION`, `ABORTED`, and `UNAVAILABLE`: (a) Use `UNAVAILABLE` if the client can retry just the failing call. (b) Use `ABORTED` if the client should retry at a higher level. For example, when a client-specified test-and-set fails, indicating the client should restart a read-modify-write sequence. (c) Use `FAILED_PRECONDITION` if the client should not retry until the system state has been explicitly fixed. For example, if an \"rmdir\" fails because the directory is non-empty, `FAILED_PRECONDITION` should be returned since the client should not retry unless the files are deleted from the directory. HTTP Mapping: 400 Bad Request",
+"The operation was aborted, typically due to a concurrency issue such as a sequencer check failure or transaction abort. See the guidelines above for deciding between `FAILED_PRECONDITION`, `ABORTED`, and `UNAVAILABLE`. HTTP Mapping: 409 Conflict",
+"The operation was attempted past the valid range. E.g., seeking or reading past end-of-file. Unlike `INVALID_ARGUMENT`, this error indicates a problem that may be fixed if the system state changes. For example, a 32-bit file system will generate `INVALID_ARGUMENT` if asked to read at an offset that is not in the range [0,2^32-1], but it will generate `OUT_OF_RANGE` if asked to read from an offset past the current file size. There is a fair bit of overlap between `FAILED_PRECONDITION` and `OUT_OF_RANGE`. We recommend using `OUT_OF_RANGE` (the more specific error) when it applies so that callers who are iterating through a space can easily look for an `OUT_OF_RANGE` error to detect when they are done. HTTP Mapping: 400 Bad Request",
+"The operation is not implemented or is not supported/enabled in this service. HTTP Mapping: 501 Not Implemented",
+"Internal errors. This means that some invariants expected by the underlying system have been broken. This error code is reserved for serious errors. HTTP Mapping: 500 Internal Server Error",
+"The service is currently unavailable. This is most likely a transient condition, which can be corrected by retrying with a backoff. Note that it is not always safe to retry non-idempotent operations. See the guidelines above for deciding between `FAILED_PRECONDITION`, `ABORTED`, and `UNAVAILABLE`. HTTP Mapping: 503 Service Unavailable",
+"Unrecoverable data loss or corruption. HTTP Mapping: 500 Internal Server Error"
+],
+"type": "string"
+},
+"debugDetails": {
+"description": "More detailed error message to assist debugging. It contains application business logic that are inappropriate to leak publicly. In the emulator, Data Connect API always includes it to assist local development and debugging. In the backend, ConnectorService always hides it. GraphqlService without impersonation always include it. GraphqlService with impersonation includes it only if explicitly opted-in with `include_debug_details` in `GraphqlRequestExtensions`.",
+"type": "string"
+},
+"file": {
+"description": "The source file name where the error occurred. Included only for `UpdateSchema` and `UpdateConnector`, it corresponds to `File.path` of the provided `Source`.",
+"type": "string"
+},
+"resource": {
+"description": "Distinguish which schema or connector the error originates from. It should be set on errors from control plane APIs (e.g. `UpdateSchema`, `UpdateConnector`).",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GraphqlRequest": {
+"description": "The GraphQL request to Firebase Data Connect. It strives to match the GraphQL over HTTP spec. https://github.com/graphql/graphql-over-http/blob/main/spec/GraphQLOverHTTP.md#post",
+"id": "GraphqlRequest",
+"properties": {
+"extensions": {
+"$ref": "GraphqlRequestExtensions",
+"description": "Optional. Additional GraphQL request information."
+},
+"operationName": {
+"description": "Optional. The name of the GraphQL operation name. Required only if `query` contains multiple operations. See https://graphql.org/learn/queries/#operation-name.",
+"type": "string"
+},
+"query": {
+"description": "Required. The GraphQL query document source.",
+"type": "string"
+},
+"variables": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "Optional. Values for GraphQL variables provided in this request.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"GraphqlRequestExtensions": {
+"description": "GraphqlRequestExtensions contains additional information of `GraphqlRequest`.",
+"id": "GraphqlRequestExtensions",
+"properties": {
+"impersonate": {
+"$ref": "Impersonation",
+"description": "Optional. If set, impersonate a request with given Firebase Auth context and evaluate the auth policies on the operation. If omitted, bypass any defined auth policies."
+}
+},
+"type": "object"
+},
+"GraphqlResponse": {
+"description": "The GraphQL response from Firebase Data Connect. It strives to match the GraphQL over HTTP spec. Note: Firebase Data Connect always responds with `Content-Type: application/json`. https://github.com/graphql/graphql-over-http/blob/main/spec/GraphQLOverHTTP.md#body",
+"id": "GraphqlResponse",
+"properties": {
+"data": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "The result of the execution of the requested operation. If an error was raised before execution begins, the data entry should not be present in the result. (a request error: https://spec.graphql.org/draft/#sec-Errors.Request-Errors) If an error was raised during the execution that prevented a valid response, the data entry in the response should be null. (a field error: https://spec.graphql.org/draft/#sec-Errors.Error-Result-Format)",
+"type": "object"
+},
+"errors": {
+"description": "Errors of this response. If the data entry in the response is not present, the errors entry must be present. It conforms to https://spec.graphql.org/draft/#sec-Errors.",
+"items": {
+"$ref": "GraphqlError"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Impersonation": {
+"description": "Impersonation configures the Firebase Auth context to impersonate.",
+"id": "Impersonation",
+"properties": {
+"authClaims": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "Evaluate the auth policy with a customized JWT auth token. Should follow the Firebase Auth token format. https://firebase.google.com/docs/rules/rules-and-auth For example: a verified user may have auth_claims of {\"sub\": , \"email_verified\": true}",
+"type": "object"
+},
+"includeDebugDetails": {
+"description": "Optional. If set, include debug details in GraphQL error extensions.",
+"type": "boolean"
+},
+"unauthenticated": {
+"description": "Evaluate the auth policy as an unauthenticated request. Can only be set to true.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"ListConnectorsResponse": {
+"description": "Message for response to listing Connectors. By default, `connectors.source` will not be included in the response. To specify the fields included in the response, the response field mask can be provided by using the query parameter `$fields` or the header `X-Goog-FieldMask`.",
+"id": "ListConnectorsResponse",
+"properties": {
+"connectors": {
+"description": "The list of Connectors.",
+"items": {
+"$ref": "Connector"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token, which can be sent as `page_token` to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListSchemasResponse": {
+"description": "Message for response to listing Schemas. By default, `schemas.source` will not be included in the response. To specify the fields included in the response, the response field mask can be provided by using the query parameter `$fields` or the header `X-Goog-FieldMask`.",
+"id": "ListSchemasResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token, which can be sent as `page_token` to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"schemas": {
+"description": "The list of Schemas.",
+"items": {
+"$ref": "Schema"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListServicesResponse": {
+"description": "Message for response to listing Services.",
+"id": "ListServicesResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token, which can be sent as `page_token` to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"services": {
+"description": "The list of Services.",
+"items": {
+"$ref": "Service"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OperationMetadata": {
+"description": "Represents the metadata of the long-running operation. Note: This message is auto-generated by CCFE. CCFE's storage, called Resource Metadata Store (RMS), holds metadata about long-running operations (i.e. OperationMetadata) and resources (i.e. ResourceMetadata). OperationMetadata documents the status of the operation. See [CCFE documentation for sidechannel data](https://g3doc.corp.google.com/cloud/control2/g3doc/dev/codelab_extras/sidechannel.md?cl=head#sidechannel-data) and yaqs/4289526912465764352.",
+"id": "OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have been cancelled successfully have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PostgreSql": {
+"description": "Settings for PostgreSQL data source.",
+"id": "PostgreSql",
+"properties": {
+"cloudSql": {
+"$ref": "CloudSqlInstance",
+"description": "Cloud SQL configurations."
+},
+"database": {
+"description": "Required. Name of the PostgreSQL database.",
+"type": "string"
+},
+"ephemeral": {
+"description": "Output only. Ephemeral is true if this data connect service is served from temporary in-memory emulation of Postgres. While Cloud SQL is being provisioned, the data connect service provides the ephemeral service to help developers get started. Once the Cloud SQL is provisioned, Data Connect service will transfer its data on a best-effort basis to the Cloud SQL instance. WARNING: Ephemeral data sources will expire after 24 hour. The data will be lost if they aren't transferred to the Cloud SQL instance. WARNING: When `ephemeral=true`, mutations to the database are not guaranteed to be durably persisted, even if an OK status code is returned. All or parts of the data may be lost or reverted to earlier versions.",
+"readOnly": true,
+"type": "boolean"
+},
+"schemaMigration": {
+"description": "Optional. Configure how to perform Postgresql schema migration.",
+"enum": [
+"SQL_SCHEMA_MIGRATION_UNSPECIFIED",
+"MIGRATE_COMPATIBLE"
+],
+"enumDescriptions": [
+"Unspecified SQL schema migration.",
+"Connect to the SQL database and identify any missing SQL resources used in the given Firebase Data Connect Schema. Automatically create necessary SQL resources (SQL table, column, etc) before deploying the schema. During migration steps, the SQL Schema must comply with the previous before_deploy setting in case the migration is interrupted. Therefore, the previous before_deploy setting must not be `schema_validation=STRICT`."
+],
+"type": "string"
+},
+"schemaValidation": {
+"description": "Optional. Configure how much Postgresql schema validation to perform.",
+"enum": [
+"SQL_SCHEMA_VALIDATION_UNSPECIFIED",
+"NONE",
+"STRICT",
+"COMPATIBLE"
+],
+"enumDescriptions": [
+"Unspecified SQL schema validation. Default to STRICT.",
+"Skip no SQL schema validation. Use it with extreme caution. CreateSchema or UpdateSchema will succeed even if SQL database is unavailable or SQL schema is incompatible. Generated SQL may fail at execution time.",
+"Connect to the SQL database and validate that the SQL DDL matches the schema exactly. Surface any discrepancies as `FAILED_PRECONDITION` with an `IncompatibleSqlSchemaError` error detail.",
+"Connect to the SQL database and validate that the SQL DDL has all the SQL resources used in the given Firebase Data Connect Schema. Surface any missing resources as `FAILED_PRECONDITION` with an `IncompatibleSqlSchemaError` error detail. Succeed even if there are unknown tables and columns."
+],
+"type": "string"
+},
+"unlinked": {
+"deprecated": true,
+"description": "No Postgres data source is linked. If set, don't allow `database` and `schema_validation` to be configured.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"Schema": {
+"description": "The application schema of a Firebase Data Connect service.",
+"id": "Schema",
+"properties": {
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Stores small amounts of arbitrary data.",
+"type": "object"
+},
+"createTime": {
+"description": "Output only. [Output only] Create time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"datasources": {
+"description": "Required. The data sources linked in the schema.",
+"items": {
+"$ref": "Datasource"
+},
+"type": "array"
+},
+"displayName": {
+"description": "Optional. Mutable human-readable name. 63 character limit.",
+"type": "string"
+},
+"etag": {
+"description": "Output only. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding. [AIP-154](https://google.aip.dev/154)",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The relative resource name of the schema, in the format: ``` projects/{project}/locations/{location}/services/{service}/schemas/{schema} ``` Right now, the only supported schema is \"main\".",
+"type": "string"
+},
+"reconciling": {
+"description": "Output only. A field that if true, indicates that the system is working to compile and deploy the schema.",
+"readOnly": true,
+"type": "boolean"
+},
+"source": {
+"$ref": "Source",
+"description": "Required. The source files that comprise the application schema."
+},
+"uid": {
+"description": "Output only. System-assigned, unique identifier.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. [Output only] Update time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Service": {
+"description": "A Firebase Data Connect service.",
+"id": "Service",
+"properties": {
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Stores small amounts of arbitrary data.",
+"type": "object"
+},
+"createTime": {
+"description": "Output only. [Output only] Create time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Optional. Mutable human-readable name. 63 character limit.",
+"type": "string"
+},
+"etag": {
+"description": "Output only. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding. [AIP-154](https://google.aip.dev/154)",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The relative resource name of the Firebase Data Connect service, in the format: ``` projects/{project}/locations/{location}/services/{service} ``` Note that the service ID is specific to Firebase Data Connect and does not correspond to any of the instance IDs of the underlying data source connections.",
+"type": "string"
+},
+"reconciling": {
+"description": "Output only. A field that if true, indicates that the system is working update the service.",
+"readOnly": true,
+"type": "boolean"
+},
+"uid": {
+"description": "Output only. System-assigned, unique identifier.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. [Output only] Update time stamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Source": {
+"description": "Used to represent a set of source files.",
+"id": "Source",
+"properties": {
+"files": {
+"description": "Required. The files that comprise the source set.",
+"items": {
+"$ref": "File"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"SourceLocation": {
+"description": "SourceLocation references a location in a GraphQL source.",
+"id": "SourceLocation",
+"properties": {
+"column": {
+"description": "Column number starting at 1.",
+"format": "int32",
+"type": "integer"
+},
+"line": {
+"description": "Line number starting at 1.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Firebase Data Connect API",
+"version": "v1beta",
+"version_module": true
+}

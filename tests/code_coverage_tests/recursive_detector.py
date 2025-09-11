@@ -97,9 +97,10 @@ if __name__ == "__main__":
     # this is used in the CI/CD pipeline to prevent recursive functions from being merged
 
     directory_path = "./litellm"
-    recursive_functions, ignored_recursive_functions = (
-        find_recursive_functions_in_directory(directory_path)
-    )
+    (
+        recursive_functions,
+        ignored_recursive_functions,
+    ) = find_recursive_functions_in_directory(directory_path)
     print("UNIGNORED RECURSIVE FUNCTIONS: ", recursive_functions)
     print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
 

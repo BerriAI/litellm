@@ -23,7 +23,7 @@ async def test_patch_user_updates_fields():
         metadata={},
     )
 
-    # Create a proper copy to track updates  
+    # Create a proper copy to track updates
     updated_user = LiteLLM_UserTable(
         user_id="user-1",
         user_email="test@example.com",
@@ -61,9 +61,10 @@ async def test_patch_user_updates_fields():
         ]
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), \
-         patch("litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user", 
-               AsyncMock(return_value=mock_scim_user)):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=mock_scim_user),
+    ):
         result = await patch_user(user_id="user-1", patch_ops=patch_ops)
 
     mock_db.litellm_usertable.update.assert_called_once()
@@ -123,17 +124,22 @@ async def test_patch_user_manages_group_memberships():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(op="add", path="groups", value=[{"value": "new-team"}]),
-            SCIMPatchOperation(op="remove", path="groups", value=[{"value": "old-team"}]),
+            SCIMPatchOperation(
+                op="remove", path="groups", value=[{"value": "old-team"}]
+            ),
         ]
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), \
-         patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
-               AsyncMock(side_effect=mock_add)) as mock_add_fn, \
-         patch("litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
-               AsyncMock(side_effect=mock_delete)) as mock_del_fn, \
-         patch("litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
-               AsyncMock(return_value=mock_scim_user)):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_client), patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(side_effect=mock_add),
+    ) as mock_add_fn, patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(side_effect=mock_delete),
+    ) as mock_del_fn, patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=mock_scim_user),
+    ):
         result = await patch_user(user_id="user-2", patch_ops=patch_ops)
 
     assert mock_add_fn.called
@@ -142,4 +148,3 @@ async def test_patch_user_manages_group_memberships():
     call_args = mock_db.litellm_usertable.update.call_args
     assert "new-team" in call_args[1]["data"]["teams"]
     assert result == mock_scim_user
-

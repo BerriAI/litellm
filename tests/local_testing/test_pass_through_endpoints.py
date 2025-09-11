@@ -26,7 +26,6 @@ async def mock_request(*args, **kwargs):
 
 
 def remove_rerank_route(app):
-
     for route in app.routes:
         if route.path == "/v1/rerank" and "POST" in route.methods:
             app.routes.remove(route)
@@ -239,7 +238,6 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     )
 
     try:
-
         mock_api_key = "sk-my-test-key"
         cache_value = UserAPIKeyAuth(
             token=hash_token(mock_api_key), rpm_limit=rpm_limit
@@ -338,7 +336,6 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
     captured_requests = []
 
     async def mock_bing_request(*args, **kwargs):
-
         captured_requests.append((args, kwargs))
         mock_response = httpx.Response(
             200,

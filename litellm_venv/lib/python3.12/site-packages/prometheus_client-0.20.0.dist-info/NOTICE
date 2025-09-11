@@ -1,0 +1,5 @@
+Prometheus instrumentation library for Python applications
+Copyright 2015 The Prometheus Authors
+
+This product bundles decorator 4.0.10 which is available under a "2-clause BSD"
+license. For details, see prometheus_client/decorator.py.

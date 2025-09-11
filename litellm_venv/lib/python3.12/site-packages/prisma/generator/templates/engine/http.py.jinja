@@ -1,0 +1,125 @@
+{% include '_header.py.jinja' %}
+{% from '_utils.py.jinja' import sleep, is_async, maybe_async_def, maybe_await with context %}
+# -- template engine/http.py.jinja --
+
+import json
+import logging
+from datetime import timedelta
+
+from . import utils, errors
+from .abstract import AbstractEngine
+from ..http import HTTP
+from .._types import Method
+
+
+__all__ = (
+    'HTTPEngine',
+)
+
+log: logging.Logger = logging.getLogger(__name__)
+
+
+class HTTPEngine(AbstractEngine):
+    """Engine wrapper that communicates to the underlying engine over HTTP"""
+    url: Optional[str]
+    session: HTTP
+    headers: Dict[str, str]
+
+    def __init__(
+        self,
+        url: Optional[str],
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__()
+        self.url = url
+        self.session = HTTP(**kwargs)
+        self.headers = headers if headers is not None else {}
+
+    {% if is_async %}
+    def close(self, *, timeout: Optional[timedelta] = None) -> None:
+        pass
+
+    async def aclose(self, *, timeout: Optional[timedelta] = None) -> None:
+        await self._close_session()
+    {% else %}
+    def close(self, *, timeout: Optional[timedelta] = None) -> None:
+        self._close_session()
+
+    async def aclose(self, *, timeout: Optional[timedelta] = None) -> None:
+        pass
+    {% endif %}
+
+    {{ maybe_async_def }}_close_session(self) -> None:
+        if self.session and not self.session.closed:
+            {{ maybe_await }}self.session.close()
+
+    # TODO: improve return types
+    {{ maybe_async_def }}request(
+        self,
+        method: Method,
+        path: str,
+        *,
+        content: Any = None,
+        headers: Optional[Dict[str, str]] = None,
+        parse_response: bool = True,
+    ) -> Any:
+        if self.url is None:
+            raise errors.NotConnectedError('Not connected to the query engine')
+
+        kwargs = {
+            'headers': {
+                **self.headers,
+            }
+        }
+
+        if parse_response:
+            kwargs['headers']['Accept'] = 'application/json'
+
+        if headers is not None:
+            kwargs['headers'].update(headers)
+
+        if content is not None:
+            kwargs['content'] = content
+
+        url = self.url + path
+        log.debug('Sending %s request to %s', method, url)
+        log.debug('Request headers: %s', kwargs['headers'])
+        log.debug('Request content: %s', content)
+
+        resp = {{ maybe_await }}self.session.request(method, url, **kwargs)
+        log.debug('%s %s returned status %s', method, url, resp.status)
+
+        if 300 > resp.status >= 200:
+            # In certain cases we just want to return the response content as-is.
+            #
+            # This is useful for metrics which can be returned in a Prometheus format
+            # which is incompatible with JSON.
+            if not parse_response:
+                text = {{ maybe_await }}resp.text()
+                log.debug('%s %s returned text: %s', method, url, text)
+                return text
+
+            response = {{ maybe_await }}resp.json()
+            log.debug('%s %s returned %s', method, url, response)
+
+            if isinstance(response, str):
+                # workaround for https://github.com/prisma/prisma-engines/pull/4246
+                response = json.loads(response)
+
+            errors_data = response.get('errors')
+            if errors_data:
+                return utils.handle_response_errors(resp, errors_data)
+
+            return response
+
+        if resp.status == 422:
+            raise errors.UnprocessableEntityError(resp)
+
+        # TODO: handle errors better
+        raise errors.EngineRequestError(resp, {{ maybe_await }}resp.text())
+
+
+# black does not respect the fmt: off comment without this
+# fmt: on
+

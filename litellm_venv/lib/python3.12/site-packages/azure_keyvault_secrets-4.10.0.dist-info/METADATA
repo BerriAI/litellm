@@ -1,0 +1,405 @@
+Metadata-Version: 2.1
+Name: azure-keyvault-secrets
+Version: 4.10.0
+Summary: Microsoft Corporation Key Vault Secrets Client Library for Python
+Home-page: https://github.com/Azure/azure-sdk-for-python/tree/main/sdk
+Author: Microsoft Corporation
+Author-email: azpysdkhelp@microsoft.com
+License: MIT License
+Keywords: azure,azure sdk
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: License :: OSI Approved :: MIT License
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: isodate>=0.6.1
+Requires-Dist: azure-core>=1.31.0
+Requires-Dist: typing-extensions>=4.6.0
+
+# Azure Key Vault Secrets client library for Python
+Azure Key Vault helps solve the following problems:
+
+- Secrets management (this library) -
+securely store and control access to tokens, passwords, certificates, API keys,
+and other secrets
+- Cryptographic key management
+([azure-keyvault-keys](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-keys)) -
+create, store, and control access to the keys used to encrypt your data
+- Certificate management
+([azure-keyvault-certificates](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-certificates)) -
+create, manage, and deploy public and private SSL/TLS certificates
+- Vault administration ([azure-keyvault-administration](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-administration)) - role-based access control (RBAC), and vault-level backup and restore options
+
+[Source code][library_src]
+| [Package (PyPI)][pypi_package_secrets]
+| [Package (Conda)](https://anaconda.org/microsoft/azure-keyvault/)
+| [API reference documentation][reference_docs]
+| [Product documentation][azure_keyvault]
+| [Samples][secret_samples]
+
+## _Disclaimer_
+
+_Azure SDK Python packages support for Python 2.7 has ended 01 January 2022. For more information and questions, please refer to https://github.com/Azure/azure-sdk-for-python/issues/20691_.
+_Python 3.9 or later is required to use this package. For more details, please refer to [Azure SDK for Python version support policy](https://github.com/Azure/azure-sdk-for-python/wiki/Azure-SDKs-Python-version-support-policy)._
+
+## Getting started
+### Install packages
+Install [azure-keyvault-secrets][pypi_package_secrets] and
+[azure-identity][azure_identity_pypi] with [pip][pip]:
+```Bash
+pip install azure-keyvault-secrets azure-identity
+```
+[azure-identity][azure_identity] is used for Azure Active Directory
+authentication as demonstrated below.
+
+### Prerequisites
+* An [Azure subscription][azure_sub]
+* Python 3.9 or later
+* An existing [Azure Key Vault][azure_keyvault]. If you need to create one, you can do so using the Azure CLI by following the steps in [this document][azure_keyvault_cli].
+
+### Authenticate the client
+In order to interact with the Azure Key Vault service, you will need an instance of a [SecretClient][secret_client_docs], as well as a **vault url** and a credential object. This document demonstrates using a [DefaultAzureCredential][default_cred_ref], which is appropriate for most scenarios, including local development and production environments. We recommend using a [managed identity][managed_identity] for authentication in production environments.
+
+See [azure-identity][azure_identity] documentation for more information about other methods of authentication and their corresponding credential types.
+
+#### Create a client
+After configuring your environment for the [DefaultAzureCredential][default_cred_ref] to use a suitable method of authentication, you can do the following to create a secret client (replacing the value of `VAULT_URL` with your vault's URL):
+
+<!-- SNIPPET:hello_world.create_secret_client -->
+
+```python
+VAULT_URL = os.environ["VAULT_URL"]
+credential = DefaultAzureCredential()
+client = SecretClient(vault_url=VAULT_URL, credential=credential)
+```
+
+<!-- END SNIPPET -->
+
+> **NOTE:** For an asynchronous client, import `azure.keyvault.secrets.aio`'s `SecretClient` instead.
+
+## Key concepts
+### Secret
+A secret consists of a secret value and its associated metadata and management
+information. This library handles secret values as strings, but Azure Key Vault
+doesn't store them as such. For more information about secrets and how Key
+Vault stores and manages them, see the
+[Key Vault documentation](https://learn.microsoft.com/azure/key-vault/general/about-keys-secrets-certificates).
+
+[SecretClient][secret_client_docs] can set secret values in the vault, update
+secret metadata, and delete secrets, as shown in the
+[examples](#examples) below.
+
+## Examples
+This section contains code snippets covering common tasks:
+* [Set a secret](#set-a-secret)
+* [Retrieve a secret](#retrieve-a-secret)
+* [Update secret metadata](#update-secret-metadata)
+* [Delete a secret](#delete-a-secret)
+* [List secrets](#list-secrets)
+* [Async API](#async-api)
+* [Asynchronously create a secret](#asynchronously-create-a-secret)
+* [Asynchronously list secrets](#asynchronously-list-secrets)
+
+### Set a secret
+[set_secret](https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient.set_secret)
+creates new secrets and changes the values of existing secrets. If no secret with the
+given name exists, `set_secret` creates a new secret with that name and the
+given value. If the given name is in use, `set_secret` creates a new version
+of that secret, with the given value.
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+credential = DefaultAzureCredential()
+
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+secret = secret_client.set_secret("secret-name", "secret-value")
+
+print(secret.name)
+print(secret.value)
+print(secret.properties.version)
+```
+
+### Retrieve a secret
+[get_secret](https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient.get_secret)
+retrieves a secret previously stored in the Key Vault.
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+credential = DefaultAzureCredential()
+
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+secret = secret_client.get_secret("secret-name")
+
+print(secret.name)
+print(secret.value)
+```
+
+### Update secret metadata
+[update_secret_properties](https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient.update_secret_properties)
+updates a secret's metadata. It cannot change the secret's value; use [set_secret](#set-a-secret) to set a secret's
+value.
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+credential = DefaultAzureCredential()
+
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+
+# Clients may specify the content type of a secret to assist in interpreting the secret data when it's retrieved
+content_type = "text/plain"
+
+# We will also disable the secret for further use
+
+updated_secret_properties = secret_client.update_secret_properties("secret-name", content_type=content_type, enabled=False)
+
+print(updated_secret_properties.updated_on)
+print(updated_secret_properties.content_type)
+print(updated_secret_properties.enabled)
+```
+
+### Delete a secret
+[begin_delete_secret](https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient.begin_delete_secret)
+requests Key Vault delete a secret, returning a poller which allows you to wait for the deletion to finish. Waiting is
+helpful when the vault has [soft-delete][soft_delete] enabled, and you want to purge (permanently delete) the secret as
+soon as possible. When [soft-delete][soft_delete] is disabled, `begin_delete_secret` itself is permanent.
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+credential = DefaultAzureCredential()
+
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+deleted_secret = secret_client.begin_delete_secret("secret-name").result()
+
+print(deleted_secret.name)
+print(deleted_secret.deleted_date)
+```
+
+### List secrets
+[list_properties_of_secrets](https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient.list_properties_of_secrets)
+lists the properties of all of the secrets in the client's vault. This list doesn't include the secret's values.
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+credential = DefaultAzureCredential()
+
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+secret_properties = secret_client.list_properties_of_secrets()
+
+for secret_property in secret_properties:
+    # the list doesn't include values or versions of the secrets
+    print(secret_property.name)
+```
+
+### Async API
+This library includes a complete set of async APIs. To use them, you must
+first install an async transport, such as [aiohttp](https://pypi.org/project/aiohttp/).
+See
+[azure-core documentation](https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/core/azure-core/CLIENT_LIBRARY_DEVELOPER.md#transport)
+for more information.
+
+Async clients and credentials should be closed when they're no longer needed. These
+objects are async context managers and define async `close` methods. For
+example:
+
+```python
+from azure.identity.aio import DefaultAzureCredential
+from azure.keyvault.secrets.aio import SecretClient
+
+credential = DefaultAzureCredential()
+
+# call close when the client and credential are no longer needed
+client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+...
+await client.close()
+await credential.close()
+
+# alternatively, use them as async context managers (contextlib.AsyncExitStack can help)
+client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+async with client:
+  async with credential:
+    ...
+```
+
+### Asynchronously create a secret
+[set_secret](https://aka.ms/azsdk/python/keyvault-secrets/aio/docs#azure.keyvault.secrets.aio.SecretClient.set_secret)
+creates a secret in the Key Vault with the specified optional arguments.
+```python
+from azure.identity.aio import DefaultAzureCredential
+from azure.keyvault.secrets.aio import SecretClient
+
+credential = DefaultAzureCredential()
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+
+secret = await secret_client.set_secret("secret-name", "secret-value")
+
+print(secret.name)
+print(secret.value)
+print(secret.properties.version)
+```
+
+### Asynchronously list secrets
+[list_properties_of_secrets](https://aka.ms/azsdk/python/keyvault-secrets/aio/docs#azure.keyvault.secrets.aio.SecretClient.list_properties_of_secrets)
+lists the properties of all of the secrets in the client's vault.
+
+```python
+from azure.identity.aio import DefaultAzureCredential
+from azure.keyvault.secrets.aio import SecretClient
+
+credential = DefaultAzureCredential()
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+secret_properties = secret_client.list_properties_of_secrets()
+
+async for secret_property in secret_properties:
+    # the list doesn't include values or versions of the secrets
+    print(secret_property.name)
+```
+
+## Troubleshooting
+
+See the `azure-keyvault-secrets`
+[troubleshooting guide](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-secrets/TROUBLESHOOTING.md)
+for details on how to diagnose various failure scenarios.
+
+### General
+Key Vault clients raise exceptions defined in [azure-core][azure_core_exceptions].
+For example, if you try to get a key that doesn't exist in the vault,
+[SecretClient][secret_client_docs] raises
+[ResourceNotFoundError](https://aka.ms/azsdk-python-core-exceptions-resource-not-found-error):
+
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+from azure.core.exceptions import ResourceNotFoundError
+
+credential = DefaultAzureCredential()
+secret_client = SecretClient(vault_url="https://my-key-vault.vault.azure.net/", credential=credential)
+
+try:
+    secret_client.get_secret("which-does-not-exist")
+except ResourceNotFoundError as e:
+    print(e.message)
+```
+
+### Logging
+This library uses the standard
+[logging](https://docs.python.org/3.5/library/logging.html) library for logging.
+Basic information about HTTP sessions (URLs, headers, etc.) is logged at INFO
+level.
+
+Detailed DEBUG level logging, including request/response bodies and unredacted
+headers, can be enabled on a client with the `logging_enable` argument:
+```python
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+import sys
+import logging
+
+# Create a logger for the 'azure' SDK
+logger = logging.getLogger('azure')
+logger.setLevel(logging.DEBUG)
+
+# Configure a console output
+handler = logging.StreamHandler(stream=sys.stdout)
+logger.addHandler(handler)
+
+credential = DefaultAzureCredential()
+
+# This client will log detailed information about its HTTP sessions, at DEBUG level
+secret_client = SecretClient(
+    vault_url="https://my-key-vault.vault.azure.net/",
+    credential=credential,
+    logging_enable=True
+)
+```
+
+Similarly, `logging_enable` can enable detailed logging for a single operation,
+even when it isn't enabled for the client:
+```python
+secret_client.get_secret("my-secret", logging_enable=True)
+```
+
+## Next steps
+Several samples are available in the Azure SDK for Python GitHub repository.
+These provide example code for additional Key Vault scenarios:
+
+- [Create/get/update/delete secrets][hello_world_sample] ([async version][hello_world_async_sample])
+- [Basic list operations for secrets][list_operations_sample] ([async version][list_operations_async_sample])
+- [Back up and restore secrets][backup_operations_sample] ([async version][backup_operations_async_sample])
+- [Recover and purge secrets][recover_purge_sample] ([async version][recover_purge_async_sample])
+
+###  Additional Documentation
+For more extensive documentation on Azure Key Vault, see the
+[API reference documentation][reference_docs].
+
+## Contributing
+This project welcomes contributions and suggestions. Most contributions require
+you to agree to a Contributor License Agreement (CLA) declaring that you have
+the right to, and actually do, grant us the rights to use your contribution.
+For details, visit https://cla.microsoft.com.
+
+When you submit a pull request, a CLA-bot will automatically determine whether
+you need to provide a CLA and decorate the PR appropriately (e.g., label,
+comment). Simply follow the instructions provided by the bot. You will only
+need to do this once across all repos using our CLA.
+
+This project has adopted the [Microsoft Open Source Code of Conduct][code_of_conduct].
+For more information, see the
+[Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
+contact opencode@microsoft.com with any additional questions or comments.
+
+
+<!-- LINKS -->
+[azure_cloud_shell]: https://shell.azure.com/bash
+[azure_core_exceptions]: https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/core/azure-core#azure-core-library-exceptions
+[azure_identity]: https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/identity/azure-identity
+[azure_identity_pypi]: https://pypi.org/project/azure-identity/
+[azure_keyvault]: https://learn.microsoft.com/azure/key-vault/general/overview
+[azure_keyvault_cli]: https://learn.microsoft.com/azure/key-vault/general/quick-create-cli
+[azure_sub]: https://azure.microsoft.com/free/
+
+[backup_operations_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/backup_restore_operations.py
+[backup_operations_async_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/backup_restore_operations_async.py
+
+[code_of_conduct]: https://opensource.microsoft.com/codeofconduct/
+
+[default_cred_ref]: https://aka.ms/azsdk/python/identity/docs#azure.identity.DefaultAzureCredential
+
+[hello_world_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/hello_world.py
+[hello_world_async_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/hello_world_async.py
+
+[library_src]: https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-secrets/azure/keyvault/secrets
+[list_operations_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/list_operations.py
+[list_operations_async_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/list_operations_async.py
+
+[managed_identity]: https://learn.microsoft.com/azure/active-directory/managed-identities-azure-resources/overview
+
+[pip]: https://pypi.org/project/pip/
+[pypi_package_secrets]: https://pypi.org/project/azure-keyvault-secrets/
+
+[recover_purge_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/recover_purge_operations.py
+[recover_purge_async_sample]: https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/keyvault/azure-keyvault-secrets/samples/recover_purge_operations_async.py
+[reference_docs]: https://aka.ms/azsdk/python/keyvault-secrets/docs
+
+[secret_client_docs]: https://aka.ms/azsdk/python/keyvault-secrets/docs#azure.keyvault.secrets.SecretClient
+[secret_samples]: https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/keyvault/azure-keyvault-secrets/samples
+[soft_delete]: https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview
+
+

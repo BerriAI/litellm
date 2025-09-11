@@ -1,0 +1,5 @@
+from .fastuuid import *
+
+__doc__ = fastuuid.__doc__
+if hasattr(fastuuid, "__all__"):
+    __all__ = fastuuid.__all__

@@ -1,0 +1,94 @@
+{
+  "pagination": {
+    "ListAudienceExportJobs": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "audienceExportJobs"
+    },
+    "ListAudienceGenerationJobs": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "audienceGenerationJobs"
+    },
+    "ListAudienceModels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "audienceModels"
+    },
+    "ListConfiguredAudienceModels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "configuredAudienceModels"
+    },
+    "ListTrainingDatasets": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "trainingDatasets"
+    },
+    "ListCollaborationConfiguredModelAlgorithmAssociations": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "collaborationConfiguredModelAlgorithmAssociations"
+    },
+    "ListCollaborationMLInputChannels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "collaborationMLInputChannelsList"
+    },
+    "ListCollaborationTrainedModelExportJobs": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "collaborationTrainedModelExportJobs"
+    },
+    "ListCollaborationTrainedModelInferenceJobs": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "collaborationTrainedModelInferenceJobs"
+    },
+    "ListCollaborationTrainedModels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "collaborationTrainedModels"
+    },
+    "ListConfiguredModelAlgorithmAssociations": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "configuredModelAlgorithmAssociations"
+    },
+    "ListConfiguredModelAlgorithms": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "configuredModelAlgorithms"
+    },
+    "ListMLInputChannels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "mlInputChannelsList"
+    },
+    "ListTrainedModelInferenceJobs": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "trainedModelInferenceJobs"
+    },
+    "ListTrainedModels": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "trainedModels"
+    }
+  }
+}

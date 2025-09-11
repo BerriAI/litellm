@@ -1,0 +1,75 @@
+Metadata-Version: 2.1
+Name: google-cloud-core
+Version: 2.4.3
+Summary: Google Cloud API client core library
+Home-page: https://github.com/googleapis/python-cloud-core
+Author: Google LLC
+Author-email: googleapis-packages@google.com
+License: Apache 2.0
+Platform: Posix; MacOS X; Windows
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Internet
+Requires-Python: >=3.7
+License-File: LICENSE
+Requires-Dist: google-api-core!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.0,<3.0.0dev,>=1.31.6
+Requires-Dist: google-auth<3.0dev,>=1.25.0
+Requires-Dist: importlib-metadata>1.0.0; python_version < "3.8"
+Provides-Extra: grpc
+Requires-Dist: grpcio<2.0dev,>=1.38.0; extra == "grpc"
+Requires-Dist: grpcio-status<2.0.dev0,>=1.38.0; extra == "grpc"
+
+Core Helpers for Google Cloud Python Client Library
+===================================================
+
+|pypi| |versions|
+
+This library is not meant to stand-alone. Instead it defines
+common helpers (e.g. base ``Client`` classes) used by all of the
+``google-cloud-*`` packages.
+
+
+-  `Documentation`_
+
+.. |pypi| image:: https://img.shields.io/pypi/v/google-cloud-core.svg
+   :target: https://pypi.org/project/google-cloud-core/
+.. |versions| image:: https://img.shields.io/pypi/pyversions/google-cloud-core.svg
+   :target: https://pypi.org/project/google-cloud-core/
+.. _Documentation: https://cloud.google.com/python/docs/reference/google-cloud-core/latest
+
+Quick Start
+-----------
+
+.. code-block:: console
+
+    $ pip install --upgrade google-cloud-core
+
+For more information on setting up your Python development environment,
+such as installing ``pip`` and ``virtualenv`` on your system, please refer
+to `Python Development Environment Setup Guide`_ for Google Cloud Platform.
+
+.. _Python Development Environment Setup Guide: https://cloud.google.com/python/setup
+
+
+Supported Python Versions
+-------------------------
+Python >= 3.7
+
+Unsupported Python Versions
+---------------------------
+Python == 2.7: the last version of this library which supported Python 2.7
+is ``google.cloud.core 1.7.2``.
+
+Python == 3.6: the last version of this library which supported Python 3.6
+is ``google.cloud.core 2.3.1``.

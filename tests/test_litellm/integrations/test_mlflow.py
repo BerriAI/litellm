@@ -73,14 +73,18 @@ async def test_mlflow_logging_functionality():
         # Check that tags parameter was included and properly transformed
         tags_param = call_args.kwargs.get("tags", {})
         expected_tags = {"tag1": "", "tag2": "", "production": ""}
-        assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
+        assert (
+            tags_param == expected_tags
+        ), f"Expected tags {expected_tags}, got {tags_param}"
 
         # Check that prediction parameter was included in inputs
         inputs_param = call_args.kwargs.get("inputs", {})
-        assert "prediction" in inputs_param, "Prediction should be included in span inputs"
-        assert inputs_param["prediction"] == test_prediction, (
-            f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
-        )
+        assert (
+            "prediction" in inputs_param
+        ), "Prediction should be included in span inputs"
+        assert (
+            inputs_param["prediction"] == test_prediction
+        ), f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
 
 
 def test_mlflow_token_usage_attribute_structure():

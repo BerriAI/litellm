@@ -46,7 +46,7 @@ class TestAzureAssistantCostTracking:
     def test_openai_file_search_unchanged(self):
         """Test OpenAI file search pricing remains unchanged."""
         from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
-        
+
         cost = StandardBuiltInToolCostTracking.get_cost_for_file_search(
             file_search={},
             provider="openai",
@@ -79,20 +79,40 @@ class TestAzureAssistantCostTracking:
         )
         assert cost == 0.0, "OpenAI should not charge separately for code interpreter"
 
-    @pytest.mark.parametrize("input_tokens,output_tokens,expected_cost", [
-        (1000, 500, 1000/1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS + 500/1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS),  # $0.009
-        (2000, 0, 2000/1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS),  # $0.006
-        (0, 1000, 1000/1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS),  # $0.012
-        (0, 0, 0.0),  # $0.000
-    ])
-    def test_azure_computer_use_cost_calculation(self, input_tokens, output_tokens, expected_cost):
+    @pytest.mark.parametrize(
+        "input_tokens,output_tokens,expected_cost",
+        [
+            (
+                1000,
+                500,
+                1000 / 1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS
+                + 500 / 1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
+            ),  # $0.009
+            (
+                2000,
+                0,
+                2000 / 1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS,
+            ),  # $0.006
+            (
+                0,
+                1000,
+                1000 / 1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
+            ),  # $0.012
+            (0, 0, 0.0),  # $0.000
+        ],
+    )
+    def test_azure_computer_use_cost_calculation(
+        self, input_tokens, output_tokens, expected_cost
+    ):
         """Test Azure computer use cost calculation with various token combinations."""
         cost = StandardBuiltInToolCostTracking.get_cost_for_computer_use(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             provider="azure",
         )
-        assert abs(cost - expected_cost) < 0.0001, f"Expected {expected_cost}, got {cost}"
+        assert (
+            abs(cost - expected_cost) < 0.0001
+        ), f"Expected {expected_cost}, got {cost}"
 
     def test_openai_computer_use_free(self):
         """Test OpenAI computer use has no separate charges."""
@@ -155,7 +175,7 @@ class TestAzureAssistantCostTracking:
             provider="azure",
             model_info=model_info,
         )
-        expected_cost = 1000/1000 * 5.0 + 500/1000 * 15.0  # $12.50
+        expected_cost = 1000 / 1000 * 5.0 + 500 / 1000 * 15.0  # $12.50
         assert cost == expected_cost, f"Expected {expected_cost}, got {cost}"
 
         # Test code interpreter with model-specific pricing
@@ -173,8 +193,12 @@ class TestAzureAssistantCostTracking:
     def test_none_inputs_return_zero(self):
         """Test that None inputs return zero cost."""
         assert StandardBuiltInToolCostTracking.get_cost_for_file_search(None) == 0.0
-        assert StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(None) == 0.0
-        assert StandardBuiltInToolCostTracking.get_cost_for_computer_use(None, None) == 0.0
+        assert (
+            StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(None) == 0.0
+        )
+        assert (
+            StandardBuiltInToolCostTracking.get_cost_for_computer_use(None, None) == 0.0
+        )
         assert StandardBuiltInToolCostTracking.get_cost_for_vector_store(None) == 0.0
 
     def test_constants_loaded_correctly(self):

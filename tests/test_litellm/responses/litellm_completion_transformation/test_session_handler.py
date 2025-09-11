@@ -202,43 +202,46 @@ async def test_e2e_cold_storage_successful_retrieval():
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "I am an AI assistant."
-                        }
+                            "content": "I am an AI assistant.",
+                        },
                     }
-                ]
-            }
+                ],
+            },
         }
     ]
-    
+
     # Full proxy request data from cold storage
     full_proxy_request = {
         "input": "Hello, who are you?",
         "model": "gpt-4",
-        "messages": [{"role": "user", "content": "Hello, who are you?"}]
+        "messages": [{"role": "user", "content": "Hello, who are you?"}],
     }
-    
+
     with patch.object(
         ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
-    ) as mock_get_spend_logs, \
-    patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage, \
-    patch("litellm.configured_cold_storage_logger", return_value="s3"):
-        
+    ) as mock_get_spend_logs, patch.object(
+        session_handler, "COLD_STORAGE_HANDLER"
+    ) as mock_cold_storage, patch(
+        "litellm.configured_cold_storage_logger", return_value="s3"
+    ):
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
-        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(return_value=full_proxy_request)
-        
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = (
+            AsyncMock(return_value=full_proxy_request)
+        )
+
         # Call the main function
         result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-test-123"
         )
-        
+
         # Verify cold storage was called with correct object key
         mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key.assert_called_once_with(
             object_key="s3://test-bucket/requests/session_456_req1.json"
         )
-        
+
         # Verify result structure
         assert result.get("litellm_session_id") == "session-456"
         assert len(result.get("messages", [])) >= 1  # At least the assistant response
@@ -264,32 +267,32 @@ async def test_e2e_cold_storage_fallback_to_truncated_payload():
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "This is a response."
-                        }
+                            "content": "This is a response.",
+                        },
                     }
-                ]
-            }
+                ],
+            },
         }
     ]
-    
+
     with patch.object(
         ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
-    ) as mock_get_spend_logs, \
-    patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage:
-        
+    ) as mock_get_spend_logs, patch.object(
+        session_handler, "COLD_STORAGE_HANDLER"
+    ) as mock_cold_storage:
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
-        
+
         # Call the main function
         result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-test-789"
         )
-        
+
         # Verify cold storage was NOT called since no object key in metadata
         mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key.assert_not_called()
-        
+
         # Verify result structure
         assert result.get("litellm_session_id") == "session-999"
         assert len(result.get("messages", [])) >= 1  # At least the assistant response
@@ -300,7 +303,7 @@ async def test_should_check_cold_storage_for_full_payload():
     """
     Test _should_check_cold_storage_for_full_payload returns True for proxy server requests with truncated content
     """
-    
+
     # Test case 1: Proxy server request with truncated PDF content (should return True)
     proxy_request_with_truncated_pdf = {
         "input": [
@@ -310,57 +313,73 @@ async def test_should_check_cold_storage_for_full_payload():
                 "content": [
                     {
                         "text": "what was datadogs largest source of operating cash ? quote the section you saw ",
-                        "type": "input_text"
+                        "type": "input_text",
                     },
                     {
                         "type": "input_image",
-                        "image_url": "data:application/pdf;base64,JVBERi0xLjcKJYGBgYEKCjcgMCBvYmoKPDwKL0ZpbHRlciAvRmxhdGVEZWNvZGUKL0xlbmd0aCA1NjcxCj4+CnN0cmVhbQp4nO1dW4/cthV+31+h5wKVeb8AhoG9Bn0I0DYL9NlInQBFHKSpA+Tnl5qRNNRIn8ij4WpnbdqAsRaX90Oe23cOWyH94U/Dwt+/ttF/neKt59675sfPN/+9Ubp1MvwRjfAtN92fRkgn2+5jI5Xyre9++fdPN//6S/NrqCFax4XqvnVtn/631FLogjfd339+1xx/+P3nm3ffyebn/92ww2Bc46zRrGv/p5vWMOmb+N9Qb/4xtOEazn2oH3rjfV3fDTj+t6s7+zjU5XFdFxo9fPs8/CiaX26cYmc/svDjhlF+Pv7QNdT30/9wbI8dFjK0cfzhUO8wPjaOr/Eq/v/d8827vzfv37/7/v5vD6HKhw93D/c3755UI3jYuOb5p7Dsh53nYQtZqyUXugn71Dx/vnnPmHQfmuf/3HDdKhY2z8jwq8//broSjkrE/aHEtZIxZhQ/VbHHKqoVQhsv7KmKgyUWdcPkoUSHaYgwmmhk5liFt85w45WcDUC0RgntpTp1o44lMhCpl95eNOZ+AI/f3988Pp9tAV/dAu5VKz0Ls+SB0vstgNNZWTUDtw1vqC65oahKctUW5gl3etg1EnXSCWplzHewG7gDoq9jWu28DYuzPB3NucmZzm3UmvFcLI/aMpcxT0w1AvUi2aFEsJZLprxMF0xIQzmXQQArRwA2Fo/YCm7P13LxdIrodIa7QIojL5zekqblloeuwkiGI3o7jk+zMEJ9vqW+NWFDtTDnU7KtCpet1WZGHqyVxjLNxPlcdcudsU648xnNOxmIY95Wf3JduAidF3q+bgtVUC/s6VAgZ/TUE9q8oD+DCwM2qA/UFD/eWqY1RrFQ61QgUYFDBRYV3GOKkSPFaEQxQqqWWRcGzZ3u... (litellm_truncated 1197576 chars)"
-                    }
-                ]
+                        "image_url": "data:application/pdf;base64,JVBERi0xLjcKJYGBgYEKCjcgMCBvYmoKPDwKL0ZpbHRlciAvRmxhdGVEZWNvZGUKL0xlbmd0aCA1NjcxCj4+CnN0cmVhbQp4nO1dW4/cthV+31+h5wKVeb8AhoG9Bn0I0DYL9NlInQBFHKSpA+Tnl5qRNNRIn8ij4WpnbdqAsRaX90Oe23cOWyH94U/Dwt+/ttF/neKt59675sfPN/+9Ubp1MvwRjfAtN92fRkgn2+5jI5Xyre9++fdPN//6S/NrqCFax4XqvnVtn/631FLogjfd339+1xx/+P3nm3ffyebn/92ww2Bc46zRrGv/p5vWMOmb+N9Qb/4xtOEazn2oH3rjfV3fDTj+t6s7+zjU5XFdFxo9fPs8/CiaX26cYmc/svDjhlF+Pv7QNdT30/9wbI8dFjK0cfzhUO8wPjaOr/Eq/v/d8827vzfv37/7/v5vD6HKhw93D/c3755UI3jYuOb5p7Dsh53nYQtZqyUXugn71Dx/vnnPmHQfmuf/3HDdKhY2z8jwq8//broSjkrE/aHEtZIxZhQ/VbHHKqoVQhsv7KmKgyUWdcPkoUSHaYgwmmhk5liFt85w45WcDUC0RgntpTp1o44lMhCpl95eNOZ+AI/f3988Pp9tAV/dAu5VKz0Ls+SB0vstgNNZWTUDtw1vqC65oahKctUW5gl3etg1EnXSCWplzHewG7gDoq9jWu28DYuzPB3NucmZzm3UmvFcLI/aMpcxT0w1AvUi2aFEsJZLprxMF0xIQzmXQQArRwA2Fo/YCm7P13LxdIrodIa7QIojL5zekqblloeuwkiGI3o7jk+zMEJ9vqW+NWFDtTDnU7KtCpet1WZGHqyVxjLNxPlcdcudsU648xnNOxmIY95Wf3JduAidF3q+bgtVUC/s6VAgZ/TUE9q8oD+DCwM2qA/UFD/eWqY1RrFQ61QgUYFDBRYV3GOKkSPFaEQxQqqWWRcGzZ3u... (litellm_truncated 1197576 chars)",
+                    },
+                ],
             }
         ],
         "model": "anthropic/claude-3-7-sonnet-20250219",
         "stream": True,
-        "litellm_trace_id": "16b86861-c120-4ecb-865b-4d2238bfd8f0"
+        "litellm_trace_id": "16b86861-c120-4ecb-865b-4d2238bfd8f0",
     }
-    
+
     # Test case 2: Regular proxy request without truncation (should return False)
     proxy_request_regular = {
         "input": [
             {
                 "role": "user",
                 "type": "message",
-                "content": "Hello, this is a regular message"
+                "content": "Hello, this is a regular message",
             }
         ],
         "model": "anthropic/claude-3-7-sonnet-20250219",
-        "stream": True
+        "stream": True,
     }
-    
+
     # Test case 3: Empty request (should return True)
     proxy_request_empty = {}
-    
+
     # Test case 4: None request (should return True)
     proxy_request_none = None
-    
+
     with patch("litellm.configured_cold_storage_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
-        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
-        assert result1 == True, "Should return True for proxy request with truncated PDF content"
-        
+        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_request_with_truncated_pdf
+        )
+        assert (
+            result1 == True
+        ), "Should return True for proxy request with truncated PDF content"
+
         # Test case 2: Should return False for regular content
-        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_regular)
-        assert result2 == False, "Should return False for regular proxy request without truncation"
-        
+        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_request_regular
+        )
+        assert (
+            result2 == False
+        ), "Should return False for regular proxy request without truncation"
+
         # Test case 3: Should return True for empty request
-        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_empty)
+        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_request_empty
+        )
         assert result3 == True, "Should return True for empty proxy request"
-        
+
         # Test case 4: Should return True for None request
-        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_none)
+        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_request_none
+        )
         assert result4 == True, "Should return True for None proxy request"
-    
+
     # Test case 5: Should return False when cold storage is not configured
-    with patch.object(litellm, 'configured_cold_storage_logger', None):
-        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
-        assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
+    with patch.object(litellm, "configured_cold_storage_logger", None):
+        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_request_with_truncated_pdf
+        )
+        assert (
+            result5 == False
+        ), "Should return False when cold storage is not configured, even with truncated content"

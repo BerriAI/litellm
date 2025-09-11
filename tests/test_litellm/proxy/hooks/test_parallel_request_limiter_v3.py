@@ -726,7 +726,6 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
 
 @pytest.mark.asyncio
 async def test_tpm_api_key_rate_limits_v3():
-
     _api_key = "sk-12345"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
@@ -743,7 +742,7 @@ async def test_tpm_api_key_rate_limits_v3():
         tpm_limit_per_model=tpms,
         models=[],
     )
-    
+
     user_api_key_dict.metadata["model_tpm_limit"] = tpms
     user_api_key_dict.metadata["model_rpm_limit"] = rpms
 
@@ -762,32 +761,45 @@ async def test_tpm_api_key_rate_limits_v3():
         # Return Error response to ensure HTTPException
         return {
             "overall_code": "OVER_LIMIT",
-            "statuses": [{'code': 'OK', 'current_limit': 2, 'limit_remaining': 1, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
-                         {'code': 'OVER_LIMIT', 'current_limit': 2, 'limit_remaining': -18, 'rate_limit_type': 'tokens', 'descriptor_key': 'model_per_key'}]
+            "statuses": [
+                {
+                    "code": "OK",
+                    "current_limit": 2,
+                    "limit_remaining": 1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "model_per_key",
+                },
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 2,
+                    "limit_remaining": -18,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "model_per_key",
+                },
+            ],
         }
-        
+
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
-    
+
     # Test the pre-call hook
     error = None
     try:
-       await parallel_request_handler.async_pre_call_hook(
+        await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
             data={"model": model},
             call_type="",
         )
     except HTTPException as e:
-        error=e
+        error = e
         assert e.status_code == 429
         assert "rate_limit_type" in e.headers
         assert e.headers.get("rate_limit_type") == "tokens"
         assert "retry-after" in e.headers
-        
-    
+
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
-    
+
     model_per_key_descriptor = None
     for descriptor in captured_descriptors:
         if descriptor["key"] == "model_per_key":
@@ -795,14 +807,19 @@ async def test_tpm_api_key_rate_limits_v3():
             break
 
     assert model_per_key_descriptor is not None, "Api-Key descriptor should be present"
-    assert model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}", "Api-Key value should combine api_key and model"
-    assert model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit, "Api-Key RPM limit should be set"
-    assert model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit, "Api-Key TPM limit should be set"
+    assert (
+        model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}"
+    ), "Api-Key value should combine api_key and model"
+    assert (
+        model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit
+    ), "Api-Key RPM limit should be set"
+    assert (
+        model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit
+    ), "Api-Key TPM limit should be set"
 
 
 @pytest.mark.asyncio
 async def test_rpm_api_key_rate_limits_v3():
-
     _api_key = "sk-12345"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
@@ -819,7 +836,7 @@ async def test_rpm_api_key_rate_limits_v3():
         tpm_limit_per_model=tpms,
         models=[],
     )
-    
+
     user_api_key_dict.metadata["model_tpm_limit"] = tpms
     user_api_key_dict.metadata["model_rpm_limit"] = rpms
 
@@ -838,31 +855,45 @@ async def test_rpm_api_key_rate_limits_v3():
         # Return Error response to ensure HTTPException
         return {
             "overall_code": "OVER_LIMIT",
-            "statuses": [{'code': 'OVER_LIMIT', 'current_limit': 2, 'limit_remaining': -2, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
-                         {'code': 'OK', 'current_limit': 2, 'limit_remaining': 2, 'rate_limit_type': 'tokens', 'descriptor_key': 'model_per_key'}]
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 2,
+                    "limit_remaining": -2,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "model_per_key",
+                },
+                {
+                    "code": "OK",
+                    "current_limit": 2,
+                    "limit_remaining": 2,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "model_per_key",
+                },
+            ],
         }
-        
+
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
-    
+
     # Test the pre-call hook
     error = None
     try:
-       await parallel_request_handler.async_pre_call_hook(
+        await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
             data={"model": model},
             call_type="",
         )
     except HTTPException as e:
-        error=e
+        error = e
         assert e.status_code == 429
         assert "rate_limit_type" in e.headers
         assert e.headers.get("rate_limit_type") == "requests"
         assert "retry-after" in e.headers
-    
+
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
-    
+
     model_per_key_descriptor = None
     for descriptor in captured_descriptors:
         if descriptor["key"] == "model_per_key":
@@ -870,9 +901,16 @@ async def test_rpm_api_key_rate_limits_v3():
             break
 
     assert model_per_key_descriptor is not None, "Api-Key descriptor should be present"
-    assert model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}", "Api-Key value should combine api_key and model"
-    assert model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit, "Api-Key RPM limit should be set"
-    assert model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit, "Api-Key TPM limit should be set"
+    assert (
+        model_per_key_descriptor["value"] == f"{_api_key_hash}:{model}"
+    ), "Api-Key value should combine api_key and model"
+    assert (
+        model_per_key_descriptor["rate_limit"]["requests_per_unit"] == rpm_limit
+    ), "Api-Key RPM limit should be set"
+    assert (
+        model_per_key_descriptor["rate_limit"]["tokens_per_unit"] == tpm_limit
+    ), "Api-Key TPM limit should be set"
+
 
 @pytest.mark.asyncio
 async def test_team_member_rate_limits_v3():
@@ -883,7 +921,7 @@ async def test_team_member_rate_limits_v3():
     _api_key = hash_token(_api_key)
     _team_id = "team_123"
     _user_id = "user_456"
-    
+
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
         team_id=_team_id,
@@ -891,7 +929,7 @@ async def test_team_member_rate_limits_v3():
         team_member_rpm_limit=10,
         team_member_tpm_limit=1000,
     )
-    
+
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -905,15 +943,12 @@ async def test_team_member_rate_limits_v3():
         nonlocal captured_descriptors
         captured_descriptors = descriptors
         # Return OK response to avoid HTTPException
-        return {
-            "overall_code": "OK",
-            "statuses": []
-        }
+        return {"overall_code": "OK", "statuses": []}
 
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
 
     # Test the pre-call hook
-    
+
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=local_cache,
@@ -923,34 +958,42 @@ async def test_team_member_rate_limits_v3():
 
     # Verify team member descriptor was created
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
-    
+
     team_member_descriptor = None
     for descriptor in captured_descriptors:
         if descriptor["key"] == "team_member":
             team_member_descriptor = descriptor
             break
-    
-    assert team_member_descriptor is not None, "Team member descriptor should be present"
-    assert team_member_descriptor["value"] == f"{_team_id}:{_user_id}", "Team member value should combine team_id and user_id"
-    assert team_member_descriptor["rate_limit"]["requests_per_unit"] == 10, "Team member RPM limit should be set"
-    assert team_member_descriptor["rate_limit"]["tokens_per_unit"] == 1000, "Team member TPM limit should be set"
+
+    assert (
+        team_member_descriptor is not None
+    ), "Team member descriptor should be present"
+    assert (
+        team_member_descriptor["value"] == f"{_team_id}:{_user_id}"
+    ), "Team member value should combine team_id and user_id"
+    assert (
+        team_member_descriptor["rate_limit"]["requests_per_unit"] == 10
+    ), "Team member RPM limit should be set"
+    assert (
+        team_member_descriptor["rate_limit"]["tokens_per_unit"] == 1000
+    ), "Team member TPM limit should be set"
 
 
 @pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """
     Test TTL preservation functionality for token increment operations.
-    
+
     This test verifies that:
     1. Keys are created with proper TTL on first increment
     2. TTL is preserved on subsequent increments (not reset)
     3. Both TTL and non-TTL operations work correctly in the same call
-    
+
     Environment variables required:
     - REDIS_HOST: Redis server hostname
     - REDIS_PORT: Redis server port
     - REDIS_PASSWORD: Redis password (optional)
-    
+
     Test scenario:
     1. First call: Create keys with TTL=60s and TTL=None
     2. Wait 2 seconds
@@ -961,37 +1004,37 @@ async def test_async_increment_tokens_with_ttl_preservation():
     import time
     from litellm.caching.redis_cache import RedisCache
     from litellm.types.caching import RedisPipelineIncrementOperation
-    
+
     # Skip test if Redis environment variables are not set
     redis_host = os.getenv("REDIS_HOST")
-    redis_port = os.getenv("REDIS_PORT") 
+    redis_port = os.getenv("REDIS_PORT")
     redis_password = os.getenv("REDIS_PASSWORD")
-    
+
     if not redis_host or not redis_port:
         pytest.skip("Redis environment variables (REDIS_HOST, REDIS_PORT) not set")
-    
+
     # Setup Redis cache
     redis_cache = RedisCache(
         host=redis_host,
         port=int(redis_port),
         password=redis_password,
     )
-    
+
     local_cache = DualCache(redis_cache=redis_cache)
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    
+
     # Verify Redis connection is working
     try:
         await redis_cache.ping()
     except Exception as e:
         pytest.skip(f"Redis connection failed: {str(e)}")
-    
+
     # Test keys
     test_key_with_ttl = "test_ttl_preservation:with_ttl"
     test_key_without_ttl = "test_ttl_preservation:without_ttl"
-    
+
     try:
         # Clean up any existing test keys
         try:
@@ -1000,82 +1043,102 @@ async def test_async_increment_tokens_with_ttl_preservation():
         except Exception:
             # Keys might not exist, ignore cleanup errors
             pass
-        
+
         # First increment: Create operations with mixed TTL scenarios
         pipeline_operations_first = [
             RedisPipelineIncrementOperation(
-                key=test_key_with_ttl,
-                increment_value=10.0,
-                ttl=60
+                key=test_key_with_ttl, increment_value=10.0, ttl=60
             ),
             RedisPipelineIncrementOperation(
-                key=test_key_without_ttl,
-                increment_value=5.0,
-                ttl=None  # No TTL
-            )
+                key=test_key_without_ttl, increment_value=5.0, ttl=None  # No TTL
+            ),
         ]
-        
+
         # Execute first increment
         await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=pipeline_operations_first
         )
-        
+
         # Verify keys exist and check initial TTL
         ttl_after_first = await redis_cache.async_get_ttl(test_key_with_ttl)
-        value_after_first_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
-        value_after_first_without_ttl = await redis_cache.async_get_cache(test_key_without_ttl)
-        
-        assert value_after_first_with_ttl == 10.0, "First increment should set value to 10.0"
-        assert value_after_first_without_ttl == 5.0, "First increment should set value to 5.0"
-        assert ttl_after_first is not None and ttl_after_first > 0, "Key with TTL should have positive TTL after first increment"
+        value_after_first_with_ttl = await redis_cache.async_get_cache(
+            test_key_with_ttl
+        )
+        value_after_first_without_ttl = await redis_cache.async_get_cache(
+            test_key_without_ttl
+        )
+
+        assert (
+            value_after_first_with_ttl == 10.0
+        ), "First increment should set value to 10.0"
+        assert (
+            value_after_first_without_ttl == 5.0
+        ), "First increment should set value to 5.0"
+        assert (
+            ttl_after_first is not None and ttl_after_first > 0
+        ), "Key with TTL should have positive TTL after first increment"
         assert ttl_after_first <= 60, "TTL should not exceed the set value"
-        
+
         # Check TTL for key without TTL (should be None, meaning no expiry)
         ttl_no_ttl_key = await redis_cache.async_get_ttl(test_key_without_ttl)
-        assert ttl_no_ttl_key is None, "Key without TTL should have no expiry (None from async_get_ttl)"
-        
+        assert (
+            ttl_no_ttl_key is None
+        ), "Key without TTL should have no expiry (None from async_get_ttl)"
+
         # Wait a moment to ensure TTL decreases
         await asyncio.sleep(2)
-        
+
         # Second increment: Same operations to test TTL preservation
         pipeline_operations_second = [
             RedisPipelineIncrementOperation(
-                key=test_key_with_ttl,
-                increment_value=15.0,
-                ttl=60  # Same TTL value
+                key=test_key_with_ttl, increment_value=15.0, ttl=60  # Same TTL value
             ),
             RedisPipelineIncrementOperation(
-                key=test_key_without_ttl,
-                increment_value=7.0,
-                ttl=None  # No TTL
-            )
+                key=test_key_without_ttl, increment_value=7.0, ttl=None  # No TTL
+            ),
         ]
-        
+
         # Execute second increment
         await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=pipeline_operations_second
         )
-        
+
         # Verify TTL preservation and value updates
         ttl_after_second = await redis_cache.async_get_ttl(test_key_with_ttl)
-        value_after_second_with_ttl = await redis_cache.async_get_cache(test_key_with_ttl)
-        value_after_second_without_ttl = await redis_cache.async_get_cache(test_key_without_ttl)
-        
-        assert value_after_second_with_ttl == 25.0, "Second increment should update value to 25.0"
-        assert value_after_second_without_ttl == 12.0, "Second increment should update value to 12.0"
-        
+        value_after_second_with_ttl = await redis_cache.async_get_cache(
+            test_key_with_ttl
+        )
+        value_after_second_without_ttl = await redis_cache.async_get_cache(
+            test_key_without_ttl
+        )
+
+        assert (
+            value_after_second_with_ttl == 25.0
+        ), "Second increment should update value to 25.0"
+        assert (
+            value_after_second_without_ttl == 12.0
+        ), "Second increment should update value to 12.0"
+
         # Critical test: TTL should be preserved (not reset to 60)
         assert ttl_after_second is not None, "TTL should still exist"
-        assert ttl_after_second < ttl_after_first, "TTL should have decreased (not been reset)"
+        assert (
+            ttl_after_second < ttl_after_first
+        ), "TTL should have decreased (not been reset)"
         assert ttl_after_second > 0, "TTL should still be positive"
-        
+
         # TTL should not be close to the original 60 seconds (proving it wasn't reset)
-        assert ttl_after_second < 59, "TTL should be significantly less than original, proving preservation"
-        
+        assert (
+            ttl_after_second < 59
+        ), "TTL should be significantly less than original, proving preservation"
+
         # Key without TTL should still have no expiry
-        ttl_no_ttl_key_after_second = await redis_cache.async_get_ttl(test_key_without_ttl)
-        assert ttl_no_ttl_key_after_second is None, "Key without TTL should still have no expiry"
-        
+        ttl_no_ttl_key_after_second = await redis_cache.async_get_ttl(
+            test_key_without_ttl
+        )
+        assert (
+            ttl_no_ttl_key_after_second is None
+        ), "Key without TTL should still have no expiry"
+
     finally:
         # Clean up test keys
         try:
@@ -1084,7 +1147,7 @@ async def test_async_increment_tokens_with_ttl_preservation():
         except Exception:
             # Ignore cleanup errors
             pass
-        
+
         # Properly close Redis connections to prevent warnings
         try:
             await redis_cache.disconnect()
@@ -1099,39 +1162,43 @@ async def test_async_increment_tokens_fallback_behavior():
     Test fallback behavior when Lua script is not available.
     """
     from litellm.types.caching import RedisPipelineIncrementOperation
-    
+
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    
+
     # Mock the token_increment_script to None to simulate unavailable script
     parallel_request_handler.token_increment_script = None
-    
+
     # Mock the fallback method
     fallback_called = False
-    original_method = parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline
-    
+    original_method = (
+        parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline
+    )
+
     async def mock_fallback(*args, **kwargs):
         nonlocal fallback_called
         fallback_called = True
         return await original_method(*args, **kwargs)
-    
-    parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = mock_fallback
-    
+
+    parallel_request_handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = (
+        mock_fallback
+    )
+
     # Test operations
     pipeline_operations = [
         RedisPipelineIncrementOperation(
-            key="test_fallback_key",
-            increment_value=10.0,
-            ttl=60
+            key="test_fallback_key", increment_value=10.0, ttl=60
         )
     ]
-    
+
     # Execute increment
     await parallel_request_handler.async_increment_tokens_with_ttl_preservation(
         pipeline_operations=pipeline_operations
     )
-    
+
     # Verify fallback was called
-    assert fallback_called, "Fallback method should be called when Lua script is not available"
+    assert (
+        fallback_called
+    ), "Fallback method should be called when Lua script is not available"

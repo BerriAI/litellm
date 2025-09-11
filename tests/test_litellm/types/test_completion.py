@@ -9,10 +9,7 @@ Usage:
 """
 from typing import List
 
-from litellm.types.completion import (
-    CompletionRequest, 
-    ChatCompletionMessageParam
-)
+from litellm.types.completion import CompletionRequest, ChatCompletionMessageParam
 
 
 def test_completion_request_messages_type_validation():
@@ -25,12 +22,9 @@ def test_completion_request_messages_type_validation():
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": "I'm doing well, thank you!"},
     ]
-    
-    request = CompletionRequest(
-        model="gpt-3.5-turbo",
-        messages=valid_messages
-    )
-    
+
+    request = CompletionRequest(model="gpt-3.5-turbo", messages=valid_messages)
+
     assert request.model == "gpt-3.5-turbo"
     assert len(request.messages) == 3
 
@@ -47,26 +41,19 @@ def test_completion_request_tool_message():
             "tool_calls": [
                 {
                     "id": "call_123",
-                    "type": "function", 
+                    "type": "function",
                     "function": {
                         "name": "calculate",
-                        "arguments": '{"expression": "2+2"}'
-                    }
+                        "arguments": '{"expression": "2+2"}',
+                    },
                 }
-            ]
+            ],
         },
-        {
-            "role": "tool",
-            "content": "4",
-            "tool_call_id": "call_123"
-        }
+        {"role": "tool", "content": "4", "tool_call_id": "call_123"},
     ]
-    
-    request = CompletionRequest(
-        model="gpt-3.5-turbo",
-        messages=messages
-    )
-    
+
+    request = CompletionRequest(model="gpt-3.5-turbo", messages=messages)
+
     assert len(request.messages) == 3
     assert request.messages[1]["role"] == "assistant"
     assert request.messages[2]["role"] == "tool"
@@ -83,21 +70,14 @@ def test_completion_request_function_message():
             "content": None,
             "function_call": {
                 "name": "get_weather",
-                "arguments": '{"location": "NYC"}'
-            }
+                "arguments": '{"location": "NYC"}',
+            },
         },
-        {
-            "role": "function",
-            "name": "get_weather",
-            "content": "Sunny, 75°F"
-        }
+        {"role": "function", "name": "get_weather", "content": "Sunny, 75°F"},
     ]
-    
-    request = CompletionRequest(
-        model="gpt-3.5-turbo", 
-        messages=messages
-    )
-    
+
+    request = CompletionRequest(model="gpt-3.5-turbo", messages=messages)
+
     assert len(request.messages) == 3
     assert request.messages[2]["role"] == "function"
     assert request.messages[2]["name"] == "get_weather"
@@ -111,25 +91,19 @@ def test_completion_request_multimodal_content():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "What's in this image?"
-                },
+                {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
-                    }
-                }
-            ]
+                    },
+                },
+            ],
         }
     ]
-    
-    request = CompletionRequest(
-        model="gpt-4-vision-preview",
-        messages=messages
-    )
-    
+
+    request = CompletionRequest(model="gpt-4-vision-preview", messages=messages)
+
     assert len(request.messages) == 1
     assert request.messages[0]["role"] == "user"
 
@@ -139,7 +113,7 @@ def test_completion_request_empty_messages_default():
     Test that CompletionRequest defaults to empty messages list.
     """
     request = CompletionRequest(model="gpt-3.5-turbo")
-    
+
     assert request.messages == []
     assert isinstance(request.messages, list)
 
@@ -148,10 +122,8 @@ def test_completion_request_with_all_params():
     """
     Test CompletionRequest with various optional parameters.
     """
-    messages: List[ChatCompletionMessageParam] = [
-        {"role": "user", "content": "Hello"}
-    ]
-    
+    messages: List[ChatCompletionMessageParam] = [{"role": "user", "content": "Hello"}]
+
     request = CompletionRequest(
         model="gpt-3.5-turbo",
         messages=messages,
@@ -162,9 +134,9 @@ def test_completion_request_with_all_params():
         presence_penalty=0.0,
         stop={"sequences": ["END"]},
         stream=False,
-        n=1
+        n=1,
     )
-    
+
     assert request.model == "gpt-3.5-turbo"
     assert request.temperature == 0.7
     assert request.max_tokens == 100

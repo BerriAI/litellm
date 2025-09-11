@@ -1,0 +1,23 @@
+[apscheduler.executors]
+asyncio = apscheduler.executors.asyncio:AsyncIOExecutor [asyncio]
+debug = apscheduler.executors.debug:DebugExecutor
+gevent = apscheduler.executors.gevent:GeventExecutor [gevent]
+processpool = apscheduler.executors.pool:ProcessPoolExecutor
+threadpool = apscheduler.executors.pool:ThreadPoolExecutor
+tornado = apscheduler.executors.tornado:TornadoExecutor [tornado]
+twisted = apscheduler.executors.twisted:TwistedExecutor [twisted]
+
+[apscheduler.jobstores]
+memory = apscheduler.jobstores.memory:MemoryJobStore
+mongodb = apscheduler.jobstores.mongodb:MongoDBJobStore [mongodb]
+redis = apscheduler.jobstores.redis:RedisJobStore [redis]
+rethinkdb = apscheduler.jobstores.rethinkdb:RethinkDBJobStore [rethinkdb]
+sqlalchemy = apscheduler.jobstores.sqlalchemy:SQLAlchemyJobStore [sqlalchemy]
+zookeeper = apscheduler.jobstores.zookeeper:ZooKeeperJobStore [zookeeper]
+
+[apscheduler.triggers]
+and = apscheduler.triggers.combining:AndTrigger
+cron = apscheduler.triggers.cron:CronTrigger
+date = apscheduler.triggers.date:DateTrigger
+interval = apscheduler.triggers.interval:IntervalTrigger
+or = apscheduler.triggers.combining:OrTrigger

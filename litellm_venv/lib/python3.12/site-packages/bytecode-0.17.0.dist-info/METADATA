@@ -1,0 +1,104 @@
+Metadata-Version: 2.4
+Name: bytecode
+Version: 0.17.0
+Summary: Python module to generate and modify bytecode
+Author-email: Victor Stinner <victor.stinner@gmail.com>
+Maintainer-email: "Matthieu C. Dartiailh" <m.dartiailh@gmail.com>
+License: The MIT License (MIT)
+        Copyright Contributors to the bytecode project.
+        
+        Permission is hereby granted, free of charge, to any person obtaining a
+        copy of this software and associated documentation files (the
+        "Software"), to deal in the Software without restriction, including
+        without limitation the rights to use, copy, modify, merge, publish,
+        distribute, sublicense, and/or sell copies of the Software, and to
+        permit persons to whom the Software is furnished to do so, subject to
+        the following conditions:
+        
+        The above copyright notice and this permission notice shall be included
+        in all copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+        OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+        MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+        IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+        CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+        TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+        SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+        
+Project-URL: homepage, https://github.com/MatthieuDartiailh/bytecode
+Project-URL: documentation, https://bytecode.readthedocs.io/en/latest/
+Project-URL: repository, https://github.com/MatthieuDartiailh/bytecode
+Project-URL: changelog, https://github.com/MatthieuDartiailh/bytecode/blob/main/doc/changelog.rst
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Natural Language :: English
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Description-Content-Type: text/x-rst
+License-File: COPYING
+Requires-Dist: typing_extensions; python_version < "3.10"
+Dynamic: license-file
+
+********
+bytecode
+********
+
+.. image:: https://img.shields.io/pypi/v/bytecode.svg
+   :alt: Latest release on the Python Cheeseshop (PyPI)
+   :target: https://pypi.python.org/pypi/bytecode
+
+.. image:: https://github.com/MatthieuDartiailh/bytecode/workflows/Continuous%20Integration/badge.svg
+    :target: https://github.com/MatthieuDartiailh/bytecode/actions
+    :alt: Continuous integration
+
+.. image:: https://github.com/MatthieuDartiailh/bytecode/workflows/Documentation%20building/badge.svg
+    :target: https://github.com/MatthieuDartiailh/bytecode/actions
+    :alt: Documentation building
+
+.. image:: https://img.shields.io/codecov/c/github/MatthieuDartiailh/bytecode/master.svg
+   :alt: Code coverage of bytecode on codecov.io
+   :target: https://codecov.io/github/MatthieuDartiailh/bytecode
+
+.. image:: https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json
+    :target: https://github.com/astral-sh/ruff
+    :alt: Ruff
+
+``bytecode`` is a Python module to generate and modify bytecode.
+
+* `bytecode project homepage at GitHub
+  <https://github.com/MatthieuDartiailh/bytecode>`_ (code, bugs)
+* `bytecode documentation
+  <https://bytecode.readthedocs.io/>`_
+* `Download latest bytecode release at the Python Cheeseshop (PyPI)
+  <https://pypi.python.org/pypi/bytecode>`_
+
+Install bytecode: ``python3 -m pip install bytecode``. It requires Python 3.8
+or newer. The latest release that supports Python 3.7 and 3.6 is 0.13.0.
+The latest release that supports Python 3.5 is 0.12.0. For Python 2.7 support,
+have a look at `dead-bytecode <https://github.com/p403n1x87/dead-bytecode>`_
+instead.
+
+Example executing ``print('Hello World!')``:
+
+.. code:: python
+
+    from bytecode import Instr, Bytecode
+
+    bytecode = Bytecode([Instr("LOAD_GLOBAL", (True, 'print')),
+                         Instr("LOAD_CONST", 'Hello World!'),
+                         Instr("CALL", 1),
+                         Instr("POP_TOP"),
+                         Instr("LOAD_CONST", None),
+                         Instr("RETURN_VALUE")])
+    code = bytecode.to_code()
+    exec(code)

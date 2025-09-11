@@ -64,7 +64,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
-            
+
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
             #########################################################
@@ -83,22 +83,25 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         """
         dict_datadog_llm_obs_params: Dict = {}
         if litellm.datadog_llm_observability_params is not None:
-            if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
-                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
+            if isinstance(
+                litellm.datadog_llm_observability_params, DatadogLLMObsInitParams
+            ):
+                dict_datadog_llm_obs_params = (
+                    litellm.datadog_llm_observability_params.model_dump()
+                )
             elif isinstance(litellm.datadog_llm_observability_params, Dict):
                 # only allow params that are of DatadogLLMObsInitParams
-                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(**litellm.datadog_llm_observability_params).model_dump()
+                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(
+                    **litellm.datadog_llm_observability_params
+                ).model_dump()
         return dict_datadog_llm_obs_params
-            
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
             )
-            payload = self.create_llm_obs_payload(
-                kwargs, start_time, end_time
-            )
+            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
 
@@ -108,15 +111,13 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging success event - {str(e)}"
             )
-    
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
             )
-            payload = self.create_llm_obs_payload(
-                kwargs, start_time, end_time
-            )
+            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
 
@@ -193,10 +194,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 messages
             )
         )
-        output_meta = OutputMeta(messages=self._get_response_messages(
-            response_obj=response_obj,
-            call_type=standard_logging_payload.get("call_type")
-        ))
+        output_meta = OutputMeta(
+            messages=self._get_response_messages(
+                response_obj=response_obj,
+                call_type=standard_logging_payload.get("call_type"),
+            )
+        )
 
         error_info = self._assemble_error_info(standard_logging_payload)
 
@@ -214,7 +217,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
             total_cost=float(standard_logging_payload.get("response_cost", 0)),
-            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
+            time_to_first_token=self._get_time_to_first_token_seconds(
+                standard_logging_payload
+            ),
         )
 
         payload: LLMObsPayload = LLMObsPayload(
@@ -251,27 +256,35 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         except Exception:
             pass
         return None
-    
-    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+
+    def _assemble_error_info(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> Optional[DDLLMObsError]:
         """
         Assemble error information for failure cases according to DD LLM Obs API spec
         """
         # Handle error information for failure cases according to DD LLM Obs API spec
         error_info: Optional[DDLLMObsError] = None
-        
+
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get("error_information")
-            
+            error_information: Optional[
+                StandardLoggingPayloadErrorInformation
+            ] = standard_logging_payload.get("error_information")
+
             if error_information:
                 error_info = DDLLMObsError(
-                    message=error_information.get("error_message") or standard_logging_payload.get("error_str") or "Unknown error",
+                    message=error_information.get("error_message")
+                    or standard_logging_payload.get("error_str")
+                    or "Unknown error",
                     type=error_information.get("error_class"),
-                    stack=error_information.get("traceback")
+                    stack=error_information.get("traceback"),
                 )
         return error_info
 
-    def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
+    def _get_time_to_first_token_seconds(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> float:
         """
         Get the time to first token in seconds
 
@@ -280,7 +293,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         For non streaming calls, CompletionStartTime is time we get the response back
         """
         start_time: Optional[float] = standard_logging_payload.get("startTime")
-        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
+        completion_start_time: Optional[float] = standard_logging_payload.get(
+            "completionStartTime"
+        )
         end_time: Optional[float] = standard_logging_payload.get("endTime")
 
         if completion_start_time is not None and start_time is not None:
@@ -289,7 +304,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             return end_time - start_time
         else:
             return 0.0
-
 
     def _get_response_messages(
         self, response_obj: Any, call_type: Optional[str]
@@ -301,7 +315,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         """
         if response_obj is None:
             return []
-        
+
         if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
             try:
                 # Safely extract message from response_obj, handle failure cases
@@ -315,102 +329,104 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 return []
         return []
 
-    def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
+    def _get_datadog_span_kind(
+        self, call_type: Optional[str]
+    ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
-        
+
         Available DataDog span kinds: "llm", "tool", "task", "embedding", "retrieval"
         """
         if call_type is None:
             return "llm"
-        
+
         # Embedding operations
         if call_type in [CallTypes.embedding.value, CallTypes.aembedding.value]:
             return "embedding"
-        
-        # LLM completion operations  
+
+        # LLM completion operations
         if call_type in [
-            CallTypes.completion.value, 
+            CallTypes.completion.value,
             CallTypes.acompletion.value,
-            CallTypes.text_completion.value, 
+            CallTypes.text_completion.value,
             CallTypes.atext_completion.value,
-            CallTypes.generate_content.value, 
+            CallTypes.generate_content.value,
             CallTypes.agenerate_content.value,
-            CallTypes.generate_content_stream.value, 
+            CallTypes.generate_content_stream.value,
             CallTypes.agenerate_content_stream.value,
-            CallTypes.anthropic_messages.value
+            CallTypes.anthropic_messages.value,
         ]:
             return "llm"
-        
+
         # Tool operations
         if call_type in [CallTypes.call_mcp_tool.value]:
             return "tool"
-            
+
         # Retrieval operations
         if call_type in [
-            CallTypes.get_assistants.value, 
+            CallTypes.get_assistants.value,
             CallTypes.aget_assistants.value,
-            CallTypes.get_thread.value, 
+            CallTypes.get_thread.value,
             CallTypes.aget_thread.value,
-            CallTypes.get_messages.value, 
+            CallTypes.get_messages.value,
             CallTypes.aget_messages.value,
-            CallTypes.afile_retrieve.value, 
+            CallTypes.afile_retrieve.value,
             CallTypes.file_retrieve.value,
-            CallTypes.afile_list.value, 
+            CallTypes.afile_list.value,
             CallTypes.file_list.value,
-            CallTypes.afile_content.value, 
+            CallTypes.afile_content.value,
             CallTypes.file_content.value,
-            CallTypes.retrieve_batch.value, 
+            CallTypes.retrieve_batch.value,
             CallTypes.aretrieve_batch.value,
-            CallTypes.retrieve_fine_tuning_job.value, 
+            CallTypes.retrieve_fine_tuning_job.value,
             CallTypes.aretrieve_fine_tuning_job.value,
-            CallTypes.responses.value, 
+            CallTypes.responses.value,
             CallTypes.aresponses.value,
-            CallTypes.alist_input_items.value
+            CallTypes.alist_input_items.value,
         ]:
             return "retrieval"
-            
+
         # Task operations (batch, fine-tuning, file operations, etc.)
         if call_type in [
-            CallTypes.create_batch.value, 
+            CallTypes.create_batch.value,
             CallTypes.acreate_batch.value,
-            CallTypes.create_fine_tuning_job.value, 
+            CallTypes.create_fine_tuning_job.value,
             CallTypes.acreate_fine_tuning_job.value,
-            CallTypes.cancel_fine_tuning_job.value, 
+            CallTypes.cancel_fine_tuning_job.value,
             CallTypes.acancel_fine_tuning_job.value,
-            CallTypes.list_fine_tuning_jobs.value, 
+            CallTypes.list_fine_tuning_jobs.value,
             CallTypes.alist_fine_tuning_jobs.value,
-            CallTypes.create_assistants.value, 
+            CallTypes.create_assistants.value,
             CallTypes.acreate_assistants.value,
-            CallTypes.delete_assistant.value, 
+            CallTypes.delete_assistant.value,
             CallTypes.adelete_assistant.value,
-            CallTypes.create_thread.value, 
+            CallTypes.create_thread.value,
             CallTypes.acreate_thread.value,
-            CallTypes.add_message.value, 
+            CallTypes.add_message.value,
             CallTypes.a_add_message.value,
-            CallTypes.run_thread.value, 
+            CallTypes.run_thread.value,
             CallTypes.arun_thread.value,
-            CallTypes.run_thread_stream.value, 
+            CallTypes.run_thread_stream.value,
             CallTypes.arun_thread_stream.value,
-            CallTypes.file_delete.value, 
+            CallTypes.file_delete.value,
             CallTypes.afile_delete.value,
-            CallTypes.create_file.value, 
+            CallTypes.create_file.value,
             CallTypes.acreate_file.value,
-            CallTypes.image_generation.value, 
+            CallTypes.image_generation.value,
             CallTypes.aimage_generation.value,
-            CallTypes.image_edit.value, 
+            CallTypes.image_edit.value,
             CallTypes.aimage_edit.value,
-            CallTypes.moderation.value, 
+            CallTypes.moderation.value,
             CallTypes.amoderation.value,
-            CallTypes.transcription.value, 
+            CallTypes.transcription.value,
             CallTypes.atranscription.value,
-            CallTypes.speech.value, 
+            CallTypes.speech.value,
             CallTypes.aspeech.value,
-            CallTypes.rerank.value, 
-            CallTypes.arerank.value
+            CallTypes.rerank.value,
+            CallTypes.arerank.value,
         ]:
             return "task"
-            
+
         # Default fallback for unknown or passthrough operations
         return "llm"
 
@@ -443,7 +459,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
-            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
+            "guardrail_information": standard_logging_payload.get(
+                "guardrail_information", None
+            ),
         }
 
         #########################################################
@@ -458,16 +476,22 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         _metadata.update(_standard_logging_metadata)
         return _metadata
 
-    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
+    def _get_latency_metrics(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> DDLLMObsLatencyMetrics:
         """
         Get the latency metrics from the standard logging payload
         """
         latency_metrics: DDLLMObsLatencyMetrics = DDLLMObsLatencyMetrics()
         # Add latency metrics to metadata
         # Time to first token (convert from seconds to milliseconds for consistency)
-        time_to_first_token_seconds = self._get_time_to_first_token_seconds(standard_logging_payload)
+        time_to_first_token_seconds = self._get_time_to_first_token_seconds(
+            standard_logging_payload
+        )
         if time_to_first_token_seconds > 0:
-            latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
+            latency_metrics["time_to_first_token_ms"] = (
+                time_to_first_token_seconds * 1000
+            )
 
         # LiteLLM overhead time
         hidden_params = standard_logging_payload.get("hidden_params", {})
@@ -476,11 +500,17 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[StandardLoggingGuardrailInformation] = standard_logging_payload.get("guardrail_information")
+        guardrail_info: Optional[
+            StandardLoggingGuardrailInformation
+        ] = standard_logging_payload.get("guardrail_information")
         if guardrail_info is not None:
-            _guardrail_duration_seconds: Optional[float] = guardrail_info.get("duration")
+            _guardrail_duration_seconds: Optional[float] = guardrail_info.get(
+                "duration"
+            )
             if _guardrail_duration_seconds is not None:
                 # Convert from seconds to milliseconds for consistency
-                latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
-            
+                latency_metrics["guardrail_overhead_time_ms"] = (
+                    _guardrail_duration_seconds * 1000
+                )
+
         return latency_metrics

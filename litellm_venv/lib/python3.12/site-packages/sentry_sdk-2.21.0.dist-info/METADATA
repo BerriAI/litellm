@@ -1,0 +1,244 @@
+Metadata-Version: 2.2
+Name: sentry-sdk
+Version: 2.21.0
+Summary: Python client for Sentry (https://sentry.io)
+Home-page: https://github.com/getsentry/sentry-python
+Author: Sentry Team and Contributors
+Author-email: hello@sentry.io
+License: MIT
+Project-URL: Documentation, https://docs.sentry.io/platforms/python/
+Project-URL: Changelog, https://github.com/getsentry/sentry-python/blob/master/CHANGELOG.md
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Web Environment
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: urllib3>=1.26.11
+Requires-Dist: certifi
+Provides-Extra: aiohttp
+Requires-Dist: aiohttp>=3.5; extra == "aiohttp"
+Provides-Extra: anthropic
+Requires-Dist: anthropic>=0.16; extra == "anthropic"
+Provides-Extra: arq
+Requires-Dist: arq>=0.23; extra == "arq"
+Provides-Extra: asyncpg
+Requires-Dist: asyncpg>=0.23; extra == "asyncpg"
+Provides-Extra: beam
+Requires-Dist: apache-beam>=2.12; extra == "beam"
+Provides-Extra: bottle
+Requires-Dist: bottle>=0.12.13; extra == "bottle"
+Provides-Extra: celery
+Requires-Dist: celery>=3; extra == "celery"
+Provides-Extra: celery-redbeat
+Requires-Dist: celery-redbeat>=2; extra == "celery-redbeat"
+Provides-Extra: chalice
+Requires-Dist: chalice>=1.16.0; extra == "chalice"
+Provides-Extra: clickhouse-driver
+Requires-Dist: clickhouse-driver>=0.2.0; extra == "clickhouse-driver"
+Provides-Extra: django
+Requires-Dist: django>=1.8; extra == "django"
+Provides-Extra: falcon
+Requires-Dist: falcon>=1.4; extra == "falcon"
+Provides-Extra: fastapi
+Requires-Dist: fastapi>=0.79.0; extra == "fastapi"
+Provides-Extra: flask
+Requires-Dist: flask>=0.11; extra == "flask"
+Requires-Dist: blinker>=1.1; extra == "flask"
+Requires-Dist: markupsafe; extra == "flask"
+Provides-Extra: grpcio
+Requires-Dist: grpcio>=1.21.1; extra == "grpcio"
+Requires-Dist: protobuf>=3.8.0; extra == "grpcio"
+Provides-Extra: http2
+Requires-Dist: httpcore[http2]==1.*; extra == "http2"
+Provides-Extra: httpx
+Requires-Dist: httpx>=0.16.0; extra == "httpx"
+Provides-Extra: huey
+Requires-Dist: huey>=2; extra == "huey"
+Provides-Extra: huggingface-hub
+Requires-Dist: huggingface_hub>=0.22; extra == "huggingface-hub"
+Provides-Extra: langchain
+Requires-Dist: langchain>=0.0.210; extra == "langchain"
+Provides-Extra: launchdarkly
+Requires-Dist: launchdarkly-server-sdk>=9.8.0; extra == "launchdarkly"
+Provides-Extra: litestar
+Requires-Dist: litestar>=2.0.0; extra == "litestar"
+Provides-Extra: loguru
+Requires-Dist: loguru>=0.5; extra == "loguru"
+Provides-Extra: openai
+Requires-Dist: openai>=1.0.0; extra == "openai"
+Requires-Dist: tiktoken>=0.3.0; extra == "openai"
+Provides-Extra: openfeature
+Requires-Dist: openfeature-sdk>=0.7.1; extra == "openfeature"
+Provides-Extra: opentelemetry
+Requires-Dist: opentelemetry-distro>=0.35b0; extra == "opentelemetry"
+Provides-Extra: opentelemetry-experimental
+Requires-Dist: opentelemetry-distro; extra == "opentelemetry-experimental"
+Provides-Extra: pure-eval
+Requires-Dist: pure_eval; extra == "pure-eval"
+Requires-Dist: executing; extra == "pure-eval"
+Requires-Dist: asttokens; extra == "pure-eval"
+Provides-Extra: pymongo
+Requires-Dist: pymongo>=3.1; extra == "pymongo"
+Provides-Extra: pyspark
+Requires-Dist: pyspark>=2.4.4; extra == "pyspark"
+Provides-Extra: quart
+Requires-Dist: quart>=0.16.1; extra == "quart"
+Requires-Dist: blinker>=1.1; extra == "quart"
+Provides-Extra: rq
+Requires-Dist: rq>=0.6; extra == "rq"
+Provides-Extra: sanic
+Requires-Dist: sanic>=0.8; extra == "sanic"
+Provides-Extra: sqlalchemy
+Requires-Dist: sqlalchemy>=1.2; extra == "sqlalchemy"
+Provides-Extra: starlette
+Requires-Dist: starlette>=0.19.1; extra == "starlette"
+Provides-Extra: starlite
+Requires-Dist: starlite>=1.48; extra == "starlite"
+Provides-Extra: tornado
+Requires-Dist: tornado>=6; extra == "tornado"
+Provides-Extra: unleash
+Requires-Dist: UnleashClient>=6.0.1; extra == "unleash"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+<a href="https://sentry.io/?utm_source=github&utm_medium=logo" target="_blank">
+  <img src="https://sentry-brand.storage.googleapis.com/github-banners/github-sdk-python.png" alt="Sentry for Python">
+</a>
+
+
+_Bad software is everywhere, and we're tired of it. Sentry is on a mission to help developers write better software faster, so we can get back to enjoying technology. If you want to join us, [<kbd>**check out our open positions**</kbd>](https://sentry.io/careers/)_.
+
+# Official Sentry SDK for Python
+
+[![Build Status](https://github.com/getsentry/sentry-python/actions/workflows/ci.yml/badge.svg)](https://github.com/getsentry/sentry-python/actions/workflows/ci.yml)
+[![PyPi page link -- version](https://img.shields.io/pypi/v/sentry-sdk.svg)](https://pypi.python.org/pypi/sentry-sdk)
+[![Discord](https://img.shields.io/discord/621778831602221064)](https://discord.gg/cWnMQeA)
+
+Welcome to the official Python SDK for **[Sentry](http://sentry.io/)**!
+
+## Getting Started
+
+### Installation
+
+Getting Sentry into your project is straightforward. Just run this command in your terminal:
+
+```bash
+pip install --upgrade sentry-sdk
+```
+
+### Basic Configuration
+
+Here’s a quick configuration example to get Sentry up and running:
+
+```python
+import sentry_sdk
+
+sentry_sdk.init(
+    "https://12927b5f211046b575ee51fd8b1ac34f@o1.ingest.sentry.io/1",  # Your DSN here
+
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for performance monitoring.
+    traces_sample_rate=1.0,
+)
+```
+
+With this configuration, Sentry will monitor for exceptions and performance issues.
+
+### Quick Usage Example
+
+To generate some events that will show up in Sentry, you can log messages or capture errors:
+
+```python
+from sentry_sdk import capture_message
+capture_message("Hello Sentry!")  # You'll see this in your Sentry dashboard.
+
+raise ValueError("Oops, something went wrong!")  # This will create an error event in Sentry.
+```
+
+#### Explore the Docs
+
+For more details on advanced usage, integrations, and customization, check out the full documentation:
+
+- [Official SDK Docs](https://docs.sentry.io/platforms/python/)
+- [API Reference](https://getsentry.github.io/sentry-python/)
+
+## Integrations
+
+Sentry integrates with many popular Python libraries and frameworks, including:
+
+- [Django](https://docs.sentry.io/platforms/python/integrations/django/)
+- [Flask](https://docs.sentry.io/platforms/python/integrations/flask/)
+- [FastAPI](https://docs.sentry.io/platforms/python/integrations/fastapi/)
+- [Celery](https://docs.sentry.io/platforms/python/integrations/celery/)
+- [AWS Lambda](https://docs.sentry.io/platforms/python/integrations/aws-lambda/)
+
+Want more? [Check out the full list of integrations](https://docs.sentry.io/platforms/python/integrations/).
+
+### Rolling Your Own Integration?
+
+If you want to create a new integration or improve an existing one, we’d welcome your contributions! Please read our [contributing guide](https://github.com/getsentry/sentry-python/blob/master/CONTRIBUTING.md) before starting.
+
+## Migrating Between Versions?
+
+### From `1.x` to `2.x`
+
+If you're using the older `1.x` version of the SDK, now's the time to upgrade to `2.x`. It includes significant upgrades and new features. Check our [migration guide](https://docs.sentry.io/platforms/python/migration/1.x-to-2.x) for assistance.
+
+### From `raven-python`
+
+Using the legacy `raven-python` client? It's now in maintenance mode, and we recommend migrating to the new SDK for an improved experience. Get all the details in our [migration guide](https://docs.sentry.io/platforms/python/migration/raven-to-sentry-sdk/).
+
+## Want to Contribute?
+
+We’d love your help in improving the Sentry SDK! Whether it’s fixing bugs, adding features, or enhancing documentation, every contribution is valuable.
+
+For details on how to contribute, please check out [CONTRIBUTING.md](CONTRIBUTING.md) and explore the [open issues](https://github.com/getsentry/sentry-python/issues).
+
+## Need Help?
+
+If you encounter issues or need help setting up or configuring the SDK, don’t hesitate to reach out to the [Sentry Community on Discord](https://discord.com/invite/Ww9hbqr). There is a ton of great people there ready to help!
+
+## Resources
+
+Here are additional resources to help you make the most of Sentry:
+
+- [![Documentation](https://img.shields.io/badge/documentation-sentry.io-green.svg)](https://docs.sentry.io/quickstart/) – Official documentation to get started.
+- [![Discord](https://img.shields.io/discord/621778831602221064)](https://discord.gg/Ww9hbqr) – Join our Discord community.
+- [![Twitter Follow](https://img.shields.io/twitter/follow/getsentry?label=getsentry&style=social)](https://twitter.com/intent/follow?screen_name=getsentry) – Follow us on X (Twitter) for updates.
+- [![Stack Overflow](https://img.shields.io/badge/stack%20overflow-sentry-green.svg)](http://stackoverflow.com/questions/tagged/sentry) – Questions and answers related to Sentry.
+
+## License
+
+The SDK is open-source and available under the MIT license. Check out the [LICENSE](LICENSE) file for more information.
+
+---
+
+Thanks to everyone who has helped improve the SDK!
+
+<a href="https://github.com/getsentry/sentry-python/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=getsentry/sentry-python" />
+</a>

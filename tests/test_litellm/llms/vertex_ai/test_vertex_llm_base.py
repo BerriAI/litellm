@@ -299,9 +299,7 @@ class TestVertexBase:
             "project_id": "test-project",
             "refresh_token": "fake-refresh-token",
             "type": "external_account",
-            "credential_source": {
-                "environment_id": "aws1"
-            }
+            "credential_source": {"environment_id": "aws1"},
         }
         mock_creds = MagicMock()
         mock_creds.token = "token-1"
@@ -309,7 +307,9 @@ class TestVertexBase:
         mock_creds.project_id = "test-project"
 
         with patch.object(
-            vertex_base, "_credentials_from_identity_pool_with_aws", return_value=mock_creds
+            vertex_base,
+            "_credentials_from_identity_pool_with_aws",
+            return_value=mock_creds,
         ) as mock_credentials_from_identity_pool_with_aws, patch.object(
             vertex_base, "refresh_auth"
         ) as mock_refresh:
@@ -447,7 +447,7 @@ class TestVertexBase:
             assert token == "token-1"
             assert project == "resolved-project"
 
-                        # Verify both cache entries exist
+            # Verify both cache entries exist
             original_cache_key = (json.dumps(credentials), None)
             resolved_cache_key = (json.dumps(credentials), "resolved-project")
 
@@ -455,8 +455,12 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the same tuple
-            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
-            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)
@@ -594,9 +598,10 @@ class TestVertexBase:
         credentials = {"type": "service_account"}
 
         with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "resolved-from-credentials")
+            vertex_base,
+            "load_auth",
+            return_value=(mock_creds, "resolved-from-credentials"),
         ) as mock_load_auth:
-
             # First call: User provides NO project_id, should resolve from credentials
             if is_async:
                 token1, project1 = await vertex_base._ensure_access_token_async(
@@ -624,8 +629,12 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the tuple with resolved project_id
-            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
-            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)

@@ -1,0 +1,56 @@
+Metadata-Version: 2.1
+Name: proto-plus
+Version: 1.26.1
+Summary: Beautiful, Pythonic protocol buffers
+Author-email: Google LLC <googleapis-packages@google.com>
+License: Apache 2.0
+Project-URL: Documentation, https://googleapis.dev/python/proto-plus/latest/
+Project-URL: Repository, https://github.com/googleapis/proto-plus-python
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Software Development :: Code Generators
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.7
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: protobuf<7.0.0,>=3.19.0
+Provides-Extra: testing
+Requires-Dist: google-api-core>=1.31.5; extra == "testing"
+
+Proto Plus for Python
+=====================
+
+|pypi| |release level|
+
+    Beautiful, Pythonic protocol buffers.
+
+This is a wrapper around `protocol buffers`_. Protocol buffers is a
+specification format for APIs, such as those inside Google.
+This library provides protocol buffer message classes and objects that
+largely behave like native Python types.
+
+.. _protocol buffers: https://developers.google.com/protocol-buffers/
+
+
+Documentation
+-------------
+
+`API Documentation`_ is available on Read the Docs.
+
+.. _API Documentation: https://googleapis.dev/python/proto-plus/latest/
+
+.. |pypi| image:: https://img.shields.io/pypi/v/proto-plus.svg
+   :target: https://pypi.org/project/proto-plus
+.. |release level| image:: https://img.shields.io/badge/release%20level-ga-gold.svg?style&#x3D;flat
+  :target: https://cloud.google.com/terms/launch-stages

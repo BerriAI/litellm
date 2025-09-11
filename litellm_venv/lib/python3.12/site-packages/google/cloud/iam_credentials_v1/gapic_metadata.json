@@ -1,0 +1,88 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.iam_credentials_v1",
+  "protoPackage": "google.iam.credentials.v1",
+  "schema": "1.0",
+  "services": {
+    "IAMCredentials": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "IAMCredentialsClient",
+          "rpcs": {
+            "GenerateAccessToken": {
+              "methods": [
+                "generate_access_token"
+              ]
+            },
+            "GenerateIdToken": {
+              "methods": [
+                "generate_id_token"
+              ]
+            },
+            "SignBlob": {
+              "methods": [
+                "sign_blob"
+              ]
+            },
+            "SignJwt": {
+              "methods": [
+                "sign_jwt"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "IAMCredentialsAsyncClient",
+          "rpcs": {
+            "GenerateAccessToken": {
+              "methods": [
+                "generate_access_token"
+              ]
+            },
+            "GenerateIdToken": {
+              "methods": [
+                "generate_id_token"
+              ]
+            },
+            "SignBlob": {
+              "methods": [
+                "sign_blob"
+              ]
+            },
+            "SignJwt": {
+              "methods": [
+                "sign_jwt"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "IAMCredentialsClient",
+          "rpcs": {
+            "GenerateAccessToken": {
+              "methods": [
+                "generate_access_token"
+              ]
+            },
+            "GenerateIdToken": {
+              "methods": [
+                "generate_id_token"
+              ]
+            },
+            "SignBlob": {
+              "methods": [
+                "sign_blob"
+              ]
+            },
+            "SignJwt": {
+              "methods": [
+                "sign_jwt"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

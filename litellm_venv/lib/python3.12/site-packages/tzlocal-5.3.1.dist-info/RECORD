@@ -1,0 +1,17 @@
+tzlocal-5.3.1.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+tzlocal-5.3.1.dist-info/LICENSE.txt,sha256=2ZqyCa6xaq0sJckP_YPBqYHikP__dqQgoqsD4D8EG4w,1060
+tzlocal-5.3.1.dist-info/METADATA,sha256=9fSrmurX5XWWl7z9_oEtOliS9NPLr90xlDjTv8kZWeQ,7589
+tzlocal-5.3.1.dist-info/RECORD,,
+tzlocal-5.3.1.dist-info/WHEEL,sha256=G16H4A3IeoQmnOrYV4ueZGKSjhipXx8zc8nu9FGlvMA,92
+tzlocal-5.3.1.dist-info/top_level.txt,sha256=QR6vZWP520waETnkotApPQPyVh9VnjoYPoAVHLK1DrE,8
+tzlocal/__init__.py,sha256=2OQDx61TZv_HmBl7JKKP4ATldlx5OdEXOjKXAt8rQwY,396
+tzlocal/__pycache__/__init__.cpython-312.pyc,,
+tzlocal/__pycache__/unix.cpython-312.pyc,,
+tzlocal/__pycache__/utils.cpython-312.pyc,,
+tzlocal/__pycache__/win32.cpython-312.pyc,,
+tzlocal/__pycache__/windows_tz.cpython-312.pyc,,
+tzlocal/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+tzlocal/unix.py,sha256=SyD32zfJn3r7xDJwo4sTYebhQ25XZIssvz24Nd-9tR8,9097
+tzlocal/utils.py,sha256=ov8fPwPjyvXRqW9Wzx_skATsjiB9gAzK1CEHJ2UI91Y,3224
+tzlocal/win32.py,sha256=8lFxjUGxOmcHcVgKWjVEPnLbTswOgxqdpnaBW9wcPQE,4668
+tzlocal/windows_tz.py,sha256=fG2X3ly4i3cRoaQEd6ncJhqDgPp-qvJunnRW-fg0Jkk,35165

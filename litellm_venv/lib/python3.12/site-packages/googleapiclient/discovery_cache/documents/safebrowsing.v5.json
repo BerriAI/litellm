@@ -1,0 +1,604 @@
+{
+"basePath": "",
+"baseUrl": "https://safebrowsing.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Safebrowsing",
+"description": "Enables client applications to check web resources (most commonly URLs) against Google-generated lists of unsafe web resources. The Safe Browsing APIs are for non-commercial use only. If you need to use APIs to detect malicious URLs for commercial purposes \u2013 meaning \u201cfor sale or revenue-generating purposes\u201d \u2013 please refer to the Web Risk API.",
+"discoveryVersion": "v1",
+"documentationLink": "https://developers.google.com/safe-browsing/",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "safebrowsing:v5",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://safebrowsing.mtls.googleapis.com/",
+"name": "safebrowsing",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"hashList": {
+"methods": {
+"get": {
+"description": "Get the latest contents of a hash list. A hash list may either by a threat list or a non-threat list such as the Global Cache. This is a standard Get method as defined by https://google.aip.dev/131 and the HTTP method is also GET.",
+"flatPath": "v5/hashList/{name}",
+"httpMethod": "GET",
+"id": "safebrowsing.hashList.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of this particular hash list. It may be a threat list, or it may be the Global Cache.",
+"location": "path",
+"required": true,
+"type": "string"
+},
+"sizeConstraints.maxDatabaseEntries": {
+"description": "Sets the maximum number of entries that the client is willing to have in the local database for the list. (The server MAY cause the client to store less than this number of entries.) If omitted or zero, no database size limit is set.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"sizeConstraints.maxUpdateEntries": {
+"description": "The maximum size in number of entries. The update will not contain more entries than this value, but it is possible that the update will contain fewer entries than this value. This MUST be at least 1024. If omitted or zero, no update size limit is set.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"version": {
+"description": "The version of the hash list that the client already has. If this is the first time the client is fetching the hash list, this field MUST be left empty. Otherwise, the client SHOULD supply the version previously received from the server. The client MUST NOT manipulate those bytes. **What's new in V5**: in V4 of the API, this was called `states`; it is now renamed to `version` for clarity.",
+"format": "byte",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v5/hashList/{name}",
+"response": {
+"$ref": "GoogleSecuritySafebrowsingV5HashList"
+}
+}
+}
+},
+"hashLists": {
+"methods": {
+"batchGet": {
+"description": "Get multiple hash lists at once. It is very common for a client to need to get multiple hash lists. Using this method is preferred over using the regular Get method multiple times. This is a standard batch Get method as defined by https://google.aip.dev/231 and the HTTP method is also GET.",
+"flatPath": "v5/hashLists:batchGet",
+"httpMethod": "GET",
+"id": "safebrowsing.hashLists.batchGet",
+"parameterOrder": [],
+"parameters": {
+"names": {
+"description": "Required. The names of the particular hash lists. The list MAY be a threat list, or it may be the Global Cache. The names MUST NOT contain duplicates; if they did, the client will get an error.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"sizeConstraints.maxDatabaseEntries": {
+"description": "Sets the maximum number of entries that the client is willing to have in the local database for the list. (The server MAY cause the client to store less than this number of entries.) If omitted or zero, no database size limit is set.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"sizeConstraints.maxUpdateEntries": {
+"description": "The maximum size in number of entries. The update will not contain more entries than this value, but it is possible that the update will contain fewer entries than this value. This MUST be at least 1024. If omitted or zero, no update size limit is set.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"version": {
+"description": "The versions of the hash list that the client already has. If this is the first time the client is fetching the hash lists, the field should be left empty. Otherwise, the client should supply the versions previously received from the server. The client MUST NOT manipulate those bytes. The client need not send the versions in the same order as the corresponding list names. The client may send fewer or more versions in a request than there are names. However the client MUST NOT send multiple versions that correspond to the same name; if it did, the client will get an error. Historical note: in V4 of the API, this was called `states`; it is now renamed to `version` for clarity.",
+"format": "byte",
+"location": "query",
+"repeated": true,
+"type": "string"
+}
+},
+"path": "v5/hashLists:batchGet",
+"response": {
+"$ref": "GoogleSecuritySafebrowsingV5BatchGetHashListsResponse"
+}
+},
+"list": {
+"description": "List hash lists. In the V5 API, Google will never remove a hash list that has ever been returned by this method. This enables clients to skip using this method and simply hard-code all hash lists they need. This is a standard List method as defined by https://google.aip.dev/132 and the HTTP method is GET.",
+"flatPath": "v5/hashLists",
+"httpMethod": "GET",
+"id": "safebrowsing.hashLists.list",
+"parameterOrder": [],
+"parameters": {
+"pageSize": {
+"description": "The maximum number of hash lists to return. The service may return fewer than this value. If unspecified, the server will choose a page size, which may be larger than the number of hash lists so that pagination is not necessary.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token, received from a previous `ListHashLists` call. Provide this to retrieve the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v5/hashLists",
+"response": {
+"$ref": "GoogleSecuritySafebrowsingV5ListHashListsResponse"
+}
+}
+}
+},
+"hashes": {
+"methods": {
+"search": {
+"description": "Search for full hashes matching the specified prefixes. This is a custom method as defined by https://google.aip.dev/136 (the custom method refers to this method having a custom name within Google's general API development nomenclature; it does not refer to using a custom HTTP method).",
+"flatPath": "v5/hashes:search",
+"httpMethod": "GET",
+"id": "safebrowsing.hashes.search",
+"parameterOrder": [],
+"parameters": {
+"hashPrefixes": {
+"description": "Required. The hash prefixes to be looked up. Clients MUST NOT send more than 1000 hash prefixes. However, following the URL processing procedure, clients SHOULD NOT need to send more than 30 hash prefixes. Currently each hash prefix is required to be exactly 4 bytes long. This MAY be relaxed in the future.",
+"format": "byte",
+"location": "query",
+"repeated": true,
+"type": "string"
+}
+},
+"path": "v5/hashes:search",
+"response": {
+"$ref": "GoogleSecuritySafebrowsingV5SearchHashesResponse"
+}
+}
+}
+}
+},
+"revision": "20250518",
+"rootUrl": "https://safebrowsing.googleapis.com/",
+"schemas": {
+"GoogleSecuritySafebrowsingV5BatchGetHashListsResponse": {
+"description": "The response containing multiple hash lists.",
+"id": "GoogleSecuritySafebrowsingV5BatchGetHashListsResponse",
+"properties": {
+"hashLists": {
+"description": "The hash lists in the same order given in the request.",
+"items": {
+"$ref": "GoogleSecuritySafebrowsingV5HashList"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5FullHash": {
+"description": "The full hash identified with one or more matches.",
+"id": "GoogleSecuritySafebrowsingV5FullHash",
+"properties": {
+"fullHash": {
+"description": "The matching full hash. This is the SHA256 hash. The length will be exactly 32 bytes.",
+"format": "byte",
+"type": "string"
+},
+"fullHashDetails": {
+"description": "Unordered list. A repeated field identifying the details relevant to this full hash.",
+"items": {
+"$ref": "GoogleSecuritySafebrowsingV5FullHashFullHashDetail"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5FullHashFullHashDetail": {
+"description": "Details about a matching full hash. An important note about forward compatibility: new threat types and threat attributes may be added by the server at any time; those additions are considered minor version changes. It is Google's policy not to expose minor version numbers in APIs (see https://cloud.google.com/apis/design/versioning for the versioning policy), so clients MUST be prepared to receive `FullHashDetail` messages containing `ThreatType` enum values or `ThreatAttribute` enum values that are considered invalid by the client. Therefore, it is the client's responsibility to check for the validity of all `ThreatType` and `ThreatAttribute` enum values; if any value is considered invalid, the client MUST disregard the entire `FullHashDetail` message.",
+"id": "GoogleSecuritySafebrowsingV5FullHashFullHashDetail",
+"properties": {
+"attributes": {
+"description": "Unordered list. Additional attributes about those full hashes. This may be empty.",
+"items": {
+"enum": [
+"THREAT_ATTRIBUTE_UNSPECIFIED",
+"CANARY",
+"FRAME_ONLY"
+],
+"enumDescriptions": [
+"Unknown attribute. If this is returned by the server, the client shall disregard the enclosing `FullHashDetail` altogether.",
+"Indicates that the threat_type should not be used for enforcement.",
+"Indicates that the threat_type should only be used for enforcement on frames."
+],
+"type": "string"
+},
+"type": "array"
+},
+"threatType": {
+"description": "The type of threat. This field will never be empty.",
+"enum": [
+"THREAT_TYPE_UNSPECIFIED",
+"MALWARE",
+"SOCIAL_ENGINEERING",
+"UNWANTED_SOFTWARE",
+"POTENTIALLY_HARMFUL_APPLICATION"
+],
+"enumDescriptions": [
+"Unknown threat type. If this is returned by the server, the client shall disregard the enclosing `FullHashDetail` altogether.",
+"Malware threat type. Malware is any software or mobile application specifically designed to harm a computer, a mobile device, the software it's running, or its users. Malware exhibits malicious behavior that can include installing software without user consent and installing harmful software such as viruses. More information can be found [here](https://developers.google.com/search/docs/monitor-debug/security/malware).",
+"Social engineering threat type. Social engineering pages falsely purport to act on behalf of a third party with the intention of confusing viewers into performing an action with which the viewer would only trust a true agent of that third party. Phishing is a type of social engineering that tricks the viewer into performing the specific action of providing information, such as login credentials. More information can be found [here](https://developers.google.com/search/docs/monitor-debug/security/social-engineering).",
+"Unwanted software threat type. Unwanted software is any software that does not adhere to [Google's Software Principles](https://www.google.com/about/software-principles.html) but isn't malware.",
+"Potentially harmful application threat type [as used by Google Play Protect for the Play Store](https://developers.google.com/android/play-protect/potentially-harmful-applications)."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5HashList": {
+"description": "A list of hashes identified by its name.",
+"id": "GoogleSecuritySafebrowsingV5HashList",
+"properties": {
+"additionsEightBytes": {
+"$ref": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded64Bit",
+"description": "The 8-byte additions."
+},
+"additionsFourBytes": {
+"$ref": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded32Bit",
+"description": "The 4-byte additions."
+},
+"additionsSixteenBytes": {
+"$ref": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded128Bit",
+"description": "The 16-byte additions."
+},
+"additionsThirtyTwoBytes": {
+"$ref": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded256Bit",
+"description": "The 32-byte additions."
+},
+"compressedRemovals": {
+"$ref": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded32Bit",
+"description": "The Rice-delta encoded version of removal indices. Since each hash list definitely has less than 2^32 entries, the indices are treated as 32-bit integers and encoded."
+},
+"metadata": {
+"$ref": "GoogleSecuritySafebrowsingV5HashListMetadata",
+"description": "Metadata about the hash list. This is not populated by the `GetHashList` method, but this is populated by the `ListHashLists` method."
+},
+"minimumWaitDuration": {
+"description": "Clients should wait at least this long to get the hash list again. If omitted or zero, clients SHOULD fetch immediately because it indicates that the server has an additional update to be sent to the client, but could not due to the client-specified constraints.",
+"format": "google-duration",
+"type": "string"
+},
+"name": {
+"description": "The name of the hash list. Note that the Global Cache is also just a hash list and can be referred to here.",
+"type": "string"
+},
+"partialUpdate": {
+"description": "When true, this is a partial diff containing additions and removals based on what the client already has. When false, this is the complete hash list. When false, the client MUST delete any locally stored version for this hash list. This means that either the version possessed by the client is seriously out-of-date or the client data is believed to be corrupt. The `compressed_removals` field will be empty. When true, the client MUST apply an incremental update by applying removals and then additions.",
+"type": "boolean"
+},
+"sha256Checksum": {
+"description": "The sorted list of all hashes, hashed again with SHA256. This is the checksum for the sorted list of all hashes present in the database after applying the provided update. In the case that no updates were provided, the server will omit this field to indicate that the client should use the existing checksum.",
+"format": "byte",
+"type": "string"
+},
+"version": {
+"description": "The version of the hash list. The client MUST NOT manipulate those bytes.",
+"format": "byte",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5HashListMetadata": {
+"description": "Metadata about a particular hash list.",
+"id": "GoogleSecuritySafebrowsingV5HashListMetadata",
+"properties": {
+"description": {
+"description": "A human-readable description about this list. Written in English.",
+"type": "string"
+},
+"hashLength": {
+"description": "The supported hash length for this hash list. Each hash list will support exactly one length. If a different hash length is introduced for the same set of threat types or safe types, it will be introduced as a separate list with a distinct name and respective hash length set.",
+"enum": [
+"HASH_LENGTH_UNSPECIFIED",
+"FOUR_BYTES",
+"EIGHT_BYTES",
+"SIXTEEN_BYTES",
+"THIRTY_TWO_BYTES"
+],
+"enumDescriptions": [
+"Unspecified length.",
+"Each hash is a four-byte prefix.",
+"Each hash is an eight-byte prefix.",
+"Each hash is a sixteen-byte prefix.",
+"Each hash is a thirty-two-byte full hash."
+],
+"type": "string"
+},
+"likelySafeTypes": {
+"description": "Unordered list. If not empty, this specifies that the hash list represents a list of likely safe hashes, and this enumerates the ways they are considered likely safe. This field is mutually exclusive with the threat_types field.",
+"items": {
+"enum": [
+"LIKELY_SAFE_TYPE_UNSPECIFIED",
+"GENERAL_BROWSING",
+"CSD",
+"DOWNLOAD"
+],
+"enumDescriptions": [
+"Unknown.",
+"This site is likely safe enough for general browsing. This is also known as the global cache.",
+"This site is likely safe enough that there is no need to run Client-Side Detection models or password protection checks.",
+"This site is likely safe enough that downloads from the site need not be checked."
+],
+"type": "string"
+},
+"type": "array"
+},
+"threatTypes": {
+"description": "Unordered list. If not empty, this specifies that the hash list is a kind of threat list, and this enumerates the kind of threats associated with hashes or hash prefixes in this hash list. May be empty if the entry does not represent a threat, i.e. in the case that it represents a likely safe type.",
+"items": {
+"enum": [
+"THREAT_TYPE_UNSPECIFIED",
+"MALWARE",
+"SOCIAL_ENGINEERING",
+"UNWANTED_SOFTWARE",
+"POTENTIALLY_HARMFUL_APPLICATION"
+],
+"enumDescriptions": [
+"Unknown threat type. If this is returned by the server, the client shall disregard the enclosing `FullHashDetail` altogether.",
+"Malware threat type. Malware is any software or mobile application specifically designed to harm a computer, a mobile device, the software it's running, or its users. Malware exhibits malicious behavior that can include installing software without user consent and installing harmful software such as viruses. More information can be found [here](https://developers.google.com/search/docs/monitor-debug/security/malware).",
+"Social engineering threat type. Social engineering pages falsely purport to act on behalf of a third party with the intention of confusing viewers into performing an action with which the viewer would only trust a true agent of that third party. Phishing is a type of social engineering that tricks the viewer into performing the specific action of providing information, such as login credentials. More information can be found [here](https://developers.google.com/search/docs/monitor-debug/security/social-engineering).",
+"Unwanted software threat type. Unwanted software is any software that does not adhere to [Google's Software Principles](https://www.google.com/about/software-principles.html) but isn't malware.",
+"Potentially harmful application threat type [as used by Google Play Protect for the Play Store](https://developers.google.com/android/play-protect/potentially-harmful-applications)."
+],
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5ListHashListsResponse": {
+"description": "The response containing metadata about hash lists.",
+"id": "GoogleSecuritySafebrowsingV5ListHashListsResponse",
+"properties": {
+"hashLists": {
+"description": "The hash lists in an arbitrary order. Only metadata about the hash lists will be included, not the contents.",
+"items": {
+"$ref": "GoogleSecuritySafebrowsingV5HashList"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token, which can be sent as `page_token` to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5RiceDeltaEncoded128Bit": {
+"description": "Same as `RiceDeltaEncoded32Bit` except this encodes 128-bit numbers.",
+"id": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded128Bit",
+"properties": {
+"encodedData": {
+"description": "The encoded deltas that are encoded using the Golomb-Rice coder.",
+"format": "byte",
+"type": "string"
+},
+"entriesCount": {
+"description": "The number of entries that are delta encoded in the encoded data. If only a single integer was encoded, this will be zero and the single value will be stored in `first_value`.",
+"format": "int32",
+"type": "integer"
+},
+"firstValueHi": {
+"description": "The upper 64 bits of the first entry in the encoded data (hashes). If the field is empty, the upper 64 bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"firstValueLo": {
+"description": "The lower 64 bits of the first entry in the encoded data (hashes). If the field is empty, the lower 64 bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"riceParameter": {
+"description": "The Golomb-Rice parameter. This parameter is guaranteed to be between 99 and 126, inclusive.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5RiceDeltaEncoded256Bit": {
+"description": "Same as `RiceDeltaEncoded32Bit` except this encodes 256-bit numbers.",
+"id": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded256Bit",
+"properties": {
+"encodedData": {
+"description": "The encoded deltas that are encoded using the Golomb-Rice coder.",
+"format": "byte",
+"type": "string"
+},
+"entriesCount": {
+"description": "The number of entries that are delta encoded in the encoded data. If only a single integer was encoded, this will be zero and the single value will be stored in `first_value`.",
+"format": "int32",
+"type": "integer"
+},
+"firstValueFirstPart": {
+"description": "The first 64 bits of the first entry in the encoded data (hashes). If the field is empty, the first 64 bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"firstValueFourthPart": {
+"description": "The last 64 bits of the first entry in the encoded data (hashes). If the field is empty, the last 64 bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"firstValueSecondPart": {
+"description": "The 65 through 128th bits of the first entry in the encoded data (hashes). If the field is empty, the 65 through 128th bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"firstValueThirdPart": {
+"description": "The 129 through 192th bits of the first entry in the encoded data (hashes). If the field is empty, the 129 through 192th bits are all zero.",
+"format": "uint64",
+"type": "string"
+},
+"riceParameter": {
+"description": "The Golomb-Rice parameter. This parameter is guaranteed to be between 227 and 254, inclusive.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5RiceDeltaEncoded32Bit": {
+"description": "The Rice-Golomb encoded data. Used for either hashes or removal indices. It is guaranteed that every hash or index here has the same length, and this length is exactly 32 bits. Generally speaking, if we sort all the entries lexicographically, we will find that the higher order bits tend not to change as frequently as lower order bits. This means that if we also take the adjacent difference between entries, the higher order bits have a high probability of being zero. This exploits this high probability of zero by essentially choosing a certain number of bits; all bits more significant than this are likely to be zero so we use unary encoding. See the `rice_parameter` field. Historical note: the Rice-delta encoding was first used in V4 of this API. In V5, two significant improvements were made: firstly, the Rice-delta encoding is now available with hash prefixes longer than 4 bytes; secondly, the encoded data are now treated as big-endian so as to avoid a costly sorting step.",
+"id": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded32Bit",
+"properties": {
+"encodedData": {
+"description": "The encoded deltas that are encoded using the Golomb-Rice coder.",
+"format": "byte",
+"type": "string"
+},
+"entriesCount": {
+"description": "The number of entries that are delta encoded in the encoded data. If only a single integer was encoded, this will be zero and the single value will be stored in `first_value`.",
+"format": "int32",
+"type": "integer"
+},
+"firstValue": {
+"description": "The first entry in the encoded data (hashes or indices), or, if only a single hash prefix or index was encoded, that entry's value. If the field is empty, the entry is zero.",
+"format": "uint32",
+"type": "integer"
+},
+"riceParameter": {
+"description": "The Golomb-Rice parameter. This parameter is guaranteed to be between 3 and 30, inclusive.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5RiceDeltaEncoded64Bit": {
+"description": "Same as `RiceDeltaEncoded32Bit` except this encodes 64-bit numbers.",
+"id": "GoogleSecuritySafebrowsingV5RiceDeltaEncoded64Bit",
+"properties": {
+"encodedData": {
+"description": "The encoded deltas that are encoded using the Golomb-Rice coder.",
+"format": "byte",
+"type": "string"
+},
+"entriesCount": {
+"description": "The number of entries that are delta encoded in the encoded data. If only a single integer was encoded, this will be zero and the single value will be stored in `first_value`.",
+"format": "int32",
+"type": "integer"
+},
+"firstValue": {
+"description": "The first entry in the encoded data (hashes), or, if only a single hash prefix was encoded, that entry's value. If the field is empty, the entry is zero.",
+"format": "uint64",
+"type": "string"
+},
+"riceParameter": {
+"description": "The Golomb-Rice parameter. This parameter is guaranteed to be between 35 and 62, inclusive.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleSecuritySafebrowsingV5SearchHashesResponse": {
+"description": "The response returned after searching threat hashes. If nothing is found, the server will return an OK status (HTTP status code 200) with the `full_hashes` field empty, rather than returning a NOT_FOUND status (HTTP status code 404). **What's new in V5**: There is a separation between `FullHash` and `FullHashDetail`. In the case when a hash represents a site having multiple threats (e.g. both MALWARE and SOCIAL_ENGINEERING), the full hash does not need to be sent twice as in V4. Furthermore, the cache duration has been simplified into a single `cache_duration` field.",
+"id": "GoogleSecuritySafebrowsingV5SearchHashesResponse",
+"properties": {
+"cacheDuration": {
+"description": "The client-side cache duration. The client MUST add this duration to the current time to determine the expiration time. The expiration time then applies to every hash prefix queried by the client in the request, regardless of how many full hashes are returned in the response. Even if the server returns no full hashes for a particular hash prefix, this fact MUST also be cached by the client. If and only if the field `full_hashes` is empty, the client MAY increase the `cache_duration` to determine a new expiration that is later than that specified by the server. In any case, the increased cache duration must not be longer than 24 hours. Important: the client MUST NOT assume that the server will return the same cache duration for all responses. The server MAY choose different cache durations for different responses depending on the situation.",
+"format": "google-duration",
+"type": "string"
+},
+"fullHashes": {
+"description": "Unordered list. The unordered list of full hashes found.",
+"items": {
+"$ref": "GoogleSecuritySafebrowsingV5FullHash"
+},
+"type": "array"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Safe Browsing API",
+"version": "v5",
+"version_module": true
+}

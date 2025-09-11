@@ -2847,7 +2847,6 @@ def test_json_valid_model_cost_map():
 
 
 def test_batch_cost_calculator():
-
     args = {
         "completion_response": {
             "choices": [

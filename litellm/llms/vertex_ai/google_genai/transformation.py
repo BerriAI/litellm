@@ -11,20 +11,20 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
     """
     Configuration for calling Google models in their native format.
     """
+
     HEADER_NAME = "Authorization"
     BEARER_PREFIX = "Bearer"
-    
+
     @property
     def custom_llm_provider(self) -> Literal["gemini", "vertex_ai"]:
         return "vertex_ai"
-    
 
     def validate_environment(
-        self, 
+        self,
         api_key: Optional[str],
         headers: Optional[dict],
         model: str,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]]
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
     ) -> dict:
         default_headers = {
             "Content-Type": "application/json",
@@ -36,4 +36,3 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
             default_headers.update(headers)
 
         return default_headers
-    

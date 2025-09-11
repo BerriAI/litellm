@@ -1,0 +1,12 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "Retrieve": {
+        "non_aggregate_keys": [
+          "guardrailAction"
+        ]
+      }
+    }
+  }
+}

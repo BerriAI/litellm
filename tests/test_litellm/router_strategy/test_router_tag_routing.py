@@ -252,7 +252,6 @@ async def test_default_tagged_deployments():
         assert response_extra_info["model_id"] == "default-model"
 
 
-
 @pytest.mark.asyncio()
 async def test_error_from_tag_routing():
     """

@@ -27,7 +27,6 @@ def migrate_models(config_file, proxy_base_url):
     model_list = config.get("model_list", [])
     print("model_list: ", model_list)
     for model in model_list:
-
         model_name = model.get("model_name")
         print("\nAdding model: ", model_name)
         litellm_params = model.get("litellm_params", {})

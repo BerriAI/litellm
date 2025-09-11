@@ -158,66 +158,72 @@ from pydantic import BaseModel
 
 class GeminiImageGenerationInstance(TypedDict):
     """Instance data for Gemini image generation request"""
+
     prompt: str
 
 
 class GeminiImageGenerationParameters(BaseModel):
     """Parameters for Gemini image generation request"""
+
     sampleCount: Optional[int] = None
     """Number of images to generate (maps to OpenAI 'n' parameter)"""
-    
+
     aspectRatio: Optional[str] = None
     """Aspect ratio for generated images (e.g., '1:1', '16:9', '9:16', '4:3', '3:4')"""
-    
+
     personGeneration: Optional[str] = None
     """Controls person generation in images"""
-    
+
     # Additional parameters that might be passed through
     background: Optional[str] = None
     """Background specification"""
-    
+
     input_fidelity: Optional[str] = None
     """Input fidelity specification"""
-    
+
     moderation: Optional[str] = None
     """Moderation settings"""
-    
+
     output_compression: Optional[str] = None
     """Output compression settings"""
-    
+
     output_format: Optional[str] = None
     """Output format specification"""
-    
+
     quality: Optional[str] = None
     """Quality settings"""
-    
+
     response_format: Optional[str] = None
     """Response format specification"""
-    
+
     style: Optional[str] = None
     """Style specification"""
-    
+
     user: Optional[str] = None
     """User specification"""
 
 
 class GeminiImageGenerationRequest(BaseModel):
     """Complete request body for Gemini image generation"""
+
     instances: List[GeminiImageGenerationInstance]
     parameters: GeminiImageGenerationParameters
 
 
 class GeminiGeneratedImage(TypedDict):
     """Individual generated image data from Gemini response"""
+
     bytesBase64Encoded: str
     """Base64 encoded image data"""
 
 
 class GeminiImageGenerationPrediction(TypedDict):
     """Prediction object containing generated images"""
+
     generatedImages: List[GeminiGeneratedImage]
 
 
 class GeminiImageGenerationResponse(TypedDict):
     """Complete response body from Gemini image generation API"""
+
     predictions: List[GeminiImageGenerationPrediction]

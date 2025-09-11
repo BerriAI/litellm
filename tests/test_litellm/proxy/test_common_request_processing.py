@@ -83,23 +83,29 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with stream timeout header
         headers_with_timeout = {"x-litellm-stream-timeout": "30.5"}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_with_timeout
+        )
         assert result == 30.5
-        
+
         # Test without stream timeout header
         headers_without_timeout = {}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_without_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_without_timeout
+        )
         assert result is None
-        
+
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
         with pytest.raises(ValueError):
-            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
+            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+                headers_with_invalid
+            )
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
         """
-        Test that x-litellm-stream-timeout header gets processed and added to request data 
+        Test that x-litellm-stream-timeout header gets processed and added to request data
         when calling add_litellm_data_to_request.
         """
         from litellm.integrations.opentelemetry import UserAPIKeyAuth
@@ -108,9 +114,9 @@ class TestProxyBaseLLMRequestProcessing:
         # Create test data with a basic completion request
         test_data = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
+
         # Mock request with stream timeout header
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {"x-litellm-stream-timeout": "45.0"}
@@ -118,7 +124,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_request.method = "POST"
         mock_request.query_params = {}
         mock_request.client = None
-        
+
         # Create a minimal mock with just the required attributes
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "test_api_key_hash"
@@ -142,10 +148,10 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.model_max_budget = None
         mock_user_api_key_dict.parent_otel_span = None
         mock_user_api_key_dict.team_model_aliases = None
-        
+
         general_settings = {}
         mock_proxy_config = MagicMock()
-        
+
         # Call the actual function that processes headers and adds data
         result_data = await add_litellm_data_to_request(
             data=test_data,
@@ -155,11 +161,11 @@ class TestProxyBaseLLMRequestProcessing:
             version=None,
             proxy_config=mock_proxy_config,
         )
-        
+
         # Verify that stream_timeout was extracted from header and added to request data
         assert "stream_timeout" in result_data
         assert result_data["stream_timeout"] == 45.0
-        
+
         # Verify that the original test data is preserved
         assert result_data["model"] == "gpt-3.5-turbo"
         assert result_data["messages"] == [{"role": "user", "content": "Hello"}]

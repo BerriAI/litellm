@@ -1,0 +1,58 @@
+{
+  "pagination": {
+    "DescribeChimeWebhookConfigurations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "WebhookConfigurations"
+    },
+    "DescribeSlackChannelConfigurations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "SlackChannelConfigurations"
+    },
+    "DescribeSlackUserIdentities": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "SlackUserIdentities"
+    },
+    "DescribeSlackWorkspaces": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "SlackWorkspaces"
+    },
+    "ListMicrosoftTeamsChannelConfigurations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TeamChannelConfigurations"
+    },
+    "ListMicrosoftTeamsConfiguredTeams": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ConfiguredTeams"
+    },
+    "ListMicrosoftTeamsUserIdentities": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TeamsUserIdentities"
+    },
+    "ListAssociations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "Associations"
+    },
+    "ListCustomActions": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "CustomActions"
+    }
+  }
+}

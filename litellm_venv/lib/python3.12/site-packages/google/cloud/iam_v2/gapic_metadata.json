@@ -1,0 +1,103 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.iam_v2",
+  "protoPackage": "google.iam.v2",
+  "schema": "1.0",
+  "services": {
+    "Policies": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "PoliciesClient",
+          "rpcs": {
+            "CreatePolicy": {
+              "methods": [
+                "create_policy"
+              ]
+            },
+            "DeletePolicy": {
+              "methods": [
+                "delete_policy"
+              ]
+            },
+            "GetPolicy": {
+              "methods": [
+                "get_policy"
+              ]
+            },
+            "ListPolicies": {
+              "methods": [
+                "list_policies"
+              ]
+            },
+            "UpdatePolicy": {
+              "methods": [
+                "update_policy"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "PoliciesAsyncClient",
+          "rpcs": {
+            "CreatePolicy": {
+              "methods": [
+                "create_policy"
+              ]
+            },
+            "DeletePolicy": {
+              "methods": [
+                "delete_policy"
+              ]
+            },
+            "GetPolicy": {
+              "methods": [
+                "get_policy"
+              ]
+            },
+            "ListPolicies": {
+              "methods": [
+                "list_policies"
+              ]
+            },
+            "UpdatePolicy": {
+              "methods": [
+                "update_policy"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "PoliciesClient",
+          "rpcs": {
+            "CreatePolicy": {
+              "methods": [
+                "create_policy"
+              ]
+            },
+            "DeletePolicy": {
+              "methods": [
+                "delete_policy"
+              ]
+            },
+            "GetPolicy": {
+              "methods": [
+                "get_policy"
+              ]
+            },
+            "ListPolicies": {
+              "methods": [
+                "list_policies"
+              ]
+            },
+            "UpdatePolicy": {
+              "methods": [
+                "update_policy"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -78,7 +78,6 @@ async def test_team_logging():
     """
     try:
         async with aiohttp.ClientSession() as session:
-
             # Add Langfuse as a callback with /config/update
             await config_update(session)
 

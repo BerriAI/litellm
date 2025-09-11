@@ -1,0 +1,1 @@
+"""Algorithms implemented in Shapely."""

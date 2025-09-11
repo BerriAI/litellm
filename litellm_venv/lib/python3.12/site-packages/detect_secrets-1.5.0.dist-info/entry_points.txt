@@ -1,0 +1,4 @@
+[console_scripts]
+detect-secrets = detect_secrets.main:main
+detect-secrets-hook = detect_secrets.pre_commit_hook:main
+

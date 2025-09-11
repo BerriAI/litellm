@@ -94,9 +94,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information

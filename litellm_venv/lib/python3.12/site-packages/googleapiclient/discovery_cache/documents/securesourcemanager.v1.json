@@ -1,0 +1,3568 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://securesourcemanager.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Secure Source Manager",
+"description": "Regionally deployed, single-tenant managed source code repository hosted on Google Cloud.",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/secure-source-manager",
+"endpoints": [
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.asia-east1.rep.googleapis.com/",
+"location": "asia-east1"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.asia-northeast1.rep.googleapis.com/",
+"location": "asia-northeast1"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.asia-northeast3.rep.googleapis.com/",
+"location": "asia-northeast3"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.australia-southeast1.rep.googleapis.com/",
+"location": "australia-southeast1"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.europe-west4.rep.googleapis.com/",
+"location": "europe-west4"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.me-central2.rep.googleapis.com/",
+"location": "me-central2"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.me-west1.rep.googleapis.com/",
+"location": "me-west1"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.northamerica-northeast1.rep.googleapis.com/",
+"location": "northamerica-northeast1"
+},
+{
+"description": "Regional Endpoint",
+"endpointUrl": "https://securesourcemanager.us-central1.rep.googleapis.com/",
+"location": "us-central1"
+}
+],
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "securesourcemanager:v1",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://securesourcemanager.mtls.googleapis.com/",
+"name": "securesourcemanager",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. A list of extra location types that should be used as conditions for controlling the visibility of the locations.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"instances": {
+"methods": {
+"create": {
+"description": "Creates a new instance in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.instances.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"instanceId": {
+"description": "Required. ID of the instance to be created.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Value for parent.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/instances",
+"request": {
+"$ref": "Instance"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances/{instancesId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.instances.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/instances/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances/{instancesId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.instances.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/instances/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Instance"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getIamPolicy": {
+"description": "Gets the access control policy for a resource. Returns an empty policy if the resource exists and does not have a policy set.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances/{instancesId}:getIamPolicy",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.instances.getIamPolicy",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"options.requestedPolicyVersion": {
+"description": "Optional. The maximum policy version that will be used to format the policy. Valid values are 0, 1, and 3. Requests specifying an invalid value will be rejected. Requests for policies with any conditional role bindings must specify version 3. Policies with no conditional role bindings may specify any valid value or leave the field unset. The policy in the response might use the policy version that you specified, or it might use a lower policy version. For example, if you specify version 3, but the policy has no conditional role bindings, the response uses version 1. To learn which resources support conditions in their IAM policies, see the [IAM documentation](https://cloud.google.com/iam/help/conditions/resource-policies).",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"resource": {
+"description": "REQUIRED: The resource for which the policy is being requested. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/instances/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:getIamPolicy",
+"response": {
+"$ref": "Policy"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Instances in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.instances.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Filter for filtering results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Hint for how to order the results.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Parent value for ListInstancesRequest.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/instances",
+"response": {
+"$ref": "ListInstancesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"setIamPolicy": {
+"description": "Sets the access control policy on the specified resource. Replaces any existing policy. Can return `NOT_FOUND`, `INVALID_ARGUMENT`, and `PERMISSION_DENIED` errors.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances/{instancesId}:setIamPolicy",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.instances.setIamPolicy",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"resource": {
+"description": "REQUIRED: The resource for which the policy is being specified. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/instances/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:setIamPolicy",
+"request": {
+"$ref": "SetIamPolicyRequest"
+},
+"response": {
+"$ref": "Policy"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"testIamPermissions": {
+"description": "Returns permissions that a caller has on the specified resource. If the resource does not exist, this will return an empty set of permissions, not a `NOT_FOUND` error. Note: This operation is designed to be used for building permission-aware UIs and command-line tools, not for authorization checking. This operation may \"fail open\" without warning.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/instances/{instancesId}:testIamPermissions",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.instances.testIamPermissions",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"resource": {
+"description": "REQUIRED: The resource for which the policy detail is being requested. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/instances/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:testIamPermissions",
+"request": {
+"$ref": "TestIamPermissionsRequest"
+},
+"response": {
+"$ref": "TestIamPermissionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"repositories": {
+"methods": {
+"create": {
+"description": "Creates a new repository in a given project and location. The Repository.Instance field is required in the request body for requests using the securesourcemanager.googleapis.com endpoint.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The project in which to create the repository. Values are of the form `projects/{project_number}/locations/{location_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"repositoryId": {
+"description": "Required. The ID to use for the repository, which will become the final component of the repository's resource name. This value should be 4-63 characters, and valid characters are /a-z-/.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/repositories",
+"request": {
+"$ref": "Repository"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a Repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If set to true, and the repository is not found, the request will succeed but no action will be taken on the server.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. Name of the repository to delete. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"fetchBlob": {
+"description": "Fetches a blob from a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}:fetchBlob",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.fetchBlob",
+"parameterOrder": [
+"repository"
+],
+"parameters": {
+"repository": {
+"description": "Required. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`. Specifies the repository containing the blob.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+},
+"sha": {
+"description": "Required. The SHA-1 hash of the blob to retrieve.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+repository}:fetchBlob",
+"response": {
+"$ref": "FetchBlobResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"fetchTree": {
+"description": "Fetches a tree from a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}:fetchTree",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.fetchTree",
+"parameterOrder": [
+"repository"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, at most 10,000 items will be returned.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"recursive": {
+"description": "Optional. If true, include all subfolders and their files in the response. If false, only the immediate children are returned.",
+"location": "query",
+"type": "boolean"
+},
+"ref": {
+"description": "Optional. `ref` can be a SHA-1 hash, a branch name, or a tag. Specifies which tree to fetch. If not specified, the default branch will be used.",
+"location": "query",
+"type": "string"
+},
+"repository": {
+"description": "Required. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`. Specifies the repository to fetch the tree from.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+repository}:fetchTree",
+"response": {
+"$ref": "FetchTreeResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets metadata of a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the repository to retrieve. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Repository"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getIamPolicy": {
+"description": "Get IAM policy for a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}:getIamPolicy",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.getIamPolicy",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"options.requestedPolicyVersion": {
+"description": "Optional. The maximum policy version that will be used to format the policy. Valid values are 0, 1, and 3. Requests specifying an invalid value will be rejected. Requests for policies with any conditional role bindings must specify version 3. Policies with no conditional role bindings may specify any valid value or leave the field unset. The policy in the response might use the policy version that you specified, or it might use a lower policy version. For example, if you specify version 3, but the policy has no conditional role bindings, the response uses version 1. To learn which resources support conditions in their IAM policies, see the [IAM documentation](https://cloud.google.com/iam/help/conditions/resource-policies).",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"resource": {
+"description": "REQUIRED: The resource for which the policy is being requested. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:getIamPolicy",
+"response": {
+"$ref": "Policy"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Repositories in a given project and location. The instance field is required in the query parameter for requests using the securesourcemanager.googleapis.com endpoint.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filter results.",
+"location": "query",
+"type": "string"
+},
+"instance": {
+"description": "Optional. The name of the instance in which the repository is hosted, formatted as `projects/{project_number}/locations/{location_id}/instances/{instance_id}`. When listing repositories via securesourcemanager.googleapis.com, this field is required. When listing repositories via *.sourcemanager.dev, this field is ignored.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Parent value for ListRepositoriesRequest.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/repositories",
+"response": {
+"$ref": "ListRepositoriesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the metadata of a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Optional. A unique identifier for a repository. The name should be of the format: `projects/{project}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the repository resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. If the user does not provide a mask then all fields will be overwritten.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. False by default. If set to true, the request is validated and the user is provided with an expected result, but no actual change is made.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Repository"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"setIamPolicy": {
+"description": "Set IAM policy on a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}:setIamPolicy",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.setIamPolicy",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"resource": {
+"description": "REQUIRED: The resource for which the policy is being specified. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:setIamPolicy",
+"request": {
+"$ref": "SetIamPolicyRequest"
+},
+"response": {
+"$ref": "Policy"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"testIamPermissions": {
+"description": "Test IAM permissions on a repository. IAM permission checks are not required on this method.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}:testIamPermissions",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.testIamPermissions",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"resource": {
+"description": "REQUIRED: The resource for which the policy detail is being requested. See [Resource names](https://cloud.google.com/apis/design/resource_names) for the appropriate value for this field.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+resource}:testIamPermissions",
+"request": {
+"$ref": "TestIamPermissionsRequest"
+},
+"response": {
+"$ref": "TestIamPermissionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"branchRules": {
+"methods": {
+"create": {
+"description": "CreateBranchRule creates a branch rule in a given repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/branchRules",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.branchRules.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"branchRuleId": {
+"location": "query",
+"type": "string"
+},
+"parent": {
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/branchRules",
+"request": {
+"$ref": "BranchRule"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "DeleteBranchRule deletes a branch rule.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/branchRules/{branchRulesId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.branchRules.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"allowMissing": {
+"description": "Optional. If set to true, and the branch rule is not found, the request will succeed but no action will be taken on the server.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/branchRules/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "GetBranchRule gets a branch rule.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/branchRules/{branchRulesId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.branchRules.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the repository to retrieve. The format is `projects/{project}/locations/{location}/repositories/{repository}/branchRules/{branch_rule}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/branchRules/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "BranchRule"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "ListBranchRules lists branch rules in a given repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/branchRules",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.branchRules.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"location": "query",
+"type": "string"
+},
+"parent": {
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/branchRules",
+"response": {
+"$ref": "ListBranchRulesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "UpdateBranchRule updates a branch rule.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/branchRules/{branchRulesId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.branchRules.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Optional. A unique identifier for a BranchRule. The name should be of the format: `projects/{project}/locations/{location}/repositories/{repository}/branchRules/{branch_rule}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/branchRules/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the branchRule resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The special value \"*\" means full replacement.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+},
+"validateOnly": {
+"description": "Optional. If set, validate the request and preview the review, but do not actually post it. (https://google.aip.dev/163, for declarative friendly)",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "BranchRule"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"hooks": {
+"methods": {
+"create": {
+"description": "Creates a new hook in a given repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/hooks",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.hooks.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"hookId": {
+"description": "Required. The ID to use for the hook, which will become the final component of the hook's resource name. This value restricts to lower-case letters, numbers, and hyphen, with the first character a letter, the last a letter or a number, and a 63 character maximum.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The repository in which to create the hook. Values are of the form `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/hooks",
+"request": {
+"$ref": "Hook"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a Hook.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/hooks/{hooksId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.hooks.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the hook to delete. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/hooks/{hook_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/hooks/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets metadata of a hook.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/hooks/{hooksId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.hooks.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the hook to retrieve. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/hooks/{hook_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/hooks/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Hook"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists hooks in a given repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/hooks",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.hooks.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Parent value for ListHooksRequest.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/hooks",
+"response": {
+"$ref": "ListHooksResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the metadata of a hook.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/hooks/{hooksId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.hooks.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. A unique identifier for a Hook. The name should be of the format: `projects/{project}/locations/{location_id}/repositories/{repository_id}/hooks/{hook_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/hooks/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the hook resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The special value \"*\" means full replacement.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Hook"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"issues": {
+"methods": {
+"close": {
+"description": "Closes an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}:close",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.issues.close",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the issue to close. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:close",
+"request": {
+"$ref": "CloseIssueRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"create": {
+"description": "Creates an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.issues.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The repository in which to create the issue. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/issues",
+"request": {
+"$ref": "Issue"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.issues.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. The current etag of the issue. If the etag is provided and does not match the current etag of the issue, deletion will be blocked and an ABORTED error will be returned.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. Name of the issue to delete. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.issues.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the issue to retrieve. The format is `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Issue"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists issues in a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.issues.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Used to filter the resulting issues list.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The repository in which to list issues. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/issues",
+"response": {
+"$ref": "ListIssuesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"open": {
+"description": "Opens an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}:open",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.issues.open",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the issue to open. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:open",
+"request": {
+"$ref": "OpenIssueRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates a issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.issues.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. Unique identifier for an issue. The issue id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the issue resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The special value \"*\" means full replacement.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Issue"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"issueComments": {
+"methods": {
+"create": {
+"description": "Creates an issue comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}/issueComments",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.issues.issueComments.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The issue in which to create the issue comment. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/issueComments",
+"request": {
+"$ref": "IssueComment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an issue comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}/issueComments/{issueCommentsId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.issues.issueComments.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the issue comment to delete. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}/issueComments/{comment_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+/issueComments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets an issue comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}/issueComments/{issueCommentsId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.issues.issueComments.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the issue comment to retrieve. The format is `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue_id}/issueComments/{comment_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+/issueComments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "IssueComment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists comments in an issue.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}/issueComments",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.issues.issueComments.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The issue in which to list the comments. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/issues/{issue_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/issueComments",
+"response": {
+"$ref": "ListIssueCommentsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates an issue comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/issues/{issuesId}/issueComments/{issueCommentsId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.issues.issueComments.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. Unique identifier for an issue comment. The comment id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue}/issueComments/{comment_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/issues/[^/]+/issueComments/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the issue comment resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The special value \"*\" means full replacement.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "IssueComment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"pullRequests": {
+"methods": {
+"close": {
+"description": "Closes a pull request without merging.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}:close",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.close",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The pull request to close. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:close",
+"request": {
+"$ref": "ClosePullRequestRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"create": {
+"description": "Creates a pull request.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The repository that the pull request is created from. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequests",
+"request": {
+"$ref": "PullRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets a pull request.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the pull request to retrieve. The format is `projects/{project}/locations/{location}/repositories/{repository}/pullRequests/{pull_request}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "PullRequest"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists pull requests in a repository.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The repository in which to list pull requests. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequests",
+"response": {
+"$ref": "ListPullRequestsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"listFileDiffs": {
+"description": "Lists a pull request's file diffs.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}:listFileDiffs",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.listFileDiffs",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The pull request to list file diffs for. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}:listFileDiffs",
+"response": {
+"$ref": "ListPullRequestFileDiffsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"merge": {
+"description": "Merges a pull request.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}:merge",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.merge",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The pull request to merge. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:merge",
+"request": {
+"$ref": "MergePullRequestRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"open": {
+"description": "Opens a pull request.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}:open",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.open",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The pull request to open. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:open",
+"request": {
+"$ref": "OpenPullRequestRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates a pull request.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Output only. A unique identifier for a PullRequest. The number appended at the end is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the pull request resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The special value \"*\" means full replacement.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "PullRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"pullRequestComments": {
+"methods": {
+"batchCreate": {
+"description": "Batch creates pull request comments.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments:batchCreate",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.batchCreate",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The pull request in which to create the pull request comments. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequestComments:batchCreate",
+"request": {
+"$ref": "BatchCreatePullRequestCommentsRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"create": {
+"description": "Creates a pull request comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The pull request in which to create the pull request comment. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequestComments",
+"request": {
+"$ref": "PullRequestComment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a pull request comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments/{pullRequestCommentsId}",
+"httpMethod": "DELETE",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the pull request comment to delete. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}/pullRequestComments/{comment_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+/pullRequestComments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets a pull request comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments/{pullRequestCommentsId}",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of the pull request comment to retrieve. The format is `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}/pullRequestComments/{comment_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+/pullRequestComments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "PullRequestComment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists pull request comments.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments",
+"httpMethod": "GET",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. If unspecified, at most 100 pull request comments will be returned. The maximum value is 100; values above 100 will be coerced to 100.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The pull request in which to list pull request comments. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequestComments",
+"response": {
+"$ref": "ListPullRequestCommentsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates a pull request comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments/{pullRequestCommentsId}",
+"httpMethod": "PATCH",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. Unique identifier for the pull request comment. The comment id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/pullRequests/{pull_request}/pullRequestComments/{comment_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+/pullRequestComments/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the pull request comment resource by the update. Updatable fields are `body`.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "PullRequestComment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"resolve": {
+"description": "Resolves pull request comments.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments:resolve",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.resolve",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The pull request in which to resolve the pull request comments. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequestComments:resolve",
+"request": {
+"$ref": "ResolvePullRequestCommentsRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"unresolve": {
+"description": "Unresolves pull request comment.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/repositories/{repositoriesId}/pullRequests/{pullRequestsId}/pullRequestComments:unresolve",
+"httpMethod": "POST",
+"id": "securesourcemanager.projects.locations.repositories.pullRequests.pullRequestComments.unresolve",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The pull request in which to resolve the pull request comments. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/repositories/[^/]+/pullRequests/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/pullRequestComments:unresolve",
+"request": {
+"$ref": "UnresolvePullRequestCommentsRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "0",
+"rootUrl": "https://securesourcemanager.googleapis.com/",
+"schemas": {
+"AuditConfig": {
+"description": "Specifies the audit configuration for a service. The configuration determines which permission types are logged, and what identities, if any, are exempted from logging. An AuditConfig must have one or more AuditLogConfigs. If there are AuditConfigs for both `allServices` and a specific service, the union of the two AuditConfigs is used for that service: the log_types specified in each AuditConfig are enabled, and the exempted_members in each AuditLogConfig are exempted. Example Policy with multiple AuditConfigs: { \"audit_configs\": [ { \"service\": \"allServices\", \"audit_log_configs\": [ { \"log_type\": \"DATA_READ\", \"exempted_members\": [ \"user:jose@example.com\" ] }, { \"log_type\": \"DATA_WRITE\" }, { \"log_type\": \"ADMIN_READ\" } ] }, { \"service\": \"sampleservice.googleapis.com\", \"audit_log_configs\": [ { \"log_type\": \"DATA_READ\" }, { \"log_type\": \"DATA_WRITE\", \"exempted_members\": [ \"user:aliya@example.com\" ] } ] } ] } For sampleservice, this policy enables DATA_READ, DATA_WRITE and ADMIN_READ logging. It also exempts `jose@example.com` from DATA_READ logging, and `aliya@example.com` from DATA_WRITE logging.",
+"id": "AuditConfig",
+"properties": {
+"auditLogConfigs": {
+"description": "The configuration for logging of each type of permission.",
+"items": {
+"$ref": "AuditLogConfig"
+},
+"type": "array"
+},
+"service": {
+"description": "Specifies a service that will be enabled for audit logging. For example, `storage.googleapis.com`, `cloudsql.googleapis.com`. `allServices` is a special value that covers all services.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"AuditLogConfig": {
+"description": "Provides the configuration for logging a type of permissions. Example: { \"audit_log_configs\": [ { \"log_type\": \"DATA_READ\", \"exempted_members\": [ \"user:jose@example.com\" ] }, { \"log_type\": \"DATA_WRITE\" } ] } This enables 'DATA_READ' and 'DATA_WRITE' logging, while exempting jose@example.com from DATA_READ logging.",
+"id": "AuditLogConfig",
+"properties": {
+"exemptedMembers": {
+"description": "Specifies the identities that do not cause logging for this type of permission. Follows the same format of Binding.members.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"logType": {
+"description": "The log type that this config enables.",
+"enum": [
+"LOG_TYPE_UNSPECIFIED",
+"ADMIN_READ",
+"DATA_WRITE",
+"DATA_READ"
+],
+"enumDescriptions": [
+"Default case. Should never be this.",
+"Admin reads. Example: CloudIAM getIamPolicy",
+"Data writes. Example: CloudSQL Users create",
+"Data reads. Example: CloudSQL Users list"
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"BatchCreatePullRequestCommentsRequest": {
+"description": "The request to batch create pull request comments.",
+"id": "BatchCreatePullRequestCommentsRequest",
+"properties": {
+"requests": {
+"description": "Required. The request message specifying the resources to create. There should be exactly one CreatePullRequestCommentRequest with CommentDetail being REVIEW in the list, and no more than 100 CreatePullRequestCommentRequests with CommentDetail being CODE in the list",
+"items": {
+"$ref": "CreatePullRequestCommentRequest"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Binding": {
+"description": "Associates `members`, or principals, with a `role`.",
+"id": "Binding",
+"properties": {
+"condition": {
+"$ref": "Expr",
+"description": "The condition that is associated with this binding. If the condition evaluates to `true`, then this binding applies to the current request. If the condition evaluates to `false`, then this binding does not apply to the current request. However, a different role binding might grant the same role to one or more of the principals in this binding. To learn which resources support conditions in their IAM policies, see the [IAM documentation](https://cloud.google.com/iam/help/conditions/resource-policies)."
+},
+"members": {
+"description": "Specifies the principals requesting access for a Google Cloud resource. `members` can have the following values: * `allUsers`: A special identifier that represents anyone who is on the internet; with or without a Google account. * `allAuthenticatedUsers`: A special identifier that represents anyone who is authenticated with a Google account or a service account. Does not include identities that come from external identity providers (IdPs) through identity federation. * `user:{emailid}`: An email address that represents a specific Google account. For example, `alice@example.com` . * `serviceAccount:{emailid}`: An email address that represents a Google service account. For example, `my-other-app@appspot.gserviceaccount.com`. * `serviceAccount:{projectid}.svc.id.goog[{namespace}/{kubernetes-sa}]`: An identifier for a [Kubernetes service account](https://cloud.google.com/kubernetes-engine/docs/how-to/kubernetes-service-accounts). For example, `my-project.svc.id.goog[my-namespace/my-kubernetes-sa]`. * `group:{emailid}`: An email address that represents a Google group. For example, `admins@example.com`. * `domain:{domain}`: The G Suite domain (primary) that represents all the users of that domain. For example, `google.com` or `example.com`. * `principal://iam.googleapis.com/locations/global/workforcePools/{pool_id}/subject/{subject_attribute_value}`: A single identity in a workforce identity pool. * `principalSet://iam.googleapis.com/locations/global/workforcePools/{pool_id}/group/{group_id}`: All workforce identities in a group. * `principalSet://iam.googleapis.com/locations/global/workforcePools/{pool_id}/attribute.{attribute_name}/{attribute_value}`: All workforce identities with a specific attribute value. * `principalSet://iam.googleapis.com/locations/global/workforcePools/{pool_id}/*`: All identities in a workforce identity pool. * `principal://iam.googleapis.com/projects/{project_number}/locations/global/workloadIdentityPools/{pool_id}/subject/{subject_attribute_value}`: A single identity in a workload identity pool. * `principalSet://iam.googleapis.com/projects/{project_number}/locations/global/workloadIdentityPools/{pool_id}/group/{group_id}`: A workload identity pool group. * `principalSet://iam.googleapis.com/projects/{project_number}/locations/global/workloadIdentityPools/{pool_id}/attribute.{attribute_name}/{attribute_value}`: All identities in a workload identity pool with a certain attribute. * `principalSet://iam.googleapis.com/projects/{project_number}/locations/global/workloadIdentityPools/{pool_id}/*`: All identities in a workload identity pool. * `deleted:user:{emailid}?uid={uniqueid}`: An email address (plus unique identifier) representing a user that has been recently deleted. For example, `alice@example.com?uid=123456789012345678901`. If the user is recovered, this value reverts to `user:{emailid}` and the recovered user retains the role in the binding. * `deleted:serviceAccount:{emailid}?uid={uniqueid}`: An email address (plus unique identifier) representing a service account that has been recently deleted. For example, `my-other-app@appspot.gserviceaccount.com?uid=123456789012345678901`. If the service account is undeleted, this value reverts to `serviceAccount:{emailid}` and the undeleted service account retains the role in the binding. * `deleted:group:{emailid}?uid={uniqueid}`: An email address (plus unique identifier) representing a Google group that has been recently deleted. For example, `admins@example.com?uid=123456789012345678901`. If the group is recovered, this value reverts to `group:{emailid}` and the recovered group retains the role in the binding. * `deleted:principal://iam.googleapis.com/locations/global/workforcePools/{pool_id}/subject/{subject_attribute_value}`: Deleted single identity in a workforce identity pool. For example, `deleted:principal://iam.googleapis.com/locations/global/workforcePools/my-pool-id/subject/my-subject-attribute-value`.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"role": {
+"description": "Role that is assigned to the list of `members`, or principals. For example, `roles/viewer`, `roles/editor`, or `roles/owner`. For an overview of the IAM roles and permissions, see the [IAM documentation](https://cloud.google.com/iam/docs/roles-overview). For a list of the available pre-defined roles, see [here](https://cloud.google.com/iam/docs/understanding-roles).",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Branch": {
+"description": "Branch represents a branch involved in a pull request.",
+"id": "Branch",
+"properties": {
+"ref": {
+"description": "Required. Name of the branch.",
+"type": "string"
+},
+"sha": {
+"description": "Output only. The commit at the tip of the branch.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"BranchRule": {
+"description": "Metadata of a BranchRule. BranchRule is the protection rule to enforce pre-defined rules on designated branches within a repository.",
+"id": "BranchRule",
+"properties": {
+"allowStaleReviews": {
+"description": "Optional. Determines if allow stale reviews or approvals before merging to the branch.",
+"type": "boolean"
+},
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. User annotations. These attributes can only be set and used by the user. See https://google.aip.dev/128#annotations for more details such as format and size limitations.",
+"type": "object"
+},
+"createTime": {
+"description": "Output only. Create timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"disabled": {
+"description": "Optional. Determines if the branch rule is disabled or not.",
+"type": "boolean"
+},
+"etag": {
+"description": "Optional. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.",
+"type": "string"
+},
+"includePattern": {
+"description": "Optional. The pattern of the branch that can match to this BranchRule. Specified as regex. .* for all branches. Examples: main, (main|release.*). Current MVP phase only support `.*` for wildcard.",
+"type": "string"
+},
+"minimumApprovalsCount": {
+"description": "Optional. The minimum number of approvals required for the branch rule to be matched.",
+"format": "int32",
+"type": "integer"
+},
+"minimumReviewsCount": {
+"description": "Optional. The minimum number of reviews required for the branch rule to be matched.",
+"format": "int32",
+"type": "integer"
+},
+"name": {
+"description": "Optional. A unique identifier for a BranchRule. The name should be of the format: `projects/{project}/locations/{location}/repositories/{repository}/branchRules/{branch_rule}`",
+"type": "string"
+},
+"requireCommentsResolved": {
+"description": "Optional. Determines if require comments resolved before merging to the branch.",
+"type": "boolean"
+},
+"requireLinearHistory": {
+"description": "Optional. Determines if require linear history before merging to the branch.",
+"type": "boolean"
+},
+"requirePullRequest": {
+"description": "Optional. Determines if the branch rule requires a pull request or not.",
+"type": "boolean"
+},
+"requiredStatusChecks": {
+"description": "Optional. List of required status checks before merging to the branch.",
+"items": {
+"$ref": "Check"
+},
+"type": "array"
+},
+"uid": {
+"description": "Output only. Unique identifier of the repository.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Update timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"Check": {
+"description": "Check is a type for status check.",
+"id": "Check",
+"properties": {
+"context": {
+"description": "Required. The context of the check.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CloseIssueRequest": {
+"description": "The request to close an issue.",
+"id": "CloseIssueRequest",
+"properties": {
+"etag": {
+"description": "Optional. The current etag of the issue. If the etag is provided and does not match the current etag of the issue, closing will be blocked and an ABORTED error will be returned.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ClosePullRequestRequest": {
+"description": "ClosePullRequestRequest is the request to close a pull request.",
+"id": "ClosePullRequestRequest",
+"properties": {},
+"type": "object"
+},
+"Code": {
+"description": "The comment on a code line.",
+"id": "Code",
+"properties": {
+"body": {
+"description": "Required. The comment body.",
+"type": "string"
+},
+"effectiveCommitSha": {
+"description": "Output only. The effective commit sha this code comment is pointing to.",
+"readOnly": true,
+"type": "string"
+},
+"effectiveRootComment": {
+"description": "Output only. The root comment of the conversation, derived from the reply field.",
+"readOnly": true,
+"type": "string"
+},
+"position": {
+"$ref": "Position",
+"description": "Optional. The position of the comment."
+},
+"reply": {
+"description": "Optional. Input only. The PullRequestComment resource name that this comment is replying to.",
+"type": "string"
+},
+"resolved": {
+"description": "Output only. Boolean indicator if the comment is resolved.",
+"readOnly": true,
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"Comment": {
+"description": "The general pull request comment.",
+"id": "Comment",
+"properties": {
+"body": {
+"description": "Required. The comment body.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CreatePullRequestCommentRequest": {
+"description": "The request to create a pull request comment.",
+"id": "CreatePullRequestCommentRequest",
+"properties": {
+"parent": {
+"description": "Required. The pull request in which to create the pull request comment. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}`",
+"type": "string"
+},
+"pullRequestComment": {
+"$ref": "PullRequestComment",
+"description": "Required. The pull request comment to create."
+}
+},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"Expr": {
+"description": "Represents a textual expression in the Common Expression Language (CEL) syntax. CEL is a C-like expression language. The syntax and semantics of CEL are documented at https://github.com/google/cel-spec. Example (Comparison): title: \"Summary size limit\" description: \"Determines if a summary is less than 100 chars\" expression: \"document.summary.size() < 100\" Example (Equality): title: \"Requestor is owner\" description: \"Determines if requestor is the document owner\" expression: \"document.owner == request.auth.claims.email\" Example (Logic): title: \"Public documents\" description: \"Determine whether the document should be publicly visible\" expression: \"document.type != 'private' && document.type != 'internal'\" Example (Data Manipulation): title: \"Notification string\" description: \"Create a notification string with a timestamp.\" expression: \"'New message received at ' + string(document.create_time)\" The exact variables and functions that may be referenced within an expression are determined by the service that evaluates it. See the service documentation for additional information.",
+"id": "Expr",
+"properties": {
+"description": {
+"description": "Optional. Description of the expression. This is a longer text which describes the expression, e.g. when hovered over it in a UI.",
+"type": "string"
+},
+"expression": {
+"description": "Textual representation of an expression in Common Expression Language syntax.",
+"type": "string"
+},
+"location": {
+"description": "Optional. String indicating the location of the expression for error reporting, e.g. a file name and a position in the file.",
+"type": "string"
+},
+"title": {
+"description": "Optional. Title for the expression, i.e. a short string describing its purpose. This can be used e.g. in UIs which allow to enter the expression.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"FetchBlobResponse": {
+"description": "Response message containing the content of a blob.",
+"id": "FetchBlobResponse",
+"properties": {
+"content": {
+"description": "The content of the blob, encoded as base64.",
+"type": "string"
+},
+"sha": {
+"description": "The SHA-1 hash of the blob.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"FetchTreeResponse": {
+"description": "Response message containing a list of TreeEntry objects.",
+"id": "FetchTreeResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"treeEntries": {
+"description": "The list of TreeEntry objects.",
+"items": {
+"$ref": "TreeEntry"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"FileDiff": {
+"description": "Metadata of a FileDiff. FileDiff represents a single file diff in a pull request.",
+"id": "FileDiff",
+"properties": {
+"action": {
+"description": "Output only. The action taken on the file (eg. added, modified, deleted).",
+"enum": [
+"ACTION_UNSPECIFIED",
+"ADDED",
+"MODIFIED",
+"DELETED"
+],
+"enumDescriptions": [
+"Unspecified.",
+"The file was added.",
+"The file was modified.",
+"The file was deleted."
+],
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Output only. The name of the file.",
+"readOnly": true,
+"type": "string"
+},
+"patch": {
+"description": "Output only. The git patch containing the file changes.",
+"readOnly": true,
+"type": "string"
+},
+"sha": {
+"description": "Output only. The commit pointing to the file changes.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Hook": {
+"description": "Metadata of a Secure Source Manager Hook.",
+"id": "Hook",
+"properties": {
+"createTime": {
+"description": "Output only. Create timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"disabled": {
+"description": "Optional. Determines if the hook disabled or not. Set to true to stop sending traffic.",
+"type": "boolean"
+},
+"events": {
+"description": "Optional. The events that trigger hook on.",
+"items": {
+"enum": [
+"UNSPECIFIED",
+"PUSH",
+"PULL_REQUEST"
+],
+"enumDescriptions": [
+"Unspecified.",
+"Push events are triggered when pushing to the repository.",
+"Pull request events are triggered when a pull request is opened, closed, reopened, or edited."
+],
+"type": "string"
+},
+"type": "array"
+},
+"name": {
+"description": "Identifier. A unique identifier for a Hook. The name should be of the format: `projects/{project}/locations/{location_id}/repositories/{repository_id}/hooks/{hook_id}`",
+"type": "string"
+},
+"pushOption": {
+"$ref": "PushOption",
+"description": "Optional. The trigger option for push events."
+},
+"sensitiveQueryString": {
+"description": "Optional. The sensitive query string to be appended to the target URI.",
+"type": "string"
+},
+"targetUri": {
+"description": "Required. The target URI to which the payloads will be delivered.",
+"type": "string"
+},
+"uid": {
+"description": "Output only. Unique identifier of the hook.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Update timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"HostConfig": {
+"description": "HostConfig has different instance endpoints.",
+"id": "HostConfig",
+"properties": {
+"api": {
+"description": "Output only. API hostname.",
+"readOnly": true,
+"type": "string"
+},
+"gitHttp": {
+"description": "Output only. Git HTTP hostname.",
+"readOnly": true,
+"type": "string"
+},
+"gitSsh": {
+"description": "Output only. Git SSH hostname.",
+"readOnly": true,
+"type": "string"
+},
+"html": {
+"description": "Output only. HTML hostname.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"InitialConfig": {
+"description": "Repository initialization configuration.",
+"id": "InitialConfig",
+"properties": {
+"defaultBranch": {
+"description": "Default branch name of the repository.",
+"type": "string"
+},
+"gitignores": {
+"description": "List of gitignore template names user can choose from. Valid values: actionscript, ada, agda, android, anjuta, ansible, appcelerator-titanium, app-engine, archives, arch-linux-packages, atmel-studio, autotools, backup, bazaar, bazel, bitrix, bricx-cc, c, cake-php, calabash, cf-wheels, chef-cookbook, clojure, cloud9, c-make, code-igniter, code-kit, code-sniffer, common-lisp, composer, concrete5, coq, cordova, cpp, craft-cms, cuda, cvs, d, dart, dart-editor, delphi, diff, dm, dreamweaver, dropbox, drupal, drupal-7, eagle, eclipse, eiffel-studio, elisp, elixir, elm, emacs, ensime, epi-server, erlang, esp-idf, espresso, exercism, expression-engine, ext-js, fancy, finale, flex-builder, force-dot-com, fortran, fuel-php, gcov, git-book, gnome-shell-extension, go, godot, gpg, gradle, grails, gwt, haskell, hugo, iar-ewarm, idris, igor-pro, images, infor-cms, java, jboss, jboss-4, jboss-6, jdeveloper, jekyll, jenkins-home, jenv, jet-brains, jigsaw, joomla, julia, jupyter-notebooks, kate, kdevelop4, kentico, ki-cad, kohana, kotlin, lab-view, laravel, lazarus, leiningen, lemon-stand, libre-office, lilypond, linux, lithium, logtalk, lua, lyx, mac-os, magento, magento-1, magento-2, matlab, maven, mercurial, mercury, metals, meta-programming-system, meteor, microsoft-office, model-sim, momentics, mono-develop, nanoc, net-beans, nikola, nim, ninja, node, notepad-pp, nwjs, objective--c, ocaml, octave, opa, open-cart, openssl, oracle-forms, otto, packer, patch, perl, perl6, phalcon, phoenix, pimcore, play-framework, plone, prestashop, processing, psoc-creator, puppet, pure-script, putty, python, qooxdoo, qt, r, racket, rails, raku, red, redcar, redis, rhodes-rhomobile, ros, ruby, rust, sam, sass, sbt, scala, scheme, scons, scrivener, sdcc, seam-gen, sketch-up, slick-edit, smalltalk, snap, splunk, stata, stella, sublime-text, sugar-crm, svn, swift, symfony, symphony-cms, synopsys-vcs, tags, terraform, tex, text-mate, textpattern, think-php, tortoise-git, turbo-gears-2, typo3, umbraco, unity, unreal-engine, vagrant, vim, virtual-env, virtuoso, visual-studio, visual-studio-code, vue, vvvv, waf, web-methods, windows, word-press, xcode, xilinx, xilinx-ise, xojo, yeoman, yii, zend-framework, zephir.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"license": {
+"description": "License template name user can choose from. Valid values: license-0bsd, license-389-exception, aal, abstyles, adobe-2006, adobe-glyph, adsl, afl-1-1, afl-1-2, afl-2-0, afl-2-1, afl-3-0, afmparse, agpl-1-0, agpl-1-0-only, agpl-1-0-or-later, agpl-3-0-only, agpl-3-0-or-later, aladdin, amdplpa, aml, ampas, antlr-pd, antlr-pd-fallback, apache-1-0, apache-1-1, apache-2-0, apafml, apl-1-0, apsl-1-0, apsl-1-1, apsl-1-2, apsl-2-0, artistic-1-0, artistic-1-0-cl8, artistic-1-0-perl, artistic-2-0, autoconf-exception-2-0, autoconf-exception-3-0, bahyph, barr, beerware, bison-exception-2-2, bittorrent-1-0, bittorrent-1-1, blessing, blueoak-1-0-0, bootloader-exception, borceux, bsd-1-clause, bsd-2-clause, bsd-2-clause-freebsd, bsd-2-clause-netbsd, bsd-2-clause-patent, bsd-2-clause-views, bsd-3-clause, bsd-3-clause-attribution, bsd-3-clause-clear, bsd-3-clause-lbnl, bsd-3-clause-modification, bsd-3-clause-no-nuclear-license, bsd-3-clause-no-nuclear-license-2014, bsd-3-clause-no-nuclear-warranty, bsd-3-clause-open-mpi, bsd-4-clause, bsd-4-clause-shortened, bsd-4-clause-uc, bsd-protection, bsd-source-code, bsl-1-0, busl-1-1, cal-1-0, cal-1-0-combined-work-exception, caldera, catosl-1-1, cc0-1-0, cc-by-1-0, cc-by-2-0, cc-by-3-0, cc-by-3-0-at, cc-by-3-0-us, cc-by-4-0, cc-by-nc-1-0, cc-by-nc-2-0, cc-by-nc-3-0, cc-by-nc-4-0, cc-by-nc-nd-1-0, cc-by-nc-nd-2-0, cc-by-nc-nd-3-0, cc-by-nc-nd-3-0-igo, cc-by-nc-nd-4-0, cc-by-nc-sa-1-0, cc-by-nc-sa-2-0, cc-by-nc-sa-3-0, cc-by-nc-sa-4-0, cc-by-nd-1-0, cc-by-nd-2-0, cc-by-nd-3-0, cc-by-nd-4-0, cc-by-sa-1-0, cc-by-sa-2-0, cc-by-sa-2-0-uk, cc-by-sa-2-1-jp, cc-by-sa-3-0, cc-by-sa-3-0-at, cc-by-sa-4-0, cc-pddc, cddl-1-0, cddl-1-1, cdla-permissive-1-0, cdla-sharing-1-0, cecill-1-0, cecill-1-1, cecill-2-0, cecill-2-1, cecill-b, cecill-c, cern-ohl-1-1, cern-ohl-1-2, cern-ohl-p-2-0, cern-ohl-s-2-0, cern-ohl-w-2-0, clartistic, classpath-exception-2-0, clisp-exception-2-0, cnri-jython, cnri-python, cnri-python-gpl-compatible, condor-1-1, copyleft-next-0-3-0, copyleft-next-0-3-1, cpal-1-0, cpl-1-0, cpol-1-02, crossword, crystal-stacker, cua-opl-1-0, cube, c-uda-1-0, curl, d-fsl-1-0, diffmark, digirule-foss-exception, doc, dotseqn, drl-1-0, dsdp, dvipdfm, ecl-1-0, ecl-2-0, ecos-exception-2-0, efl-1-0, efl-2-0, egenix, entessa, epics, epl-1-0, epl-2-0, erlpl-1-1, etalab-2-0, eu-datagrid, eupl-1-0, eupl-1-1, eupl-1-2, eurosym, fair, fawkes-runtime-exception, fltk-exception, font-exception-2-0, frameworx-1-0, freebsd-doc, freeimage, freertos-exception-2-0, fsfap, fsful, fsfullr, ftl, gcc-exception-2-0, gcc-exception-3-1, gd, gfdl-1-1-invariants-only, gfdl-1-1-invariants-or-later, gfdl-1-1-no-invariants-only, gfdl-1-1-no-invariants-or-later, gfdl-1-1-only, gfdl-1-1-or-later, gfdl-1-2-invariants-only, gfdl-1-2-invariants-or-later, gfdl-1-2-no-invariants-only, gfdl-1-2-no-invariants-or-later, gfdl-1-2-only, gfdl-1-2-or-later, gfdl-1-3-invariants-only, gfdl-1-3-invariants-or-later, gfdl-1-3-no-invariants-only, gfdl-1-3-no-invariants-or-later, gfdl-1-3-only, gfdl-1-3-or-later, giftware, gl2ps, glide, glulxe, glwtpl, gnu-javamail-exception, gnuplot, gpl-1-0-only, gpl-1-0-or-later, gpl-2-0-only, gpl-2-0-or-later, gpl-3-0-linking-exception, gpl-3-0-linking-source-exception, gpl-3-0-only, gpl-3-0-or-later, gpl-cc-1-0, gsoap-1-3b, haskell-report, hippocratic-2-1, hpnd, hpnd-sell-variant, htmltidy, i2p-gpl-java-exception, ibm-pibs, icu, ijg, image-magick, imatix, imlib2, info-zip, intel, intel-acpi, interbase-1-0, ipa, ipl-1-0, isc, jasper-2-0, jpnic, json, lal-1-2, lal-1-3, latex2e, leptonica, lgpl-2-0-only, lgpl-2-0-or-later, lgpl-2-1-only, lgpl-2-1-or-later, lgpl-3-0-linking-exception, lgpl-3-0-only, lgpl-3-0-or-later, lgpllr, libpng, libpng-2-0, libselinux-1-0, libtiff, libtool-exception, liliq-p-1-1, liliq-r-1-1, liliq-rplus-1-1, linux-openib, linux-syscall-note, llvm-exception, lpl-1-0, lpl-1-02, lppl-1-0, lppl-1-1, lppl-1-2, lppl-1-3a, lppl-1-3c, lzma-exception, make-index, mif-exception, miros, mit, mit-0, mit-advertising, mit-cmu, mit-enna, mit-feh, mit-modern-variant, mitnfa, mit-open-group, motosoto, mpich2, mpl-1-0, mpl-1-1, mpl-2-0, mpl-2-0-no-copyleft-exception, ms-pl, ms-rl, mtll, mulanpsl-1-0, mulanpsl-2-0, multics, mup, naist-2003, nasa-1-3, naumen, nbpl-1-0, ncgl-uk-2-0, ncsa, netcdf, net-snmp, newsletr, ngpl, nist-pd, nist-pd-fallback, nlod-1-0, nlpl, nokia, nokia-qt-exception-1-1, nosl, noweb, npl-1-0, npl-1-1, nposl-3-0, nrl, ntp, ntp-0, ocaml-lgpl-linking-exception, occt-exception-1-0, occt-pl, oclc-2-0, odbl-1-0, odc-by-1-0, ofl-1-0, ofl-1-0-no-rfn, ofl-1-0-rfn, ofl-1-1, ofl-1-1-no-rfn, ofl-1-1-rfn, ogc-1-0, ogdl-taiwan-1-0, ogl-canada-2-0, ogl-uk-1-0, ogl-uk-2-0, ogl-uk-3-0, ogtsl, oldap-1-1, oldap-1-2, oldap-1-3, oldap-1-4, oldap-2-0, oldap-2-0-1, oldap-2-1, oldap-2-2, oldap-2-2-1, oldap-2-2-2, oldap-2-3, oldap-2-4, oldap-2-7, oml, openjdk-assembly-exception-1-0, openssl, openvpn-openssl-exception, opl-1-0, oset-pl-2-1, osl-1-0, osl-1-1, osl-2-0, osl-2-1, osl-3-0, o-uda-1-0, parity-6-0-0, parity-7-0-0, pddl-1-0, php-3-0, php-3-01, plexus, polyform-noncommercial-1-0-0, polyform-small-business-1-0-0, postgresql, psf-2-0, psfrag, ps-or-pdf-font-exception-20170817, psutils, python-2-0, qhull, qpl-1-0, qt-gpl-exception-1-0, qt-lgpl-exception-1-1, qwt-exception-1-0, rdisc, rhecos-1-1, rpl-1-1, rpsl-1-0, rsa-md, rscpl, ruby, saxpath, sax-pd, scea, sendmail, sendmail-8-23, sgi-b-1-0, sgi-b-1-1, sgi-b-2-0, shl-0-51, shl-2-0, shl-2-1, simpl-2-0, sissl, sissl-1-2, sleepycat, smlnj, smppl, snia, spencer-86, spencer-94, spencer-99, spl-1-0, ssh-openssh, ssh-short, sspl-1-0, sugarcrm-1-1-3, swift-exception, swl, tapr-ohl-1-0, tcl, tcp-wrappers, tmate, torque-1-1, tosl, tu-berlin-1-0, tu-berlin-2-0, u-boot-exception-2-0, ucl-1-0, unicode-dfs-2015, unicode-dfs-2016, unicode-tou, universal-foss-exception-1-0, unlicense, upl-1-0, vim, vostrom, vsl-1-0, w3c, w3c-19980720, w3c-20150513, watcom-1-0, wsuipa, wtfpl, wxwindows-exception-3-1, x11, xerox, xfree86-1-1, xinetd, xnet, xpp, xskat, ypl-1-0, ypl-1-1, zed, zend-2-0, zimbra-1-3, zimbra-1-4, zlib, zlib-acknowledgement, zpl-1-1, zpl-2-0, zpl-2-1.",
+"type": "string"
+},
+"readme": {
+"description": "README template name. Valid template name(s) are: default.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Instance": {
+"description": "A resource that represents a Secure Source Manager instance.",
+"id": "Instance",
+"properties": {
+"createTime": {
+"description": "Output only. Create timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"hostConfig": {
+"$ref": "HostConfig",
+"description": "Output only. A list of hostnames for this instance.",
+"readOnly": true
+},
+"kmsKey": {
+"description": "Optional. Immutable. Customer-managed encryption key name, in the format projects/*/locations/*/keyRings/*/cryptoKeys/*.",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Optional. A unique identifier for an instance. The name should be of the format: `projects/{project_number}/locations/{location_id}/instances/{instance_id}` `project_number`: Maps to a unique int64 id assigned to each project. `location_id`: Refers to the region where the instance will be deployed. Since Secure Source Manager is a regional service, it must be one of the valid GCP regions. `instance_id`: User provided name for the instance, must be unique for a project_number and location_id combination.",
+"type": "string"
+},
+"privateConfig": {
+"$ref": "PrivateConfig",
+"description": "Optional. Private settings for private instance."
+},
+"state": {
+"description": "Output only. Current state of the instance.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"ACTIVE",
+"DELETING",
+"PAUSED",
+"UNKNOWN"
+],
+"enumDescriptions": [
+"Not set. This should only be the case for incoming requests.",
+"Instance is being created.",
+"Instance is ready.",
+"Instance is being deleted.",
+"Instance is paused.",
+"Instance is unknown, we are not sure if it's functioning."
+],
+"readOnly": true,
+"type": "string"
+},
+"stateNote": {
+"description": "Output only. An optional field providing information about the current instance state.",
+"enum": [
+"STATE_NOTE_UNSPECIFIED",
+"PAUSED_CMEK_UNAVAILABLE",
+"INSTANCE_RESUMING"
+],
+"enumDeprecated": [
+false,
+false,
+true
+],
+"enumDescriptions": [
+"STATE_NOTE_UNSPECIFIED as the first value of State.",
+"CMEK access is unavailable.",
+"INSTANCE_RESUMING indicates that the instance was previously paused and is under the process of being brought back."
+],
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Update timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"workforceIdentityFederationConfig": {
+"$ref": "WorkforceIdentityFederationConfig",
+"description": "Optional. Configuration for Workforce Identity Federation to support third party identity provider. If unset, defaults to the Google OIDC IdP."
+}
+},
+"type": "object"
+},
+"Issue": {
+"description": "Metadata of an Issue.",
+"id": "Issue",
+"properties": {
+"body": {
+"description": "Optional. Issue body. Provides a detailed description of the issue.",
+"type": "string"
+},
+"closeTime": {
+"description": "Output only. Close timestamp (if closed). Cleared when is re-opened.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. Creation timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"etag": {
+"description": "Optional. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.",
+"type": "string"
+},
+"name": {
+"description": "Identifier. Unique identifier for an issue. The issue id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue_id}`",
+"type": "string"
+},
+"state": {
+"description": "Output only. State of the issue.",
+"enum": [
+"STATE_UNSPECIFIED",
+"OPEN",
+"CLOSED"
+],
+"enumDescriptions": [
+"Unspecified.",
+"An open issue.",
+"A closed issue."
+],
+"readOnly": true,
+"type": "string"
+},
+"title": {
+"description": "Required. Issue title.",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Last updated timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"IssueComment": {
+"description": "IssueComment represents a comment on an issue.",
+"id": "IssueComment",
+"properties": {
+"body": {
+"description": "Required. The comment body.",
+"type": "string"
+},
+"createTime": {
+"description": "Output only. Creation timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Identifier. Unique identifier for an issue comment. The comment id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/issues/{issue}/issueComments/{comment_id}`",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Last updated timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListBranchRulesResponse": {
+"description": "ListBranchRulesResponse is the response to listing branchRules.",
+"id": "ListBranchRulesResponse",
+"properties": {
+"branchRules": {
+"description": "The list of branch rules.",
+"items": {
+"$ref": "BranchRule"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListHooksResponse": {
+"description": "ListHooksResponse is response to list hooks.",
+"id": "ListHooksResponse",
+"properties": {
+"hooks": {
+"description": "The list of hooks.",
+"items": {
+"$ref": "Hook"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListInstancesResponse": {
+"id": "ListInstancesResponse",
+"properties": {
+"instances": {
+"description": "The list of instances.",
+"items": {
+"$ref": "Instance"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListIssueCommentsResponse": {
+"description": "The response to list issue comments.",
+"id": "ListIssueCommentsResponse",
+"properties": {
+"issueComments": {
+"description": "The list of issue comments.",
+"items": {
+"$ref": "IssueComment"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListIssuesResponse": {
+"description": "The response to list issues.",
+"id": "ListIssuesResponse",
+"properties": {
+"issues": {
+"description": "The list of issues.",
+"items": {
+"$ref": "Issue"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPullRequestCommentsResponse": {
+"description": "The response to list pull request comments.",
+"id": "ListPullRequestCommentsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token to set as page_token to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"pullRequestComments": {
+"description": "The list of pull request comments.",
+"items": {
+"$ref": "PullRequestComment"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPullRequestFileDiffsResponse": {
+"description": "ListPullRequestFileDiffsResponse is the response containing file diffs returned from ListPullRequestFileDiffs.",
+"id": "ListPullRequestFileDiffsResponse",
+"properties": {
+"fileDiffs": {
+"description": "The list of pull request file diffs.",
+"items": {
+"$ref": "FileDiff"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListPullRequestsResponse": {
+"description": "ListPullRequestsResponse is the response to list pull requests.",
+"id": "ListPullRequestsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"pullRequests": {
+"description": "The list of pull requests.",
+"items": {
+"$ref": "PullRequest"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListRepositoriesResponse": {
+"id": "ListRepositoriesResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"repositories": {
+"description": "The list of repositories.",
+"items": {
+"$ref": "Repository"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"MergePullRequestRequest": {
+"description": "MergePullRequestRequest is the request to merge a pull request.",
+"id": "MergePullRequestRequest",
+"properties": {},
+"type": "object"
+},
+"OpenIssueRequest": {
+"description": "The request to open an issue.",
+"id": "OpenIssueRequest",
+"properties": {
+"etag": {
+"description": "Optional. The current etag of the issue. If the etag is provided and does not match the current etag of the issue, opening will be blocked and an ABORTED error will be returned.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OpenPullRequestRequest": {
+"description": "OpenPullRequestRequest is the request to open a pull request.",
+"id": "OpenPullRequestRequest",
+"properties": {},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OperationMetadata": {
+"description": "Represents the metadata of the long-running operation.",
+"id": "OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have successfully been cancelled have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Policy": {
+"description": "An Identity and Access Management (IAM) policy, which specifies access controls for Google Cloud resources. A `Policy` is a collection of `bindings`. A `binding` binds one or more `members`, or principals, to a single `role`. Principals can be user accounts, service accounts, Google groups, and domains (such as G Suite). A `role` is a named list of permissions; each `role` can be an IAM predefined role or a user-created custom role. For some types of Google Cloud resources, a `binding` can also specify a `condition`, which is a logical expression that allows access to a resource only if the expression evaluates to `true`. A condition can add constraints based on attributes of the request, the resource, or both. To learn which resources support conditions in their IAM policies, see the [IAM documentation](https://cloud.google.com/iam/help/conditions/resource-policies). **JSON example:** ``` { \"bindings\": [ { \"role\": \"roles/resourcemanager.organizationAdmin\", \"members\": [ \"user:mike@example.com\", \"group:admins@example.com\", \"domain:google.com\", \"serviceAccount:my-project-id@appspot.gserviceaccount.com\" ] }, { \"role\": \"roles/resourcemanager.organizationViewer\", \"members\": [ \"user:eve@example.com\" ], \"condition\": { \"title\": \"expirable access\", \"description\": \"Does not grant access after Sep 2020\", \"expression\": \"request.time < timestamp('2020-10-01T00:00:00.000Z')\", } } ], \"etag\": \"BwWWja0YfJA=\", \"version\": 3 } ``` **YAML example:** ``` bindings: - members: - user:mike@example.com - group:admins@example.com - domain:google.com - serviceAccount:my-project-id@appspot.gserviceaccount.com role: roles/resourcemanager.organizationAdmin - members: - user:eve@example.com role: roles/resourcemanager.organizationViewer condition: title: expirable access description: Does not grant access after Sep 2020 expression: request.time < timestamp('2020-10-01T00:00:00.000Z') etag: BwWWja0YfJA= version: 3 ``` For a description of IAM and its features, see the [IAM documentation](https://cloud.google.com/iam/docs/).",
+"id": "Policy",
+"properties": {
+"auditConfigs": {
+"description": "Specifies cloud audit logging configuration for this policy.",
+"items": {
+"$ref": "AuditConfig"
+},
+"type": "array"
+},
+"bindings": {
+"description": "Associates a list of `members`, or principals, with a `role`. Optionally, may specify a `condition` that determines how and when the `bindings` are applied. Each of the `bindings` must contain at least one principal. The `bindings` in a `Policy` can refer to up to 1,500 principals; up to 250 of these principals can be Google groups. Each occurrence of a principal counts towards these limits. For example, if the `bindings` grant 50 different roles to `user:alice@example.com`, and not to any other principal, then you can add another 1,450 principals to the `bindings` in the `Policy`.",
+"items": {
+"$ref": "Binding"
+},
+"type": "array"
+},
+"etag": {
+"description": "`etag` is used for optimistic concurrency control as a way to help prevent simultaneous updates of a policy from overwriting each other. It is strongly suggested that systems make use of the `etag` in the read-modify-write cycle to perform policy updates in order to avoid race conditions: An `etag` is returned in the response to `getIamPolicy`, and systems are expected to put that etag in the request to `setIamPolicy` to ensure that their change will be applied to the same version of the policy. **Important:** If you use IAM Conditions, you must include the `etag` field whenever you call `setIamPolicy`. If you omit this field, then IAM allows you to overwrite a version `3` policy with a version `1` policy, and all of the conditions in the version `3` policy are lost.",
+"format": "byte",
+"type": "string"
+},
+"version": {
+"description": "Specifies the format of the policy. Valid values are `0`, `1`, and `3`. Requests that specify an invalid value are rejected. Any operation that affects conditional role bindings must specify version `3`. This requirement applies to the following operations: * Getting a policy that includes a conditional role binding * Adding a conditional role binding to a policy * Changing a conditional role binding in a policy * Removing any role binding, with or without a condition, from a policy that includes conditions **Important:** If you use IAM Conditions, you must include the `etag` field whenever you call `setIamPolicy`. If you omit this field, then IAM allows you to overwrite a version `3` policy with a version `1` policy, and all of the conditions in the version `3` policy are lost. If a policy does not include any conditions, operations on that policy may specify any valid version or leave the field unset. To learn which resources support conditions in their IAM policies, see the [IAM documentation](https://cloud.google.com/iam/help/conditions/resource-policies).",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"Position": {
+"description": "The position of the code comment.",
+"id": "Position",
+"properties": {
+"line": {
+"description": "Required. The line number of the comment. Positive value means it's on the new side of the diff, negative value means it's on the old side.",
+"format": "int64",
+"type": "string"
+},
+"path": {
+"description": "Required. The path of the file.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"PrivateConfig": {
+"description": "PrivateConfig includes settings for private instance.",
+"id": "PrivateConfig",
+"properties": {
+"caPool": {
+"description": "Optional. Immutable. CA pool resource, resource must in the format of `projects/{project}/locations/{location}/caPools/{ca_pool}`.",
+"type": "string"
+},
+"httpServiceAttachment": {
+"description": "Output only. Service Attachment for HTTP, resource is in the format of `projects/{project}/regions/{region}/serviceAttachments/{service_attachment}`.",
+"readOnly": true,
+"type": "string"
+},
+"isPrivate": {
+"description": "Required. Immutable. Indicate if it's private instance.",
+"type": "boolean"
+},
+"pscAllowedProjects": {
+"description": "Optional. Additional allowed projects for setting up PSC connections. Instance host project is automatically allowed and does not need to be included in this list.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"sshServiceAttachment": {
+"description": "Output only. Service Attachment for SSH, resource is in the format of `projects/{project}/regions/{region}/serviceAttachments/{service_attachment}`.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PullRequest": {
+"description": "Metadata of a PullRequest. PullRequest is the request from a user to merge a branch (head) into another branch (base).",
+"id": "PullRequest",
+"properties": {
+"base": {
+"$ref": "Branch",
+"description": "Required. The branch to merge changes in."
+},
+"body": {
+"description": "Optional. The pull request body. Provides a detailed description of the changes.",
+"type": "string"
+},
+"closeTime": {
+"description": "Output only. Close timestamp (if closed or merged). Cleared when pull request is re-opened.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. Creation timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"head": {
+"$ref": "Branch",
+"description": "Immutable. The branch containing the changes to be merged."
+},
+"name": {
+"description": "Output only. A unique identifier for a PullRequest. The number appended at the end is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/pullRequests/{pull_request_id}`",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. State of the pull request (open, closed or merged).",
+"enum": [
+"STATE_UNSPECIFIED",
+"OPEN",
+"CLOSED",
+"MERGED"
+],
+"enumDescriptions": [
+"Unspecified.",
+"An open pull request.",
+"A closed pull request.",
+"A merged pull request."
+],
+"readOnly": true,
+"type": "string"
+},
+"title": {
+"description": "Required. The pull request title.",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Last updated timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PullRequestComment": {
+"description": "PullRequestComment represents a comment on a pull request.",
+"id": "PullRequestComment",
+"properties": {
+"code": {
+"$ref": "Code",
+"description": "Optional. The comment on a code line."
+},
+"comment": {
+"$ref": "Comment",
+"description": "Optional. The general pull request comment."
+},
+"createTime": {
+"description": "Output only. Creation timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Identifier. Unique identifier for the pull request comment. The comment id is generated by the server. Format: `projects/{project}/locations/{location}/repositories/{repository}/pullRequests/{pull_request}/pullRequestComments/{comment_id}`",
+"type": "string"
+},
+"review": {
+"$ref": "Review",
+"description": "Optional. The review summary comment."
+},
+"updateTime": {
+"description": "Output only. Last updated timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PushOption": {
+"id": "PushOption",
+"properties": {
+"branchFilter": {
+"description": "Optional. Trigger hook for matching branches only. Specified as glob pattern. If empty or *, events for all branches are reported. Examples: main, {main,release*}. See https://pkg.go.dev/github.com/gobwas/glob documentation.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Repository": {
+"description": "Metadata of a Secure Source Manager repository.",
+"id": "Repository",
+"properties": {
+"createTime": {
+"description": "Output only. Create timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"description": {
+"description": "Optional. Description of the repository, which cannot exceed 500 characters.",
+"type": "string"
+},
+"etag": {
+"description": "Optional. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.",
+"type": "string"
+},
+"initialConfig": {
+"$ref": "InitialConfig",
+"description": "Input only. Initial configurations for the repository."
+},
+"instance": {
+"description": "Optional. The name of the instance in which the repository is hosted, formatted as `projects/{project_number}/locations/{location_id}/instances/{instance_id}` When creating repository via securesourcemanager.googleapis.com, this field is used as input. When creating repository via *.sourcemanager.dev, this field is output only.",
+"type": "string"
+},
+"name": {
+"description": "Optional. A unique identifier for a repository. The name should be of the format: `projects/{project}/locations/{location_id}/repositories/{repository_id}`",
+"type": "string"
+},
+"uid": {
+"description": "Output only. Unique identifier of the repository.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Update timestamp.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"uris": {
+"$ref": "URIs",
+"description": "Output only. URIs for the repository.",
+"readOnly": true
+}
+},
+"type": "object"
+},
+"ResolvePullRequestCommentsRequest": {
+"description": "The request to resolve multiple pull request comments.",
+"id": "ResolvePullRequestCommentsRequest",
+"properties": {
+"autoFill": {
+"description": "Optional. If set, at least one comment in a thread is required, rest of the comments in the same thread will be automatically updated to resolved. If unset, all comments in the same thread need be present.",
+"type": "boolean"
+},
+"names": {
+"description": "Required. The names of the pull request comments to resolve. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}/pullRequestComments/{comment_id}` Only comments from the same threads are allowed in the same request.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Review": {
+"description": "The review summary comment.",
+"id": "Review",
+"properties": {
+"actionType": {
+"description": "Required. The review action type.",
+"enum": [
+"ACTION_TYPE_UNSPECIFIED",
+"COMMENT",
+"CHANGE_REQUESTED",
+"APPROVED"
+],
+"enumDescriptions": [
+"Unspecified.",
+"A general review comment.",
+"Change required from this review.",
+"Change approved from this review."
+],
+"type": "string"
+},
+"body": {
+"description": "Optional. The comment body.",
+"type": "string"
+},
+"effectiveCommitSha": {
+"description": "Output only. The effective commit sha this review is pointing to.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"SetIamPolicyRequest": {
+"description": "Request message for `SetIamPolicy` method.",
+"id": "SetIamPolicyRequest",
+"properties": {
+"policy": {
+"$ref": "Policy",
+"description": "REQUIRED: The complete policy to be applied to the `resource`. The size of the policy is limited to a few 10s of KB. An empty policy is a valid policy but certain Google Cloud services (such as Projects) might reject them."
+},
+"updateMask": {
+"description": "OPTIONAL: A FieldMask specifying which fields of the policy to modify. Only the fields in the mask will be modified. If no mask is provided, the following default mask is used: `paths: \"bindings, etag\"`",
+"format": "google-fieldmask",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"TestIamPermissionsRequest": {
+"description": "Request message for `TestIamPermissions` method.",
+"id": "TestIamPermissionsRequest",
+"properties": {
+"permissions": {
+"description": "The set of permissions to check for the `resource`. Permissions with wildcards (such as `*` or `storage.*`) are not allowed. For more information see [IAM Overview](https://cloud.google.com/iam/docs/overview#permissions).",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"TestIamPermissionsResponse": {
+"description": "Response message for `TestIamPermissions` method.",
+"id": "TestIamPermissionsResponse",
+"properties": {
+"permissions": {
+"description": "A subset of `TestPermissionsRequest.permissions` that the caller is allowed.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"TreeEntry": {
+"description": "Represents an entry within a tree structure (like a Git tree).",
+"id": "TreeEntry",
+"properties": {
+"mode": {
+"description": "Output only. The file mode as a string (e.g., \"100644\"). Indicates file type. Output-only.",
+"readOnly": true,
+"type": "string"
+},
+"path": {
+"description": "Output only. The path of the file or directory within the tree (e.g., \"src/main/java/MyClass.java\"). Output-only.",
+"readOnly": true,
+"type": "string"
+},
+"sha": {
+"description": "Output only. The SHA-1 hash of the object (unique identifier). Output-only.",
+"readOnly": true,
+"type": "string"
+},
+"size": {
+"description": "Output only. The size of the object in bytes (only for blobs). Output-only.",
+"format": "int64",
+"readOnly": true,
+"type": "string"
+},
+"type": {
+"description": "Output only. The type of the object (TREE, BLOB, COMMIT). Output-only.",
+"enum": [
+"OBJECT_TYPE_UNSPECIFIED",
+"TREE",
+"BLOB",
+"COMMIT"
+],
+"enumDescriptions": [
+"Default value, indicating the object type is unspecified.",
+"Represents a directory (folder).",
+"Represents a file (contains file data).",
+"Represents a pointer to another repository (submodule)."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"URIs": {
+"description": "URIs for the repository.",
+"id": "URIs",
+"properties": {
+"api": {
+"description": "Output only. API is the URI for API access.",
+"readOnly": true,
+"type": "string"
+},
+"gitHttps": {
+"description": "Output only. git_https is the git HTTPS URI for git operations.",
+"readOnly": true,
+"type": "string"
+},
+"html": {
+"description": "Output only. HTML is the URI for user to view the repository in a browser.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"UnresolvePullRequestCommentsRequest": {
+"description": "The request to unresolve multiple pull request comments.",
+"id": "UnresolvePullRequestCommentsRequest",
+"properties": {
+"autoFill": {
+"description": "Optional. If set, at least one comment in a thread is required, rest of the comments in the same thread will be automatically updated to unresolved. If unset, all comments in the same thread need be present.",
+"type": "boolean"
+},
+"names": {
+"description": "Required. The names of the pull request comments to unresolve. Format: `projects/{project_number}/locations/{location_id}/repositories/{repository_id}/pullRequests/{pull_request_id}/pullRequestComments/{comment_id}` Only comments from the same threads are allowed in the same request.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"WorkforceIdentityFederationConfig": {
+"description": "WorkforceIdentityFederationConfig allows this instance to support users from external identity providers.",
+"id": "WorkforceIdentityFederationConfig",
+"properties": {
+"enabled": {
+"description": "Optional. Immutable. Whether Workforce Identity Federation is enabled.",
+"type": "boolean"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Secure Source Manager API",
+"version": "v1",
+"version_module": true
+}

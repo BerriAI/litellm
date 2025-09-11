@@ -198,7 +198,6 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
         }
 
 
-
 @pytest.mark.flaky(retries=3, delay=1)
 def test_image_generation_azure_dall_e_3():
     try:

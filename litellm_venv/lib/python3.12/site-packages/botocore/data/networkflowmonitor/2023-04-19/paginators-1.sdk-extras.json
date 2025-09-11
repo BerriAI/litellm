@@ -1,0 +1,17 @@
+{
+    "version": 1.0,
+    "merge": {
+        "pagination": {
+            "GetQueryResultsMonitorTopContributors": {
+                "non_aggregate_keys": [
+                    "unit"
+                ]
+            },
+            "GetQueryResultsWorkloadInsightsTopContributorsData": {
+                "non_aggregate_keys": [
+                    "unit"
+                ]
+            }          
+        }
+    }
+}

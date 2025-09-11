@@ -120,7 +120,9 @@ def create_batch(
         model_info = kwargs.get("model_info", None)
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
-        litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
+        litellm_logging_obj: LiteLLMLoggingObj = cast(
+            LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_logging_obj.update_environment_variables(
@@ -150,7 +152,6 @@ def create_batch(
             timeout = float(timeout)  # type: ignore
         elif timeout is None:
             timeout = 600.0
-        
 
         _create_batch_request = CreateBatchRequest(
             completion_window=completion_window,
@@ -352,7 +353,9 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+            "litellm_logging_obj", None
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_params = get_litellm_params(

@@ -1,0 +1,4493 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://oracledatabase.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Oracle Database",
+"description": "The Oracle Database@Google Cloud API provides a set of APIs to manage Oracle database services, such as Exadata and Autonomous Databases.",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/oracle/database/docs",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "oracledatabase:v1",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://oracledatabase.mtls.googleapis.com/",
+"name": "oracledatabase",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. Do not use this field. It is unsupported and is ignored unless explicitly documented otherwise. This is primarily for internal usage.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"autonomousDatabaseBackups": {
+"methods": {
+"list": {
+"description": "Lists the long-term and automatic backups of an Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabaseBackups",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.autonomousDatabaseBackups.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request. Only the **autonomous_database_id** field is supported in the following format: `autonomous_database_id=\"{autonomous_database_id}\"`. The accepted values must be a valid Autonomous Database ID, limited to the naming restrictions of the ID: ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$). The ID must start with a letter, end with a letter or a number, and be a maximum of 63 characters.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 Autonomous DB Backups will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for ListAutonomousDatabaseBackups in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/autonomousDatabaseBackups",
+"response": {
+"$ref": "ListAutonomousDatabaseBackupsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"autonomousDatabaseCharacterSets": {
+"methods": {
+"list": {
+"description": "Lists Autonomous Database Character Sets in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabaseCharacterSets",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.autonomousDatabaseCharacterSets.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request. Only the **character_set_type** field is supported in the following format: `character_set_type=\"{characterSetType}\"`. Accepted values include `DATABASE` and `NATIONAL`.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 Autonomous DB Character Sets will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the Autonomous Database in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/autonomousDatabaseCharacterSets",
+"response": {
+"$ref": "ListAutonomousDatabaseCharacterSetsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"autonomousDatabases": {
+"methods": {
+"create": {
+"description": "Creates a new Autonomous Database in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"autonomousDatabaseId": {
+"description": "Required. The ID of the Autonomous Database to create. This value is restricted to (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$) and must be a maximum of 63 characters in length. The value must start with a letter and end with a letter or a number.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The name of the parent in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/autonomousDatabases",
+"request": {
+"$ref": "AutonomousDatabase"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.autonomousDatabases.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the resource in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"generateWallet": {
+"description": "Generates a wallet for an Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:generateWallet",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.generateWallet",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:generateWallet",
+"request": {
+"$ref": "GenerateAutonomousDatabaseWalletRequest"
+},
+"response": {
+"$ref": "GenerateAutonomousDatabaseWalletResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the details of a single Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.autonomousDatabases.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "AutonomousDatabase"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the Autonomous Databases in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.autonomousDatabases.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. An expression for ordering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 Autonomous Database will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the Autonomous Database in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/autonomousDatabases",
+"response": {
+"$ref": "ListAutonomousDatabasesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"restart": {
+"description": "Restarts an Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:restart",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.restart",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:restart",
+"request": {
+"$ref": "RestartAutonomousDatabaseRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"restore": {
+"description": "Restores a single Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:restore",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.restore",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:restore",
+"request": {
+"$ref": "RestoreAutonomousDatabaseRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"start": {
+"description": "Starts an Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:start",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.start",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:start",
+"request": {
+"$ref": "StartAutonomousDatabaseRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"stop": {
+"description": "Stops an Autonomous Database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:stop",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.stop",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:stop",
+"request": {
+"$ref": "StopAutonomousDatabaseRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"switchover": {
+"description": "Initiates a switchover of specified autonomous database to the associated peer database.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDatabases/{autonomousDatabasesId}:switchover",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.autonomousDatabases.switchover",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Autonomous Database in the following format: projects/{project}/locations/{location}/autonomousDatabases/{autonomous_database}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/autonomousDatabases/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:switchover",
+"request": {
+"$ref": "SwitchoverAutonomousDatabaseRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"autonomousDbVersions": {
+"methods": {
+"list": {
+"description": "Lists all the available Autonomous Database versions for a project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/autonomousDbVersions",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.autonomousDbVersions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 Autonomous DB Versions will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the Autonomous Database in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/autonomousDbVersions",
+"response": {
+"$ref": "ListAutonomousDbVersionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"cloudExadataInfrastructures": {
+"methods": {
+"create": {
+"description": "Creates a new Exadata Infrastructure in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudExadataInfrastructures",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.cloudExadataInfrastructures.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"cloudExadataInfrastructureId": {
+"description": "Required. The ID of the Exadata Infrastructure to create. This value is restricted to (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$) and must be a maximum of 63 characters in length. The value must start with a letter and end with a letter or a number.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for CloudExadataInfrastructure in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/cloudExadataInfrastructures",
+"request": {
+"$ref": "CloudExadataInfrastructure"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Exadata Infrastructure.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudExadataInfrastructures/{cloudExadataInfrastructuresId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.cloudExadataInfrastructures.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"force": {
+"description": "Optional. If set to true, all VM clusters for this Exadata Infrastructure will be deleted. An Exadata Infrastructure can only be deleted once all its VM clusters have been deleted.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the Cloud Exadata Infrastructure in the following format: projects/{project}/locations/{location}/cloudExadataInfrastructures/{cloud_exadata_infrastructure}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudExadataInfrastructures/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single Exadata Infrastructure.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudExadataInfrastructures/{cloudExadataInfrastructuresId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudExadataInfrastructures.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Cloud Exadata Infrastructure in the following format: projects/{project}/locations/{location}/cloudExadataInfrastructures/{cloud_exadata_infrastructure}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudExadataInfrastructures/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "CloudExadataInfrastructure"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists Exadata Infrastructures in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudExadataInfrastructures",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudExadataInfrastructures.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 Exadata infrastructures will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for CloudExadataInfrastructure in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/cloudExadataInfrastructures",
+"response": {
+"$ref": "ListCloudExadataInfrastructuresResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"dbServers": {
+"methods": {
+"list": {
+"description": "Lists the database servers of an Exadata Infrastructure instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudExadataInfrastructures/{cloudExadataInfrastructuresId}/dbServers",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudExadataInfrastructures.dbServers.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, a maximum of 50 db servers will be returned. The maximum value is 1000; values above 1000 will be reset to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for database server in the following format: projects/{project}/locations/{location}/cloudExadataInfrastructures/{cloudExadataInfrastructure}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudExadataInfrastructures/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/dbServers",
+"response": {
+"$ref": "ListDbServersResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"cloudVmClusters": {
+"methods": {
+"create": {
+"description": "Creates a new VM Cluster in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudVmClusters",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.cloudVmClusters.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"cloudVmClusterId": {
+"description": "Required. The ID of the VM Cluster to create. This value is restricted to (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$) and must be a maximum of 63 characters in length. The value must start with a letter and end with a letter or a number.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The name of the parent in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/cloudVmClusters",
+"request": {
+"$ref": "CloudVmCluster"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single VM Cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudVmClusters/{cloudVmClustersId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.cloudVmClusters.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"force": {
+"description": "Optional. If set to true, all child resources for the VM Cluster will be deleted. A VM Cluster can only be deleted once all its child resources have been deleted.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the Cloud VM Cluster in the following format: projects/{project}/locations/{location}/cloudVmClusters/{cloud_vm_cluster}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudVmClusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single VM Cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudVmClusters/{cloudVmClustersId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudVmClusters.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Cloud VM Cluster in the following format: projects/{project}/locations/{location}/cloudVmClusters/{cloud_vm_cluster}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudVmClusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "CloudVmCluster"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the VM Clusters in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudVmClusters",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudVmClusters.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The number of VM clusters to return. If unspecified, at most 50 VM clusters will be returned. The maximum value is 1,000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying the page of results the server returns.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The name of the parent in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/cloudVmClusters",
+"response": {
+"$ref": "ListCloudVmClustersResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"dbNodes": {
+"methods": {
+"list": {
+"description": "Lists the database nodes of a VM Cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/cloudVmClusters/{cloudVmClustersId}/dbNodes",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.cloudVmClusters.dbNodes.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 db nodes will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the node should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for database node in the following format: projects/{project}/locations/{location}/cloudVmClusters/{cloudVmCluster}. .",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/cloudVmClusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/dbNodes",
+"response": {
+"$ref": "ListDbNodesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"dbSystemShapes": {
+"methods": {
+"list": {
+"description": "Lists the database system shapes available for the project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/dbSystemShapes",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.dbSystemShapes.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 database system shapes will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for Database System Shapes in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/dbSystemShapes",
+"response": {
+"$ref": "ListDbSystemShapesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"entitlements": {
+"methods": {
+"list": {
+"description": "Lists the entitlements in a given project.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/entitlements",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.entitlements.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, a maximum of 50 entitlements will be returned. The maximum value is 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the entitlement in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/entitlements",
+"response": {
+"$ref": "ListEntitlementsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"giVersions": {
+"methods": {
+"list": {
+"description": "Lists all the valid Oracle Grid Infrastructure (GI) versions for the given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/giVersions",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.giVersions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request. Only the shape and gi_version fields are supported in this format: `shape=\"{shape}\"`.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, a maximum of 50 Oracle Grid Infrastructure (GI) versions will be returned. The maximum value is 1000; values above 1000 will be reset to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for Grid Infrastructure Version in the following format: Format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/giVersions",
+"response": {
+"$ref": "ListGiVersionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"odbNetworks": {
+"methods": {
+"create": {
+"description": "Creates a new ODB Network in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.odbNetworks.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"odbNetworkId": {
+"description": "Required. The ID of the OdbNetwork to create. This value is restricted to (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$) and must be a maximum of 63 characters in length. The value must start with a letter and end with a letter or a number.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the OdbNetwork in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/odbNetworks",
+"request": {
+"$ref": "OdbNetwork"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single ODB Network.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.odbNetworks.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the resource in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single ODB Network.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.odbNetworks.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the OdbNetwork in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "OdbNetwork"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the ODB Networks in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.odbNetworks.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. An expression for ordering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 ODB Networks will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the ODB Network in the following format: projects/{project}/locations/{location}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/odbNetworks",
+"response": {
+"$ref": "ListOdbNetworksResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"odbSubnets": {
+"methods": {
+"create": {
+"description": "Creates a new ODB Subnet in a given ODB Network.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}/odbSubnets",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.odbNetworks.odbSubnets.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"odbSubnetId": {
+"description": "Required. The ID of the OdbSubnet to create. This value is restricted to (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$) and must be a maximum of 63 characters in length. The value must start with a letter and end with a letter or a number.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the OdbSubnet in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/odbSubnets",
+"request": {
+"$ref": "OdbSubnet"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single ODB Subnet.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}/odbSubnets/{odbSubnetsId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.odbNetworks.odbSubnets.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the resource in the following format: projects/{project}/locations/{region}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+/odbSubnets/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional ID to identify the request. This value is used to identify duplicate requests. If you make a request with the same request ID and the original request is still in progress or completed, the server ignores the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single ODB Subnet.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}/odbSubnets/{odbSubnetsId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.odbNetworks.odbSubnets.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the OdbSubnet in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+/odbSubnets/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "OdbSubnet"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists all the ODB Subnets in a given ODB Network.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/odbNetworks/{odbNetworksId}/odbSubnets",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.odbNetworks.odbSubnets.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. An expression for filtering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. An expression for ordering the results of the request.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of items to return. If unspecified, at most 50 ODB Networks will be returned. The maximum value is 1000; values above 1000 will be coerced to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent value for the OdbSubnet in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/odbNetworks/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/odbSubnets",
+"response": {
+"$ref": "ListOdbSubnetsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "oracledatabase.projects.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "oracledatabase.projects.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "oracledatabase.projects.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250825",
+"rootUrl": "https://oracledatabase.googleapis.com/",
+"schemas": {
+"AllConnectionStrings": {
+"description": "A list of all connection strings that can be used to connect to the Autonomous Database.",
+"id": "AllConnectionStrings",
+"properties": {
+"high": {
+"description": "Output only. The database service provides the highest level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+},
+"low": {
+"description": "Output only. The database service provides the least level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+},
+"medium": {
+"description": "Output only. The database service provides a lower level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabase": {
+"description": "Details of the Autonomous Database resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/AutonomousDatabase/",
+"id": "AutonomousDatabase",
+"properties": {
+"adminPassword": {
+"description": "Optional. The password for the default ADMIN user.",
+"type": "string"
+},
+"cidr": {
+"description": "Optional. The subnet CIDR range for the Autonomous Database.",
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The date and time that the Autonomous Database was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"database": {
+"description": "Optional. The name of the Autonomous Database. The database name must be unique in the project. The name must begin with a letter and can contain a maximum of 30 alphanumeric characters.",
+"type": "string"
+},
+"disasterRecoverySupportedLocations": {
+"description": "Output only. List of supported GCP region to clone the Autonomous Database for disaster recovery. Format: `project/{project}/locations/{location}`.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"displayName": {
+"description": "Optional. The display name for the Autonomous Database. The name does not have to be unique within your project.",
+"type": "string"
+},
+"entitlementId": {
+"description": "Output only. The ID of the subscription entitlement associated with the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. The labels or tags associated with the Autonomous Database.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the Autonomous Database resource in the following format: projects/{project}/locations/{region}/autonomousDatabases/{autonomous_database}",
+"type": "string"
+},
+"network": {
+"description": "Optional. The name of the VPC network used by the Autonomous Database in the following format: projects/{project}/global/networks/{network}",
+"type": "string"
+},
+"odbNetwork": {
+"description": "Optional. The name of the OdbNetwork associated with the Autonomous Database. Format: projects/{project}/locations/{location}/odbNetworks/{odb_network} It is optional but if specified, this should match the parent ODBNetwork of the OdbSubnet.",
+"type": "string"
+},
+"odbSubnet": {
+"description": "Optional. The name of the OdbSubnet associated with the Autonomous Database. Format: projects/{project}/locations/{location}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}",
+"type": "string"
+},
+"peerAutonomousDatabases": {
+"description": "Output only. The peer Autonomous Database names of the given Autonomous Database.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"properties": {
+"$ref": "AutonomousDatabaseProperties",
+"description": "Optional. The properties of the Autonomous Database."
+},
+"sourceConfig": {
+"$ref": "SourceConfig",
+"description": "Optional. The source Autonomous Database configuration for the standby Autonomous Database. The source Autonomous Database is configured while creating the Peer Autonomous Database and can't be updated after creation."
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseApex": {
+"description": "Oracle APEX Application Development. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/AutonomousDatabaseApex",
+"id": "AutonomousDatabaseApex",
+"properties": {
+"apexVersion": {
+"description": "Output only. The Oracle APEX Application Development version.",
+"readOnly": true,
+"type": "string"
+},
+"ordsVersion": {
+"description": "Output only. The Oracle REST Data Services (ORDS) version.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseBackup": {
+"description": "Details of the Autonomous Database Backup resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/AutonomousDatabaseBackup/",
+"id": "AutonomousDatabaseBackup",
+"properties": {
+"autonomousDatabase": {
+"description": "Required. The name of the Autonomous Database resource for which the backup is being created. Format: projects/{project}/locations/{region}/autonomousDatabases/{autonomous_database}",
+"type": "string"
+},
+"displayName": {
+"description": "Optional. User friendly name for the Backup. The name does not have to be unique.",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. labels or tags associated with the resource.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the Autonomous Database Backup resource with the format: projects/{project}/locations/{region}/autonomousDatabaseBackups/{autonomous_database_backup}",
+"type": "string"
+},
+"properties": {
+"$ref": "AutonomousDatabaseBackupProperties",
+"description": "Optional. Various properties of the backup."
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseBackupProperties": {
+"description": "Properties of the Autonomous Database Backup resource.",
+"id": "AutonomousDatabaseBackupProperties",
+"properties": {
+"availableTillTime": {
+"description": "Output only. Timestamp until when the backup will be available.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"compartmentId": {
+"description": "Output only. The OCID of the compartment.",
+"readOnly": true,
+"type": "string"
+},
+"databaseSizeTb": {
+"description": "Output only. The quantity of data in the database, in terabytes.",
+"format": "float",
+"readOnly": true,
+"type": "number"
+},
+"dbVersion": {
+"description": "Output only. A valid Oracle Database version for Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The date and time the backup completed.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"isAutomaticBackup": {
+"description": "Output only. Indicates if the backup is automatic or user initiated.",
+"readOnly": true,
+"type": "boolean"
+},
+"isLongTermBackup": {
+"description": "Output only. Indicates if the backup is long term backup.",
+"readOnly": true,
+"type": "boolean"
+},
+"isRestorable": {
+"description": "Output only. Indicates if the backup can be used to restore the Autonomous Database.",
+"readOnly": true,
+"type": "boolean"
+},
+"keyStoreId": {
+"description": "Optional. The OCID of the key store of Oracle Vault.",
+"type": "string"
+},
+"keyStoreWallet": {
+"description": "Optional. The wallet name for Oracle Key Vault.",
+"type": "string"
+},
+"kmsKeyId": {
+"description": "Optional. The OCID of the key container that is used as the master encryption key in database transparent data encryption (TDE) operations.",
+"type": "string"
+},
+"kmsKeyVersionId": {
+"description": "Optional. The OCID of the key container version that is used in database transparent data encryption (TDE) operations KMS Key can have multiple key versions. If none is specified, the current key version (latest) of the Key Id is used for the operation. Autonomous Database Serverless does not use key versions, hence is not applicable for Autonomous Database Serverless instances.",
+"type": "string"
+},
+"lifecycleDetails": {
+"description": "Output only. Additional information about the current lifecycle state.",
+"readOnly": true,
+"type": "string"
+},
+"lifecycleState": {
+"description": "Output only. The lifecycle state of the backup.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"ACTIVE",
+"DELETING",
+"DELETED",
+"FAILED",
+"UPDATING"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in creating state.",
+"Indicates that the resource is in active state.",
+"Indicates that the resource is in deleting state.",
+"Indicates that the resource is in deleted state.",
+"Indicates that the resource is in failed state.",
+"Indicates that the resource is in updating state."
+],
+"readOnly": true,
+"type": "string"
+},
+"ocid": {
+"description": "Output only. OCID of the Autonomous Database backup. https://docs.oracle.com/en-us/iaas/Content/General/Concepts/identifiers.htm#Oracle",
+"readOnly": true,
+"type": "string"
+},
+"retentionPeriodDays": {
+"description": "Optional. Retention period in days for the backup.",
+"format": "int32",
+"type": "integer"
+},
+"sizeTb": {
+"description": "Output only. The backup size in terabytes.",
+"format": "float",
+"readOnly": true,
+"type": "number"
+},
+"startTime": {
+"description": "Output only. The date and time the backup started.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"type": {
+"description": "Output only. The type of the backup.",
+"enum": [
+"TYPE_UNSPECIFIED",
+"INCREMENTAL",
+"FULL",
+"LONG_TERM"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Incremental backups.",
+"Full backups.",
+"Long term backups."
+],
+"readOnly": true,
+"type": "string"
+},
+"vaultId": {
+"description": "Optional. The OCID of the vault.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseCharacterSet": {
+"description": "Details of the Autonomous Database character set resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/AutonomousDatabaseCharacterSets/",
+"id": "AutonomousDatabaseCharacterSet",
+"properties": {
+"characterSet": {
+"description": "Output only. The character set name for the Autonomous Database which is the ID in the resource name.",
+"readOnly": true,
+"type": "string"
+},
+"characterSetType": {
+"description": "Output only. The character set type for the Autonomous Database.",
+"enum": [
+"CHARACTER_SET_TYPE_UNSPECIFIED",
+"DATABASE",
+"NATIONAL"
+],
+"enumDescriptions": [
+"Character set type is not specified.",
+"Character set type is set to database.",
+"Character set type is set to national."
+],
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Identifier. The name of the Autonomous Database Character Set resource in the following format: projects/{project}/locations/{region}/autonomousDatabaseCharacterSets/{autonomous_database_character_set}",
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseConnectionStrings": {
+"description": "The connection string used to connect to the Autonomous Database. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/AutonomousDatabaseConnectionStrings",
+"id": "AutonomousDatabaseConnectionStrings",
+"properties": {
+"allConnectionStrings": {
+"$ref": "AllConnectionStrings",
+"description": "Output only. Returns all connection strings that can be used to connect to the Autonomous Database.",
+"readOnly": true
+},
+"dedicated": {
+"description": "Output only. The database service provides the least level of resources to each SQL statement, but supports the most number of concurrent SQL statements.",
+"readOnly": true,
+"type": "string"
+},
+"high": {
+"description": "Output only. The database service provides the highest level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+},
+"low": {
+"description": "Output only. The database service provides the least level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+},
+"medium": {
+"description": "Output only. The database service provides a lower level of resources to each SQL statement.",
+"readOnly": true,
+"type": "string"
+},
+"profiles": {
+"description": "Output only. A list of connection string profiles to allow clients to group, filter, and select values based on the structured metadata.",
+"items": {
+"$ref": "DatabaseConnectionStringProfile"
+},
+"readOnly": true,
+"type": "array"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseConnectionUrls": {
+"description": "The URLs for accessing Oracle Application Express (APEX) and SQL Developer Web with a browser from a Compute instance. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/AutonomousDatabaseConnectionUrls",
+"id": "AutonomousDatabaseConnectionUrls",
+"properties": {
+"apexUri": {
+"description": "Output only. Oracle Application Express (APEX) URL.",
+"readOnly": true,
+"type": "string"
+},
+"databaseTransformsUri": {
+"description": "Output only. The URL of the Database Transforms for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"graphStudioUri": {
+"description": "Output only. The URL of the Graph Studio for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"machineLearningNotebookUri": {
+"description": "Output only. The URL of the Oracle Machine Learning (OML) Notebook for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"machineLearningUserManagementUri": {
+"description": "Output only. The URL of Machine Learning user management the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"mongoDbUri": {
+"description": "Output only. The URL of the MongoDB API for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"ordsUri": {
+"description": "Output only. The Oracle REST Data Services (ORDS) URL of the Web Access for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"sqlDevWebUri": {
+"description": "Output only. The URL of the Oracle SQL Developer Web for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseProperties": {
+"description": "The properties of an Autonomous Database.",
+"id": "AutonomousDatabaseProperties",
+"properties": {
+"actualUsedDataStorageSizeTb": {
+"description": "Output only. The amount of storage currently being used for user and system data, in terabytes.",
+"format": "double",
+"readOnly": true,
+"type": "number"
+},
+"allocatedStorageSizeTb": {
+"description": "Output only. The amount of storage currently allocated for the database tables and billed for, rounded up in terabytes.",
+"format": "double",
+"readOnly": true,
+"type": "number"
+},
+"allowlistedIps": {
+"description": "Optional. The list of allowlisted IP addresses for the Autonomous Database.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"apexDetails": {
+"$ref": "AutonomousDatabaseApex",
+"description": "Output only. The details for the Oracle APEX Application Development.",
+"readOnly": true
+},
+"arePrimaryAllowlistedIpsUsed": {
+"description": "Output only. This field indicates the status of Data Guard and Access control for the Autonomous Database. The field's value is null if Data Guard is disabled or Access Control is disabled. The field's value is TRUE if both Data Guard and Access Control are enabled, and the Autonomous Database is using primary IP access control list (ACL) for standby. The field's value is FALSE if both Data Guard and Access Control are enabled, and the Autonomous Database is using a different IP access control list (ACL) for standby compared to primary.",
+"readOnly": true,
+"type": "boolean"
+},
+"autonomousContainerDatabaseId": {
+"description": "Output only. The Autonomous Container Database OCID.",
+"readOnly": true,
+"type": "string"
+},
+"availableUpgradeVersions": {
+"description": "Output only. The list of available Oracle Database upgrade versions for an Autonomous Database.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"backupRetentionPeriodDays": {
+"description": "Optional. The retention period for the Autonomous Database. This field is specified in days, can range from 1 day to 60 days, and has a default value of 60 days.",
+"format": "int32",
+"type": "integer"
+},
+"characterSet": {
+"description": "Optional. The character set for the Autonomous Database. The default is AL32UTF8.",
+"type": "string"
+},
+"computeCount": {
+"description": "Optional. The number of compute servers for the Autonomous Database.",
+"format": "float",
+"type": "number"
+},
+"connectionStrings": {
+"$ref": "AutonomousDatabaseConnectionStrings",
+"description": "Output only. The connection strings used to connect to an Autonomous Database.",
+"readOnly": true
+},
+"connectionUrls": {
+"$ref": "AutonomousDatabaseConnectionUrls",
+"description": "Output only. The Oracle Connection URLs for an Autonomous Database.",
+"readOnly": true
+},
+"cpuCoreCount": {
+"description": "Optional. The number of CPU cores to be made available to the database.",
+"format": "int32",
+"type": "integer"
+},
+"customerContacts": {
+"description": "Optional. The list of customer contacts.",
+"items": {
+"$ref": "CustomerContact"
+},
+"type": "array"
+},
+"dataGuardRoleChangedTime": {
+"description": "Output only. The date and time the Autonomous Data Guard role was changed for the standby Autonomous Database.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"dataSafeState": {
+"description": "Output only. The current state of the Data Safe registration for the Autonomous Database.",
+"enum": [
+"DATA_SAFE_STATE_UNSPECIFIED",
+"REGISTERING",
+"REGISTERED",
+"DEREGISTERING",
+"NOT_REGISTERED",
+"FAILED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Registering data safe state.",
+"Registered data safe state.",
+"Deregistering data safe state.",
+"Not registered data safe state.",
+"Failed data safe state."
+],
+"readOnly": true,
+"type": "string"
+},
+"dataStorageSizeGb": {
+"description": "Optional. The size of the data stored in the database, in gigabytes.",
+"format": "int32",
+"type": "integer"
+},
+"dataStorageSizeTb": {
+"description": "Optional. The size of the data stored in the database, in terabytes.",
+"format": "int32",
+"type": "integer"
+},
+"databaseManagementState": {
+"description": "Output only. The current state of database management for the Autonomous Database.",
+"enum": [
+"DATABASE_MANAGEMENT_STATE_UNSPECIFIED",
+"ENABLING",
+"ENABLED",
+"DISABLING",
+"NOT_ENABLED",
+"FAILED_ENABLING",
+"FAILED_DISABLING"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Enabling Database Management state",
+"Enabled Database Management state",
+"Disabling Database Management state",
+"Not Enabled Database Management state",
+"Failed enabling Database Management state",
+"Failed disabling Database Management state"
+],
+"readOnly": true,
+"type": "string"
+},
+"dbEdition": {
+"description": "Optional. The edition of the Autonomous Databases.",
+"enum": [
+"DATABASE_EDITION_UNSPECIFIED",
+"STANDARD_EDITION",
+"ENTERPRISE_EDITION"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Standard Database Edition",
+"Enterprise Database Edition"
+],
+"type": "string"
+},
+"dbVersion": {
+"description": "Optional. The Oracle Database version for the Autonomous Database.",
+"type": "string"
+},
+"dbWorkload": {
+"description": "Required. The workload type of the Autonomous Database.",
+"enum": [
+"DB_WORKLOAD_UNSPECIFIED",
+"OLTP",
+"DW",
+"AJD",
+"APEX"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Autonomous Transaction Processing database.",
+"Autonomous Data Warehouse database.",
+"Autonomous JSON Database.",
+"Autonomous Database with the Oracle APEX Application Development workload type."
+],
+"type": "string"
+},
+"disasterRecoveryRoleChangedTime": {
+"description": "Output only. The date and time the Disaster Recovery role was changed for the standby Autonomous Database.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"failedDataRecoveryDuration": {
+"description": "Output only. This field indicates the number of seconds of data loss during a Data Guard failover.",
+"format": "google-duration",
+"readOnly": true,
+"type": "string"
+},
+"isAutoScalingEnabled": {
+"description": "Optional. This field indicates if auto scaling is enabled for the Autonomous Database CPU core count.",
+"type": "boolean"
+},
+"isLocalDataGuardEnabled": {
+"description": "Output only. This field indicates whether the Autonomous Database has local (in-region) Data Guard enabled.",
+"readOnly": true,
+"type": "boolean"
+},
+"isStorageAutoScalingEnabled": {
+"description": "Optional. This field indicates if auto scaling is enabled for the Autonomous Database storage.",
+"type": "boolean"
+},
+"licenseType": {
+"description": "Required. The license type used for the Autonomous Database.",
+"enum": [
+"LICENSE_TYPE_UNSPECIFIED",
+"LICENSE_INCLUDED",
+"BRING_YOUR_OWN_LICENSE"
+],
+"enumDescriptions": [
+"Unspecified",
+"License included part of offer",
+"Bring your own license"
+],
+"type": "string"
+},
+"lifecycleDetails": {
+"description": "Output only. The details of the current lifestyle state of the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"localAdgAutoFailoverMaxDataLossLimit": {
+"description": "Output only. This field indicates the maximum data loss limit for an Autonomous Database, in seconds.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"localDisasterRecoveryType": {
+"description": "Output only. This field indicates the local disaster recovery (DR) type of an Autonomous Database.",
+"enum": [
+"LOCAL_DISASTER_RECOVERY_TYPE_UNSPECIFIED",
+"ADG",
+"BACKUP_BASED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Autonomous Data Guard recovery.",
+"Backup based recovery."
+],
+"readOnly": true,
+"type": "string"
+},
+"localStandbyDb": {
+"$ref": "AutonomousDatabaseStandbySummary",
+"description": "Output only. The details of the Autonomous Data Guard standby database.",
+"readOnly": true
+},
+"maintenanceBeginTime": {
+"description": "Output only. The date and time when maintenance will begin.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"maintenanceEndTime": {
+"description": "Output only. The date and time when maintenance will end.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"maintenanceScheduleType": {
+"description": "Optional. The maintenance schedule of the Autonomous Database.",
+"enum": [
+"MAINTENANCE_SCHEDULE_TYPE_UNSPECIFIED",
+"EARLY",
+"REGULAR"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"An EARLY maintenance schedule patches the database before the regular scheduled maintenance.",
+"A REGULAR maintenance schedule follows the normal maintenance cycle."
+],
+"type": "string"
+},
+"memoryPerOracleComputeUnitGbs": {
+"description": "Output only. The amount of memory enabled per ECPU, in gigabytes.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"memoryTableGbs": {
+"description": "Output only. The memory assigned to in-memory tables in an Autonomous Database.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"mtlsConnectionRequired": {
+"description": "Optional. This field specifies if the Autonomous Database requires mTLS connections.",
+"type": "boolean"
+},
+"nCharacterSet": {
+"description": "Optional. The national character set for the Autonomous Database. The default is AL16UTF16.",
+"type": "string"
+},
+"nextLongTermBackupTime": {
+"description": "Output only. The long term backup schedule of the Autonomous Database.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"ociUrl": {
+"description": "Output only. The Oracle Cloud Infrastructure link for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"ocid": {
+"description": "Output only. OCID of the Autonomous Database. https://docs.oracle.com/en-us/iaas/Content/General/Concepts/identifiers.htm#Oracle",
+"readOnly": true,
+"type": "string"
+},
+"openMode": {
+"description": "Output only. This field indicates the current mode of the Autonomous Database.",
+"enum": [
+"OPEN_MODE_UNSPECIFIED",
+"READ_ONLY",
+"READ_WRITE"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Read Only Mode",
+"Read Write Mode"
+],
+"readOnly": true,
+"type": "string"
+},
+"operationsInsightsState": {
+"description": "Output only. This field indicates the state of Operations Insights for the Autonomous Database.",
+"enum": [
+"OPERATIONS_INSIGHTS_STATE_UNSPECIFIED",
+"ENABLING",
+"ENABLED",
+"DISABLING",
+"NOT_ENABLED",
+"FAILED_ENABLING",
+"FAILED_DISABLING"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Enabling status for operation insights.",
+"Enabled status for operation insights.",
+"Disabling status for operation insights.",
+"Not Enabled status for operation insights.",
+"Failed enabling status for operation insights.",
+"Failed disabling status for operation insights."
+],
+"readOnly": true,
+"type": "string"
+},
+"peerDbIds": {
+"description": "Output only. The list of OCIDs of standby databases located in Autonomous Data Guard remote regions that are associated with the source database.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"permissionLevel": {
+"description": "Output only. The permission level of the Autonomous Database.",
+"enum": [
+"PERMISSION_LEVEL_UNSPECIFIED",
+"RESTRICTED",
+"UNRESTRICTED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Restricted mode allows access only by admin users.",
+"Normal access."
+],
+"readOnly": true,
+"type": "string"
+},
+"privateEndpoint": {
+"description": "Output only. The private endpoint for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"privateEndpointIp": {
+"description": "Optional. The private endpoint IP address for the Autonomous Database.",
+"type": "string"
+},
+"privateEndpointLabel": {
+"description": "Optional. The private endpoint label for the Autonomous Database.",
+"type": "string"
+},
+"refreshableMode": {
+"description": "Output only. The refresh mode of the cloned Autonomous Database.",
+"enum": [
+"REFRESHABLE_MODE_UNSPECIFIED",
+"AUTOMATIC",
+"MANUAL"
+],
+"enumDescriptions": [
+"The default unspecified value.",
+"AUTOMATIC indicates that the cloned database is automatically refreshed with data from the source Autonomous Database.",
+"MANUAL indicates that the cloned database is manually refreshed with data from the source Autonomous Database."
+],
+"readOnly": true,
+"type": "string"
+},
+"refreshableState": {
+"description": "Output only. The refresh State of the clone.",
+"enum": [
+"REFRESHABLE_STATE_UNSPECIFIED",
+"REFRESHING",
+"NOT_REFRESHING"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Refreshing",
+"Not refreshed"
+],
+"readOnly": true,
+"type": "string"
+},
+"role": {
+"description": "Output only. The Data Guard role of the Autonomous Database.",
+"enum": [
+"ROLE_UNSPECIFIED",
+"PRIMARY",
+"STANDBY",
+"DISABLED_STANDBY",
+"BACKUP_COPY",
+"SNAPSHOT_STANDBY"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Primary role",
+"Standby role",
+"Disabled standby role",
+"Backup copy role",
+"Snapshot standby role"
+],
+"readOnly": true,
+"type": "string"
+},
+"scheduledOperationDetails": {
+"description": "Output only. The list and details of the scheduled operations of the Autonomous Database.",
+"items": {
+"$ref": "ScheduledOperationDetails"
+},
+"readOnly": true,
+"type": "array"
+},
+"secretId": {
+"description": "Optional. The ID of the Oracle Cloud Infrastructure vault secret.",
+"type": "string"
+},
+"sqlWebDeveloperUrl": {
+"description": "Output only. The SQL Web Developer URL for the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The current lifecycle state of the Autonomous Database.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"STOPPING",
+"STOPPED",
+"STARTING",
+"TERMINATING",
+"TERMINATED",
+"UNAVAILABLE",
+"RESTORE_IN_PROGRESS",
+"RESTORE_FAILED",
+"BACKUP_IN_PROGRESS",
+"SCALE_IN_PROGRESS",
+"AVAILABLE_NEEDS_ATTENTION",
+"UPDATING",
+"MAINTENANCE_IN_PROGRESS",
+"RESTARTING",
+"RECREATING",
+"ROLE_CHANGE_IN_PROGRESS",
+"UPGRADING",
+"INACCESSIBLE",
+"STANDBY"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the Autonomous Database is in provisioning state.",
+"Indicates that the Autonomous Database is in available state.",
+"Indicates that the Autonomous Database is in stopping state.",
+"Indicates that the Autonomous Database is in stopped state.",
+"Indicates that the Autonomous Database is in starting state.",
+"Indicates that the Autonomous Database is in terminating state.",
+"Indicates that the Autonomous Database is in terminated state.",
+"Indicates that the Autonomous Database is in unavailable state.",
+"Indicates that the Autonomous Database restore is in progress.",
+"Indicates that the Autonomous Database failed to restore.",
+"Indicates that the Autonomous Database backup is in progress.",
+"Indicates that the Autonomous Database scale is in progress.",
+"Indicates that the Autonomous Database is available but needs attention state.",
+"Indicates that the Autonomous Database is in updating state.",
+"Indicates that the Autonomous Database's maintenance is in progress state.",
+"Indicates that the Autonomous Database is in restarting state.",
+"Indicates that the Autonomous Database is in recreating state.",
+"Indicates that the Autonomous Database's role change is in progress state.",
+"Indicates that the Autonomous Database is in upgrading state.",
+"Indicates that the Autonomous Database is in inaccessible state.",
+"Indicates that the Autonomous Database is in standby state."
+],
+"readOnly": true,
+"type": "string"
+},
+"supportedCloneRegions": {
+"description": "Output only. The list of available regions that can be used to create a clone for the Autonomous Database.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"totalAutoBackupStorageSizeGbs": {
+"description": "Output only. The storage space used by automatic backups of Autonomous Database, in gigabytes.",
+"format": "float",
+"readOnly": true,
+"type": "number"
+},
+"usedDataStorageSizeTbs": {
+"description": "Output only. The storage space used by Autonomous Database, in gigabytes.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"vaultId": {
+"description": "Optional. The ID of the Oracle Cloud Infrastructure vault.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDatabaseStandbySummary": {
+"description": "Autonomous Data Guard standby database details. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/AutonomousDatabaseStandbySummary",
+"id": "AutonomousDatabaseStandbySummary",
+"properties": {
+"dataGuardRoleChangedTime": {
+"description": "Output only. The date and time the Autonomous Data Guard role was switched for the standby Autonomous Database.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"disasterRecoveryRoleChangedTime": {
+"description": "Output only. The date and time the Disaster Recovery role was switched for the standby Autonomous Database.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"lagTimeDuration": {
+"description": "Output only. The amount of time, in seconds, that the data of the standby database lags in comparison to the data of the primary database.",
+"format": "google-duration",
+"readOnly": true,
+"type": "string"
+},
+"lifecycleDetails": {
+"description": "Output only. The additional details about the current lifecycle state of the Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The current lifecycle state of the Autonomous Database.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"STOPPING",
+"STOPPED",
+"STARTING",
+"TERMINATING",
+"TERMINATED",
+"UNAVAILABLE",
+"RESTORE_IN_PROGRESS",
+"RESTORE_FAILED",
+"BACKUP_IN_PROGRESS",
+"SCALE_IN_PROGRESS",
+"AVAILABLE_NEEDS_ATTENTION",
+"UPDATING",
+"MAINTENANCE_IN_PROGRESS",
+"RESTARTING",
+"RECREATING",
+"ROLE_CHANGE_IN_PROGRESS",
+"UPGRADING",
+"INACCESSIBLE",
+"STANDBY"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the Autonomous Database is in provisioning state.",
+"Indicates that the Autonomous Database is in available state.",
+"Indicates that the Autonomous Database is in stopping state.",
+"Indicates that the Autonomous Database is in stopped state.",
+"Indicates that the Autonomous Database is in starting state.",
+"Indicates that the Autonomous Database is in terminating state.",
+"Indicates that the Autonomous Database is in terminated state.",
+"Indicates that the Autonomous Database is in unavailable state.",
+"Indicates that the Autonomous Database restore is in progress.",
+"Indicates that the Autonomous Database failed to restore.",
+"Indicates that the Autonomous Database backup is in progress.",
+"Indicates that the Autonomous Database scale is in progress.",
+"Indicates that the Autonomous Database is available but needs attention state.",
+"Indicates that the Autonomous Database is in updating state.",
+"Indicates that the Autonomous Database's maintenance is in progress state.",
+"Indicates that the Autonomous Database is in restarting state.",
+"Indicates that the Autonomous Database is in recreating state.",
+"Indicates that the Autonomous Database's role change is in progress state.",
+"Indicates that the Autonomous Database is in upgrading state.",
+"Indicates that the Autonomous Database is in inaccessible state.",
+"Indicates that the Autonomous Database is in standby state."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"AutonomousDbVersion": {
+"description": "Details of the Autonomous Database version. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/AutonomousDbVersionSummary/",
+"id": "AutonomousDbVersion",
+"properties": {
+"dbWorkload": {
+"description": "Output only. The Autonomous Database workload type.",
+"enum": [
+"DB_WORKLOAD_UNSPECIFIED",
+"OLTP",
+"DW",
+"AJD",
+"APEX"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Autonomous Transaction Processing database.",
+"Autonomous Data Warehouse database.",
+"Autonomous JSON Database.",
+"Autonomous Database with the Oracle APEX Application Development workload type."
+],
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Identifier. The name of the Autonomous Database Version resource with the format: projects/{project}/locations/{region}/autonomousDbVersions/{autonomous_db_version}",
+"type": "string"
+},
+"version": {
+"description": "Output only. An Oracle Database version for Autonomous Database.",
+"readOnly": true,
+"type": "string"
+},
+"workloadUri": {
+"description": "Output only. A URL that points to a detailed description of the Autonomous Database version.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"CloudAccountDetails": {
+"description": "Details of the OCI Cloud Account.",
+"id": "CloudAccountDetails",
+"properties": {
+"accountCreationUri": {
+"description": "Output only. URL to create a new account and link.",
+"readOnly": true,
+"type": "string"
+},
+"cloudAccount": {
+"description": "Output only. OCI account name.",
+"readOnly": true,
+"type": "string"
+},
+"cloudAccountHomeRegion": {
+"description": "Output only. OCI account home region.",
+"readOnly": true,
+"type": "string"
+},
+"linkExistingAccountUri": {
+"description": "Output only. URL to link an existing account.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"CloudExadataInfrastructure": {
+"description": "Represents CloudExadataInfrastructure resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/CloudExadataInfrastructure/",
+"id": "CloudExadataInfrastructure",
+"properties": {
+"createTime": {
+"description": "Output only. The date and time that the Exadata Infrastructure was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Optional. User friendly name for this resource.",
+"type": "string"
+},
+"entitlementId": {
+"description": "Output only. Entitlement ID of the private offer against which this infrastructure resource is provisioned.",
+"readOnly": true,
+"type": "string"
+},
+"gcpOracleZone": {
+"description": "Optional. The GCP Oracle zone where Oracle Exadata Infrastructure is hosted. Example: us-east4-b-r2. If not specified, the system will pick a zone based on availability.",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels or tags associated with the resource.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the Exadata Infrastructure resource with the format: projects/{project}/locations/{region}/cloudExadataInfrastructures/{cloud_exadata_infrastructure}",
+"type": "string"
+},
+"properties": {
+"$ref": "CloudExadataInfrastructureProperties",
+"description": "Optional. Various properties of the infra."
+}
+},
+"type": "object"
+},
+"CloudExadataInfrastructureProperties": {
+"description": "Various properties of Exadata Infrastructure.",
+"id": "CloudExadataInfrastructureProperties",
+"properties": {
+"activatedStorageCount": {
+"description": "Output only. The requested number of additional storage servers activated for the Exadata Infrastructure.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"additionalStorageCount": {
+"description": "Output only. The requested number of additional storage servers for the Exadata Infrastructure.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"availableStorageSizeGb": {
+"description": "Output only. The available storage can be allocated to the Exadata Infrastructure resource, in gigabytes (GB).",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"computeCount": {
+"description": "Optional. The number of compute servers for the Exadata Infrastructure.",
+"format": "int32",
+"type": "integer"
+},
+"computeModel": {
+"description": "Output only. The compute model of the Exadata Infrastructure.",
+"enum": [
+"COMPUTE_MODEL_UNSPECIFIED",
+"COMPUTE_MODEL_ECPU",
+"COMPUTE_MODEL_OCPU"
+],
+"enumDescriptions": [
+"Unspecified compute model.",
+"Abstract measure of compute resources. ECPUs are based on the number of cores elastically allocated from a pool of compute and storage servers.",
+"Physical measure of compute resources. OCPUs are based on the physical core of a processor."
+],
+"readOnly": true,
+"type": "string"
+},
+"cpuCount": {
+"description": "Output only. The number of enabled CPU cores.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"customerContacts": {
+"description": "Optional. The list of customer contacts.",
+"items": {
+"$ref": "CustomerContact"
+},
+"type": "array"
+},
+"dataStorageSizeTb": {
+"description": "Output only. Size, in terabytes, of the DATA disk group.",
+"format": "double",
+"readOnly": true,
+"type": "number"
+},
+"databaseServerType": {
+"description": "Output only. The database server type of the Exadata Infrastructure.",
+"readOnly": true,
+"type": "string"
+},
+"dbNodeStorageSizeGb": {
+"description": "Output only. The local node storage allocated in GBs.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"dbServerVersion": {
+"description": "Output only. The software version of the database servers (dom0) in the Exadata Infrastructure.",
+"readOnly": true,
+"type": "string"
+},
+"maintenanceWindow": {
+"$ref": "MaintenanceWindow",
+"description": "Optional. Maintenance window for repair."
+},
+"maxCpuCount": {
+"description": "Output only. The total number of CPU cores available.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"maxDataStorageTb": {
+"description": "Output only. The total available DATA disk group size.",
+"format": "double",
+"readOnly": true,
+"type": "number"
+},
+"maxDbNodeStorageSizeGb": {
+"description": "Output only. The total local node storage available in GBs.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"maxMemoryGb": {
+"description": "Output only. The total memory available in GBs.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"memorySizeGb": {
+"description": "Output only. The memory allocated in GBs.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"monthlyDbServerVersion": {
+"description": "Output only. The monthly software version of the database servers (dom0) in the Exadata Infrastructure. Example: 20.1.15",
+"readOnly": true,
+"type": "string"
+},
+"monthlyStorageServerVersion": {
+"description": "Output only. The monthly software version of the storage servers (cells) in the Exadata Infrastructure. Example: 20.1.15",
+"readOnly": true,
+"type": "string"
+},
+"nextMaintenanceRunId": {
+"description": "Output only. The OCID of the next maintenance run.",
+"readOnly": true,
+"type": "string"
+},
+"nextMaintenanceRunTime": {
+"description": "Output only. The time when the next maintenance run will occur.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"nextSecurityMaintenanceRunTime": {
+"description": "Output only. The time when the next security maintenance run will occur.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"ociUrl": {
+"description": "Output only. Deep link to the OCI console to view this resource.",
+"readOnly": true,
+"type": "string"
+},
+"ocid": {
+"description": "Output only. OCID of created infra. https://docs.oracle.com/en-us/iaas/Content/General/Concepts/identifiers.htm#Oracle",
+"readOnly": true,
+"type": "string"
+},
+"shape": {
+"description": "Required. The shape of the Exadata Infrastructure. The shape determines the amount of CPU, storage, and memory resources allocated to the instance.",
+"type": "string"
+},
+"state": {
+"description": "Output only. The current lifecycle state of the Exadata Infrastructure.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"UPDATING",
+"TERMINATING",
+"TERMINATED",
+"FAILED",
+"MAINTENANCE_IN_PROGRESS"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"The Exadata Infrastructure is being provisioned.",
+"The Exadata Infrastructure is available for use.",
+"The Exadata Infrastructure is being updated.",
+"The Exadata Infrastructure is being terminated.",
+"The Exadata Infrastructure is terminated.",
+"The Exadata Infrastructure is in failed state.",
+"The Exadata Infrastructure is in maintenance."
+],
+"readOnly": true,
+"type": "string"
+},
+"storageCount": {
+"description": "Optional. The number of Cloud Exadata storage servers for the Exadata Infrastructure.",
+"format": "int32",
+"type": "integer"
+},
+"storageServerType": {
+"description": "Output only. The storage server type of the Exadata Infrastructure.",
+"readOnly": true,
+"type": "string"
+},
+"storageServerVersion": {
+"description": "Output only. The software version of the storage servers (cells) in the Exadata Infrastructure.",
+"readOnly": true,
+"type": "string"
+},
+"totalStorageSizeGb": {
+"description": "Optional. The total storage allocated to the Exadata Infrastructure resource, in gigabytes (GB).",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"CloudVmCluster": {
+"description": "Details of the Cloud VM Cluster resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/CloudVmCluster/",
+"id": "CloudVmCluster",
+"properties": {
+"backupOdbSubnet": {
+"description": "Optional. The name of the backup OdbSubnet associated with the VM Cluster. Format: projects/{project}/locations/{location}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}",
+"type": "string"
+},
+"backupSubnetCidr": {
+"description": "Optional. CIDR range of the backup subnet.",
+"type": "string"
+},
+"cidr": {
+"description": "Optional. Network settings. CIDR to use for cluster IP allocation.",
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The date and time that the VM cluster was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Optional. User friendly name for this resource.",
+"type": "string"
+},
+"exadataInfrastructure": {
+"description": "Required. The name of the Exadata Infrastructure resource on which VM cluster resource is created, in the following format: projects/{project}/locations/{region}/cloudExadataInfrastuctures/{cloud_extradata_infrastructure}",
+"type": "string"
+},
+"gcpOracleZone": {
+"description": "Output only. The GCP Oracle zone where Oracle CloudVmCluster is hosted. This will be the same as the gcp_oracle_zone of the CloudExadataInfrastructure. Example: us-east4-b-r2.",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels or tags associated with the VM Cluster.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the VM Cluster resource with the format: projects/{project}/locations/{region}/cloudVmClusters/{cloud_vm_cluster}",
+"type": "string"
+},
+"network": {
+"description": "Optional. The name of the VPC network. Format: projects/{project}/global/networks/{network}",
+"type": "string"
+},
+"odbNetwork": {
+"description": "Optional. The name of the OdbNetwork associated with the VM Cluster. Format: projects/{project}/locations/{location}/odbNetworks/{odb_network} It is optional but if specified, this should match the parent ODBNetwork of the odb_subnet and backup_odb_subnet.",
+"type": "string"
+},
+"odbSubnet": {
+"description": "Optional. The name of the OdbSubnet associated with the VM Cluster for IP allocation. Format: projects/{project}/locations/{location}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}",
+"type": "string"
+},
+"properties": {
+"$ref": "CloudVmClusterProperties",
+"description": "Optional. Various properties of the VM Cluster."
+}
+},
+"type": "object"
+},
+"CloudVmClusterProperties": {
+"description": "Various properties and settings associated with Exadata VM cluster.",
+"id": "CloudVmClusterProperties",
+"properties": {
+"clusterName": {
+"description": "Optional. OCI Cluster name.",
+"type": "string"
+},
+"compartmentId": {
+"description": "Output only. Compartment ID of cluster.",
+"readOnly": true,
+"type": "string"
+},
+"computeModel": {
+"description": "Output only. The compute model of the VM Cluster.",
+"enum": [
+"COMPUTE_MODEL_UNSPECIFIED",
+"COMPUTE_MODEL_ECPU",
+"COMPUTE_MODEL_OCPU"
+],
+"enumDescriptions": [
+"Unspecified compute model.",
+"Abstract measure of compute resources. ECPUs are based on the number of cores elastically allocated from a pool of compute and storage servers.",
+"Physical measure of compute resources. OCPUs are based on the physical core of a processor."
+],
+"readOnly": true,
+"type": "string"
+},
+"cpuCoreCount": {
+"description": "Required. Number of enabled CPU cores.",
+"format": "int32",
+"type": "integer"
+},
+"dataStorageSizeTb": {
+"description": "Optional. The data disk group size to be allocated in TBs.",
+"format": "double",
+"type": "number"
+},
+"dbNodeStorageSizeGb": {
+"description": "Optional. Local storage per VM.",
+"format": "int32",
+"type": "integer"
+},
+"dbServerOcids": {
+"description": "Optional. OCID of database servers.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"diagnosticsDataCollectionOptions": {
+"$ref": "DataCollectionOptions",
+"description": "Optional. Data collection options for diagnostics."
+},
+"diskRedundancy": {
+"description": "Optional. The type of redundancy.",
+"enum": [
+"DISK_REDUNDANCY_UNSPECIFIED",
+"HIGH",
+"NORMAL"
+],
+"enumDescriptions": [
+"Unspecified.",
+"High - 3 way mirror.",
+"Normal - 2 way mirror."
+],
+"type": "string"
+},
+"dnsListenerIp": {
+"description": "Output only. DNS listener IP.",
+"readOnly": true,
+"type": "string"
+},
+"domain": {
+"description": "Output only. Parent DNS domain where SCAN DNS and hosts names are qualified. ex: ocispdelegated.ocisp10jvnet.oraclevcn.com",
+"readOnly": true,
+"type": "string"
+},
+"giVersion": {
+"description": "Optional. Grid Infrastructure Version.",
+"type": "string"
+},
+"hostname": {
+"description": "Output only. host name without domain. format: \"-\" with some suffix. ex: sp2-yi0xq where \"sp2\" is the hostname_prefix.",
+"readOnly": true,
+"type": "string"
+},
+"hostnamePrefix": {
+"description": "Optional. Prefix for VM cluster host names.",
+"type": "string"
+},
+"licenseType": {
+"description": "Required. License type of VM Cluster.",
+"enum": [
+"LICENSE_TYPE_UNSPECIFIED",
+"LICENSE_INCLUDED",
+"BRING_YOUR_OWN_LICENSE"
+],
+"enumDescriptions": [
+"Unspecified",
+"License included part of offer",
+"Bring your own license"
+],
+"type": "string"
+},
+"localBackupEnabled": {
+"description": "Optional. Use local backup.",
+"type": "boolean"
+},
+"memorySizeGb": {
+"description": "Optional. Memory allocated in GBs.",
+"format": "int32",
+"type": "integer"
+},
+"nodeCount": {
+"description": "Optional. Number of database servers.",
+"format": "int32",
+"type": "integer"
+},
+"ociUrl": {
+"description": "Output only. Deep link to the OCI console to view this resource.",
+"readOnly": true,
+"type": "string"
+},
+"ocid": {
+"description": "Output only. Oracle Cloud Infrastructure ID of VM Cluster.",
+"readOnly": true,
+"type": "string"
+},
+"ocpuCount": {
+"description": "Optional. OCPU count per VM. Minimum is 0.1.",
+"format": "float",
+"type": "number"
+},
+"scanDns": {
+"description": "Output only. SCAN DNS name. ex: sp2-yi0xq-scan.ocispdelegated.ocisp10jvnet.oraclevcn.com",
+"readOnly": true,
+"type": "string"
+},
+"scanDnsRecordId": {
+"description": "Output only. OCID of scan DNS record.",
+"readOnly": true,
+"type": "string"
+},
+"scanIpIds": {
+"description": "Output only. OCIDs of scan IPs.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"scanListenerPortTcp": {
+"description": "Output only. SCAN listener port - TCP",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"scanListenerPortTcpSsl": {
+"description": "Output only. SCAN listener port - TLS",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"shape": {
+"description": "Output only. Shape of VM Cluster.",
+"readOnly": true,
+"type": "string"
+},
+"sparseDiskgroupEnabled": {
+"description": "Optional. Use exadata sparse snapshots.",
+"type": "boolean"
+},
+"sshPublicKeys": {
+"description": "Optional. SSH public keys to be stored with cluster.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"state": {
+"description": "Output only. State of the cluster.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"UPDATING",
+"TERMINATING",
+"TERMINATED",
+"FAILED",
+"MAINTENANCE_IN_PROGRESS"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in provisioning state.",
+"Indicates that the resource is in available state.",
+"Indicates that the resource is in updating state.",
+"Indicates that the resource is in terminating state.",
+"Indicates that the resource is in terminated state.",
+"Indicates that the resource is in failed state.",
+"Indicates that the resource is in maintenance in progress state."
+],
+"readOnly": true,
+"type": "string"
+},
+"storageSizeGb": {
+"description": "Output only. The storage allocation for the disk group, in gigabytes (GB).",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"systemVersion": {
+"description": "Optional. Operating system version of the image.",
+"type": "string"
+},
+"timeZone": {
+"$ref": "TimeZone",
+"description": "Optional. Time zone of VM Cluster to set. Defaults to UTC if not specified."
+}
+},
+"type": "object"
+},
+"CustomerContact": {
+"description": "The CustomerContact reference as defined by Oracle. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/CustomerContact",
+"id": "CustomerContact",
+"properties": {
+"email": {
+"description": "Required. The email address used by Oracle to send notifications regarding databases and infrastructure.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"DataCollectionOptions": {
+"description": "Data collection options for diagnostics.",
+"id": "DataCollectionOptions",
+"properties": {
+"diagnosticsEventsEnabled": {
+"description": "Optional. Indicates whether diagnostic collection is enabled for the VM cluster",
+"type": "boolean"
+},
+"healthMonitoringEnabled": {
+"description": "Optional. Indicates whether health monitoring is enabled for the VM cluster",
+"type": "boolean"
+},
+"incidentLogsEnabled": {
+"description": "Optional. Indicates whether incident logs and trace collection are enabled for the VM cluster",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"DatabaseConnectionStringProfile": {
+"description": "The connection string profile to allow clients to group. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/DatabaseConnectionStringProfile",
+"id": "DatabaseConnectionStringProfile",
+"properties": {
+"consumerGroup": {
+"description": "Output only. The current consumer group being used by the connection.",
+"enum": [
+"CONSUMER_GROUP_UNSPECIFIED",
+"HIGH",
+"MEDIUM",
+"LOW",
+"TP",
+"TPURGENT"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"High consumer group.",
+"Medium consumer group.",
+"Low consumer group.",
+"TP consumer group.",
+"TPURGENT consumer group."
+],
+"readOnly": true,
+"type": "string"
+},
+"displayName": {
+"description": "Output only. The display name for the database connection.",
+"readOnly": true,
+"type": "string"
+},
+"hostFormat": {
+"description": "Output only. The host name format being currently used in connection string.",
+"enum": [
+"HOST_FORMAT_UNSPECIFIED",
+"FQDN",
+"IP"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"FQDN",
+"IP"
+],
+"readOnly": true,
+"type": "string"
+},
+"isRegional": {
+"description": "Output only. This field indicates if the connection string is regional and is only applicable for cross-region Data Guard.",
+"readOnly": true,
+"type": "boolean"
+},
+"protocol": {
+"description": "Output only. The protocol being used by the connection.",
+"enum": [
+"PROTOCOL_UNSPECIFIED",
+"TCP",
+"TCPS"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Tcp",
+"Tcps"
+],
+"readOnly": true,
+"type": "string"
+},
+"sessionMode": {
+"description": "Output only. The current session mode of the connection.",
+"enum": [
+"SESSION_MODE_UNSPECIFIED",
+"DIRECT",
+"INDIRECT"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Direct",
+"Indirect"
+],
+"readOnly": true,
+"type": "string"
+},
+"syntaxFormat": {
+"description": "Output only. The syntax of the connection string.",
+"enum": [
+"SYNTAX_FORMAT_UNSPECIFIED",
+"LONG",
+"EZCONNECT",
+"EZCONNECTPLUS"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Long",
+"Ezconnect",
+"Ezconnectplus"
+],
+"readOnly": true,
+"type": "string"
+},
+"tlsAuthentication": {
+"description": "Output only. This field indicates the TLS authentication type of the connection.",
+"enum": [
+"TLS_AUTHENTICATION_UNSPECIFIED",
+"SERVER",
+"MUTUAL"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Server",
+"Mutual"
+],
+"readOnly": true,
+"type": "string"
+},
+"value": {
+"description": "Output only. The value of the connection string.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"DbNode": {
+"description": "Details of the database node resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/DbNode/",
+"id": "DbNode",
+"properties": {
+"name": {
+"description": "Identifier. The name of the database node resource in the following format: projects/{project}/locations/{location}/cloudVmClusters/{cloud_vm_cluster}/dbNodes/{db_node}",
+"type": "string"
+},
+"properties": {
+"$ref": "DbNodeProperties",
+"description": "Optional. Various properties of the database node."
+}
+},
+"type": "object"
+},
+"DbNodeProperties": {
+"description": "Various properties and settings associated with Db node.",
+"id": "DbNodeProperties",
+"properties": {
+"createTime": {
+"description": "Output only. The date and time that the database node was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"dbNodeStorageSizeGb": {
+"description": "Optional. Local storage per database node.",
+"format": "int32",
+"type": "integer"
+},
+"dbServerOcid": {
+"description": "Optional. Database server OCID.",
+"type": "string"
+},
+"hostname": {
+"description": "Optional. DNS",
+"type": "string"
+},
+"memorySizeGb": {
+"description": "Memory allocated in GBs.",
+"format": "int32",
+"type": "integer"
+},
+"ocid": {
+"description": "Output only. OCID of database node.",
+"readOnly": true,
+"type": "string"
+},
+"ocpuCount": {
+"description": "Optional. OCPU count per database node.",
+"format": "int32",
+"type": "integer"
+},
+"state": {
+"description": "Output only. State of the database node.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"UPDATING",
+"STOPPING",
+"STOPPED",
+"STARTING",
+"TERMINATING",
+"TERMINATED",
+"FAILED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in provisioning state.",
+"Indicates that the resource is in available state.",
+"Indicates that the resource is in updating state.",
+"Indicates that the resource is in stopping state.",
+"Indicates that the resource is in stopped state.",
+"Indicates that the resource is in starting state.",
+"Indicates that the resource is in terminating state.",
+"Indicates that the resource is in terminated state.",
+"Indicates that the resource is in failed state."
+],
+"readOnly": true,
+"type": "string"
+},
+"totalCpuCoreCount": {
+"description": "Total CPU core count of the database node.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"DbServer": {
+"description": "Details of the database server resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/DbServer/",
+"id": "DbServer",
+"properties": {
+"displayName": {
+"description": "Optional. User friendly name for this resource.",
+"type": "string"
+},
+"name": {
+"description": "Identifier. The name of the database server resource with the format: projects/{project}/locations/{location}/cloudExadataInfrastructures/{cloud_exadata_infrastructure}/dbServers/{db_server}",
+"type": "string"
+},
+"properties": {
+"$ref": "DbServerProperties",
+"description": "Optional. Various properties of the database server."
+}
+},
+"type": "object"
+},
+"DbServerProperties": {
+"description": "Various properties and settings associated with Exadata database server.",
+"id": "DbServerProperties",
+"properties": {
+"dbNodeIds": {
+"description": "Output only. OCID of database nodes associated with the database server.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"dbNodeStorageSizeGb": {
+"description": "Optional. Local storage per VM.",
+"format": "int32",
+"type": "integer"
+},
+"maxDbNodeStorageSizeGb": {
+"description": "Optional. Maximum local storage per VM.",
+"format": "int32",
+"type": "integer"
+},
+"maxMemorySizeGb": {
+"description": "Optional. Maximum memory allocated in GBs.",
+"format": "int32",
+"type": "integer"
+},
+"maxOcpuCount": {
+"description": "Optional. Maximum OCPU count per database.",
+"format": "int32",
+"type": "integer"
+},
+"memorySizeGb": {
+"description": "Optional. Memory allocated in GBs.",
+"format": "int32",
+"type": "integer"
+},
+"ocid": {
+"description": "Output only. OCID of database server.",
+"readOnly": true,
+"type": "string"
+},
+"ocpuCount": {
+"description": "Optional. OCPU count per database.",
+"format": "int32",
+"type": "integer"
+},
+"state": {
+"description": "Output only. State of the database server.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"AVAILABLE",
+"UNAVAILABLE",
+"DELETING",
+"DELETED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in creating state.",
+"Indicates that the resource is in available state.",
+"Indicates that the resource is in unavailable state.",
+"Indicates that the resource is in deleting state.",
+"Indicates that the resource is in deleted state."
+],
+"readOnly": true,
+"type": "string"
+},
+"vmCount": {
+"description": "Optional. Vm count per database.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"DbSystemShape": {
+"description": "Details of the Database System Shapes resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/DbSystemShapeSummary/",
+"id": "DbSystemShape",
+"properties": {
+"availableCoreCountPerNode": {
+"description": "Optional. Number of cores per node.",
+"format": "int32",
+"type": "integer"
+},
+"availableDataStorageTb": {
+"description": "Optional. Storage per storage server in terabytes.",
+"format": "int32",
+"type": "integer"
+},
+"availableMemoryPerNodeGb": {
+"description": "Optional. Memory per database server node in gigabytes.",
+"format": "int32",
+"type": "integer"
+},
+"maxNodeCount": {
+"description": "Optional. Maximum number of database servers.",
+"format": "int32",
+"type": "integer"
+},
+"maxStorageCount": {
+"description": "Optional. Maximum number of storage servers.",
+"format": "int32",
+"type": "integer"
+},
+"minCoreCountPerNode": {
+"description": "Optional. Minimum core count per node.",
+"format": "int32",
+"type": "integer"
+},
+"minDbNodeStoragePerNodeGb": {
+"description": "Optional. Minimum node storage per database server in gigabytes.",
+"format": "int32",
+"type": "integer"
+},
+"minMemoryPerNodeGb": {
+"description": "Optional. Minimum memory per node in gigabytes.",
+"format": "int32",
+"type": "integer"
+},
+"minNodeCount": {
+"description": "Optional. Minimum number of database servers.",
+"format": "int32",
+"type": "integer"
+},
+"minStorageCount": {
+"description": "Optional. Minimum number of storage servers.",
+"format": "int32",
+"type": "integer"
+},
+"name": {
+"description": "Identifier. The name of the Database System Shape resource with the format: projects/{project}/locations/{region}/dbSystemShapes/{db_system_shape}",
+"type": "string"
+},
+"shape": {
+"description": "Optional. shape",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"Entitlement": {
+"description": "Details of the Entitlement resource.",
+"id": "Entitlement",
+"properties": {
+"cloudAccountDetails": {
+"$ref": "CloudAccountDetails",
+"description": "Details of the OCI Cloud Account."
+},
+"entitlementId": {
+"description": "Output only. Google Cloud Marketplace order ID (aka entitlement ID)",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Identifier. The name of the Entitlement resource with the format: projects/{project}/locations/{region}/entitlements/{entitlement}",
+"type": "string"
+},
+"state": {
+"description": "Output only. Entitlement State.",
+"enum": [
+"STATE_UNSPECIFIED",
+"ACCOUNT_NOT_LINKED",
+"ACCOUNT_NOT_ACTIVE",
+"ACTIVE",
+"ACCOUNT_SUSPENDED",
+"NOT_APPROVED_IN_PRIVATE_MARKETPLACE"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Account not linked.",
+"Account is linked but not active.",
+"Entitlement and Account are active.",
+"Account is suspended.",
+"Entitlement is not approved in private marketplace."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GenerateAutonomousDatabaseWalletRequest": {
+"description": "The request for `AutonomousDatabase.GenerateWallet`.",
+"id": "GenerateAutonomousDatabaseWalletRequest",
+"properties": {
+"isRegional": {
+"description": "Optional. True when requesting regional connection strings in PDB connect info, applicable to cross-region Data Guard only.",
+"type": "boolean"
+},
+"password": {
+"description": "Required. The password used to encrypt the keys inside the wallet. The password must be a minimum of 8 characters.",
+"type": "string"
+},
+"type": {
+"description": "Optional. The type of wallet generation for the Autonomous Database. The default value is SINGLE.",
+"enum": [
+"GENERATE_TYPE_UNSPECIFIED",
+"ALL",
+"SINGLE"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Used to generate wallet for all databases in the region.",
+"Used to generate wallet for a single database."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"GenerateAutonomousDatabaseWalletResponse": {
+"description": "The response for `AutonomousDatabase.GenerateWallet`.",
+"id": "GenerateAutonomousDatabaseWalletResponse",
+"properties": {
+"archiveContent": {
+"description": "Output only. The base64 encoded wallet files.",
+"format": "byte",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GiVersion": {
+"description": "Details of the Oracle Grid Infrastructure (GI) version resource. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/GiVersionSummary/",
+"id": "GiVersion",
+"properties": {
+"name": {
+"description": "Identifier. The name of the Oracle Grid Infrastructure (GI) version resource with the format: projects/{project}/locations/{region}/giVersions/{gi_versions}",
+"type": "string"
+},
+"version": {
+"description": "Optional. version",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListAutonomousDatabaseBackupsResponse": {
+"description": "The response for `AutonomousDatabaseBackup.List`.",
+"id": "ListAutonomousDatabaseBackupsResponse",
+"properties": {
+"autonomousDatabaseBackups": {
+"description": "The list of Autonomous Database Backups.",
+"items": {
+"$ref": "AutonomousDatabaseBackup"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListAutonomousDatabaseCharacterSetsResponse": {
+"description": "The response for `AutonomousDatabaseCharacterSet.List`.",
+"id": "ListAutonomousDatabaseCharacterSetsResponse",
+"properties": {
+"autonomousDatabaseCharacterSets": {
+"description": "The list of Autonomous Database Character Sets.",
+"items": {
+"$ref": "AutonomousDatabaseCharacterSet"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListAutonomousDatabasesResponse": {
+"description": "The response for `AutonomousDatabase.List`.",
+"id": "ListAutonomousDatabasesResponse",
+"properties": {
+"autonomousDatabases": {
+"description": "The list of Autonomous Databases.",
+"items": {
+"$ref": "AutonomousDatabase"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListAutonomousDbVersionsResponse": {
+"description": "The response for `AutonomousDbVersion.List`.",
+"id": "ListAutonomousDbVersionsResponse",
+"properties": {
+"autonomousDbVersions": {
+"description": "The list of Autonomous Database versions.",
+"items": {
+"$ref": "AutonomousDbVersion"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListCloudExadataInfrastructuresResponse": {
+"description": "The response for `CloudExadataInfrastructures.list`.",
+"id": "ListCloudExadataInfrastructuresResponse",
+"properties": {
+"cloudExadataInfrastructures": {
+"description": "The list of Exadata Infrastructures.",
+"items": {
+"$ref": "CloudExadataInfrastructure"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token for fetching next page of response.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListCloudVmClustersResponse": {
+"description": "The response for `CloudVmCluster.List`.",
+"id": "ListCloudVmClustersResponse",
+"properties": {
+"cloudVmClusters": {
+"description": "The list of VM Clusters.",
+"items": {
+"$ref": "CloudVmCluster"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token to fetch the next page of results.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListDbNodesResponse": {
+"description": "The response for `DbNode.List`.",
+"id": "ListDbNodesResponse",
+"properties": {
+"dbNodes": {
+"description": "The list of DB Nodes",
+"items": {
+"$ref": "DbNode"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the node should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListDbServersResponse": {
+"description": "The response for `DbServer.List`.",
+"id": "ListDbServersResponse",
+"properties": {
+"dbServers": {
+"description": "The list of database servers.",
+"items": {
+"$ref": "DbServer"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListDbSystemShapesResponse": {
+"description": "The response for `DbSystemShape.List`.",
+"id": "ListDbSystemShapesResponse",
+"properties": {
+"dbSystemShapes": {
+"description": "The list of Database System shapes.",
+"items": {
+"$ref": "DbSystemShape"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListEntitlementsResponse": {
+"description": "The response for `Entitlement.List`.",
+"id": "ListEntitlementsResponse",
+"properties": {
+"entitlements": {
+"description": "The list of Entitlements",
+"items": {
+"$ref": "Entitlement"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListGiVersionsResponse": {
+"description": "The response for `GiVersion.List`.",
+"id": "ListGiVersionsResponse",
+"properties": {
+"giVersions": {
+"description": "The list of Oracle Grid Infrastructure (GI) versions.",
+"items": {
+"$ref": "GiVersion"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOdbNetworksResponse": {
+"description": "The response for `OdbNetwork.List`.",
+"id": "ListOdbNetworksResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"odbNetworks": {
+"description": "The list of ODB Networks.",
+"items": {
+"$ref": "OdbNetwork"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Unreachable locations when listing resources across all locations using wildcard location '-'.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListOdbSubnetsResponse": {
+"description": "The response for `OdbSubnet.List`.",
+"id": "ListOdbSubnetsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token identifying a page of results the server should return.",
+"type": "string"
+},
+"odbSubnets": {
+"description": "The list of ODB Subnets.",
+"items": {
+"$ref": "OdbSubnet"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Unreachable locations when listing resources across all locations using wildcard location '-'.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"LocationMetadata": {
+"description": "Metadata for a given Location.",
+"id": "LocationMetadata",
+"properties": {
+"gcpOracleZones": {
+"description": "Output only. Google Cloud Platform Oracle zones in a location.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+}
+},
+"type": "object"
+},
+"MaintenanceWindow": {
+"description": "Maintenance window as defined by Oracle. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/MaintenanceWindow",
+"id": "MaintenanceWindow",
+"properties": {
+"customActionTimeoutMins": {
+"description": "Optional. Determines the amount of time the system will wait before the start of each database server patching operation. Custom action timeout is in minutes and valid value is between 15 to 120 (inclusive).",
+"format": "int32",
+"type": "integer"
+},
+"daysOfWeek": {
+"description": "Optional. Days during the week when maintenance should be performed.",
+"items": {
+"enum": [
+"DAY_OF_WEEK_UNSPECIFIED",
+"MONDAY",
+"TUESDAY",
+"WEDNESDAY",
+"THURSDAY",
+"FRIDAY",
+"SATURDAY",
+"SUNDAY"
+],
+"enumDescriptions": [
+"The day of the week is unspecified.",
+"Monday",
+"Tuesday",
+"Wednesday",
+"Thursday",
+"Friday",
+"Saturday",
+"Sunday"
+],
+"type": "string"
+},
+"type": "array"
+},
+"hoursOfDay": {
+"description": "Optional. The window of hours during the day when maintenance should be performed. The window is a 4 hour slot. Valid values are: 0 - represents time slot 0:00 - 3:59 UTC 4 - represents time slot 4:00 - 7:59 UTC 8 - represents time slot 8:00 - 11:59 UTC 12 - represents time slot 12:00 - 15:59 UTC 16 - represents time slot 16:00 - 19:59 UTC 20 - represents time slot 20:00 - 23:59 UTC",
+"items": {
+"format": "int32",
+"type": "integer"
+},
+"type": "array"
+},
+"isCustomActionTimeoutEnabled": {
+"description": "Optional. If true, enables the configuration of a custom action timeout (waiting period) between database server patching operations.",
+"type": "boolean"
+},
+"leadTimeWeek": {
+"description": "Optional. Lead time window allows user to set a lead time to prepare for a down time. The lead time is in weeks and valid value is between 1 to 4.",
+"format": "int32",
+"type": "integer"
+},
+"months": {
+"description": "Optional. Months during the year when maintenance should be performed.",
+"items": {
+"enum": [
+"MONTH_UNSPECIFIED",
+"JANUARY",
+"FEBRUARY",
+"MARCH",
+"APRIL",
+"MAY",
+"JUNE",
+"JULY",
+"AUGUST",
+"SEPTEMBER",
+"OCTOBER",
+"NOVEMBER",
+"DECEMBER"
+],
+"enumDescriptions": [
+"The unspecified month.",
+"The month of January.",
+"The month of February.",
+"The month of March.",
+"The month of April.",
+"The month of May.",
+"The month of June.",
+"The month of July.",
+"The month of August.",
+"The month of September.",
+"The month of October.",
+"The month of November.",
+"The month of December."
+],
+"type": "string"
+},
+"type": "array"
+},
+"patchingMode": {
+"description": "Optional. Cloud CloudExadataInfrastructure node patching method, either \"ROLLING\" or \"NONROLLING\". Default value is ROLLING.",
+"enum": [
+"PATCHING_MODE_UNSPECIFIED",
+"ROLLING",
+"NON_ROLLING"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Updates the Cloud Exadata database server hosts in a rolling fashion.",
+"The non-rolling maintenance method first updates your storage servers at the same time, then your database servers at the same time."
+],
+"type": "string"
+},
+"preference": {
+"description": "Optional. The maintenance window scheduling preference.",
+"enum": [
+"MAINTENANCE_WINDOW_PREFERENCE_UNSPECIFIED",
+"CUSTOM_PREFERENCE",
+"NO_PREFERENCE"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Custom preference.",
+"No preference."
+],
+"type": "string"
+},
+"weeksOfMonth": {
+"description": "Optional. Weeks during the month when maintenance should be performed. Weeks start on the 1st, 8th, 15th, and 22nd days of the month, and have a duration of 7 days. Weeks start and end based on calendar dates, not days of the week.",
+"items": {
+"format": "int32",
+"type": "integer"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"OdbNetwork": {
+"description": "Represents OdbNetwork resource.",
+"id": "OdbNetwork",
+"properties": {
+"createTime": {
+"description": "Output only. The date and time that the OdbNetwork was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"entitlementId": {
+"description": "Output only. The ID of the subscription entitlement associated with the OdbNetwork.",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels or tags associated with the resource.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the OdbNetwork resource in the following format: projects/{project}/locations/{region}/odbNetworks/{odb_network}",
+"type": "string"
+},
+"network": {
+"description": "Required. The name of the VPC network in the following format: projects/{project}/global/networks/{network}",
+"type": "string"
+},
+"state": {
+"description": "Output only. State of the ODB Network.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"TERMINATING",
+"FAILED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in provisioning state.",
+"Indicates that the resource is in available state.",
+"Indicates that the resource is in terminating state.",
+"Indicates that the resource is in failed state."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"OdbSubnet": {
+"description": "Represents OdbSubnet resource.",
+"id": "OdbSubnet",
+"properties": {
+"cidrRange": {
+"description": "Required. The CIDR range of the subnet.",
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The date and time that the OdbNetwork was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels or tags associated with the resource.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the OdbSubnet resource in the following format: projects/{project}/locations/{location}/odbNetworks/{odb_network}/odbSubnets/{odb_subnet}",
+"type": "string"
+},
+"purpose": {
+"description": "Required. Purpose of the subnet.",
+"enum": [
+"PURPOSE_UNSPECIFIED",
+"CLIENT_SUBNET",
+"BACKUP_SUBNET"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Subnet to be used for client connections.",
+"Subnet to be used for backup."
+],
+"type": "string"
+},
+"state": {
+"description": "Output only. State of the ODB Subnet.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROVISIONING",
+"AVAILABLE",
+"TERMINATING",
+"FAILED"
+],
+"enumDescriptions": [
+"Default unspecified value.",
+"Indicates that the resource is in provisioning state.",
+"Indicates that the resource is in available state.",
+"Indicates that the resource is in terminating state.",
+"Indicates that the resource is in failed state."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OperationMetadata": {
+"description": "Represents the metadata of the long-running operation.",
+"id": "OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"percentComplete": {
+"description": "Output only. An estimated percentage of the operation that has been completed at a given moment of time, between 0 and 100.",
+"format": "double",
+"readOnly": true,
+"type": "number"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have been cancelled successfully have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. The status of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"RestartAutonomousDatabaseRequest": {
+"description": "The request for `AutonomousDatabase.Restart`.",
+"id": "RestartAutonomousDatabaseRequest",
+"properties": {},
+"type": "object"
+},
+"RestoreAutonomousDatabaseRequest": {
+"description": "The request for `AutonomousDatabase.Restore`.",
+"id": "RestoreAutonomousDatabaseRequest",
+"properties": {
+"restoreTime": {
+"description": "Required. The time and date to restore the database to.",
+"format": "google-datetime",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ScheduledOperationDetails": {
+"description": "Details of scheduled operation. https://docs.oracle.com/en-us/iaas/api/#/en/database/20160918/datatypes/ScheduledOperationDetails",
+"id": "ScheduledOperationDetails",
+"properties": {
+"dayOfWeek": {
+"description": "Output only. Day of week.",
+"enum": [
+"DAY_OF_WEEK_UNSPECIFIED",
+"MONDAY",
+"TUESDAY",
+"WEDNESDAY",
+"THURSDAY",
+"FRIDAY",
+"SATURDAY",
+"SUNDAY"
+],
+"enumDescriptions": [
+"The day of the week is unspecified.",
+"Monday",
+"Tuesday",
+"Wednesday",
+"Thursday",
+"Friday",
+"Saturday",
+"Sunday"
+],
+"readOnly": true,
+"type": "string"
+},
+"startTime": {
+"$ref": "TimeOfDay",
+"description": "Output only. Auto start time.",
+"readOnly": true
+},
+"stopTime": {
+"$ref": "TimeOfDay",
+"description": "Output only. Auto stop time.",
+"readOnly": true
+}
+},
+"type": "object"
+},
+"SourceConfig": {
+"description": "The source configuration for the standby Autonomous Database.",
+"id": "SourceConfig",
+"properties": {
+"automaticBackupsReplicationEnabled": {
+"description": "Optional. This field specifies if the replication of automatic backups is enabled when creating a Data Guard.",
+"type": "boolean"
+},
+"autonomousDatabase": {
+"description": "Optional. The name of the primary Autonomous Database that is used to create a Peer Autonomous Database from a source.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"StartAutonomousDatabaseRequest": {
+"description": "The request for `AutonomousDatabase.Start`.",
+"id": "StartAutonomousDatabaseRequest",
+"properties": {},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"StopAutonomousDatabaseRequest": {
+"description": "The request for `AutonomousDatabase.Stop`.",
+"id": "StopAutonomousDatabaseRequest",
+"properties": {},
+"type": "object"
+},
+"SwitchoverAutonomousDatabaseRequest": {
+"description": "The request for `OracleDatabase.SwitchoverAutonomousDatabase`.",
+"id": "SwitchoverAutonomousDatabaseRequest",
+"properties": {
+"peerAutonomousDatabase": {
+"description": "Required. The peer database name to switch over to.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"TimeOfDay": {
+"description": "Represents a time of day. The date and time zone are either not significant or are specified elsewhere. An API may choose to allow leap seconds. Related types are google.type.Date and `google.protobuf.Timestamp`.",
+"id": "TimeOfDay",
+"properties": {
+"hours": {
+"description": "Hours of a day in 24 hour format. Must be greater than or equal to 0 and typically must be less than or equal to 23. An API may choose to allow the value \"24:00:00\" for scenarios like business closing time.",
+"format": "int32",
+"type": "integer"
+},
+"minutes": {
+"description": "Minutes of an hour. Must be greater than or equal to 0 and less than or equal to 59.",
+"format": "int32",
+"type": "integer"
+},
+"nanos": {
+"description": "Fractions of seconds, in nanoseconds. Must be greater than or equal to 0 and less than or equal to 999,999,999.",
+"format": "int32",
+"type": "integer"
+},
+"seconds": {
+"description": "Seconds of a minute. Must be greater than or equal to 0 and typically must be less than or equal to 59. An API may allow the value 60 if it allows leap-seconds.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"TimeZone": {
+"description": "Represents a time zone from the [IANA Time Zone Database](https://www.iana.org/time-zones).",
+"id": "TimeZone",
+"properties": {
+"id": {
+"description": "IANA Time Zone Database time zone. For example \"America/New_York\".",
+"type": "string"
+},
+"version": {
+"description": "Optional. IANA Time Zone Database version number. For example \"2019a\".",
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Oracle Database@Google Cloud API",
+"version": "v1",
+"version_module": true
+}

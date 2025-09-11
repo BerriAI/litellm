@@ -203,7 +203,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             start_time=start_time,
             end_time=end_time,
         )
-    
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
             kwargs=kwargs,
@@ -212,7 +212,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             end_time=end_time,
         )
         pass
-    
 
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -241,7 +240,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
-
 
     async def async_upload_data_to_s3(
         self, batch_logging_element: s3BatchLoggingElement
@@ -462,14 +460,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
 
-
     async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
         """
         Download and parse JSON object from S3.
-        
+
         Args:
             s3_object_key: The S3 object key to download
-            
+
         Returns:
             Optional[dict]: The parsed JSON object or None if not found/error
         """
@@ -481,7 +478,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
-            
+
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
@@ -533,12 +530,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response = await self.async_httpx_client.get(url, headers=signed_headers)
 
             if response.status_code != 200:
-                verbose_logger.exception("S3 object not found, saw response=", response.text)
+                verbose_logger.exception(
+                    "S3 object not found, saw response=", response.text
+                )
                 return None
-            
+
             # Parse JSON response
             return response.json()
-            
+
         except Exception as e:
             verbose_logger.exception(f"Error downloading from S3: {str(e)}")
             return None
@@ -551,11 +550,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Get the proxy server request from cold storage
 
         Allows fetching a dict of the proxy server request from s3 or GCS bucket.
-        
+
         Args:
             request_id: The unique request ID to search for
             start_time: The start time of the request (datetime or ISO string)
-            
+
         Returns:
             Optional[dict]: The request data dictionary or None if not found
         """
@@ -564,5 +563,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             downloaded_object = await self._download_object_from_s3(object_key)
             return downloaded_object
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {str(e)}")
+            verbose_logger.exception(
+                f"Error retrieving object {object_key} from cold storage: {str(e)}"
+            )
             return None

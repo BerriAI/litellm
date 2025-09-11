@@ -7,7 +7,6 @@ from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 
 
 class TestCustomGuardrailDeploymentHook:
-
     @pytest.mark.asyncio
     async def test_async_pre_call_deployment_hook_no_guardrails(self):
         """Test that method returns kwargs unchanged when no guardrails are present"""
@@ -85,98 +84,87 @@ class TestCustomGuardrailDeploymentHook:
 
 
 class TestCustomGuardrailShouldRunGuardrail:
-
     def test_should_run_guardrail_with_litellm_metadata(self):
         """Test that should_run_guardrail works with litellm_metadata pattern"""
         from litellm.types.guardrails import GuardrailEventHooks
-        
+
         custom_guardrail = CustomGuardrail(
-            guardrail_name="test_guardrail", 
+            guardrail_name="test_guardrail",
             default_on=False,
-            event_hook=GuardrailEventHooks.pre_call
+            event_hook=GuardrailEventHooks.pre_call,
         )
-        
+
         # Test with guardrails in litellm_metadata
         data = {
             "model": "gpt-3.5-turbo",
-            "litellm_metadata": {
-                "guardrails": ["test_guardrail"]
-            }
+            "litellm_metadata": {"guardrails": ["test_guardrail"]},
         }
-        
+
         result = custom_guardrail.should_run_guardrail(
             data=data, event_type=GuardrailEventHooks.pre_call
         )
-        
+
         assert result is True
-        
+
     def test_should_run_guardrail_with_metadata(self):
         """Test that should_run_guardrail works with metadata pattern"""
         from litellm.types.guardrails import GuardrailEventHooks
-        
+
         custom_guardrail = CustomGuardrail(
-            guardrail_name="test_guardrail", 
+            guardrail_name="test_guardrail",
             default_on=False,
-            event_hook=GuardrailEventHooks.pre_call
+            event_hook=GuardrailEventHooks.pre_call,
         )
-        
+
         # Test with guardrails in metadata
         data = {
             "model": "gpt-3.5-turbo",
-            "metadata": {
-                "guardrails": ["test_guardrail"]
-            }
+            "metadata": {"guardrails": ["test_guardrail"]},
         }
-        
+
         result = custom_guardrail.should_run_guardrail(
             data=data, event_type=GuardrailEventHooks.pre_call
         )
-        
+
         assert result is True
-        
+
     def test_should_run_guardrail_with_root_level_guardrails(self):
         """Test that should_run_guardrail works with root level guardrails"""
         from litellm.types.guardrails import GuardrailEventHooks
-        
+
         custom_guardrail = CustomGuardrail(
-            guardrail_name="test_guardrail", 
+            guardrail_name="test_guardrail",
             default_on=False,
-            event_hook=GuardrailEventHooks.pre_call
+            event_hook=GuardrailEventHooks.pre_call,
         )
-        
+
         # Test with guardrails at root level
-        data = {
-            "model": "gpt-3.5-turbo",
-            "guardrails": ["test_guardrail"]
-        }
-        
+        data = {"model": "gpt-3.5-turbo", "guardrails": ["test_guardrail"]}
+
         result = custom_guardrail.should_run_guardrail(
             data=data, event_type=GuardrailEventHooks.pre_call
         )
-        
+
         assert result is True
-        
-        
+
     def test_should_run_guardrail_no_matching_guardrail(self):
         """Test that should_run_guardrail returns False when guardrail name doesn't match"""
         from litellm.types.guardrails import GuardrailEventHooks
-        
+
         custom_guardrail = CustomGuardrail(
-            guardrail_name="test_guardrail", 
+            guardrail_name="test_guardrail",
             default_on=False,
-            event_hook=GuardrailEventHooks.pre_call
+            event_hook=GuardrailEventHooks.pre_call,
         )
-        
+
         # Test with different guardrail name
         data = {
             "model": "gpt-3.5-turbo",
-            "litellm_metadata": {
-                "guardrails": ["different_guardrail"]
-            }
+            "litellm_metadata": {"guardrails": ["different_guardrail"]},
         }
-        
+
         result = custom_guardrail.should_run_guardrail(
             data=data, event_type=GuardrailEventHooks.pre_call
         )
-        
+
         assert result is False

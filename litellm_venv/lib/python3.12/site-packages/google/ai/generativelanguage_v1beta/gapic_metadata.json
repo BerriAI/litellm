@@ -1,0 +1,877 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.ai.generativelanguage_v1beta",
+  "protoPackage": "google.ai.generativelanguage.v1beta",
+  "schema": "1.0",
+  "services": {
+    "DiscussService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "DiscussServiceClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "DiscussServiceAsyncClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "DiscussServiceClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "FileService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "FileServiceClient",
+          "rpcs": {
+            "CreateFile": {
+              "methods": [
+                "create_file"
+              ]
+            },
+            "DeleteFile": {
+              "methods": [
+                "delete_file"
+              ]
+            },
+            "GetFile": {
+              "methods": [
+                "get_file"
+              ]
+            },
+            "ListFiles": {
+              "methods": [
+                "list_files"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "FileServiceAsyncClient",
+          "rpcs": {
+            "CreateFile": {
+              "methods": [
+                "create_file"
+              ]
+            },
+            "DeleteFile": {
+              "methods": [
+                "delete_file"
+              ]
+            },
+            "GetFile": {
+              "methods": [
+                "get_file"
+              ]
+            },
+            "ListFiles": {
+              "methods": [
+                "list_files"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "FileServiceClient",
+          "rpcs": {
+            "CreateFile": {
+              "methods": [
+                "create_file"
+              ]
+            },
+            "DeleteFile": {
+              "methods": [
+                "delete_file"
+              ]
+            },
+            "GetFile": {
+              "methods": [
+                "get_file"
+              ]
+            },
+            "ListFiles": {
+              "methods": [
+                "list_files"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "GenerativeService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "GenerativeServiceClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateAnswer": {
+              "methods": [
+                "generate_answer"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "GenerativeServiceAsyncClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateAnswer": {
+              "methods": [
+                "generate_answer"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "GenerativeServiceClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateAnswer": {
+              "methods": [
+                "generate_answer"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ModelService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "CreateTunedModel": {
+              "methods": [
+                "create_tuned_model"
+              ]
+            },
+            "DeleteTunedModel": {
+              "methods": [
+                "delete_tuned_model"
+              ]
+            },
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "GetTunedModel": {
+              "methods": [
+                "get_tuned_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            },
+            "ListTunedModels": {
+              "methods": [
+                "list_tuned_models"
+              ]
+            },
+            "UpdateTunedModel": {
+              "methods": [
+                "update_tuned_model"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "ModelServiceAsyncClient",
+          "rpcs": {
+            "CreateTunedModel": {
+              "methods": [
+                "create_tuned_model"
+              ]
+            },
+            "DeleteTunedModel": {
+              "methods": [
+                "delete_tuned_model"
+              ]
+            },
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "GetTunedModel": {
+              "methods": [
+                "get_tuned_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            },
+            "ListTunedModels": {
+              "methods": [
+                "list_tuned_models"
+              ]
+            },
+            "UpdateTunedModel": {
+              "methods": [
+                "update_tuned_model"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "CreateTunedModel": {
+              "methods": [
+                "create_tuned_model"
+              ]
+            },
+            "DeleteTunedModel": {
+              "methods": [
+                "delete_tuned_model"
+              ]
+            },
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "GetTunedModel": {
+              "methods": [
+                "get_tuned_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            },
+            "ListTunedModels": {
+              "methods": [
+                "list_tuned_models"
+              ]
+            },
+            "UpdateTunedModel": {
+              "methods": [
+                "update_tuned_model"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "PermissionService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "PermissionServiceClient",
+          "rpcs": {
+            "CreatePermission": {
+              "methods": [
+                "create_permission"
+              ]
+            },
+            "DeletePermission": {
+              "methods": [
+                "delete_permission"
+              ]
+            },
+            "GetPermission": {
+              "methods": [
+                "get_permission"
+              ]
+            },
+            "ListPermissions": {
+              "methods": [
+                "list_permissions"
+              ]
+            },
+            "TransferOwnership": {
+              "methods": [
+                "transfer_ownership"
+              ]
+            },
+            "UpdatePermission": {
+              "methods": [
+                "update_permission"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "PermissionServiceAsyncClient",
+          "rpcs": {
+            "CreatePermission": {
+              "methods": [
+                "create_permission"
+              ]
+            },
+            "DeletePermission": {
+              "methods": [
+                "delete_permission"
+              ]
+            },
+            "GetPermission": {
+              "methods": [
+                "get_permission"
+              ]
+            },
+            "ListPermissions": {
+              "methods": [
+                "list_permissions"
+              ]
+            },
+            "TransferOwnership": {
+              "methods": [
+                "transfer_ownership"
+              ]
+            },
+            "UpdatePermission": {
+              "methods": [
+                "update_permission"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "PermissionServiceClient",
+          "rpcs": {
+            "CreatePermission": {
+              "methods": [
+                "create_permission"
+              ]
+            },
+            "DeletePermission": {
+              "methods": [
+                "delete_permission"
+              ]
+            },
+            "GetPermission": {
+              "methods": [
+                "get_permission"
+              ]
+            },
+            "ListPermissions": {
+              "methods": [
+                "list_permissions"
+              ]
+            },
+            "TransferOwnership": {
+              "methods": [
+                "transfer_ownership"
+              ]
+            },
+            "UpdatePermission": {
+              "methods": [
+                "update_permission"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "RetrieverService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "RetrieverServiceClient",
+          "rpcs": {
+            "BatchCreateChunks": {
+              "methods": [
+                "batch_create_chunks"
+              ]
+            },
+            "BatchDeleteChunks": {
+              "methods": [
+                "batch_delete_chunks"
+              ]
+            },
+            "BatchUpdateChunks": {
+              "methods": [
+                "batch_update_chunks"
+              ]
+            },
+            "CreateChunk": {
+              "methods": [
+                "create_chunk"
+              ]
+            },
+            "CreateCorpus": {
+              "methods": [
+                "create_corpus"
+              ]
+            },
+            "CreateDocument": {
+              "methods": [
+                "create_document"
+              ]
+            },
+            "DeleteChunk": {
+              "methods": [
+                "delete_chunk"
+              ]
+            },
+            "DeleteCorpus": {
+              "methods": [
+                "delete_corpus"
+              ]
+            },
+            "DeleteDocument": {
+              "methods": [
+                "delete_document"
+              ]
+            },
+            "GetChunk": {
+              "methods": [
+                "get_chunk"
+              ]
+            },
+            "GetCorpus": {
+              "methods": [
+                "get_corpus"
+              ]
+            },
+            "GetDocument": {
+              "methods": [
+                "get_document"
+              ]
+            },
+            "ListChunks": {
+              "methods": [
+                "list_chunks"
+              ]
+            },
+            "ListCorpora": {
+              "methods": [
+                "list_corpora"
+              ]
+            },
+            "ListDocuments": {
+              "methods": [
+                "list_documents"
+              ]
+            },
+            "QueryCorpus": {
+              "methods": [
+                "query_corpus"
+              ]
+            },
+            "QueryDocument": {
+              "methods": [
+                "query_document"
+              ]
+            },
+            "UpdateChunk": {
+              "methods": [
+                "update_chunk"
+              ]
+            },
+            "UpdateCorpus": {
+              "methods": [
+                "update_corpus"
+              ]
+            },
+            "UpdateDocument": {
+              "methods": [
+                "update_document"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "RetrieverServiceAsyncClient",
+          "rpcs": {
+            "BatchCreateChunks": {
+              "methods": [
+                "batch_create_chunks"
+              ]
+            },
+            "BatchDeleteChunks": {
+              "methods": [
+                "batch_delete_chunks"
+              ]
+            },
+            "BatchUpdateChunks": {
+              "methods": [
+                "batch_update_chunks"
+              ]
+            },
+            "CreateChunk": {
+              "methods": [
+                "create_chunk"
+              ]
+            },
+            "CreateCorpus": {
+              "methods": [
+                "create_corpus"
+              ]
+            },
+            "CreateDocument": {
+              "methods": [
+                "create_document"
+              ]
+            },
+            "DeleteChunk": {
+              "methods": [
+                "delete_chunk"
+              ]
+            },
+            "DeleteCorpus": {
+              "methods": [
+                "delete_corpus"
+              ]
+            },
+            "DeleteDocument": {
+              "methods": [
+                "delete_document"
+              ]
+            },
+            "GetChunk": {
+              "methods": [
+                "get_chunk"
+              ]
+            },
+            "GetCorpus": {
+              "methods": [
+                "get_corpus"
+              ]
+            },
+            "GetDocument": {
+              "methods": [
+                "get_document"
+              ]
+            },
+            "ListChunks": {
+              "methods": [
+                "list_chunks"
+              ]
+            },
+            "ListCorpora": {
+              "methods": [
+                "list_corpora"
+              ]
+            },
+            "ListDocuments": {
+              "methods": [
+                "list_documents"
+              ]
+            },
+            "QueryCorpus": {
+              "methods": [
+                "query_corpus"
+              ]
+            },
+            "QueryDocument": {
+              "methods": [
+                "query_document"
+              ]
+            },
+            "UpdateChunk": {
+              "methods": [
+                "update_chunk"
+              ]
+            },
+            "UpdateCorpus": {
+              "methods": [
+                "update_corpus"
+              ]
+            },
+            "UpdateDocument": {
+              "methods": [
+                "update_document"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "RetrieverServiceClient",
+          "rpcs": {
+            "BatchCreateChunks": {
+              "methods": [
+                "batch_create_chunks"
+              ]
+            },
+            "BatchDeleteChunks": {
+              "methods": [
+                "batch_delete_chunks"
+              ]
+            },
+            "BatchUpdateChunks": {
+              "methods": [
+                "batch_update_chunks"
+              ]
+            },
+            "CreateChunk": {
+              "methods": [
+                "create_chunk"
+              ]
+            },
+            "CreateCorpus": {
+              "methods": [
+                "create_corpus"
+              ]
+            },
+            "CreateDocument": {
+              "methods": [
+                "create_document"
+              ]
+            },
+            "DeleteChunk": {
+              "methods": [
+                "delete_chunk"
+              ]
+            },
+            "DeleteCorpus": {
+              "methods": [
+                "delete_corpus"
+              ]
+            },
+            "DeleteDocument": {
+              "methods": [
+                "delete_document"
+              ]
+            },
+            "GetChunk": {
+              "methods": [
+                "get_chunk"
+              ]
+            },
+            "GetCorpus": {
+              "methods": [
+                "get_corpus"
+              ]
+            },
+            "GetDocument": {
+              "methods": [
+                "get_document"
+              ]
+            },
+            "ListChunks": {
+              "methods": [
+                "list_chunks"
+              ]
+            },
+            "ListCorpora": {
+              "methods": [
+                "list_corpora"
+              ]
+            },
+            "ListDocuments": {
+              "methods": [
+                "list_documents"
+              ]
+            },
+            "QueryCorpus": {
+              "methods": [
+                "query_corpus"
+              ]
+            },
+            "QueryDocument": {
+              "methods": [
+                "query_document"
+              ]
+            },
+            "UpdateChunk": {
+              "methods": [
+                "update_chunk"
+              ]
+            },
+            "UpdateCorpus": {
+              "methods": [
+                "update_corpus"
+              ]
+            },
+            "UpdateDocument": {
+              "methods": [
+                "update_document"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TextService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TextServiceClient",
+          "rpcs": {
+            "BatchEmbedText": {
+              "methods": [
+                "batch_embed_text"
+              ]
+            },
+            "CountTextTokens": {
+              "methods": [
+                "count_text_tokens"
+              ]
+            },
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TextServiceAsyncClient",
+          "rpcs": {
+            "BatchEmbedText": {
+              "methods": [
+                "batch_embed_text"
+              ]
+            },
+            "CountTextTokens": {
+              "methods": [
+                "count_text_tokens"
+              ]
+            },
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TextServiceClient",
+          "rpcs": {
+            "BatchEmbedText": {
+              "methods": [
+                "batch_embed_text"
+              ]
+            },
+            "CountTextTokens": {
+              "methods": [
+                "count_text_tokens"
+              ]
+            },
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

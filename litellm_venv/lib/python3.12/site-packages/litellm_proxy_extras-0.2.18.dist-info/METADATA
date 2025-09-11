@@ -1,0 +1,42 @@
+Metadata-Version: 2.3
+Name: litellm-proxy-extras
+Version: 0.2.18
+Summary: Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package.
+Author: BerriAI
+Requires-Python: >=3.8, !=2.7.*, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, !=3.6.*, !=3.7.*
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Project-URL: Documentation, https://docs.litellm.ai
+Project-URL: Homepage, https://litellm.ai
+Project-URL: Repository, https://github.com/BerriAI/litellm
+Project-URL: documentation, https://docs.litellm.ai
+Project-URL: homepage, https://litellm.ai
+Project-URL: repository, https://github.com/BerriAI/litellm
+Description-Content-Type: text/markdown
+
+Additional files for the proxy. Reduces the size of the main litellm package.
+
+Currently, only stores the migration.sql files for litellm-proxy.
+
+To install, run:
+
+```bash
+pip install litellm-proxy-extras
+```
+OR 
+
+```bash
+pip install litellm[proxy] # installs litellm-proxy-extras and other proxy dependencies
+```
+
+To use the migrations, run:
+
+```bash
+litellm --use_prisma_migrate
+```
+
+

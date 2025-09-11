@@ -1,0 +1,46 @@
+{
+    "version": 1.0,
+    "merge": {
+      "pagination": {
+        "ListGroupMembers": {
+          "non_aggregate_keys": [
+            "DirectoryId",
+            "MemberRealm",
+            "Realm"
+          ]
+        },
+        "ListGroups": {
+            "non_aggregate_keys": [
+              "DirectoryId",
+              "Realm"
+            ]
+        },
+        "ListGroupsForMember": {
+            "non_aggregate_keys": [
+              "DirectoryId",
+              "MemberRealm",
+              "Realm"
+            ]
+        },
+        "ListUsers": {
+            "non_aggregate_keys": [
+              "DirectoryId",
+              "Realm"
+            ]
+        },
+        "SearchGroups": {
+            "non_aggregate_keys": [
+              "DirectoryId",
+              "Realm"
+            ]
+        },
+        "SearchUsers": {
+            "non_aggregate_keys": [
+              "DirectoryId",
+              "Realm"
+            ]
+        }
+      }
+    }
+  }
+  

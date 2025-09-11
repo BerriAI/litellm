@@ -1429,7 +1429,6 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         "litellm.proxy.proxy_server.prisma_client",
         MockPrismaClientDB(mock_team_data, mock_key_data),
     ):
-
         from litellm.proxy.management_endpoints.internal_user_endpoints import (
             _get_user_info_for_proxy_admin,
         )

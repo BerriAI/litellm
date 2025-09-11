@@ -13,8 +13,10 @@ sys.path.insert(
 
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
+
 def test_custom_prisma_dir(monkeypatch):
     import tempfile
+
     # create a temp directory
     temp_dir = tempfile.mkdtemp()
     monkeypatch.setenv("LITELLM_MIGRATION_DIR", temp_dir)
@@ -29,4 +31,3 @@ def test_custom_prisma_dir(monkeypatch):
     ## Check if the migrations dir is in the temp directory
     migrations_dir = os.path.join(temp_dir, "migrations")
     assert os.path.exists(migrations_dir)
-

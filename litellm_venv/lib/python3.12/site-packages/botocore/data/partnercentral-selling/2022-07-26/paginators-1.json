@@ -1,0 +1,64 @@
+{
+  "pagination": {
+    "ListEngagementInvitations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "EngagementInvitationSummaries"
+    },
+    "ListOpportunities": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "OpportunitySummaries"
+    },
+    "ListSolutions": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "SolutionSummaries"
+    },
+    "ListEngagementByAcceptingInvitationTasks": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TaskSummaries"
+    },
+    "ListEngagementFromOpportunityTasks": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "TaskSummaries"
+    },
+    "ListEngagementMembers": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "EngagementMemberList"
+    },
+    "ListEngagementResourceAssociations": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "EngagementResourceAssociationSummaries"
+    },
+    "ListEngagements": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "EngagementSummaryList"
+    },
+    "ListResourceSnapshotJobs": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ResourceSnapshotJobSummaries"
+    },
+    "ListResourceSnapshots": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ResourceSnapshotSummaries"
+    }
+  }
+}

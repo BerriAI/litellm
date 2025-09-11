@@ -561,9 +561,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,

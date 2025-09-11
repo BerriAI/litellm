@@ -814,7 +814,6 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-
 def test_supports_computer_use_utility():
     """
     Tests the litellm.utils.supports_computer_use utility function.
@@ -896,8 +895,7 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
     from litellm.utils import ProviderConfigManager, pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
-        model=model, 
-        provider=LlmProviders(custom_llm_provider)
+        model=model, provider=LlmProviders(custom_llm_provider)
     )
 
     class ResponseFormat(BaseModel):

@@ -1,0 +1,28 @@
+{
+  "pagination": {
+    "ListSearchJobBackups": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "Results"
+    },
+    "ListSearchJobResults": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "Results"
+    },
+    "ListSearchJobs": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "SearchJobs"
+    },
+    "ListSearchResultExportJobs": {
+      "input_token": "NextToken",
+      "output_token": "NextToken",
+      "limit_key": "MaxResults",
+      "result_key": "ExportJobs"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "GetStatementResult": {
+        "non_aggregate_keys": [
+          "ColumnMetadata",
+          "TotalNumRows"
+        ]
+      },
+      "GetStatementResultV2": {
+        "non_aggregate_keys": [
+          "ColumnMetadata",
+          "TotalNumRows",
+          "ResultFormat"
+        ]
+      },
+      "DescribeTable": {
+        "non_aggregate_keys": [
+          "TableName"
+        ]
+      }
+    }
+  }
+}

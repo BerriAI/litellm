@@ -1,0 +1,922 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.resourcemanager_v3",
+  "protoPackage": "google.cloud.resourcemanager.v3",
+  "schema": "1.0",
+  "services": {
+    "Folders": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "FoldersClient",
+          "rpcs": {
+            "CreateFolder": {
+              "methods": [
+                "create_folder"
+              ]
+            },
+            "DeleteFolder": {
+              "methods": [
+                "delete_folder"
+              ]
+            },
+            "GetFolder": {
+              "methods": [
+                "get_folder"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "ListFolders": {
+              "methods": [
+                "list_folders"
+              ]
+            },
+            "MoveFolder": {
+              "methods": [
+                "move_folder"
+              ]
+            },
+            "SearchFolders": {
+              "methods": [
+                "search_folders"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteFolder": {
+              "methods": [
+                "undelete_folder"
+              ]
+            },
+            "UpdateFolder": {
+              "methods": [
+                "update_folder"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "FoldersAsyncClient",
+          "rpcs": {
+            "CreateFolder": {
+              "methods": [
+                "create_folder"
+              ]
+            },
+            "DeleteFolder": {
+              "methods": [
+                "delete_folder"
+              ]
+            },
+            "GetFolder": {
+              "methods": [
+                "get_folder"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "ListFolders": {
+              "methods": [
+                "list_folders"
+              ]
+            },
+            "MoveFolder": {
+              "methods": [
+                "move_folder"
+              ]
+            },
+            "SearchFolders": {
+              "methods": [
+                "search_folders"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteFolder": {
+              "methods": [
+                "undelete_folder"
+              ]
+            },
+            "UpdateFolder": {
+              "methods": [
+                "update_folder"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "FoldersClient",
+          "rpcs": {
+            "CreateFolder": {
+              "methods": [
+                "create_folder"
+              ]
+            },
+            "DeleteFolder": {
+              "methods": [
+                "delete_folder"
+              ]
+            },
+            "GetFolder": {
+              "methods": [
+                "get_folder"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "ListFolders": {
+              "methods": [
+                "list_folders"
+              ]
+            },
+            "MoveFolder": {
+              "methods": [
+                "move_folder"
+              ]
+            },
+            "SearchFolders": {
+              "methods": [
+                "search_folders"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteFolder": {
+              "methods": [
+                "undelete_folder"
+              ]
+            },
+            "UpdateFolder": {
+              "methods": [
+                "update_folder"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "Organizations": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "OrganizationsClient",
+          "rpcs": {
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetOrganization": {
+              "methods": [
+                "get_organization"
+              ]
+            },
+            "SearchOrganizations": {
+              "methods": [
+                "search_organizations"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "OrganizationsAsyncClient",
+          "rpcs": {
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetOrganization": {
+              "methods": [
+                "get_organization"
+              ]
+            },
+            "SearchOrganizations": {
+              "methods": [
+                "search_organizations"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "OrganizationsClient",
+          "rpcs": {
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetOrganization": {
+              "methods": [
+                "get_organization"
+              ]
+            },
+            "SearchOrganizations": {
+              "methods": [
+                "search_organizations"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "Projects": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "ProjectsClient",
+          "rpcs": {
+            "CreateProject": {
+              "methods": [
+                "create_project"
+              ]
+            },
+            "DeleteProject": {
+              "methods": [
+                "delete_project"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetProject": {
+              "methods": [
+                "get_project"
+              ]
+            },
+            "ListProjects": {
+              "methods": [
+                "list_projects"
+              ]
+            },
+            "MoveProject": {
+              "methods": [
+                "move_project"
+              ]
+            },
+            "SearchProjects": {
+              "methods": [
+                "search_projects"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteProject": {
+              "methods": [
+                "undelete_project"
+              ]
+            },
+            "UpdateProject": {
+              "methods": [
+                "update_project"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "ProjectsAsyncClient",
+          "rpcs": {
+            "CreateProject": {
+              "methods": [
+                "create_project"
+              ]
+            },
+            "DeleteProject": {
+              "methods": [
+                "delete_project"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetProject": {
+              "methods": [
+                "get_project"
+              ]
+            },
+            "ListProjects": {
+              "methods": [
+                "list_projects"
+              ]
+            },
+            "MoveProject": {
+              "methods": [
+                "move_project"
+              ]
+            },
+            "SearchProjects": {
+              "methods": [
+                "search_projects"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteProject": {
+              "methods": [
+                "undelete_project"
+              ]
+            },
+            "UpdateProject": {
+              "methods": [
+                "update_project"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "ProjectsClient",
+          "rpcs": {
+            "CreateProject": {
+              "methods": [
+                "create_project"
+              ]
+            },
+            "DeleteProject": {
+              "methods": [
+                "delete_project"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetProject": {
+              "methods": [
+                "get_project"
+              ]
+            },
+            "ListProjects": {
+              "methods": [
+                "list_projects"
+              ]
+            },
+            "MoveProject": {
+              "methods": [
+                "move_project"
+              ]
+            },
+            "SearchProjects": {
+              "methods": [
+                "search_projects"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteProject": {
+              "methods": [
+                "undelete_project"
+              ]
+            },
+            "UpdateProject": {
+              "methods": [
+                "update_project"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TagBindings": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TagBindingsClient",
+          "rpcs": {
+            "CreateTagBinding": {
+              "methods": [
+                "create_tag_binding"
+              ]
+            },
+            "DeleteTagBinding": {
+              "methods": [
+                "delete_tag_binding"
+              ]
+            },
+            "ListEffectiveTags": {
+              "methods": [
+                "list_effective_tags"
+              ]
+            },
+            "ListTagBindings": {
+              "methods": [
+                "list_tag_bindings"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TagBindingsAsyncClient",
+          "rpcs": {
+            "CreateTagBinding": {
+              "methods": [
+                "create_tag_binding"
+              ]
+            },
+            "DeleteTagBinding": {
+              "methods": [
+                "delete_tag_binding"
+              ]
+            },
+            "ListEffectiveTags": {
+              "methods": [
+                "list_effective_tags"
+              ]
+            },
+            "ListTagBindings": {
+              "methods": [
+                "list_tag_bindings"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TagBindingsClient",
+          "rpcs": {
+            "CreateTagBinding": {
+              "methods": [
+                "create_tag_binding"
+              ]
+            },
+            "DeleteTagBinding": {
+              "methods": [
+                "delete_tag_binding"
+              ]
+            },
+            "ListEffectiveTags": {
+              "methods": [
+                "list_effective_tags"
+              ]
+            },
+            "ListTagBindings": {
+              "methods": [
+                "list_tag_bindings"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TagHolds": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TagHoldsClient",
+          "rpcs": {
+            "CreateTagHold": {
+              "methods": [
+                "create_tag_hold"
+              ]
+            },
+            "DeleteTagHold": {
+              "methods": [
+                "delete_tag_hold"
+              ]
+            },
+            "ListTagHolds": {
+              "methods": [
+                "list_tag_holds"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TagHoldsAsyncClient",
+          "rpcs": {
+            "CreateTagHold": {
+              "methods": [
+                "create_tag_hold"
+              ]
+            },
+            "DeleteTagHold": {
+              "methods": [
+                "delete_tag_hold"
+              ]
+            },
+            "ListTagHolds": {
+              "methods": [
+                "list_tag_holds"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TagHoldsClient",
+          "rpcs": {
+            "CreateTagHold": {
+              "methods": [
+                "create_tag_hold"
+              ]
+            },
+            "DeleteTagHold": {
+              "methods": [
+                "delete_tag_hold"
+              ]
+            },
+            "ListTagHolds": {
+              "methods": [
+                "list_tag_holds"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TagKeys": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TagKeysClient",
+          "rpcs": {
+            "CreateTagKey": {
+              "methods": [
+                "create_tag_key"
+              ]
+            },
+            "DeleteTagKey": {
+              "methods": [
+                "delete_tag_key"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagKey": {
+              "methods": [
+                "get_namespaced_tag_key"
+              ]
+            },
+            "GetTagKey": {
+              "methods": [
+                "get_tag_key"
+              ]
+            },
+            "ListTagKeys": {
+              "methods": [
+                "list_tag_keys"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagKey": {
+              "methods": [
+                "update_tag_key"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TagKeysAsyncClient",
+          "rpcs": {
+            "CreateTagKey": {
+              "methods": [
+                "create_tag_key"
+              ]
+            },
+            "DeleteTagKey": {
+              "methods": [
+                "delete_tag_key"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagKey": {
+              "methods": [
+                "get_namespaced_tag_key"
+              ]
+            },
+            "GetTagKey": {
+              "methods": [
+                "get_tag_key"
+              ]
+            },
+            "ListTagKeys": {
+              "methods": [
+                "list_tag_keys"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagKey": {
+              "methods": [
+                "update_tag_key"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TagKeysClient",
+          "rpcs": {
+            "CreateTagKey": {
+              "methods": [
+                "create_tag_key"
+              ]
+            },
+            "DeleteTagKey": {
+              "methods": [
+                "delete_tag_key"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagKey": {
+              "methods": [
+                "get_namespaced_tag_key"
+              ]
+            },
+            "GetTagKey": {
+              "methods": [
+                "get_tag_key"
+              ]
+            },
+            "ListTagKeys": {
+              "methods": [
+                "list_tag_keys"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagKey": {
+              "methods": [
+                "update_tag_key"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TagValues": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TagValuesClient",
+          "rpcs": {
+            "CreateTagValue": {
+              "methods": [
+                "create_tag_value"
+              ]
+            },
+            "DeleteTagValue": {
+              "methods": [
+                "delete_tag_value"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagValue": {
+              "methods": [
+                "get_namespaced_tag_value"
+              ]
+            },
+            "GetTagValue": {
+              "methods": [
+                "get_tag_value"
+              ]
+            },
+            "ListTagValues": {
+              "methods": [
+                "list_tag_values"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagValue": {
+              "methods": [
+                "update_tag_value"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TagValuesAsyncClient",
+          "rpcs": {
+            "CreateTagValue": {
+              "methods": [
+                "create_tag_value"
+              ]
+            },
+            "DeleteTagValue": {
+              "methods": [
+                "delete_tag_value"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagValue": {
+              "methods": [
+                "get_namespaced_tag_value"
+              ]
+            },
+            "GetTagValue": {
+              "methods": [
+                "get_tag_value"
+              ]
+            },
+            "ListTagValues": {
+              "methods": [
+                "list_tag_values"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagValue": {
+              "methods": [
+                "update_tag_value"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TagValuesClient",
+          "rpcs": {
+            "CreateTagValue": {
+              "methods": [
+                "create_tag_value"
+              ]
+            },
+            "DeleteTagValue": {
+              "methods": [
+                "delete_tag_value"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetNamespacedTagValue": {
+              "methods": [
+                "get_namespaced_tag_value"
+              ]
+            },
+            "GetTagValue": {
+              "methods": [
+                "get_tag_value"
+              ]
+            },
+            "ListTagValues": {
+              "methods": [
+                "list_tag_values"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UpdateTagValue": {
+              "methods": [
+                "update_tag_value"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

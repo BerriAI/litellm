@@ -346,6 +346,7 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json["allowed_routes"] = ["info_routes"]
     return data_json
 
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -358,13 +359,13 @@ async def validate_team_id_used_in_service_account_request(
             status_code=400,
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
             detail="prisma_client is required for service account keys. Please specify `prisma_client` in the request body.",
         )
-    
+
     # check if team_id exists in the database
     team = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id},
@@ -375,6 +376,7 @@ async def validate_team_id_used_in_service_account_request(
             detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
         )
     return True
+
 
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
@@ -557,16 +559,16 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             status_code=400,
             detail={
                 "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
-            }
+            },
         )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
     )
 
-    response["soft_budget"] = (
-        data.soft_budget
-    )  # include the user-input soft budget in the response
+    response[
+        "soft_budget"
+    ] = data.soft_budget  # include the user-input soft budget in the response
 
     response = GenerateKeyResponse(**response)
 
@@ -897,9 +899,9 @@ async def _set_object_permission(
                 data=data_json["object_permission"],
             )
         )
-        data_json["object_permission_id"] = (
-            created_object_permission.object_permission_id
-        )
+        data_json[
+            "object_permission_id"
+        ] = created_object_permission.object_permission_id
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
     return data_json
@@ -909,7 +911,6 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
-
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
@@ -1894,10 +1895,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
-                await prisma_client.db.litellm_verificationtoken.find_many(
-                    where={"token": {"in": tokens}}
-                )
+            _keys_being_deleted: List[
+                LiteLLM_VerificationToken
+            ] = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"token": {"in": tokens}}
             )
 
             if len(_keys_being_deleted) == 0:
@@ -2005,9 +2006,9 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[List] = (
-            await prisma_client.db.litellm_proxymodeltable.find_many()
-        )
+        models: Optional[
+            List
+        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
     except Exception:
         models = None
     # 2. process model table
@@ -2318,11 +2319,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[BaseModel] = (
-        await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": user_api_key_dict.user_id},
-            include={"organization_memberships": True},
-        )
+    complete_user_info_db_obj: Optional[
+        BaseModel
+    ] = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
     )
 
     if complete_user_info_db_obj is None:
@@ -2408,10 +2409,10 @@ async def get_admin_team_ids(
     if complete_user_info is None:
         return []
     # Get all teams that user is an admin of
-    teams: Optional[List[BaseModel]] = (
-        await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"in": complete_user_info.teams}}
-        )
+    teams: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": complete_user_info.teams}}
     )
     if teams is None:
         return []

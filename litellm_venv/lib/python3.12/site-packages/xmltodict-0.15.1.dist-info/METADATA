@@ -1,0 +1,306 @@
+Metadata-Version: 2.4
+Name: xmltodict
+Version: 0.15.1
+Summary: Makes working with XML feel like you are working with JSON
+Home-page: https://github.com/martinblech/xmltodict
+Author: Martin Blech
+Author-email: martinblech@gmail.com
+License: MIT
+Platform: all
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: Implementation :: PyPy
+Classifier: Topic :: Text Processing :: Markup :: XML
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: platform
+Dynamic: requires-python
+Dynamic: summary
+
+# xmltodict
+
+`xmltodict` is a Python module that makes working with XML feel like you are working with [JSON](http://docs.python.org/library/json.html), as in this ["spec"](http://www.xml.com/pub/a/2006/05/31/converting-between-xml-and-json.html):
+
+[![Build Status](https://app.travis-ci.com/martinblech/xmltodict.svg?branch=master)](https://app.travis-ci.com/martinblech/xmltodict)
+
+```python
+>>> print(json.dumps(xmltodict.parse("""
+...  <mydocument has="an attribute">
+...    <and>
+...      <many>elements</many>
+...      <many>more elements</many>
+...    </and>
+...    <plus a="complex">
+...      element as well
+...    </plus>
+...  </mydocument>
+...  """), indent=4))
+{
+    "mydocument": {
+        "@has": "an attribute",
+        "and": {
+            "many": [
+                "elements",
+                "more elements"
+            ]
+        },
+        "plus": {
+            "@a": "complex",
+            "#text": "element as well"
+        }
+    }
+}
+```
+
+## Namespace support
+
+By default, `xmltodict` does no XML namespace processing (it just treats namespace declarations as regular node attributes), but passing `process_namespaces=True` will make it expand namespaces for you:
+
+```python
+>>> xml = """
+... <root xmlns="http://defaultns.com/"
+...       xmlns:a="http://a.com/"
+...       xmlns:b="http://b.com/">
+...   <x>1</x>
+...   <a:y>2</a:y>
+...   <b:z>3</b:z>
+... </root>
+... """
+>>> xmltodict.parse(xml, process_namespaces=True) == {
+...     'http://defaultns.com/:root': {
+...         'http://defaultns.com/:x': '1',
+...         'http://a.com/:y': '2',
+...         'http://b.com/:z': '3',
+...     }
+... }
+True
+```
+
+It also lets you collapse certain namespaces to shorthand prefixes, or skip them altogether:
+
+```python
+>>> namespaces = {
+...     'http://defaultns.com/': None, # skip this namespace
+...     'http://a.com/': 'ns_a', # collapse "http://a.com/" -> "ns_a"
+... }
+>>> xmltodict.parse(xml, process_namespaces=True, namespaces=namespaces) == {
+...     'root': {
+...         'x': '1',
+...         'ns_a:y': '2',
+...         'http://b.com/:z': '3',
+...     },
+... }
+True
+```
+
+## Streaming mode
+
+`xmltodict` is very fast ([Expat](http://docs.python.org/library/pyexpat.html)-based) and has a streaming mode with a small memory footprint, suitable for big XML dumps like [Discogs](http://discogs.com/data/) or [Wikipedia](http://dumps.wikimedia.org/):
+
+```python
+>>> def handle_artist(_, artist):
+...     print(artist['name'])
+...     return True
+>>>
+>>> xmltodict.parse(GzipFile('discogs_artists.xml.gz'),
+...     item_depth=2, item_callback=handle_artist)
+A Perfect Circle
+Fantômas
+King Crimson
+Chris Potter
+...
+```
+
+It can also be used from the command line to pipe objects to a script like this:
+
+```python
+import sys, marshal
+while True:
+    _, article = marshal.load(sys.stdin)
+    print(article['title'])
+```
+
+```sh
+$ bunzip2 enwiki-pages-articles.xml.bz2 | xmltodict.py 2 | myscript.py
+AccessibleComputing
+Anarchism
+AfghanistanHistory
+AfghanistanGeography
+AfghanistanPeople
+AfghanistanCommunications
+Autism
+...
+```
+
+Or just cache the dicts so you don't have to parse that big XML file again. You do this only once:
+
+```sh
+$ bunzip2 enwiki-pages-articles.xml.bz2 | xmltodict.py 2 | gzip > enwiki.dicts.gz
+```
+
+And you reuse the dicts with every script that needs them:
+
+```sh
+$ gunzip enwiki.dicts.gz | script1.py
+$ gunzip enwiki.dicts.gz | script2.py
+...
+```
+
+## Roundtripping
+
+You can also convert in the other direction, using the `unparse()` method:
+
+```python
+>>> mydict = {
+...     'response': {
+...             'status': 'good',
+...             'last_updated': '2014-02-16T23:10:12Z',
+...     }
+... }
+>>> print(unparse(mydict, pretty=True))
+<?xml version="1.0" encoding="utf-8"?>
+<response>
+	<status>good</status>
+	<last_updated>2014-02-16T23:10:12Z</last_updated>
+</response>
+```
+
+Text values for nodes can be specified with the `cdata_key` key in the python dict, while node properties can be specified with the `attr_prefix` prefixed to the key name in the python dict. The default value for `attr_prefix` is `@` and the default value for `cdata_key` is `#text`.
+
+```python
+>>> import xmltodict
+>>>
+>>> mydict = {
+...     'text': {
+...         '@color':'red',
+...         '@stroke':'2',
+...         '#text':'This is a test'
+...     }
+... }
+>>> print(xmltodict.unparse(mydict, pretty=True))
+<?xml version="1.0" encoding="utf-8"?>
+<text stroke="2" color="red">This is a test</text>
+```
+
+Lists that are specified under a key in a dictionary use the key as a tag for each item. But if a list does have a parent key, for example if a list exists inside another list, it does not have a tag to use and the items are converted to a string as shown in the example below.  To give tags to nested lists, use the `expand_iter` keyword argument to provide a tag as demonstrated below. Note that using `expand_iter` will break roundtripping.
+
+```python
+>>> mydict = {
+...     "line": {
+...         "points": [
+...             [1, 5],
+...             [2, 6],
+...         ]
+...     }
+... }
+>>> print(xmltodict.unparse(mydict, pretty=True))
+<?xml version="1.0" encoding="utf-8"?>
+<line>
+        <points>[1, 5]</points>
+        <points>[2, 6]</points>
+</line>
+>>> print(xmltodict.unparse(mydict, pretty=True, expand_iter="coord"))
+<?xml version="1.0" encoding="utf-8"?>
+<line>
+        <points>
+                <coord>1</coord>
+                <coord>5</coord>
+        </points>
+        <points>
+                <coord>2</coord>
+                <coord>6</coord>
+        </points>
+</line>
+```
+
+## Ok, how do I get it?
+
+### Using pypi
+
+You just need to
+
+```sh
+$ pip install xmltodict
+```
+
+### Using conda
+
+For installing `xmltodict` using Anaconda/Miniconda (*conda*) from the
+[conda-forge channel][#xmltodict-conda] all you need to do is:
+
+[#xmltodict-conda]: https://anaconda.org/conda-forge/xmltodict
+
+```sh
+$ conda install -c conda-forge xmltodict
+```
+
+### RPM-based distro (Fedora, RHEL, …)
+
+There is an [official Fedora package for xmltodict](https://apps.fedoraproject.org/packages/python-xmltodict).
+
+```sh
+$ sudo yum install python-xmltodict
+```
+
+### Arch Linux
+
+There is an [official Arch Linux package for xmltodict](https://www.archlinux.org/packages/community/any/python-xmltodict/).
+
+```sh
+$ sudo pacman -S python-xmltodict
+```
+
+### Debian-based distro (Debian, Ubuntu, …)
+
+There is an [official Debian package for xmltodict](https://tracker.debian.org/pkg/python-xmltodict).
+
+```sh
+$ sudo apt install python-xmltodict
+```
+
+### FreeBSD
+
+There is an [official FreeBSD port for xmltodict](https://svnweb.freebsd.org/ports/head/devel/py-xmltodict/).
+
+```sh
+$ pkg install py36-xmltodict
+```
+
+### openSUSE/SLE (SLE 15, Leap 15, Tumbleweed)
+
+There is an [official openSUSE package for xmltodict](https://software.opensuse.org/package/python-xmltodict).
+
+```sh
+# Python2
+$ zypper in python2-xmltodict
+
+# Python3
+$ zypper in python3-xmltodict
+```
+
+## Security Notes
+
+A CVE (CVE-2025-9375) was filed against `xmltodict` but is [disputed](https://github.com/martinblech/xmltodict/issues/377#issuecomment-3255691923). The root issue lies in Python’s `xml.sax.saxutils.XMLGenerator` API, which does not validate XML element names and provides no built-in way to do so. Since `xmltodict` is a thin wrapper that passes keys directly to `XMLGenerator`, the same issue exists in the standard library itself.
+
+It has been suggested that `xml.sax.saxutils.escape()` represents a secure usage path. This is incorrect: `escape()` is intended only for character data and attribute values, and can produce invalid XML when misapplied to element names. There is currently no secure, documented way in Python’s standard library to validate XML element names.
+
+Despite this, Fluid Attacks chose to assign a CVE to `xmltodict` while leaving the identical behavior in Python’s own standard library unaddressed. Their disclosure process also gave only 10 days from first contact to publication—well short of the 90-day industry norm—leaving no real opportunity for maintainer response. These actions reflect an inconsistency of standards and priorities that raise concerns about motivations, as they do not primarily serve the security of the broader community.
+
+The maintainer considers this CVE invalid and will formally dispute it with MITRE.

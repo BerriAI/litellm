@@ -118,7 +118,6 @@ def test_add_vector_store_to_registry():
     assert registry.vector_stores[0]["vector_store_name"] == "existing_store_1"
 
 
-
 def test_search_uses_registry_credentials():
     """search() should pull credentials from vector_store_registry when available"""
     vector_store = LiteLLM_ManagedVectorStore(
@@ -136,7 +135,11 @@ def test_search_uses_registry_credentials():
         with patch.object(
             registry,
             "get_credentials_for_vector_store",
-            return_value={"aws_access_key_id": "ABC", "aws_secret_access_key": "DEF", "aws_region_name": "us-east-1"},
+            return_value={
+                "aws_access_key_id": "ABC",
+                "aws_secret_access_key": "DEF",
+                "aws_region_name": "us-east-1",
+            },
         ) as mock_get_creds, patch(
             "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=MagicMock(),

@@ -92,9 +92,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -229,7 +229,7 @@ class OllamaConfig(BaseConfig):
             model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         api_key = self.get_api_key()
-        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
             response = litellm.module_level_client.post(

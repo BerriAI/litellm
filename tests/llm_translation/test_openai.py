@@ -519,7 +519,6 @@ async def test_openai_codex_stream(sync_mode):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_openai_codex(sync_mode):
-
     from litellm import Router
 
     router = Router(

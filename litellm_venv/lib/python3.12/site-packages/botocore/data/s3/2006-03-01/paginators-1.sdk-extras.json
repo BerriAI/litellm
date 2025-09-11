@@ -1,0 +1,46 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "ListBuckets": {
+        "non_aggregate_keys": [
+          "Owner",
+          "Prefix"
+        ]
+      },
+      "ListMultipartUploads": {
+        "non_aggregate_keys": [
+          "RequestCharged",
+          "Prefix"
+        ]
+      },
+      "ListObjectVersions": {
+        "non_aggregate_keys": [
+          "RequestCharged",
+          "Prefix"
+        ]
+      },
+      "ListObjects": {
+          "non_aggregate_keys": [
+            "RequestCharged",
+            "Prefix"
+          ]
+      },
+      "ListObjectsV2": {
+        "non_aggregate_keys": [
+          "RequestCharged",
+          "Prefix"
+        ]
+      },
+      "ListParts": {
+        "non_aggregate_keys": [
+          "ChecksumAlgorithm",
+          "Initiator",
+          "Owner",
+          "StorageClass",
+          "ChecksumType"
+        ]
+      }
+    }
+  }
+}

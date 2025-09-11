@@ -1,0 +1,17 @@
+[console_scripts]
+ddtrace-run = ddtrace.commands.ddtrace_run:main
+
+[ddtrace.products]
+code-origin-for-spans = ddtrace.debugging._products.code_origin.span
+dynamic-instrumentation = ddtrace.debugging._products.dynamic_instrumentation
+exception-replay = ddtrace.debugging._products.exception_replay
+remote-configuration = ddtrace.internal.remoteconfig.product
+symbol-database = ddtrace.internal.symbol_db.product
+
+[opentelemetry_context]
+ddcontextvars_context = ddtrace.internal.opentelemetry.context:DDRuntimeContext
+
+[pytest11]
+ddtrace = ddtrace.contrib.pytest.plugin
+ddtrace.pytest_bdd = ddtrace.contrib.pytest_bdd.plugin
+ddtrace.pytest_benchmark = ddtrace.contrib.pytest_benchmark.plugin

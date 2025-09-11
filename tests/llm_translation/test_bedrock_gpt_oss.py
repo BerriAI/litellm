@@ -17,7 +17,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         return {
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
         }
-    
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
@@ -28,10 +28,13 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         """
         pass
 
-    @pytest.mark.parametrize("model", [
-        "bedrock/openai.gpt-oss-20b-1:0",
-        "bedrock/openai.gpt-oss-120b-1:0",
-    ])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/openai.gpt-oss-20b-1:0",
+            "bedrock/openai.gpt-oss-120b-1:0",
+        ],
+    )
     def test_reasoning_effort_transformation_gpt_oss(self, model):
         """Test that reasoning_effort is handled correctly for GPT-OSS models."""
         config = AmazonConverseConfig()
@@ -46,7 +49,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
             model=model,
             drop_params=False,
         )
-        
+
         # GPT-OSS should have reasoning_effort in result, not thinking
         assert "reasoning_effort" in result
         assert result["reasoning_effort"] == "low"

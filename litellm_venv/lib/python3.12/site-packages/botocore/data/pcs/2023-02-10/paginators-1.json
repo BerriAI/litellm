@@ -1,0 +1,22 @@
+{
+  "pagination": {
+    "ListClusters": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "clusters"
+    },
+    "ListComputeNodeGroups": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "computeNodeGroups"
+    },
+    "ListQueues": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "queues"
+    }
+  }
+}

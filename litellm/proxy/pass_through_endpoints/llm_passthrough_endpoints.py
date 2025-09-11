@@ -172,7 +172,9 @@ async def gemini_proxy_route(
         request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
-    base_target_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    base_target_url = (
+        os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -505,13 +507,13 @@ async def bedrock_llm_proxy_route(
                 "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
                 + endpoint,
             },
-        ) 
+        )
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
     data["custom_llm_provider"] = "bedrock"
-    
+
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,

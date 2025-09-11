@@ -167,13 +167,17 @@ async def aresponses_api_with_mcp(
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     user_api_key_auth = kwargs.get("user_api_key_auth")
-    
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
-    original_mcp_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-        user_api_key_auth=user_api_key_auth,
-        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+    original_mcp_tools = (
+        await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            user_api_key_auth=user_api_key_auth,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
     )
-    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
+    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+        original_mcp_tools
+    )
 
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -212,15 +216,15 @@ async def aresponses_api_with_mcp(
         from litellm.responses.mcp.mcp_streaming_iterator import (
             create_mcp_list_tools_events,
         )
-        
+
         base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
         mcp_discovery_events = await create_mcp_list_tools_events(
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=user_api_key_auth,
             base_item_id=base_item_id,
-            pre_processed_mcp_tools=original_mcp_tools
+            pre_processed_mcp_tools=original_mcp_tools,
         )
-        
+
         return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
@@ -229,23 +233,21 @@ async def aresponses_api_with_mcp(
             mcp_discovery_events=mcp_discovery_events,
             call_params=call_params,
             previous_response_id=previous_response_id,
-            **kwargs
+            **kwargs,
         )
-    
+
     # Determine if we should auto-execute tools
-    should_auto_execute = (
-        bool(mcp_tools_with_litellm_proxy)
-        and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-        )
+    should_auto_execute = bool(
+        mcp_tools_with_litellm_proxy
+    ) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
     )
-    
+
     # Prepare parameters for the initial call
     initial_call_params = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
-        call_params=call_params,
-        should_auto_execute=should_auto_execute
+        call_params=call_params, should_auto_execute=should_auto_execute
     )
-    
+
     #########################################################
     # Make initial response API call
     #########################################################
@@ -263,9 +265,8 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if (
-        should_auto_execute
-        and isinstance(response, ResponsesAPIResponse)
+    if should_auto_execute and isinstance(
+        response, ResponsesAPIResponse
     ):  # type: ignore
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
             response=response
@@ -285,19 +286,21 @@ async def aresponses_api_with_mcp(
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
-                follow_up_call_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
-                    call_params=call_params,
-                    original_stream_setting=stream or False
+                follow_up_call_params = (
+                    LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                        call_params=call_params, original_stream_setting=stream or False
+                    )
                 )
-                
+
                 # Create tool execution events for streaming if needed
                 tool_execution_events = []
                 if stream:
-                    tool_execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
-                        tool_calls=tool_calls, 
-                        tool_results=tool_results
+                    tool_execution_events = (
+                        LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+                            tool_calls=tool_calls, tool_results=tool_results
+                        )
                     )
-                
+
                 final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
                     follow_up_input=follow_up_input,
                     model=model,
@@ -307,13 +310,20 @@ async def aresponses_api_with_mcp(
                 )
 
                 # If streaming and we have tool execution events, wrap the response
-                if stream and tool_execution_events and (hasattr(final_response, '__aiter__') or hasattr(final_response, '__iter__')):
+                if (
+                    stream
+                    and tool_execution_events
+                    and (
+                        hasattr(final_response, "__aiter__")
+                        or hasattr(final_response, "__iter__")
+                    )
+                ):
                     from litellm.responses.mcp.mcp_streaming_iterator import (
                         MCPEnhancedStreamingIterator,
                     )
+
                     final_response = MCPEnhancedStreamingIterator(
-                        base_iterator=final_response,
-                        mcp_events=tool_execution_events
+                        base_iterator=final_response, mcp_events=tool_execution_events
                     )
 
                 # Add custom output elements to the final response (for non-streaming)
@@ -321,7 +331,7 @@ async def aresponses_api_with_mcp(
                     # Fetch MCP tools again for output elements (without OpenAI transformation)
                     mcp_tools_for_output = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
-                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(

@@ -1,0 +1,333 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.iam_admin_v1",
+  "protoPackage": "google.iam.admin.v1",
+  "schema": "1.0",
+  "services": {
+    "IAM": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "IAMClient",
+          "rpcs": {
+            "CreateRole": {
+              "methods": [
+                "create_role"
+              ]
+            },
+            "CreateServiceAccount": {
+              "methods": [
+                "create_service_account"
+              ]
+            },
+            "CreateServiceAccountKey": {
+              "methods": [
+                "create_service_account_key"
+              ]
+            },
+            "DeleteRole": {
+              "methods": [
+                "delete_role"
+              ]
+            },
+            "DeleteServiceAccount": {
+              "methods": [
+                "delete_service_account"
+              ]
+            },
+            "DeleteServiceAccountKey": {
+              "methods": [
+                "delete_service_account_key"
+              ]
+            },
+            "DisableServiceAccount": {
+              "methods": [
+                "disable_service_account"
+              ]
+            },
+            "DisableServiceAccountKey": {
+              "methods": [
+                "disable_service_account_key"
+              ]
+            },
+            "EnableServiceAccount": {
+              "methods": [
+                "enable_service_account"
+              ]
+            },
+            "EnableServiceAccountKey": {
+              "methods": [
+                "enable_service_account_key"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetRole": {
+              "methods": [
+                "get_role"
+              ]
+            },
+            "GetServiceAccount": {
+              "methods": [
+                "get_service_account"
+              ]
+            },
+            "GetServiceAccountKey": {
+              "methods": [
+                "get_service_account_key"
+              ]
+            },
+            "LintPolicy": {
+              "methods": [
+                "lint_policy"
+              ]
+            },
+            "ListRoles": {
+              "methods": [
+                "list_roles"
+              ]
+            },
+            "ListServiceAccountKeys": {
+              "methods": [
+                "list_service_account_keys"
+              ]
+            },
+            "ListServiceAccounts": {
+              "methods": [
+                "list_service_accounts"
+              ]
+            },
+            "PatchServiceAccount": {
+              "methods": [
+                "patch_service_account"
+              ]
+            },
+            "QueryAuditableServices": {
+              "methods": [
+                "query_auditable_services"
+              ]
+            },
+            "QueryGrantableRoles": {
+              "methods": [
+                "query_grantable_roles"
+              ]
+            },
+            "QueryTestablePermissions": {
+              "methods": [
+                "query_testable_permissions"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "SignBlob": {
+              "methods": [
+                "sign_blob"
+              ]
+            },
+            "SignJwt": {
+              "methods": [
+                "sign_jwt"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteRole": {
+              "methods": [
+                "undelete_role"
+              ]
+            },
+            "UndeleteServiceAccount": {
+              "methods": [
+                "undelete_service_account"
+              ]
+            },
+            "UpdateRole": {
+              "methods": [
+                "update_role"
+              ]
+            },
+            "UpdateServiceAccount": {
+              "methods": [
+                "update_service_account"
+              ]
+            },
+            "UploadServiceAccountKey": {
+              "methods": [
+                "upload_service_account_key"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "IAMAsyncClient",
+          "rpcs": {
+            "CreateRole": {
+              "methods": [
+                "create_role"
+              ]
+            },
+            "CreateServiceAccount": {
+              "methods": [
+                "create_service_account"
+              ]
+            },
+            "CreateServiceAccountKey": {
+              "methods": [
+                "create_service_account_key"
+              ]
+            },
+            "DeleteRole": {
+              "methods": [
+                "delete_role"
+              ]
+            },
+            "DeleteServiceAccount": {
+              "methods": [
+                "delete_service_account"
+              ]
+            },
+            "DeleteServiceAccountKey": {
+              "methods": [
+                "delete_service_account_key"
+              ]
+            },
+            "DisableServiceAccount": {
+              "methods": [
+                "disable_service_account"
+              ]
+            },
+            "DisableServiceAccountKey": {
+              "methods": [
+                "disable_service_account_key"
+              ]
+            },
+            "EnableServiceAccount": {
+              "methods": [
+                "enable_service_account"
+              ]
+            },
+            "EnableServiceAccountKey": {
+              "methods": [
+                "enable_service_account_key"
+              ]
+            },
+            "GetIamPolicy": {
+              "methods": [
+                "get_iam_policy"
+              ]
+            },
+            "GetRole": {
+              "methods": [
+                "get_role"
+              ]
+            },
+            "GetServiceAccount": {
+              "methods": [
+                "get_service_account"
+              ]
+            },
+            "GetServiceAccountKey": {
+              "methods": [
+                "get_service_account_key"
+              ]
+            },
+            "LintPolicy": {
+              "methods": [
+                "lint_policy"
+              ]
+            },
+            "ListRoles": {
+              "methods": [
+                "list_roles"
+              ]
+            },
+            "ListServiceAccountKeys": {
+              "methods": [
+                "list_service_account_keys"
+              ]
+            },
+            "ListServiceAccounts": {
+              "methods": [
+                "list_service_accounts"
+              ]
+            },
+            "PatchServiceAccount": {
+              "methods": [
+                "patch_service_account"
+              ]
+            },
+            "QueryAuditableServices": {
+              "methods": [
+                "query_auditable_services"
+              ]
+            },
+            "QueryGrantableRoles": {
+              "methods": [
+                "query_grantable_roles"
+              ]
+            },
+            "QueryTestablePermissions": {
+              "methods": [
+                "query_testable_permissions"
+              ]
+            },
+            "SetIamPolicy": {
+              "methods": [
+                "set_iam_policy"
+              ]
+            },
+            "SignBlob": {
+              "methods": [
+                "sign_blob"
+              ]
+            },
+            "SignJwt": {
+              "methods": [
+                "sign_jwt"
+              ]
+            },
+            "TestIamPermissions": {
+              "methods": [
+                "test_iam_permissions"
+              ]
+            },
+            "UndeleteRole": {
+              "methods": [
+                "undelete_role"
+              ]
+            },
+            "UndeleteServiceAccount": {
+              "methods": [
+                "undelete_service_account"
+              ]
+            },
+            "UpdateRole": {
+              "methods": [
+                "update_role"
+              ]
+            },
+            "UpdateServiceAccount": {
+              "methods": [
+                "update_service_account"
+              ]
+            },
+            "UploadServiceAccountKey": {
+              "methods": [
+                "upload_service_account_key"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

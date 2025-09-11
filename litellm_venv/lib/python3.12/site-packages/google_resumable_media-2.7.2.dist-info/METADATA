@@ -1,0 +1,67 @@
+Metadata-Version: 2.1
+Name: google-resumable-media
+Version: 2.7.2
+Summary: Utilities for Google Media Downloads and Resumable Uploads
+Home-page: https://github.com/googleapis/google-resumable-media-python
+Author: Google Cloud Platform
+Author-email: googleapis-publisher@google.com
+License: Apache 2.0
+Platform: Posix; MacOS X; Windows
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Internet
+Requires-Python: >= 3.7
+License-File: LICENSE
+Requires-Dist: google-crc32c <2.0dev,>=1.0
+Provides-Extra: aiohttp
+Requires-Dist: aiohttp <4.0.0dev,>=3.6.2 ; extra == 'aiohttp'
+Requires-Dist: google-auth <2.0dev,>=1.22.0 ; extra == 'aiohttp'
+Provides-Extra: requests
+Requires-Dist: requests <3.0.0dev,>=2.18.0 ; extra == 'requests'
+
+``google-resumable-media``
+==========================
+
+
+Utilities for Google Media Downloads and Resumable Uploads
+
+
+See the `docs`_ for examples and usage.
+
+.. _docs: https://googleapis.dev/python/google-resumable-media/latest/index.html
+
+Experimental `asyncio` Support
+------------------------------
+While still in development and subject to change, this library has `asyncio`
+support at `google._async_resumable_media`. 
+
+Supported Python Versions
+-------------------------
+Python >= 3.7
+
+Unsupported Python Versions
+---------------------------
+
+Python == 2.7, Python == 3.5, Python == 3.6.
+
+The last version of this library compatible with Python 2.7 and 3.5 is
+`google-resumable-media==1.3.3`.
+
+The last version of this library compatible with Python 3.6 is
+`google-resumable-media==2.3.3`.
+
+License
+-------
+
+Apache 2.0 - See `the LICENSE`_ for more information.
+
+.. _the LICENSE: https://github.com/googleapis/google-resumable-media-python/blob/main/LICENSE

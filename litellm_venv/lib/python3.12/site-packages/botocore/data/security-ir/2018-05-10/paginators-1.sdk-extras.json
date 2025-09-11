@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "merge": {
+    "pagination": {
+      "ListCaseEdits": {
+        "non_aggregate_keys": [
+          "total"
+        ]
+      },
+      "ListCases": {
+        "non_aggregate_keys": [
+          "total"
+        ]
+      },
+      "ListComments": {
+        "non_aggregate_keys": [
+          "total"
+        ]
+      }
+    }
+  }
+}

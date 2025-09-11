@@ -1,0 +1,32 @@
+{% set is_async = generator.config.interface == 'asyncio' %}
+{% set recursive_types = generator.config.recursive_type_depth == -1 %}
+
+{% if is_async %}
+    {% set maybe_await = 'await ' %}
+    {% set maybe_async = 'async ' %}
+    {% set maybe_async_def = 'async def ' %}
+{% else %}
+    {% set maybe_await = '' %}
+    {% set maybe_async = '' %}
+    {% set maybe_async_def = 'def ' %}
+{% endif %}
+
+
+{% macro sleep(duration) -%}
+{% if is_async %}
+await asyncio.sleep({{ duration }})
+{% else %}
+time.sleep({{ duration }})
+{% endif %}
+{%- endmacro %}
+
+{% set active_provider = datasources[0].active_provider %}
+
+{% macro query_methods(name) %}
+
+    @classmethod
+    def prisma(cls: Type[_PrismaModelT]) -> 'actions.{{ name }}Actions[_PrismaModelT]':
+        from .client import get_client
+
+        return actions.{{ name }}Actions[_PrismaModelT](get_client(), cls)
+{% endmacro %}

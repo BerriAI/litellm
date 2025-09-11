@@ -1,0 +1,28 @@
+{
+  "version" : 2,
+  "waiters" : {
+    "ClusterActive" : {
+      "description" : "Wait until a Cluster is ACTIVE",
+      "delay" : 2,
+      "maxAttempts" : 60,
+      "operation" : "GetCluster",
+      "acceptors" : [ {
+        "matcher" : "path",
+        "argument" : "status",
+        "state" : "success",
+        "expected" : "ACTIVE"
+      } ]
+    },
+    "ClusterNotExists" : {
+      "description" : "Wait until a Cluster is gone",
+      "delay" : 2,
+      "maxAttempts" : 60,
+      "operation" : "GetCluster",
+      "acceptors" : [ {
+        "matcher" : "error",
+        "state" : "success",
+        "expected" : "ResourceNotFoundException"
+      } ]
+    }
+  }
+}

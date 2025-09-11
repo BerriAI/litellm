@@ -31,6 +31,7 @@ from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
 
+
 @pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_deployment():
     """

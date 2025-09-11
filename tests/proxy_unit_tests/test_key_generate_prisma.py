@@ -151,7 +151,6 @@ def prisma_client():
 @pytest.mark.flaky(retries=6, delay=1)
 async def test_new_user_response(prisma_client):
     try:
-
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -424,7 +423,6 @@ async def test_call_with_valid_model_using_all_models(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
-
         await litellm.proxy.proxy_server.prisma_client.connect()
 
         team_request = NewTeamRequest(
@@ -1786,7 +1784,6 @@ async def test_call_with_key_over_model_budget(
     litellm.callbacks.append(model_budget_limiter)
 
     try:
-
         # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
         model_max_budget = {
             "gpt-4o-mini": {

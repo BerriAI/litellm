@@ -138,7 +138,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         self.sqs_use_ssl = (
             litellm.aws_sqs_callback_params.get("sqs_use_ssl", True) or sqs_use_ssl
         )
-        self.sqs_verify = litellm.aws_sqs_callback_params.get("sqs_verify") or sqs_verify
+        self.sqs_verify = (
+            litellm.aws_sqs_callback_params.get("sqs_verify") or sqs_verify
+        )
         self.sqs_endpoint_url = (
             litellm.aws_sqs_callback_params.get("sqs_endpoint_url") or sqs_endpoint_url
         )
@@ -158,15 +160,18 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         )
 
         self.sqs_aws_session_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_session_name") or sqs_aws_session_name
+            litellm.aws_sqs_callback_params.get("sqs_aws_session_name")
+            or sqs_aws_session_name
         )
 
         self.sqs_aws_profile_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_profile_name") or sqs_aws_profile_name
+            litellm.aws_sqs_callback_params.get("sqs_aws_profile_name")
+            or sqs_aws_profile_name
         )
 
         self.sqs_aws_role_name = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_role_name") or sqs_aws_role_name
+            litellm.aws_sqs_callback_params.get("sqs_aws_role_name")
+            or sqs_aws_role_name
         )
 
         self.sqs_aws_web_identity_token = (
@@ -175,10 +180,13 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         )
 
         self.sqs_aws_sts_endpoint = (
-            litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint") or sqs_aws_sts_endpoint
+            litellm.aws_sqs_callback_params.get("sqs_aws_sts_endpoint")
+            or sqs_aws_sts_endpoint
         )
 
-        self.sqs_config = litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
+        self.sqs_config = (
+            litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
+        )
 
     async def async_log_success_event(
         self, kwargs, response_obj, start_time, end_time
@@ -201,9 +209,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception(f"sqs Layer Error - {str(e)}")
 
     async def async_send_batch(self) -> None:
-        verbose_logger.debug(
-            f"sqs logger - sending batch of {len(self.log_queue)}"
-        )
+        verbose_logger.debug(f"sqs logger - sending batch of {len(self.log_queue)}")
         if not self.log_queue:
             return
 
@@ -258,9 +264,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(
-                aws_request
-            )
+            SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(aws_request)
 
             signed_headers = dict(aws_request.headers.items())
 
@@ -272,4 +276,3 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error sending to SQS: {str(e)}")
-

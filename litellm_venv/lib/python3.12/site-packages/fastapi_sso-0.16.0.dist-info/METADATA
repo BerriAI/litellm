@@ -1,0 +1,167 @@
+Metadata-Version: 2.1
+Name: fastapi-sso
+Version: 0.16.0
+Summary: FastAPI plugin to enable SSO to most common providers (such as Facebook login, Google login and login via Microsoft Office 365 Account)
+Home-page: https://tomasvotava.github.io/fastapi-sso/
+License: MIT
+Keywords: fastapi,sso,oauth,google,facebook,spotify,linkedin
+Author: Tomas Votava
+Author-email: info@tomasvotava.eu
+Requires-Python: >=3.8,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Dist: fastapi (>=0.80)
+Requires-Dist: httpx (>=0.23.0)
+Requires-Dist: oauthlib (>=3.1.0)
+Requires-Dist: pydantic[email] (>=1.8.0)
+Requires-Dist: typing-extensions (>=4.12.2,<5.0.0) ; python_version < "3.10"
+Project-URL: Documentation, https://tomasvotava.github.io/fastapi-sso/
+Project-URL: Repository, https://github.com/tomasvotava/fastapi-sso
+Description-Content-Type: text/markdown
+
+# FastAPI SSO
+
+![Supported Python Versions](https://img.shields.io/pypi/pyversions/fastapi-sso)
+[![Test coverage](https://codecov.io/gh/tomasvotava/fastapi-sso/graph/badge.svg?token=SIFCTVSSOS)](https://codecov.io/gh/tomasvotava/fastapi-sso)
+![Tests Workflow Status](https://img.shields.io/github/actions/workflow/status/tomasvotava/fastapi-sso/test.yml?label=tests)
+![Lint Workflow Status](https://img.shields.io/github/actions/workflow/status/tomasvotava/fastapi-sso/lint.yml?label=ruff)
+![Mypy Workflow Status](https://img.shields.io/github/actions/workflow/status/tomasvotava/fastapi-sso/lint.yml?label=mypy)
+![Black Workflow Status](https://img.shields.io/github/actions/workflow/status/tomasvotava/fastapi-sso/lint.yml?label=black)
+![CodeQL Workflow Status](https://img.shields.io/github/actions/workflow/status/tomasvotava/fastapi-sso/codeql-analysis.yml?label=CodeQL)
+![PyPi weekly downloads](https://img.shields.io/pypi/dw/fastapi-sso)
+![Project License](https://img.shields.io/github/license/tomasvotava/fastapi-sso)
+![PyPi Version](https://img.shields.io/pypi/v/fastapi-sso)
+
+FastAPI plugin to enable SSO to most common providers (such as Facebook login, Google login and login via
+Microsoft Office 365 account).
+
+This allows you to implement the famous `Login with Google/Facebook/Microsoft` buttons functionality on your
+backend very easily.
+
+**Documentation**: [https://tomasvotava.github.io/fastapi-sso/](https://tomasvotava.github.io/fastapi-sso/)
+
+**Source Code**: [https://github.com/tomasvotava/fastapi-sso](https://github.com/tomasvotava/fastapi-sso/)
+
+## Demo site
+
+An awesome demo site was created and is maintained by even awesomer
+[Chris Karvouniaris (@chrisK824)](https://github.com/chrisK824). Chris has also posted multiple
+Medium articles about FastAPI and FastAPI SSO.
+
+Be sure to see his tutorials, follow him and show him some appreciation!
+
+Please see his [announcement](https://github.com/tomasvotava/fastapi-sso/discussions/150) with all the links.
+
+Quick links for the eager ones:
+
+- [Demo site](https://fastapi-sso-example.vercel.app/)
+- [Medium articles](https://medium.com/@christos.karvouniaris247)
+
+## Security Notice
+
+### Version `0.16.0` Update: Race Condition Bug Fix & Context Manager Change
+
+A race condition bug in the login flow that could, in rare cases, allow one user
+to assume the identity of another due to concurrent login requests was recently discovered
+by [@parikls](https://github.com/parikls).
+This issue was reported in [#186](https://github.com/tomasvotava/fastapi-sso/issues/186) and has been resolved
+in version `0.16.0`.
+
+**Details of the Fix:**
+
+The bug was mitigated by introducing an async lock mechanism that ensures only one user can attempt the login
+process at any given time. This prevents race conditions that could lead to unintended user identity crossover.
+
+**Important Change:**
+
+To fully support this fix, **users must now use the SSO instance within an `async with`
+context manager**. This adjustment is necessary for proper handling of asynchronous operations.
+
+The synchronous `with` context manager is now deprecated and will produce a warning.
+It will be removed in future versions to ensure best practices for async handling.
+
+**Impact:**
+
+This bug could potentially affect deployments with high concurrency or scenarios where multiple users initiate
+login requests simultaneously. To prevent potential issues and deprecation warnings, **update to
+version `0.16.0` or later and modify your code to use the async with context**.
+
+Code Example Update:
+
+```python
+# Before (deprecated)
+with sso:
+    openid = await sso.verify_and_process(request)
+
+# After (recommended)
+async with sso:
+    openid = await sso.verify_and_process(request)
+```
+
+Thanks to both [@parikls](https://github.com/parikls) and the community for helping me identify and improve the
+security of `fastapi-sso`. If you encounter any issues or potential vulnerabilities, please report them
+immediately so they can be addressed.
+
+For more details, refer to Issue [#186](https://github.com/tomasvotava/fastapi-sso/issues/186)
+and PR [#189](https://github.com/tomasvotava/fastapi-sso/pull/189).
+
+## Support this project
+
+If you'd like to support this project, consider [buying me a coffee ☕](https://www.buymeacoffee.com/tomas.votava).
+I tend to process Pull Requests faster when properly caffeinated 😉.
+
+<a href="https://www.buymeacoffee.com/tomas.votava" target="_blank">
+<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+    alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
+## Supported login providers
+
+### Official
+
+- Google
+- Microsoft
+- Facebook
+- Spotify
+- Fitbit
+- Github (credits to [Brandl](https://github.com/Brandl) for hint using `accept` header)
+- generic (see [docs](https://tomasvotava.github.io/fastapi-sso/reference/sso.generic/))
+- Notion
+- Twitter (X)
+
+### Contributed
+
+- Kakao (by Jae-Baek Song - [thdwoqor](https://github.com/thdwoqor))
+- Naver (by 1tang2bang92) - [1tang2bang92](https://github.com/1tang2bang92)
+- Gitlab (by Alessandro Pischedda) - [Cereal84](https://github.com/Cereal84)
+- Line (by Jimmy Yeh) - [jimmyyyeh](https://github.com/jimmyyyeh)
+- LinkedIn (by Alessandro Pischedda) - [Cereal84](https://github.com/Cereal84)
+- Yandex (by Akim Faskhutdinov) – [akimrx](https://github.com/akimrx)
+- Seznam (by Tomas Koutek) - [TomasKoutek](https://github.com/TomasKoutek)
+
+See [Contributing](#contributing) for a guide on how to contribute your own login provider.
+
+## Installation
+
+### Install using `pip`
+
+```console
+pip install fastapi-sso
+```
+
+### Install using `poetry`
+
+```console
+poetry add fastapi-sso
+```
+
+## Contributing
+
+If you'd like to contribute and add your specific login provider, please see
+[Contributing](https://tomasvotava.github.io/fastapi-sso/contributing) file.
+

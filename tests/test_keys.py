@@ -547,7 +547,9 @@ async def test_key_info_spend_values():
 
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.skip(reason="Temporarily skipping due to model change. Will be updated soon.")
+@pytest.mark.skip(
+    reason="Temporarily skipping due to model change. Will be updated soon."
+)
 async def test_aaaaakey_info_spend_values_streaming():
     """
     Test to ensure spend is correctly calculated.
@@ -860,7 +862,7 @@ async def test_key_over_budget():
 
         ## CALL `/models` - expect to work
         model_list = await get_key_info(session=session, get_key=key, call_key=key)
-        ## CALL `/chat/completions` - expect to fail    
+        ## CALL `/chat/completions` - expect to fail
         try:
             await chat_completion(session=session, key=key)
             pytest.fail("Expected this call to fail")

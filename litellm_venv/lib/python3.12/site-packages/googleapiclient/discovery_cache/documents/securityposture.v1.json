@@ -1,0 +1,2142 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://securityposture.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Security Posture",
+"description": "Defines, assesses, and monitors the overall status of your security in Google Cloud. You can use security postures to evaluate your current cloud security against defined benchmarks and help maintain the level of security that your organization requires. ",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/security-command-center",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "securityposture:v1",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://securityposture.mtls.googleapis.com/",
+"name": "securityposture",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"organizations": {
+"resources": {
+"locations": {
+"resources": {
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "securityposture.organizations.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "securityposture.organizations.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"postureDeployments": {
+"methods": {
+"create": {
+"description": "Creates a new PostureDeployment in a given project and location.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureDeployments",
+"httpMethod": "POST",
+"id": "securityposture.organizations.locations.postureDeployments.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"postureDeploymentId": {
+"description": "Required. An identifier for the posture deployment.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postureDeployments",
+"request": {
+"$ref": "PostureDeployment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a PostureDeployment.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureDeployments/{postureDeploymentsId}",
+"httpMethod": "DELETE",
+"id": "securityposture.organizations.locations.postureDeployments.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. An opaque identifier for the current version of the posture deployment. If you provide this value, then it must match the existing value. If the values don't match, then the request fails with an ABORTED error. If you omit this value, then the posture deployment is deleted regardless of its current `etag` value.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. The name of the posture deployment, in the format `organizations/{organization}/locations/global/postureDeployments/{posture_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postureDeployments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details for a PostureDeployment.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureDeployments/{postureDeploymentsId}",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postureDeployments.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the PostureDeployment, in the format `organizations/{organization}/locations/global/postureDeployments/{posture_deployment_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postureDeployments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "PostureDeployment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists every PostureDeployment in a project and location.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureDeployments",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postureDeployments.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. A filter to apply to the list of postures, in the format defined in [AIP-160: Filtering](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of posture deployments to return. The default value is `500`. If you exceed the maximum value of `1000`, then the service uses the maximum value.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A pagination token returned from a previous request to list posture deployments. Provide this token to retrieve the next page of results.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postureDeployments",
+"response": {
+"$ref": "ListPostureDeploymentsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates an existing PostureDeployment. To prevent concurrent updates from overwriting each other, always follow the read-modify-write pattern when you update a posture deployment: 1. Call GetPostureDeployment to get the current version of the deployment. 2. Update the fields in the deployment as needed. 3. Call UpdatePostureDeployment to update the deployment. Ensure that your request includes the `etag` value from the GetPostureDeployment response. **Important:** If you omit the `etag` when you call UpdatePostureDeployment, then the updated deployment unconditionally overwrites the existing deployment.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureDeployments/{postureDeploymentsId}",
+"httpMethod": "PATCH",
+"id": "securityposture.organizations.locations.postureDeployments.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Identifier. The name of the posture deployment, in the format `organizations/{organization}/locations/global/postureDeployments/{deployment_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postureDeployments/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. The fields in the PostureDeployment to update. You can update only the following fields: * PostureDeployment.posture_id * PostureDeployment.posture_revision_id",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "PostureDeployment"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"postureTemplates": {
+"methods": {
+"get": {
+"description": "Gets a single revision of a PostureTemplate.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureTemplates/{postureTemplatesId}",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postureTemplates.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the PostureTemplate, in the format `organizations/{organization}/locations/global/postureTemplates/{posture_template}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postureTemplates/[^/]+$",
+"required": true,
+"type": "string"
+},
+"revisionId": {
+"description": "Optional. The posture template revision to retrieve. If not specified, the most recently updated revision is retrieved.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "PostureTemplate"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists every PostureTemplate in a given organization and location.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postureTemplates",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postureTemplates.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. A filter to apply to the list of postures, in the format defined in [AIP-160: Filtering](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of posture templates to return. The default value is `500`. If you exceed the maximum value of `1000`, then the service uses the maximum value.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A pagination token returned from a previous request to list posture templates. Provide this token to retrieve the next page of results.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postureTemplates",
+"response": {
+"$ref": "ListPostureTemplatesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"postures": {
+"methods": {
+"create": {
+"description": "Creates a new Posture.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures",
+"httpMethod": "POST",
+"id": "securityposture.organizations.locations.postures.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"postureId": {
+"description": "Required. An identifier for the posture.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postures",
+"request": {
+"$ref": "Posture"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes all revisions of a Posture. You can only delete a posture if none of its revisions are deployed.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures/{posturesId}",
+"httpMethod": "DELETE",
+"id": "securityposture.organizations.locations.postures.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. An opaque identifier for the current version of the posture. If you provide this value, then it must match the existing value. If the values don't match, then the request fails with an ABORTED error. If you omit this value, then the posture is deleted regardless of its current `etag` value.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. The name of the Posture, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postures/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"extract": {
+"description": "Extracts existing policies from an organization, folder, or project, and applies them to another organization, folder, or project as a Posture. If the other organization, folder, or project already has a posture, then the result of the long-running operation is an ALREADY_EXISTS error.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures:extract",
+"httpMethod": "POST",
+"id": "securityposture.organizations.locations.postures.extract",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postures:extract",
+"request": {
+"$ref": "ExtractPostureRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets a single revision of a Posture.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures/{posturesId}",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postures.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Posture, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postures/[^/]+$",
+"required": true,
+"type": "string"
+},
+"revisionId": {
+"description": "Optional. The posture revision to retrieve. If not specified, the most recently updated revision is retrieved.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Posture"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the most recent revisions of all Posture resources in a specified organization and location.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postures.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. A filter to apply to the list of postures, in the format defined in [AIP-160: Filtering](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of postures to return. The default value is `500`. If you exceed the maximum value of `1000`, then the service uses the maximum value.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A pagination token returned from a previous request to list postures. Provide this token to retrieve the next page of results.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/postures",
+"response": {
+"$ref": "ListPosturesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"listRevisions": {
+"description": "Lists all revisions of a single Posture.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures/{posturesId}:listRevisions",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.postures.listRevisions",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Posture, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postures/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of posture revisions to return. The default value is `500`. If you exceed the maximum value of `1000`, then the service uses the maximum value.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A pagination token from a previous request to list posture revisions. Provide this token to retrieve the next page of results.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}:listRevisions",
+"response": {
+"$ref": "ListPostureRevisionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates a revision of an existing Posture. If the posture revision that you update is currently deployed, then a new revision of the posture is created. To prevent concurrent updates from overwriting each other, always follow the read-modify-write pattern when you update a posture: 1. Call GetPosture to get the current version of the posture. 2. Update the fields in the posture as needed. 3. Call UpdatePosture to update the posture. Ensure that your request includes the `etag` value from the GetPosture response. **Important:** If you omit the `etag` when you call UpdatePosture, then the updated posture unconditionally overwrites the existing posture.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/postures/{posturesId}",
+"httpMethod": "PATCH",
+"id": "securityposture.organizations.locations.postures.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Identifier. The name of the posture, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/postures/[^/]+$",
+"required": true,
+"type": "string"
+},
+"revisionId": {
+"description": "Required. The revision ID of the posture to update. If the posture revision that you update is currently deployed, then a new revision of the posture is created.",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Required. The fields in the Posture to update. You can update only the following fields: * Posture.description * Posture.policy_sets * Posture.state",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Posture"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"reports": {
+"methods": {
+"createIaCValidationReport": {
+"description": "Validates a specified infrastructure-as-code (IaC) configuration, and creates a Report with the validation results. Only Terraform configurations are supported. Only modified assets are validated.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/reports:createIaCValidationReport",
+"httpMethod": "POST",
+"id": "securityposture.organizations.locations.reports.createIaCValidationReport",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/reports:createIaCValidationReport",
+"request": {
+"$ref": "CreateIaCValidationReportRequest"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details for a Report.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/reports/{reportsId}",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.reports.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the report, in the format `organizations/{organization}/locations/global/reports/{report_id}`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/reports/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Report"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists every Report in a given organization and location.",
+"flatPath": "v1/organizations/{organizationsId}/locations/{locationsId}/reports",
+"httpMethod": "GET",
+"id": "securityposture.organizations.locations.reports.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. A filter to apply to the list of reports, in the format defined in [AIP-160: Filtering](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of reports to return. The default value is `500`. If you exceed the maximum value of `1000`, then the service uses the maximum value.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A pagination token returned from a previous request to list reports. Provide this token to retrieve the next page of results.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name, in the format `organizations/{organization}/locations/global`.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/reports",
+"response": {
+"$ref": "ListReportsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+},
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "securityposture.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "securityposture.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. Do not use this field. It is unsupported and is ignored unless explicitly documented otherwise. This is primarily for internal usage.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+},
+"revision": "20250819",
+"rootUrl": "https://securityposture.googleapis.com/",
+"schemas": {
+"AssetDetails": {
+"description": "Details of a Cloud Asset Inventory asset that caused a violation.",
+"id": "AssetDetails",
+"properties": {
+"asset": {
+"description": "Information about the Cloud Asset Inventory asset that violated a policy. The format of this information can change at any time without prior notice. Your application must not depend on this information in any way.",
+"type": "string"
+},
+"assetType": {
+"description": "The type of Cloud Asset Inventory asset. For a list of asset types, see [Supported asset types](https://cloud.google.com/asset-inventory/docs/supported-asset-types).",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"ComplianceStandard": {
+"description": "Information about a compliance standard that the policy helps enforce.",
+"id": "ComplianceStandard",
+"properties": {
+"control": {
+"description": "Optional. The control in the compliance standard that the policy helps enforce. For example, `AC-3`.",
+"type": "string"
+},
+"standard": {
+"description": "Optional. The compliance standard that the policy helps enforce. For example, `NIST SP 800-53`.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Constraint": {
+"description": "Metadata for a constraint in a Policy.",
+"id": "Constraint",
+"properties": {
+"orgPolicyConstraint": {
+"$ref": "OrgPolicyConstraint",
+"description": "Optional. A predefined organization policy constraint."
+},
+"orgPolicyConstraintCustom": {
+"$ref": "OrgPolicyConstraintCustom",
+"description": "Optional. A custom organization policy constraint."
+},
+"securityHealthAnalyticsCustomModule": {
+"$ref": "SecurityHealthAnalyticsCustomModule",
+"description": "Optional. A custom module for Security Health Analytics."
+},
+"securityHealthAnalyticsModule": {
+"$ref": "SecurityHealthAnalyticsModule",
+"description": "Optional. A built-in detector for Security Health Analytics."
+}
+},
+"type": "object"
+},
+"CreateIaCValidationReportRequest": {
+"description": "Request message for CreateIaCValidationReport.",
+"id": "CreateIaCValidationReportRequest",
+"properties": {
+"iac": {
+"$ref": "IaC",
+"description": "Required. The infrastructure-as-code (IaC) configuration to validate."
+}
+},
+"type": "object"
+},
+"CustomConfig": {
+"description": "A custom module configuration for Security Health Analytics. Use `CustomConfig` to create custom detectors that generate custom findings for resources that you specify.",
+"id": "CustomConfig",
+"properties": {
+"customOutput": {
+"$ref": "CustomOutputSpec",
+"description": "Optional. Definitions of custom source properties to include in findings."
+},
+"description": {
+"description": "Optional. A description of the vulnerability or misconfiguration that the custom module detects. The description appears in each finding. Provide enough information to help an investigator understand the finding. The value must be enclosed in quotation marks.",
+"type": "string"
+},
+"predicate": {
+"$ref": "Expr",
+"description": "Required. The Common Expression Language (CEL) expression to evaluate. When the expression evaluates to `true` for a resource, a finding is generated."
+},
+"recommendation": {
+"description": "Required. An explanation of the steps that security teams can take to resolve the detected issue. The explanation appears in each finding.",
+"type": "string"
+},
+"resourceSelector": {
+"$ref": "ResourceSelector",
+"description": "Required. The resource types that the custom module operates on."
+},
+"severity": {
+"description": "Required. The severity of findings generated by the custom module.",
+"enum": [
+"SEVERITY_UNSPECIFIED",
+"CRITICAL",
+"HIGH",
+"MEDIUM",
+"LOW"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Critical severity.",
+"High severity.",
+"Medium severity.",
+"Low severity."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"CustomOutputSpec": {
+"description": "Definitions of custom source properties that can appear in findings.",
+"id": "CustomOutputSpec",
+"properties": {
+"properties": {
+"description": "Optional. The custom source properties that can appear in findings.",
+"items": {
+"$ref": "Property"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"Expr": {
+"description": "Represents a textual expression in the Common Expression Language (CEL) syntax. CEL is a C-like expression language. The syntax and semantics of CEL are documented at https://github.com/google/cel-spec. Example (Comparison): title: \"Summary size limit\" description: \"Determines if a summary is less than 100 chars\" expression: \"document.summary.size() < 100\" Example (Equality): title: \"Requestor is owner\" description: \"Determines if requestor is the document owner\" expression: \"document.owner == request.auth.claims.email\" Example (Logic): title: \"Public documents\" description: \"Determine whether the document should be publicly visible\" expression: \"document.type != 'private' && document.type != 'internal'\" Example (Data Manipulation): title: \"Notification string\" description: \"Create a notification string with a timestamp.\" expression: \"'New message received at ' + string(document.create_time)\" The exact variables and functions that may be referenced within an expression are determined by the service that evaluates it. See the service documentation for additional information.",
+"id": "Expr",
+"properties": {
+"description": {
+"description": "Optional. Description of the expression. This is a longer text which describes the expression, e.g. when hovered over it in a UI.",
+"type": "string"
+},
+"expression": {
+"description": "Textual representation of an expression in Common Expression Language syntax.",
+"type": "string"
+},
+"location": {
+"description": "Optional. String indicating the location of the expression for error reporting, e.g. a file name and a position in the file.",
+"type": "string"
+},
+"title": {
+"description": "Optional. Title for the expression, i.e. a short string describing its purpose. This can be used e.g. in UIs which allow to enter the expression.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ExtractPostureRequest": {
+"description": "Request message for ExtractPosture.",
+"id": "ExtractPostureRequest",
+"properties": {
+"postureId": {
+"description": "Required. An identifier for the posture.",
+"type": "string"
+},
+"workload": {
+"description": "Required. The organization, folder, or project from which policies are extracted. Must be within the organization defined in parent. Use one of the following formats: * `organization/{organization_number}` * `folder/{folder_number}` * `project/{project_number}`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudSecuritypostureV1CustomConstraint": {
+"description": "A custom, user-defined constraint. You can apply the constraint only to the resource types specified in the constraint, and only within the organization where the constraint is defined. _When you create a custom constraint, it is not enforced automatically._ You must use an organization policy to [enforce the constraint](https://cloud.google.com/resource-manager/help/organization-policy/constraints/enforce).",
+"id": "GoogleCloudSecuritypostureV1CustomConstraint",
+"properties": {
+"actionType": {
+"description": "Whether to allow or deny the action.",
+"enum": [
+"ACTION_TYPE_UNSPECIFIED",
+"ALLOW",
+"DENY"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Allow the action.",
+"Deny the action."
+],
+"type": "string"
+},
+"condition": {
+"description": "A Common Expression Language (CEL) condition expression that must evaluate to `true` for the constraint to be enforced. The maximum length is 1000 characters. For example: + `resource.instanceName.matches('(production|test)_(.+_)?[\\d]+')`: Evaluates to `true` if the resource's `instanceName` attribute contains the following: + The prefix `production` or `test` + An underscore (`_`) + Optional: One or more characters, followed by an underscore (`_`) + One or more digits + `resource.management.auto_upgrade == true`: Evaluates to `true` if the resource's `management.auto_upgrade` attribute is `true`.",
+"type": "string"
+},
+"description": {
+"description": "A description of the constraint. The maximum length is 2000 characters.",
+"type": "string"
+},
+"displayName": {
+"description": "A display name for the constraint. The maximum length is 200 characters.",
+"type": "string"
+},
+"methodTypes": {
+"description": "The types of operations that the constraint applies to.",
+"items": {
+"enum": [
+"METHOD_TYPE_UNSPECIFIED",
+"CREATE",
+"UPDATE",
+"DELETE"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Constraint applied when creating the resource.",
+"Constraint applied when updating the resource.",
+"Not supported. Constraint applied when deleting the resource."
+],
+"type": "string"
+},
+"type": "array"
+},
+"name": {
+"description": "Immutable. The name of the constraint, in the format `organizations/{organization_id}/customConstraints/custom.{custom_constraint_id}`. For example, `organizations/123456789012/customConstraints/custom.createOnlyE2TypeVms`. Must contain 1 to 62 characters, excluding the prefix `organizations/{organization_id}/customConstraints/custom.`.",
+"type": "string"
+},
+"resourceTypes": {
+"description": "Immutable. The resource type that the constraint applies to, in the format `{canonical_service_name}/{resource_type_name}`. For example, `compute.googleapis.com/Instance`.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"updateTime": {
+"description": "Output only. The last time at which the constraint was updated or created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudSecuritypostureV1PolicyRule": {
+"description": "A rule that defines the allowed and denied values for an organization policy constraint.",
+"id": "GoogleCloudSecuritypostureV1PolicyRule",
+"properties": {
+"allowAll": {
+"description": "Whether to allow any value for a list constraint. Valid only for list constraints.",
+"type": "boolean"
+},
+"condition": {
+"$ref": "Expr",
+"description": "A condition that determines whether this rule is used to evaluate the policy. When set, the google.type.Expr.expression field must contain 1 to 10 subexpressions, joined by the `||` or `&&` operators. Each subexpression must use the `resource.matchTag()` or `resource.matchTagId()` Common Expression Language (CEL) function. The `resource.matchTag()` function takes the following arguments: * `key_name`: the namespaced name of the tag key, with the organization ID and a slash (`/`) as a prefix; for example, `123456789012/environment` * `value_name`: the short name of the tag value For example: `resource.matchTag('123456789012/environment, 'prod')` The `resource.matchTagId()` function takes the following arguments: * `key_id`: the permanent ID of the tag key; for example, `tagKeys/123456789012` * `value_id`: the permanent ID of the tag value; for example, `tagValues/567890123456` For example: `resource.matchTagId('tagKeys/123456789012', 'tagValues/567890123456')`"
+},
+"denyAll": {
+"description": "Whether to deny all values for a list constraint. Valid only for list constraints.",
+"type": "boolean"
+},
+"enforce": {
+"description": "Whether to enforce the constraint. Valid only for boolean constraints.",
+"type": "boolean"
+},
+"parameters": {
+"additionalProperties": {
+"description": "Properties of the object.",
+"type": "any"
+},
+"description": "Optional. Required for managed constraints if parameters are defined. Passes parameter values when policy enforcement is enabled. Ensure that parameter value types match those defined in the constraint definition. For example: ``` { \"allowedLocations\": [\"us-east1\", \"us-west1\"], \"allowAll\": true } ```",
+"type": "object"
+},
+"resourceTypes": {
+"$ref": "ResourceTypes",
+"description": "Optional. The resource types policies can support, only used for managed constraints. Method type is `GOVERN_TAGS`."
+},
+"values": {
+"$ref": "GoogleCloudSecuritypostureV1PolicyRuleStringValues",
+"description": "The allowed and denied values for a list constraint. Valid only for list constraints."
+}
+},
+"type": "object"
+},
+"GoogleCloudSecuritypostureV1PolicyRuleStringValues": {
+"description": "The allowed and denied values for a list constraint. For all constraints, these fields can contain literal values. Optionally, you can add the `is:` prefix to these values. If the value contains a colon (`:`), then the `is:` prefix is required. Some constraints allow you to specify a portion of the resource hierarchy, known as a [_hierarchy subtree_](https://cloud.google.com/resource-manager/help/organization-policy/hierarchy-subtree), that the constraint applies to. To specify a hierarchy subtree, use the `under:` prefix, followed by a value with one of these formats: - `projects/{project_id}` (for example, `projects/tokyo-rain-123`) - `folders/{folder_id}` (for example, `folders/1234567890123`) - `organizations/{organization_id}` (for example, `organizations/123456789012`) A constraint's `supports_under` field indicates whether you can specify a hierarchy subtree. To learn which predefined constraints let you specify a hierarchy subtree, see the [constraints reference](https://cloud.google.com/resource-manager/help/organization-policy/constraints/reference).",
+"id": "GoogleCloudSecuritypostureV1PolicyRuleStringValues",
+"properties": {
+"allowedValues": {
+"description": "The allowed values for the constraint.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"deniedValues": {
+"description": "The denied values for the constraint.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"IaC": {
+"description": "Details of an infrastructure-as-code (IaC) configuration.",
+"id": "IaC",
+"properties": {
+"tfPlan": {
+"description": "Optional. A Terraform plan file, formatted as a stringified JSON object. To learn how to generate a Terraform plan file in JSON format, see [JSON output format](https://developer.hashicorp.com/terraform/internals/json-format) in the Terraform documentation.",
+"format": "byte",
+"type": "string"
+}
+},
+"type": "object"
+},
+"IaCValidationReport": {
+"description": "Details of an infrastructure-as-code (IaC) validation report.",
+"id": "IaCValidationReport",
+"properties": {
+"note": {
+"description": "Additional information about the report.",
+"type": "string"
+},
+"violations": {
+"description": "A list of every Violation found in the IaC configuration.",
+"items": {
+"$ref": "Violation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPostureDeploymentsResponse": {
+"description": "Response message for ListPostureDeployments.",
+"id": "ListPostureDeploymentsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A pagination token. To retrieve the next page of results, call the method again with this token.",
+"type": "string"
+},
+"postureDeployments": {
+"description": "The list of PostureDeployment resources.",
+"items": {
+"$ref": "PostureDeployment"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that were temporarily unavailable and could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPostureRevisionsResponse": {
+"description": "Response message for ListPostureRevisions.",
+"id": "ListPostureRevisionsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A pagination token. To retrieve the next page of results, call the method again with this token.",
+"type": "string"
+},
+"revisions": {
+"description": "The list of revisions for the Posture.",
+"items": {
+"$ref": "Posture"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPostureTemplatesResponse": {
+"description": "Response message for ListPostureTemplates.",
+"id": "ListPostureTemplatesResponse",
+"properties": {
+"nextPageToken": {
+"description": "A pagination token. To retrieve the next page of results, call the method again with this token.",
+"type": "string"
+},
+"postureTemplates": {
+"description": "The list of PostureTemplate resources.",
+"items": {
+"$ref": "PostureTemplate"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListPosturesResponse": {
+"description": "Response message for ListPostures.",
+"id": "ListPosturesResponse",
+"properties": {
+"nextPageToken": {
+"description": "A pagination token. To retrieve the next page of results, call the method again with this token.",
+"type": "string"
+},
+"postures": {
+"description": "The list of Posture resources.",
+"items": {
+"$ref": "Posture"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that were temporarily unavailable and could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListReportsResponse": {
+"description": "Response message for ListReports.",
+"id": "ListReportsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A pagination token. To retrieve the next page of results, call the method again with this token.",
+"type": "string"
+},
+"reports": {
+"description": "The list of Report resources.",
+"items": {
+"$ref": "Report"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that were temporarily unavailable and could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OperationMetadata": {
+"description": "Metadata for an Operation.",
+"id": "OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. The API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time at which the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time at which the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"errorMessage": {
+"description": "Output only. An error message. Returned when a PostureDeployment enters a failure state like UPDATE_FAILED.",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Whether a request to cancel the operation has been received. For operations that have been cancelled successfully, the Operation.error field contains the error code CANCELLED.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. The status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. The server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. The name of the action executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"OrgPolicyConstraint": {
+"description": "A predefined organization policy constraint.",
+"id": "OrgPolicyConstraint",
+"properties": {
+"cannedConstraintId": {
+"description": "Required. A unique identifier for the constraint.",
+"type": "string"
+},
+"policyRules": {
+"description": "Required. The rules enforced by the constraint.",
+"items": {
+"$ref": "GoogleCloudSecuritypostureV1PolicyRule"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"OrgPolicyConstraintCustom": {
+"description": "A custom organization policy constraint.",
+"id": "OrgPolicyConstraintCustom",
+"properties": {
+"customConstraint": {
+"$ref": "GoogleCloudSecuritypostureV1CustomConstraint",
+"description": "Required. Metadata for the constraint."
+},
+"policyRules": {
+"description": "Required. The rules enforced by the constraint.",
+"items": {
+"$ref": "GoogleCloudSecuritypostureV1PolicyRule"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Policy": {
+"description": "The details of a policy, including the constraints that it includes.",
+"id": "Policy",
+"properties": {
+"complianceStandards": {
+"description": "Optional. The compliance standards that the policy helps enforce.",
+"items": {
+"$ref": "ComplianceStandard"
+},
+"type": "array"
+},
+"constraint": {
+"$ref": "Constraint",
+"description": "Required. The constraints that the policy includes."
+},
+"description": {
+"description": "Optional. A description of the policy.",
+"type": "string"
+},
+"policyId": {
+"description": "Required. A user-specified identifier for the policy. In a PolicySet, each policy must have a unique identifier.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"PolicyDetails": {
+"description": "Details of a policy that was violated.",
+"id": "PolicyDetails",
+"properties": {
+"complianceStandards": {
+"description": "The compliance standards that the policy maps to. For example, `CIS-2.0 1.15`.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"constraint": {
+"description": "Information about the constraint that was violated. The format of this information can change at any time without prior notice. Your application must not depend on this information in any way.",
+"type": "string"
+},
+"constraintType": {
+"description": "The type of constraint that was violated.",
+"enum": [
+"CONSTRAINT_TYPE_UNSPECIFIED",
+"SECURITY_HEALTH_ANALYTICS_CUSTOM_MODULE",
+"ORG_POLICY_CUSTOM",
+"SECURITY_HEALTH_ANALYTICS_MODULE",
+"ORG_POLICY",
+"REGO_POLICY"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"A custom module for Security Health Analytics.",
+"A custom organization policy constraint.",
+"A built-in detector for Security Health Analytics.",
+"A predefined organization policy constraint.",
+"A custom rego policy constraint."
+],
+"type": "string"
+},
+"description": {
+"description": "A description of the policy.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"PolicySet": {
+"description": "A group of one or more Policy resources.",
+"id": "PolicySet",
+"properties": {
+"description": {
+"description": "Optional. A description of the policy set.",
+"type": "string"
+},
+"policies": {
+"description": "Required. The Policy resources in the policy set. Each policy must have a policy_id that's unique within the policy set.",
+"items": {
+"$ref": "Policy"
+},
+"type": "array"
+},
+"policySetId": {
+"description": "Required. An identifier for the policy set.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Posture": {
+"description": "The details of a posture.",
+"id": "Posture",
+"properties": {
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. The user-specified annotations for the posture. For details about the values you can use in an annotation, see [AIP-148: Standard fields](https://google.aip.dev/148#annotations).",
+"type": "object"
+},
+"categories": {
+"description": "Output only. The categories that the posture belongs to, as determined by the Security Posture API.",
+"items": {
+"enum": [
+"CATEGORY_UNSPECIFIED",
+"AI",
+"AWS",
+"GCP",
+"AZURE"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Artificial intelligence (AI).",
+"Amazon Web Services (AWS) policies.",
+"Google Cloud policies.",
+"Microsoft Azure policies."
+],
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"createTime": {
+"description": "Output only. The time at which the posture was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"description": {
+"description": "Optional. A description of the posture.",
+"type": "string"
+},
+"etag": {
+"description": "Optional. An opaque identifier for the current version of the posture at the specified `revision_id`. To prevent concurrent updates from overwriting each other, always provide the `etag` when you update a posture. You can also provide the `etag` when you delete a posture, to help ensure that you're deleting the intended version of the posture.",
+"type": "string"
+},
+"name": {
+"description": "Required. Identifier. The name of the posture, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"type": "string"
+},
+"policySets": {
+"description": "Required. The PolicySet resources that the posture includes.",
+"items": {
+"$ref": "PolicySet"
+},
+"type": "array"
+},
+"reconciling": {
+"description": "Output only. Whether the posture is in the process of being updated.",
+"readOnly": true,
+"type": "boolean"
+},
+"revisionId": {
+"description": "Output only. Immutable. An opaque eight-character string that identifies the revision of the posture. A posture can have multiple revisions; when you deploy a posture, you deploy a specific revision of the posture.",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Required. The state of the posture at the specified `revision_id`.",
+"enum": [
+"STATE_UNSPECIFIED",
+"DEPRECATED",
+"DRAFT",
+"ACTIVE"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"The posture is deprecated and can no longer be deployed.",
+"The posture is a draft and is not ready to deploy.",
+"The posture is complete and ready to deploy."
+],
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. The time at which the posture was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PostureDeployment": {
+"description": "Details for a Posture deployment on an organization, folder, or project. You can deploy at most one posture to each organization, folder, or project. The parent resource for a posture deployment is always the organization, even if the deployment applies to a folder or project.",
+"id": "PostureDeployment",
+"properties": {
+"annotations": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. The user-specified annotations for the posture deployment. For details about the values you can use in an annotation, see [AIP-148: Standard fields](https://google.aip.dev/148#annotations).",
+"type": "object"
+},
+"categories": {
+"description": "Output only. The categories that the posture deployment belongs to, as determined by the Security Posture API.",
+"items": {
+"enum": [
+"CATEGORY_UNSPECIFIED",
+"AI",
+"AWS",
+"GCP",
+"AZURE"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Artificial intelligence (AI).",
+"Amazon Web Services (AWS) policies.",
+"Google Cloud policies.",
+"Microsoft Azure policies."
+],
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"createTime": {
+"description": "Output only. The time at which the posture deployment was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"description": {
+"description": "Optional. A description of the posture deployment.",
+"type": "string"
+},
+"desiredPostureId": {
+"description": "Output only. The posture ID that was specified for the deployment. Present only if the posture deployment is in a failed state.",
+"readOnly": true,
+"type": "string"
+},
+"desiredPostureRevisionId": {
+"description": "Output only. The revision ID of the posture that was specified for the deployment. Present only if the deployment is in a failed state.",
+"readOnly": true,
+"type": "string"
+},
+"etag": {
+"description": "Optional. An opaque identifier for the current version of the posture deployment. To prevent concurrent updates from overwriting each other, always provide the `etag` when you update a posture deployment. You can also provide the `etag` when you delete a posture deployment, to help ensure that you're deleting the intended posture deployment.",
+"type": "string"
+},
+"failureMessage": {
+"description": "Output only. A description of why the posture deployment failed. Present only if the deployment is in a failed state.",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Required. Identifier. The name of the posture deployment, in the format `organizations/{organization}/locations/global/postureDeployments/{deployment_id}`.",
+"type": "string"
+},
+"postureId": {
+"description": "Required. The posture used in the deployment, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"type": "string"
+},
+"postureRevisionId": {
+"description": "Required. The revision ID of the posture used in the deployment.",
+"type": "string"
+},
+"reconciling": {
+"description": "Output only. Whether the posture deployment is in the process of being updated.",
+"readOnly": true,
+"type": "boolean"
+},
+"state": {
+"description": "Output only. The state of the posture deployment.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"DELETING",
+"UPDATING",
+"ACTIVE",
+"CREATE_FAILED",
+"UPDATE_FAILED",
+"DELETE_FAILED"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"The posture deployment is being created.",
+"The posture deployment is being deleted.",
+"The posture deployment is being updated.",
+"The posture deployment is active and in use.",
+"The posture deployment could not be created.",
+"The posture deployment could not be updated.",
+"The posture deployment could not be deleted."
+],
+"readOnly": true,
+"type": "string"
+},
+"targetResource": {
+"description": "Required. The organization, folder, or project where the posture is deployed. Uses one of the following formats: * `organizations/{organization_number}` * `folders/{folder_number}` * `projects/{project_number}`",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. The time at which the posture deployment was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PostureDetails": {
+"description": "Details of a posture deployment.",
+"id": "PostureDetails",
+"properties": {
+"policySet": {
+"description": "The identifier for the PolicySet that the relevant policy belongs to.",
+"type": "string"
+},
+"posture": {
+"description": "The posture used in the deployment, in the format `organizations/{organization}/locations/global/postures/{posture_id}`.",
+"type": "string"
+},
+"postureDeployment": {
+"description": "The name of the posture deployment, in the format `organizations/{organization}/locations/global/postureDeployments/{deployment_id}`.",
+"type": "string"
+},
+"postureDeploymentTargetResource": {
+"description": "The organization, folder, or project where the posture is deployed. Uses one of the following formats: * `organizations/{organization_number}` * `folders/{folder_number}` * `projects/{project_number}`",
+"type": "string"
+},
+"postureRevisionId": {
+"description": "The revision ID of the posture used in the deployment.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"PostureTemplate": {
+"description": "The details of a posture template.",
+"id": "PostureTemplate",
+"properties": {
+"categories": {
+"description": "Output only. The categories that the posture template belongs to, as determined by the Security Posture API.",
+"items": {
+"enum": [
+"CATEGORY_UNSPECIFIED",
+"AI",
+"AWS",
+"GCP",
+"AZURE"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Artificial intelligence (AI).",
+"Amazon Web Services (AWS) policies.",
+"Google Cloud policies.",
+"Microsoft Azure policies."
+],
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"description": {
+"description": "Output only. A description of the posture template.",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Output only. Identifier. The name of the posture template, in the format `organizations/{organization}/locations/global/postureTemplates/{posture_template}`.",
+"readOnly": true,
+"type": "string"
+},
+"policySets": {
+"description": "Output only. The PolicySet resources that the posture template includes.",
+"items": {
+"$ref": "PolicySet"
+},
+"readOnly": true,
+"type": "array"
+},
+"revisionId": {
+"description": "Output only. A string that identifies the revision of the posture template.",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The state of the posture template at the specified `revision_id`.",
+"enum": [
+"STATE_UNSPECIFIED",
+"ACTIVE",
+"DEPRECATED"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"The posture template follows the latest controls and standards.",
+"The posture template uses outdated controls and standards. We recommend that you use a newer revision of the posture template."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"Property": {
+"description": "A name-value pair used as a custom source property.",
+"id": "Property",
+"properties": {
+"name": {
+"description": "Required. The name of the custom source property.",
+"type": "string"
+},
+"valueExpression": {
+"$ref": "Expr",
+"description": "Optional. The CEL expression for the value of the custom source property. For resource properties, you can return the value of the property or a string enclosed in quotation marks."
+}
+},
+"type": "object"
+},
+"Report": {
+"description": "Details of a report.",
+"id": "Report",
+"properties": {
+"createTime": {
+"description": "Output only. The time at which the report was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"iacValidationReport": {
+"$ref": "IaCValidationReport",
+"description": "Output only. An infrastructure-as-code (IaC) validation report.",
+"readOnly": true
+},
+"name": {
+"description": "Required. The name of the report, in the format `organizations/{organization}/locations/global/reports/{report_id}`.",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. The time at which the report was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ResourceSelector": {
+"description": "A selector for the resource types to run the detector on.",
+"id": "ResourceSelector",
+"properties": {
+"resourceTypes": {
+"description": "Required. The resource types to run the detector on. Each custom module can specify up to 5 resource types.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ResourceTypes": {
+"description": "Set multiple resource types for one policy, for example: ``` resourceTypes: included: - compute.googleapis.com/Instance - compute.googleapis.com/Disk ``` Constraint definition contains an empty resource type in order to support multiple resource types in the policy. Only supports managed constraints. Method type is `GOVERN_TAGS`.",
+"id": "ResourceTypes",
+"properties": {
+"included": {
+"description": "Optional. The resource types we currently support.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"SecurityHealthAnalyticsCustomModule": {
+"description": "A custom module for Security Health Analytics.",
+"id": "SecurityHealthAnalyticsCustomModule",
+"properties": {
+"config": {
+"$ref": "CustomConfig",
+"description": "Required. Configuration settings for the custom module."
+},
+"displayName": {
+"description": "Optional. The display name of the custom module. This value is used as the finding category for all the asset violation findings that the custom module returns. The display name must contain between 1 and 128 alphanumeric characters or underscores, and it must start with a lowercase letter.",
+"type": "string"
+},
+"id": {
+"description": "Output only. Immutable. The unique identifier for the custom module. Contains 1 to 20 digits.",
+"readOnly": true,
+"type": "string"
+},
+"moduleEnablementState": {
+"description": "Whether the custom module is enabled at a specified level of the resource hierarchy.",
+"enum": [
+"ENABLEMENT_STATE_UNSPECIFIED",
+"ENABLED",
+"DISABLED"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"The detector or custom module is enabled.",
+"The detector or custom module is disabled."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"SecurityHealthAnalyticsModule": {
+"description": "A built-in detector for Security Health Analytics.",
+"id": "SecurityHealthAnalyticsModule",
+"properties": {
+"moduleEnablementState": {
+"description": "Whether the detector is enabled at a specified level of the resource hierarchy.",
+"enum": [
+"ENABLEMENT_STATE_UNSPECIFIED",
+"ENABLED",
+"DISABLED"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"The detector or custom module is enabled.",
+"The detector or custom module is disabled."
+],
+"type": "string"
+},
+"moduleName": {
+"description": "Required. The name of the detector. For example, `BIGQUERY_TABLE_CMEK_DISABLED`. This field is also used as the finding category for all the asset violation findings that the detector returns.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Violation": {
+"description": "Details of a violation.",
+"id": "Violation",
+"properties": {
+"assetId": {
+"description": "The full resource name of the asset that caused the violation. For details about the format of the full resource name for each asset type, see [Resource name format](https://cloud.google.com/asset-inventory/docs/resource-name-format).",
+"type": "string"
+},
+"nextSteps": {
+"description": "A description of the steps that you can take to fix the violation.",
+"type": "string"
+},
+"policyId": {
+"description": "The policy that was violated.",
+"type": "string"
+},
+"severity": {
+"description": "The severity of the violation.",
+"enum": [
+"SEVERITY_UNSPECIFIED",
+"CRITICAL",
+"HIGH",
+"MEDIUM",
+"LOW"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Critical severity.",
+"High severity.",
+"Medium severity.",
+"Low severity."
+],
+"type": "string"
+},
+"violatedAsset": {
+"$ref": "AssetDetails",
+"description": "Details of the Cloud Asset Inventory asset that caused the violation."
+},
+"violatedPolicy": {
+"$ref": "PolicyDetails",
+"description": "Details of the policy that was violated."
+},
+"violatedPosture": {
+"$ref": "PostureDetails",
+"description": "Details for the posture that was violated. This field is present only if the violated policy belongs to a deployed posture."
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Security Posture API",
+"version": "v1",
+"version_module": true
+}

@@ -1,0 +1,4 @@
+[console_scripts]
+litellm=litellm:run_server
+litellm-proxy=litellm.proxy.client.cli:cli
+

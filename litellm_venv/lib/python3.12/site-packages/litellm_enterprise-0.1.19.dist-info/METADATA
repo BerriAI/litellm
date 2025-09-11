@@ -1,0 +1,30 @@
+Metadata-Version: 2.3
+Name: litellm-enterprise
+Version: 0.1.19
+Summary: Package for LiteLLM Enterprise features
+Author: BerriAI
+Requires-Python: >=3.8, !=2.7.*, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*, !=3.6.*, !=3.7.*
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Project-URL: Documentation, https://docs.litellm.ai
+Project-URL: Homepage, https://litellm.ai
+Project-URL: Repository, https://github.com/BerriAI/litellm
+Project-URL: documentation, https://docs.litellm.ai
+Project-URL: homepage, https://litellm.ai
+Project-URL: repository, https://github.com/BerriAI/litellm
+Description-Content-Type: text/markdown
+
+## LiteLLM Enterprise
+
+Code in this folder is licensed under a commercial license. Please review the [LICENSE](./LICENSE.md) file within the /enterprise folder
+
+**These features are covered under the LiteLLM Enterprise contract**
+
+👉 **Using in an Enterprise / Need specific features ?** Meet with us [here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat?month=2024-02)
+
+See all Enterprise Features here 👉 [Docs](https://docs.litellm.ai/docs/proxy/enterprise)
+

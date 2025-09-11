@@ -1,0 +1,34 @@
+{
+  "pagination": {
+    "GetQueryResultsMonitorTopContributors": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "topContributors"
+    },
+    "GetQueryResultsWorkloadInsightsTopContributors": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "topContributors"
+    },
+    "GetQueryResultsWorkloadInsightsTopContributorsData": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "datapoints"
+    },
+    "ListMonitors": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "monitors"
+    },
+    "ListScopes": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "scopes"
+    }
+  }
+}

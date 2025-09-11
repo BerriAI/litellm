@@ -1,0 +1,2337 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://metastore.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Dataproc Metastore",
+"description": "The Dataproc Metastore API is used to manage the lifecycle and configuration of metastore services.",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/dataproc-metastore/docs",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "metastore:v2alpha",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://metastore.mtls.googleapis.com/",
+"name": "metastore",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"resources": {
+"services": {
+"methods": {
+"alterLocation": {
+"description": "Alter metadata resource location. The metadata resource can be a database, table, or partition. This functionality only updates the parent directory for the respective metadata resource and does not transfer any existing data to the new location.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:alterLocation",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.alterLocation",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to mutate metadata, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:alterLocation",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaAlterMetadataResourceLocationRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"alterTableProperties": {
+"description": "Alter metadata table properties.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:alterTableProperties",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.alterTableProperties",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the Dataproc Metastore service that's being used to mutate metadata table properties, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:alterTableProperties",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaAlterTablePropertiesRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"cancelMigration": {
+"description": "Cancels the ongoing Managed Migration process.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:cancelMigration",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.cancelMigration",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to cancel the ongoing migration to, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:cancelMigration",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaCancelMigrationRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"completeMigration": {
+"description": "Completes the managed migration process. The Dataproc Metastore service will switch to using its own backend database after successful migration.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:completeMigration",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.completeMigration",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to complete the migration to, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:completeMigration",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaCompleteMigrationRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"create": {
+"description": "Creates a metastore service in a project and location.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The relative resource name of the location in which to create a metastore service, in the following form:projects/{project_number}/locations/{location_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+},
+"serviceId": {
+"description": "Required. The ID of the metastore service, which is used as the final component of the metastore service's name.This value must be between 2 and 63 characters long inclusive, begin with a letter, end with a letter or number, and consist of alpha-numeric ASCII characters or hyphens.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+parent}/services",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaService"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "DELETE",
+"id": "metastore.projects.locations.services.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the metastore service to delete, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"exportMetadata": {
+"description": "Exports metadata from a service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:exportMetadata",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.exportMetadata",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to run export, in the following form:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:exportMetadata",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaExportMetadataRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the details of a single service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the metastore service to retrieve, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaService"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"importMetadata": {
+"description": "Imports Metadata into a Dataproc Metastore service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:importMetadata",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.importMetadata",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. The relative resource name of the metastore service to run import, in the following form:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}:importMetadata",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaImportMetadataRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists services in a project and location.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. The filter to apply to list results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Specify the ordering of results as described in Sorting Order (https://cloud.google.com/apis/design/design_patterns#sorting_order). If not specified, the results will be sorted in the default order.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of services to return. The response may contain less than the maximum number. If unspecified, no more than 500 services are returned. The maximum value is 1000; values above 1000 are changed to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous DataprocMetastore.ListServices call. Provide this token to retrieve the subsequent page.To retrieve the first page, supply an empty page token.When paginating, other parameters provided to DataprocMetastore.ListServices must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The relative resource name of the location of metastore services to list, in the following form:projects/{project_number}/locations/{location_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+parent}/services",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaListServicesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"moveTableToDatabase": {
+"description": "Move a table to another database.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:moveTableToDatabase",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.moveTableToDatabase",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to mutate metadata, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:moveTableToDatabase",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaMoveTableToDatabaseRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the parameters of a single service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}",
+"httpMethod": "PATCH",
+"id": "metastore.projects.locations.services.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. The relative resource name of the metastore service, in the following format:projects/{project_number}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Required. A field mask used to specify the fields to be overwritten in the metastore service resource by the update. Fields specified in the update_mask are relative to the resource (not to the full request). A field is overwritten if it is in the mask.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaService"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"queryMetadata": {
+"description": "Query Dataproc Metastore metadata.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:queryMetadata",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.queryMetadata",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to query metadata, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:queryMetadata",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaQueryMetadataRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"removeIamPolicy": {
+"description": "Removes the attached IAM policies for a resource",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/{servicesId1}:removeIamPolicy",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.removeIamPolicy",
+"parameterOrder": [
+"resource"
+],
+"parameters": {
+"resource": {
+"description": "Required. The relative resource name of the dataplane resource to remove IAM policy, in the following form:projects/{project_id}/locations/{location_id}/services/{service_id}/databases/{database_id} or projects/{project_id}/locations/{location_id}/services/{service_id}/databases/{database_id}/tables/{table_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+resource}:removeIamPolicy",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaRemoveIamPolicyRequest"
+},
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaRemoveIamPolicyResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"restore": {
+"description": "Restores a service from a backup.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:restore",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.restore",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to run restore, in the following form:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:restore",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaRestoreServiceRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"startMigration": {
+"description": "Starts the Managed Migration process.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}:startMigration",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.startMigration",
+"parameterOrder": [
+"service"
+],
+"parameters": {
+"service": {
+"description": "Required. The relative resource name of the metastore service to start migrating to, in the following format:projects/{project_id}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+service}:startMigration",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaStartMigrationRequest"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"backups": {
+"methods": {
+"create": {
+"description": "Creates a new backup in a given project and location.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/backups",
+"httpMethod": "POST",
+"id": "metastore.projects.locations.services.backups.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"backupId": {
+"description": "Required. The ID of the backup, which is used as the final component of the backup's name.This value must be between 1 and 64 characters long, begin with a letter, end with a letter or number, and consist of alpha-numeric ASCII characters or hyphens.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The relative resource name of the service in which to create a backup of the following form:projects/{project_number}/locations/{location_id}/services/{service_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+parent}/backups",
+"request": {
+"$ref": "GoogleCloudMetastoreV2alphaBackup"
+},
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single backup.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/backups/{backupsId}",
+"httpMethod": "DELETE",
+"id": "metastore.projects.locations.services.backups.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the backup to delete, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/backups/{backup_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/backups/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single backup.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/backups/{backupsId}",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.backups.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the backup to retrieve, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/backups/{backup_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/backups/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaBackup"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists backups in a service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/backups",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.backups.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. The filter to apply to list results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Specify the ordering of results as described in Sorting Order (https://cloud.google.com/apis/design/design_patterns#sorting_order). If not specified, the results will be sorted in the default order.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of backups to return. The response may contain less than the maximum number. If unspecified, no more than 500 backups are returned. The maximum value is 1000; values above 1000 are changed to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous DataprocMetastore.ListBackups call. Provide this token to retrieve the subsequent page.To retrieve the first page, supply an empty page token.When paginating, other parameters provided to DataprocMetastore.ListBackups must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The relative resource name of the service whose backups to list, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/backups.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+parent}/backups",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaListBackupsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"migrationExecutions": {
+"methods": {
+"delete": {
+"description": "Deletes a single migration execution.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/migrationExecutions/{migrationExecutionsId}",
+"httpMethod": "DELETE",
+"id": "metastore.projects.locations.services.migrationExecutions.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the migrationExecution to delete, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/migrationExecutions/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleLongrunningOperation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets details of a single migration execution.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/migrationExecutions/{migrationExecutionsId}",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.migrationExecutions.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The relative resource name of the migration execution to retrieve, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+/migrationExecutions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+name}",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaMigrationExecution"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists migration executions on a service.",
+"flatPath": "v2alpha/projects/{projectsId}/locations/{locationsId}/services/{servicesId}/migrationExecutions",
+"httpMethod": "GET",
+"id": "metastore.projects.locations.services.migrationExecutions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. The filter to apply to list results.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Specify the ordering of results as described in Sorting Order (https://cloud.google.com/apis/design/design_patterns#sorting_order). If not specified, the results will be sorted in the default order.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of migration executions to return. The response may contain less than the maximum number. If unspecified, no more than 500 migration executions are returned. The maximum value is 1000; values above 1000 are changed to 1000.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous DataprocMetastore.ListMigrationExecutions call. Provide this token to retrieve the subsequent page.To retrieve the first page, supply an empty page token.When paginating, other parameters provided to DataprocMetastore.ListMigrationExecutions must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The relative resource name of the service whose migration executions to list, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/services/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2alpha/{+parent}/migrationExecutions",
+"response": {
+"$ref": "GoogleCloudMetastoreV2alphaListMigrationExecutionsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250227",
+"rootUrl": "https://metastore.googleapis.com/",
+"schemas": {
+"GoogleCloudMetastoreV1AlterMetadataResourceLocationResponse": {
+"description": "Response message for DataprocMetastore.AlterMetadataResourceLocation.",
+"id": "GoogleCloudMetastoreV1AlterMetadataResourceLocationResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1CustomRegionMetadata": {
+"description": "Metadata about a custom region. This is only populated if the region is a custom region. For single/multi regions, it will be empty.",
+"id": "GoogleCloudMetastoreV1CustomRegionMetadata",
+"properties": {
+"optionalReadOnlyRegions": {
+"description": "The read-only regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"requiredReadWriteRegions": {
+"description": "The read-write regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this custom region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1ErrorDetails": {
+"description": "Error details in public error message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1ErrorDetails",
+"properties": {
+"details": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Additional structured details about this error.Keys define the failure items. Value describes the exception or details of the item.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1HiveMetastoreVersion": {
+"description": "A specification of a supported version of the Hive Metastore software.",
+"id": "GoogleCloudMetastoreV1HiveMetastoreVersion",
+"properties": {
+"isDefault": {
+"description": "Whether version will be chosen by the server if a metastore service is created with a HiveMetastoreConfig that omits the version.",
+"type": "boolean"
+},
+"version": {
+"description": "The semantic version of the Hive Metastore software.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1LocationMetadata": {
+"description": "Metadata about the service in a location.",
+"id": "GoogleCloudMetastoreV1LocationMetadata",
+"properties": {
+"customRegionMetadata": {
+"description": "Possible configurations supported if the current region is a custom region.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1CustomRegionMetadata"
+},
+"type": "array"
+},
+"multiRegionMetadata": {
+"$ref": "GoogleCloudMetastoreV1MultiRegionMetadata",
+"description": "The multi-region metadata if the current region is a multi-region."
+},
+"supportedHiveMetastoreVersions": {
+"description": "The versions of Hive Metastore that can be used when creating a new metastore service in this location. The server guarantees that exactly one HiveMetastoreVersion in the list will set is_default.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1HiveMetastoreVersion"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1MoveTableToDatabaseResponse": {
+"description": "Response message for DataprocMetastore.MoveTableToDatabase.",
+"id": "GoogleCloudMetastoreV1MoveTableToDatabaseResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1MultiRegionMetadata": {
+"description": "The metadata for the multi-region that includes the constituent regions. The metadata is only populated if the region is multi-region. For single region or custom dual region, it will be empty.",
+"id": "GoogleCloudMetastoreV1MultiRegionMetadata",
+"properties": {
+"constituentRegions": {
+"description": "The regions constituting the multi-region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"continent": {
+"description": "The continent for this multi-region.",
+"type": "string"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this multi-region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1OperationMetadata": {
+"description": "Represents the metadata of a long-running operation.",
+"id": "GoogleCloudMetastoreV1OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the caller has requested cancellation of the operation. Operations that have successfully been cancelled have google.longrunning.Operation.error value with a google.rpc.Status.code of 1, corresponding to Code.CANCELLED.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1QueryMetadataResponse": {
+"description": "Response message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1QueryMetadataResponse",
+"properties": {
+"resultManifestUri": {
+"description": "The manifest URI is link to a JSON instance in Cloud Storage. This instance manifests immediately along with QueryMetadataResponse. The content of the URI is not retriable until the long-running operation query against the metadata finishes.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaAlterMetadataResourceLocationResponse": {
+"description": "Response message for DataprocMetastore.AlterMetadataResourceLocation.",
+"id": "GoogleCloudMetastoreV1alphaAlterMetadataResourceLocationResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaCancelMigrationResponse": {
+"description": "Response message for DataprocMetastore.CancelMigration.",
+"id": "GoogleCloudMetastoreV1alphaCancelMigrationResponse",
+"properties": {
+"migrationExecution": {
+"description": "The relative resource name of the migration execution, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaCompleteMigrationResponse": {
+"description": "Response message for DataprocMetastore.CompleteMigration.",
+"id": "GoogleCloudMetastoreV1alphaCompleteMigrationResponse",
+"properties": {
+"migrationExecution": {
+"description": "The relative resource name of the migration execution, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaCustomRegionMetadata": {
+"description": "Metadata about a custom region. This is only populated if the region is a custom region. For single/multi regions, it will be empty.",
+"id": "GoogleCloudMetastoreV1alphaCustomRegionMetadata",
+"properties": {
+"optionalReadOnlyRegions": {
+"description": "The read-only regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"requiredReadWriteRegions": {
+"description": "The read-write regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this custom region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaErrorDetails": {
+"description": "Error details in public error message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1alphaErrorDetails",
+"properties": {
+"details": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Additional structured details about this error.Keys define the failure items. Value describes the exception or details of the item.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaHiveMetastoreVersion": {
+"description": "A specification of a supported version of the Hive Metastore software.",
+"id": "GoogleCloudMetastoreV1alphaHiveMetastoreVersion",
+"properties": {
+"isDefault": {
+"description": "Whether version will be chosen by the server if a metastore service is created with a HiveMetastoreConfig that omits the version.",
+"type": "boolean"
+},
+"version": {
+"description": "The semantic version of the Hive Metastore software.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaLocationMetadata": {
+"description": "Metadata about the service in a location.",
+"id": "GoogleCloudMetastoreV1alphaLocationMetadata",
+"properties": {
+"customRegionMetadata": {
+"description": "Possible configurations supported if the current region is a custom region.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1alphaCustomRegionMetadata"
+},
+"type": "array"
+},
+"multiRegionMetadata": {
+"$ref": "GoogleCloudMetastoreV1alphaMultiRegionMetadata",
+"description": "The multi-region metadata if the current region is a multi-region."
+},
+"supportedHiveMetastoreVersions": {
+"description": "The versions of Hive Metastore that can be used when creating a new metastore service in this location. The server guarantees that exactly one HiveMetastoreVersion in the list will set is_default.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1alphaHiveMetastoreVersion"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaMoveTableToDatabaseResponse": {
+"description": "Response message for DataprocMetastore.MoveTableToDatabase.",
+"id": "GoogleCloudMetastoreV1alphaMoveTableToDatabaseResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaMultiRegionMetadata": {
+"description": "The metadata for the multi-region that includes the constituent regions. The metadata is only populated if the region is multi-region. For single region or custom dual region, it will be empty.",
+"id": "GoogleCloudMetastoreV1alphaMultiRegionMetadata",
+"properties": {
+"constituentRegions": {
+"description": "The regions constituting the multi-region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"continent": {
+"description": "The continent for this multi-region.",
+"type": "string"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this multi-region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaOperationMetadata": {
+"description": "Represents the metadata of a long-running operation.",
+"id": "GoogleCloudMetastoreV1alphaOperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the caller has requested cancellation of the operation. Operations that have successfully been cancelled have google.longrunning.Operation.error value with a google.rpc.Status.code of 1, corresponding to Code.CANCELLED.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1alphaQueryMetadataResponse": {
+"description": "Response message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1alphaQueryMetadataResponse",
+"properties": {
+"resultManifestUri": {
+"description": "The manifest URI is link to a JSON instance in Cloud Storage. This instance manifests immediately along with QueryMetadataResponse. The content of the URI is not retriable until the long-running operation query against the metadata finishes.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaAlterMetadataResourceLocationResponse": {
+"description": "Response message for DataprocMetastore.AlterMetadataResourceLocation.",
+"id": "GoogleCloudMetastoreV1betaAlterMetadataResourceLocationResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaCancelMigrationResponse": {
+"description": "Response message for DataprocMetastore.CancelMigration.",
+"id": "GoogleCloudMetastoreV1betaCancelMigrationResponse",
+"properties": {
+"migrationExecution": {
+"description": "The relative resource name of the migration execution, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaCompleteMigrationResponse": {
+"description": "Response message for DataprocMetastore.CompleteMigration.",
+"id": "GoogleCloudMetastoreV1betaCompleteMigrationResponse",
+"properties": {
+"migrationExecution": {
+"description": "The relative resource name of the migration execution, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaCustomRegionMetadata": {
+"description": "Metadata about a custom region. This is only populated if the region is a custom region. For single/multi regions, it will be empty.",
+"id": "GoogleCloudMetastoreV1betaCustomRegionMetadata",
+"properties": {
+"optionalReadOnlyRegions": {
+"description": "The read-only regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"requiredReadWriteRegions": {
+"description": "The read-write regions for this custom region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this custom region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaErrorDetails": {
+"description": "Error details in public error message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1betaErrorDetails",
+"properties": {
+"details": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Additional structured details about this error.Keys define the failure items. Value describes the exception or details of the item.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaHiveMetastoreVersion": {
+"description": "A specification of a supported version of the Hive Metastore software.",
+"id": "GoogleCloudMetastoreV1betaHiveMetastoreVersion",
+"properties": {
+"isDefault": {
+"description": "Whether version will be chosen by the server if a metastore service is created with a HiveMetastoreConfig that omits the version.",
+"type": "boolean"
+},
+"version": {
+"description": "The semantic version of the Hive Metastore software.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaLocationMetadata": {
+"description": "Metadata about the service in a location.",
+"id": "GoogleCloudMetastoreV1betaLocationMetadata",
+"properties": {
+"customRegionMetadata": {
+"description": "Possible configurations supported if the current region is a custom region.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1betaCustomRegionMetadata"
+},
+"type": "array"
+},
+"multiRegionMetadata": {
+"$ref": "GoogleCloudMetastoreV1betaMultiRegionMetadata",
+"description": "The multi-region metadata if the current region is a multi-region."
+},
+"supportedHiveMetastoreVersions": {
+"description": "The versions of Hive Metastore that can be used when creating a new metastore service in this location. The server guarantees that exactly one HiveMetastoreVersion in the list will set is_default.",
+"items": {
+"$ref": "GoogleCloudMetastoreV1betaHiveMetastoreVersion"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaMoveTableToDatabaseResponse": {
+"description": "Response message for DataprocMetastore.MoveTableToDatabase.",
+"id": "GoogleCloudMetastoreV1betaMoveTableToDatabaseResponse",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaMultiRegionMetadata": {
+"description": "The metadata for the multi-region that includes the constituent regions. The metadata is only populated if the region is multi-region. For single region or custom dual region, it will be empty.",
+"id": "GoogleCloudMetastoreV1betaMultiRegionMetadata",
+"properties": {
+"constituentRegions": {
+"description": "The regions constituting the multi-region.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"continent": {
+"description": "The continent for this multi-region.",
+"type": "string"
+},
+"witnessRegion": {
+"description": "The Spanner witness region for this multi-region.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaOperationMetadata": {
+"description": "Represents the metadata of a long-running operation.",
+"id": "GoogleCloudMetastoreV1betaOperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the caller has requested cancellation of the operation. Operations that have successfully been cancelled have google.longrunning.Operation.error value with a google.rpc.Status.code of 1, corresponding to Code.CANCELLED.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV1betaQueryMetadataResponse": {
+"description": "Response message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV1betaQueryMetadataResponse",
+"properties": {
+"resultManifestUri": {
+"description": "The manifest URI is link to a JSON instance in Cloud Storage. This instance manifests immediately along with QueryMetadataResponse. The content of the URI is not retriable until the long-running operation query against the metadata finishes.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaAlterMetadataResourceLocationRequest": {
+"description": "Request message for DataprocMetastore.AlterMetadataResourceLocation.",
+"id": "GoogleCloudMetastoreV2alphaAlterMetadataResourceLocationRequest",
+"properties": {
+"locationUri": {
+"description": "Required. The new location URI for the metadata resource.",
+"type": "string"
+},
+"resourceName": {
+"description": "Required. The relative metadata resource name in the following format.databases/{database_id} or databases/{database_id}/tables/{table_id} or databases/{database_id}/tables/{table_id}/partitions/{partition_id}",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaAlterTablePropertiesRequest": {
+"description": "Request message for DataprocMetastore.AlterTableProperties.",
+"id": "GoogleCloudMetastoreV2alphaAlterTablePropertiesRequest",
+"properties": {
+"properties": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "A map that describes the desired values to mutate. If update_mask is empty, the properties will not update. Otherwise, the properties only alters the value whose associated paths exist in the update mask",
+"type": "object"
+},
+"tableName": {
+"description": "Required. The name of the table containing the properties you're altering in the following format.databases/{database_id}/tables/{table_id}",
+"type": "string"
+},
+"updateMask": {
+"description": "A field mask that specifies the metadata table properties that are overwritten by the update. Fields specified in the update_mask are relative to the resource (not to the full request). A field is overwritten if it is in the mask.For example, given the target properties: properties { a: 1 b: 2 } And an update properties: properties { a: 2 b: 3 c: 4 } then if the field mask is:paths: \"properties.b\", \"properties.c\"then the result will be: properties { a: 1 b: 3 c: 4 } ",
+"format": "google-fieldmask",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaAutoscalingConfig": {
+"description": "Represents the autoscaling configuration of a metastore service.",
+"id": "GoogleCloudMetastoreV2alphaAutoscalingConfig",
+"properties": {
+"autoscalingEnabled": {
+"description": "Optional. Whether or not autoscaling is enabled for this service.",
+"type": "boolean"
+},
+"autoscalingFactor": {
+"description": "Output only. The scaling factor of a service with autoscaling enabled.",
+"format": "int32",
+"readOnly": true,
+"type": "integer"
+},
+"limitConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaLimitConfig",
+"description": "Optional. The LimitConfig of the service."
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaAuxiliaryVersionConfig": {
+"description": "Configuration information for the auxiliary service versions.",
+"id": "GoogleCloudMetastoreV2alphaAuxiliaryVersionConfig",
+"properties": {
+"configOverrides": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "A mapping of Hive metastore configuration key-value pairs to apply to the auxiliary Hive metastore (configured in hive-site.xml) in addition to the primary version's overrides. If keys are present in both the auxiliary version's overrides and the primary version's overrides, the value from the auxiliary version's overrides takes precedence.",
+"type": "object"
+},
+"endpoints": {
+"description": "Output only. The list of endpoints used to access the auxiliary metastore service, includes version and region data.",
+"items": {
+"$ref": "GoogleCloudMetastoreV2alphaEndpoint"
+},
+"readOnly": true,
+"type": "array"
+},
+"version": {
+"description": "The Hive metastore version of the auxiliary service. It must be less than the primary Hive metastore service's version.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaBackup": {
+"description": "The details of a backup resource.",
+"id": "GoogleCloudMetastoreV2alphaBackup",
+"properties": {
+"createTime": {
+"description": "Output only. The time when the backup was started.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"description": {
+"description": "The description of the backup.",
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time when the backup finished creating.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Immutable. The relative resource name of the backup, in the following form:projects/{project_number}/locations/{location_id}/services/{service_id}/backups/{backup_id}",
+"type": "string"
+},
+"restoringServices": {
+"description": "Output only. Services that are restoring from the backup.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"serviceRevision": {
+"$ref": "GoogleCloudMetastoreV2alphaService",
+"description": "Output only. The revision of the service at the time of backup.",
+"readOnly": true
+},
+"state": {
+"description": "Output only. The current state of the backup.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"DELETING",
+"ACTIVE",
+"FAILED",
+"RESTORING"
+],
+"enumDescriptions": [
+"The state of the backup is unknown.",
+"The backup is being created.",
+"The backup is being deleted.",
+"The backup is active and ready to use.",
+"The backup failed.",
+"The backup is being restored."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaCancelMigrationRequest": {
+"description": "Request message for DataprocMetastore.CancelMigration.",
+"id": "GoogleCloudMetastoreV2alphaCancelMigrationRequest",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaCdcConfig": {
+"description": "Configuration information to start the Change Data Capture (CDC) streams from customer database to backend database of Dataproc Metastore.",
+"id": "GoogleCloudMetastoreV2alphaCdcConfig",
+"properties": {
+"bucket": {
+"description": "Optional. The bucket to write the intermediate stream event data in. The bucket name must be without any prefix like \"gs://\". See the bucket naming requirements (https://cloud.google.com/storage/docs/buckets#naming). This field is optional. If not set, the Artifacts Cloud Storage bucket will be used.",
+"type": "string"
+},
+"password": {
+"description": "Required. Input only. The password for the user that Datastream service should use for the MySQL connection. This field is not returned on request.",
+"type": "string"
+},
+"reverseProxySubnet": {
+"description": "Required. The URL of the subnetwork resource to create the VM instance hosting the reverse proxy in. More context in https://cloud.google.com/datastream/docs/private-connectivity#reverse-csql-proxy The subnetwork should reside in the network provided in the request that Datastream will peer to and should be in the same region as Datastream, in the following format. projects/{project_id}/regions/{region_id}/subnetworks/{subnetwork_id}",
+"type": "string"
+},
+"rootPath": {
+"description": "Optional. The root path inside the Cloud Storage bucket. The stream event data will be written to this path. The default value is /migration.",
+"type": "string"
+},
+"subnetIpRange": {
+"description": "Required. A /29 CIDR IP range for peering with datastream.",
+"type": "string"
+},
+"username": {
+"description": "Required. The username that the Datastream service should use for the MySQL connection.",
+"type": "string"
+},
+"vpcNetwork": {
+"description": "Required. Fully qualified name of the Cloud SQL instance's VPC network or the shared VPC network that Datastream will peer to, in the following format: projects/{project_id}/locations/global/networks/{network_id}. More context in https://cloud.google.com/datastream/docs/network-connectivity-options#privateconnectivity",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaCloudSQLConnectionConfig": {
+"description": "Configuration information to establish customer database connection before the cutover phase of migration",
+"id": "GoogleCloudMetastoreV2alphaCloudSQLConnectionConfig",
+"properties": {
+"hiveDatabaseName": {
+"description": "Required. The hive database name.",
+"type": "string"
+},
+"instanceConnectionName": {
+"description": "Required. Cloud SQL database connection name (project_id:region:instance_name)",
+"type": "string"
+},
+"ipAddress": {
+"description": "Required. The private IP address of the Cloud SQL instance.",
+"type": "string"
+},
+"natSubnet": {
+"description": "Required. The relative resource name of the subnetwork to be used for Private Service Connect. Note that this cannot be a regular subnet and is used only for NAT. (https://cloud.google.com/vpc/docs/about-vpc-hosted-services#psc-subnets) This subnet is used to publish the SOCKS5 proxy service. The subnet size must be at least /29 and it should reside in a network through which the Cloud SQL instance is accessible. The resource name should be in the format, projects/{project_id}/regions/{region_id}/subnetworks/{subnetwork_id}",
+"type": "string"
+},
+"password": {
+"description": "Required. Input only. The password for the user that Dataproc Metastore service will be using to connect to the database. This field is not returned on request.",
+"type": "string"
+},
+"port": {
+"description": "Required. The network port of the database.",
+"format": "int32",
+"type": "integer"
+},
+"proxySubnet": {
+"description": "Required. The relative resource name of the subnetwork to deploy the SOCKS5 proxy service in. The subnetwork should reside in a network through which the Cloud SQL instance is accessible. The resource name should be in the format, projects/{project_id}/regions/{region_id}/subnetworks/{subnetwork_id}",
+"type": "string"
+},
+"username": {
+"description": "Required. The username that Dataproc Metastore service will use to connect to the database.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaCloudSQLMigrationConfig": {
+"description": "Configuration information for migrating from self-managed hive metastore on Google Cloud using Cloud SQL as the backend database to Dataproc Metastore.",
+"id": "GoogleCloudMetastoreV2alphaCloudSQLMigrationConfig",
+"properties": {
+"cdcConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaCdcConfig",
+"description": "Required. Configuration information to start the Change Data Capture (CDC) streams from customer database to backend database of Dataproc Metastore. Dataproc Metastore switches to using its backend database after the cutover phase of migration."
+},
+"cloudSqlConnectionConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaCloudSQLConnectionConfig",
+"description": "Required. Configuration information to establish customer database connection before the cutover phase of migration"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaCompleteMigrationRequest": {
+"description": "Request message for DataprocMetastore.CompleteMigration.",
+"id": "GoogleCloudMetastoreV2alphaCompleteMigrationRequest",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaDataCatalogConfig": {
+"description": "Specifies how metastore metadata should be integrated with the Data Catalog service.",
+"id": "GoogleCloudMetastoreV2alphaDataCatalogConfig",
+"properties": {
+"enabled": {
+"description": "Optional. Defines whether the metastore metadata should be synced to Data Catalog. The default value is to disable syncing metastore metadata to Data Catalog.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaDatabaseDump": {
+"description": "A specification of the location and metadata type for a database dump from a relational database management system.",
+"id": "GoogleCloudMetastoreV2alphaDatabaseDump",
+"properties": {
+"gcsUri": {
+"description": "Required. A Cloud Storage object or folder URI that specifies the source from which to import metadata. It must begin with gs://.",
+"type": "string"
+},
+"type": {
+"description": "Optional. The type of the database dump. If unspecified, defaults to MYSQL.",
+"enum": [
+"TYPE_UNSPECIFIED",
+"MYSQL",
+"AVRO"
+],
+"enumDescriptions": [
+"The type of the database dump is unknown.",
+"Database dump is a MySQL dump file.",
+"Database dump contains Avro files."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaEncryptionConfig": {
+"description": "Encryption settings for the service.",
+"id": "GoogleCloudMetastoreV2alphaEncryptionConfig",
+"properties": {},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaEndpoint": {
+"description": "An endpoint used to access the metastore service.",
+"id": "GoogleCloudMetastoreV2alphaEndpoint",
+"properties": {
+"endpointUri": {
+"description": "Output only. The URI of the endpoint used to access the metastore service.",
+"readOnly": true,
+"type": "string"
+},
+"region": {
+"description": "Output only. The region where the endpoint is located.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaExportMetadataRequest": {
+"description": "Request message for DataprocMetastore.ExportMetadata.",
+"id": "GoogleCloudMetastoreV2alphaExportMetadataRequest",
+"properties": {
+"databaseDumpType": {
+"description": "Optional. The type of the database dump. If unspecified, defaults to MYSQL.",
+"enum": [
+"TYPE_UNSPECIFIED",
+"MYSQL",
+"AVRO"
+],
+"enumDescriptions": [
+"The type of the database dump is unknown.",
+"Database dump is a MySQL dump file.",
+"Database dump contains Avro files."
+],
+"type": "string"
+},
+"destinationGcsFolder": {
+"description": "A Cloud Storage URI of a folder, in the format gs:///. A sub-folder containing exported files will be created below it.",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format). A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaHiveMetastoreConfig": {
+"description": "Specifies configuration information specific to running Hive metastore software as the metastore service.",
+"id": "GoogleCloudMetastoreV2alphaHiveMetastoreConfig",
+"properties": {
+"auxiliaryVersions": {
+"additionalProperties": {
+"$ref": "GoogleCloudMetastoreV2alphaAuxiliaryVersionConfig"
+},
+"description": "Optional. A mapping of Hive metastore version to the auxiliary version configuration. When specified, a secondary Hive metastore service is created along with the primary service. All auxiliary versions must be less than the service's primary version. The key is the auxiliary service name and it must match the regular expression a-z?. This means that the first character must be a lowercase letter, and all the following characters must be hyphens, lowercase letters, or digits, except the last character, which cannot be a hyphen.",
+"type": "object"
+},
+"configOverrides": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. A mapping of Hive metastore configuration key-value pairs to apply to the Hive metastore (configured in hive-site.xml). The mappings override system defaults (some keys cannot be overridden). These overrides are also applied to auxiliary versions and can be further customized in the auxiliary version's AuxiliaryVersionConfig.",
+"type": "object"
+},
+"endpointProtocol": {
+"description": "Optional. The protocol to use for the metastore service endpoint. If unspecified, defaults to GRPC.",
+"enum": [
+"ENDPOINT_PROTOCOL_UNSPECIFIED",
+"THRIFT",
+"GRPC"
+],
+"enumDescriptions": [
+"The protocol is not set.",
+"Use the legacy Apache Thrift protocol for the metastore service endpoint.",
+"Use the modernized gRPC protocol for the metastore service endpoint."
+],
+"type": "string"
+},
+"version": {
+"description": "Immutable. The Hive metastore schema version.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaImportMetadataRequest": {
+"description": "Request message for DataprocMetastore.CreateMetadataImport.",
+"id": "GoogleCloudMetastoreV2alphaImportMetadataRequest",
+"properties": {
+"databaseDump": {
+"$ref": "GoogleCloudMetastoreV2alphaDatabaseDump",
+"description": "Immutable. A database dump from a pre-existing metastore's database."
+},
+"description": {
+"description": "Optional. The description of the metadata import.",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format). A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaLatestBackup": {
+"description": "The details of the latest scheduled backup.",
+"id": "GoogleCloudMetastoreV2alphaLatestBackup",
+"properties": {
+"backupId": {
+"description": "Output only. The ID of an in-progress scheduled backup. Empty if no backup is in progress.",
+"readOnly": true,
+"type": "string"
+},
+"duration": {
+"description": "Output only. The duration of the backup completion.",
+"format": "google-duration",
+"readOnly": true,
+"type": "string"
+},
+"startTime": {
+"description": "Output only. The time when the backup was started.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The current state of the backup.",
+"enum": [
+"STATE_UNSPECIFIED",
+"IN_PROGRESS",
+"SUCCEEDED",
+"FAILED"
+],
+"enumDescriptions": [
+"The state of the backup is unknown.",
+"The backup is in progress.",
+"The backup completed.",
+"The backup failed."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaLimitConfig": {
+"description": "Represents the autoscaling limit configuration of a metastore service.",
+"id": "GoogleCloudMetastoreV2alphaLimitConfig",
+"properties": {
+"maxScalingFactor": {
+"description": "Optional. The highest scaling factor that the service should be autoscaled to.",
+"format": "int32",
+"type": "integer"
+},
+"minScalingFactor": {
+"description": "Optional. The lowest scaling factor that the service should be autoscaled to.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaListBackupsResponse": {
+"description": "Response message for DataprocMetastore.ListBackups.",
+"id": "GoogleCloudMetastoreV2alphaListBackupsResponse",
+"properties": {
+"backups": {
+"description": "The backups of the specified service.",
+"items": {
+"$ref": "GoogleCloudMetastoreV2alphaBackup"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as page_token to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaListMigrationExecutionsResponse": {
+"description": "Response message for DataprocMetastore.ListMigrationExecutions.",
+"id": "GoogleCloudMetastoreV2alphaListMigrationExecutionsResponse",
+"properties": {
+"migrationExecutions": {
+"description": "The migration executions on the specified service.",
+"items": {
+"$ref": "GoogleCloudMetastoreV2alphaMigrationExecution"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as page_token to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaListServicesResponse": {
+"description": "Response message for DataprocMetastore.ListServices.",
+"id": "GoogleCloudMetastoreV2alphaListServicesResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token that can be sent as page_token to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"services": {
+"description": "The services in the specified location.",
+"items": {
+"$ref": "GoogleCloudMetastoreV2alphaService"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaMetadataIntegration": {
+"description": "Specifies how metastore metadata should be integrated with external services.",
+"id": "GoogleCloudMetastoreV2alphaMetadataIntegration",
+"properties": {
+"dataCatalogConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaDataCatalogConfig",
+"description": "Optional. The integration config for the Data Catalog service."
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaMigrationExecution": {
+"description": "The details of a migration execution resource.",
+"id": "GoogleCloudMetastoreV2alphaMigrationExecution",
+"properties": {
+"cloudSqlMigrationConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaCloudSQLMigrationConfig",
+"description": "Configuration information specific to migrating from self-managed hive metastore on Google Cloud using Cloud SQL as the backend database to Dataproc Metastore."
+},
+"createTime": {
+"description": "Output only. The time when the migration execution was started.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time when the migration execution finished.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Output only. The relative resource name of the migration execution, in the following form: projects/{project_number}/locations/{location_id}/services/{service_id}/migrationExecutions/{migration_execution_id}",
+"readOnly": true,
+"type": "string"
+},
+"phase": {
+"description": "Output only. The current phase of the migration execution.",
+"enum": [
+"PHASE_UNSPECIFIED",
+"REPLICATION",
+"CUTOVER"
+],
+"enumDescriptions": [
+"The phase of the migration execution is unknown.",
+"Replication phase refers to the migration phase when Dataproc Metastore is running a pipeline to replicate changes in the customer database to its backend database. During this phase, Dataproc Metastore uses the customer database as the hive metastore backend database.",
+"Cutover phase refers to the migration phase when Dataproc Metastore switches to using its own backend database. Migration enters this phase when customer is done migrating all their clusters/workloads to Dataproc Metastore and triggers CompleteMigration."
+],
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. The current state of the migration execution.",
+"enum": [
+"STATE_UNSPECIFIED",
+"STARTING",
+"RUNNING",
+"CANCELLING",
+"AWAITING_USER_ACTION",
+"SUCCEEDED",
+"FAILED",
+"CANCELLED",
+"DELETING"
+],
+"enumDescriptions": [
+"The state of the migration execution is unknown.",
+"The migration execution is starting.",
+"The migration execution is running.",
+"The migration execution is in the process of being cancelled.",
+"The migration execution is awaiting user action.",
+"The migration execution has completed successfully.",
+"The migration execution has failed.",
+"The migration execution is cancelled.",
+"The migration execution is being deleted."
+],
+"readOnly": true,
+"type": "string"
+},
+"stateMessage": {
+"description": "Output only. Additional information about the current state of the migration execution.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaMoveTableToDatabaseRequest": {
+"description": "Request message for DataprocMetastore.MoveTableToDatabase.",
+"id": "GoogleCloudMetastoreV2alphaMoveTableToDatabaseRequest",
+"properties": {
+"dbName": {
+"description": "Required. The name of the database where the table resides.",
+"type": "string"
+},
+"destinationDbName": {
+"description": "Required. The name of the database where the table should be moved.",
+"type": "string"
+},
+"tableName": {
+"description": "Required. The name of the table to be moved.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaQueryMetadataRequest": {
+"description": "Request message for DataprocMetastore.QueryMetadata.",
+"id": "GoogleCloudMetastoreV2alphaQueryMetadataRequest",
+"properties": {
+"query": {
+"description": "Required. A read-only SQL query to execute against the metadata database. The query cannot change or mutate the data.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaRemoveIamPolicyRequest": {
+"description": "Request message for DataprocMetastore.RemoveIamPolicy.",
+"id": "GoogleCloudMetastoreV2alphaRemoveIamPolicyRequest",
+"properties": {
+"asynchronous": {
+"description": "Optional. Removes IAM policy attached to database or table asynchronously when it is set. The default is false.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaRemoveIamPolicyResponse": {
+"description": "Response message for DataprocMetastore.RemoveIamPolicy.",
+"id": "GoogleCloudMetastoreV2alphaRemoveIamPolicyResponse",
+"properties": {
+"success": {
+"description": "True if the policy is successfully removed.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaRestoreServiceRequest": {
+"description": "Request message for DataprocMetastore.Restore.",
+"id": "GoogleCloudMetastoreV2alphaRestoreServiceRequest",
+"properties": {
+"backup": {
+"description": "Optional. The relative resource name of the metastore service backup to restore from, in the following form:projects/{project_id}/locations/{location_id}/services/{service_id}/backups/{backup_id}. Mutually exclusive with backup_location, and exactly one of the two must be set.",
+"type": "string"
+},
+"backupLocation": {
+"description": "Optional. A Cloud Storage URI specifying the location of the backup artifacts, namely - backup avro files under \"avro/\", backup_metastore.json and service.json, in the following form:gs://. Mutually exclusive with backup, and exactly one of the two must be set.",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format). A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"type": "string"
+},
+"restoreType": {
+"description": "Optional. The type of restore. If unspecified, defaults to METADATA_ONLY.",
+"enum": [
+"RESTORE_TYPE_UNSPECIFIED",
+"FULL",
+"METADATA_ONLY"
+],
+"enumDescriptions": [
+"The restore type is unknown.",
+"The service's metadata and configuration are restored.",
+"Only the service's metadata is restored."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaScalingConfig": {
+"description": "Represents the scaling configuration of a metastore service.",
+"id": "GoogleCloudMetastoreV2alphaScalingConfig",
+"properties": {
+"autoscalingConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaAutoscalingConfig",
+"description": "Optional. The autoscaling configuration."
+},
+"scalingFactor": {
+"description": "Optional. Scaling factor from 1 to 5, increments of 1.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaScheduledBackup": {
+"description": "This specifies the configuration of scheduled backup.",
+"id": "GoogleCloudMetastoreV2alphaScheduledBackup",
+"properties": {
+"backupLocation": {
+"description": "Optional. A Cloud Storage URI of a folder, in the format gs:///. A sub-folder containing backup files will be stored below it.",
+"type": "string"
+},
+"cronSchedule": {
+"description": "Optional. The scheduled interval in Cron format, see https://en.wikipedia.org/wiki/Cron The default is empty: scheduled backup is not enabled. Must be specified to enable scheduled backups.",
+"type": "string"
+},
+"enabled": {
+"description": "Optional. Defines whether the scheduled backup is enabled. The default value is false.",
+"type": "boolean"
+},
+"latestBackup": {
+"$ref": "GoogleCloudMetastoreV2alphaLatestBackup",
+"description": "Output only. The details of the latest scheduled backup.",
+"readOnly": true
+},
+"nextScheduledTime": {
+"description": "Output only. The time when the next backups execution is scheduled to start.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"timeZone": {
+"description": "Optional. Specifies the time zone to be used when interpreting cron_schedule. Must be a time zone name from the time zone database (https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), e.g. America/Los_Angeles or Africa/Abidjan. If left unspecified, the default is UTC.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaService": {
+"description": "A managed metastore service that serves metadata queries.",
+"id": "GoogleCloudMetastoreV2alphaService",
+"properties": {
+"createTime": {
+"description": "Output only. The time when the metastore service was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"encryptionConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaEncryptionConfig",
+"description": "Immutable. Information used to configure the Dataproc Metastore service to encrypt customer data at rest. Cannot be updated."
+},
+"endpoints": {
+"description": "Output only. The list of endpoints used to access the metastore service.",
+"items": {
+"$ref": "GoogleCloudMetastoreV2alphaEndpoint"
+},
+"readOnly": true,
+"type": "array"
+},
+"hiveMetastoreConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaHiveMetastoreConfig",
+"description": "Configuration information specific to running Hive metastore software as the metastore service."
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "User-defined labels for the metastore service.",
+"type": "object"
+},
+"metadataIntegration": {
+"$ref": "GoogleCloudMetastoreV2alphaMetadataIntegration",
+"description": "Optional. The setting that defines how metastore metadata should be integrated with external services and systems."
+},
+"name": {
+"description": "Immutable. The relative resource name of the metastore service, in the following format:projects/{project_number}/locations/{location_id}/services/{service_id}.",
+"type": "string"
+},
+"scalingConfig": {
+"$ref": "GoogleCloudMetastoreV2alphaScalingConfig",
+"description": "Optional. Scaling configuration of the metastore service."
+},
+"scheduledBackup": {
+"$ref": "GoogleCloudMetastoreV2alphaScheduledBackup",
+"description": "Optional. The configuration of scheduled backup for the metastore service."
+},
+"state": {
+"description": "Output only. The current state of the metastore service.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"ACTIVE",
+"SUSPENDING",
+"SUSPENDED",
+"UPDATING",
+"DELETING",
+"ERROR",
+"MIGRATING"
+],
+"enumDescriptions": [
+"The state of the metastore service is unknown.",
+"The metastore service is in the process of being created.",
+"The metastore service is running and ready to serve queries.",
+"The metastore service is entering suspension. Its query-serving availability may cease unexpectedly.",
+"The metastore service is suspended and unable to serve queries.",
+"The metastore service is being updated. It remains usable but cannot accept additional update requests or be deleted at this time.",
+"The metastore service is undergoing deletion. It cannot be used.",
+"The metastore service has encountered an error and cannot be used. The metastore service should be deleted.",
+"The metastore service is processing a managed migration."
+],
+"readOnly": true,
+"type": "string"
+},
+"stateMessage": {
+"description": "Output only. Additional information about the current state of the metastore service, if available.",
+"readOnly": true,
+"type": "string"
+},
+"uid": {
+"description": "Output only. The globally unique resource identifier of the metastore service.",
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. The time when the metastore service was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"warehouseGcsUri": {
+"description": "Required. A Cloud Storage URI (starting with gs://) that specifies the default warehouse directory of the Hive Metastore.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudMetastoreV2alphaStartMigrationRequest": {
+"description": "Request message for DataprocMetastore.StartMigration.",
+"id": "GoogleCloudMetastoreV2alphaStartMigrationRequest",
+"properties": {
+"migrationExecution": {
+"$ref": "GoogleCloudMetastoreV2alphaMigrationExecution",
+"description": "Required. The configuration details for the migration."
+},
+"requestId": {
+"description": "Optional. A request ID. Specify a unique request ID to allow the server to ignore the request if it has completed. The server will ignore subsequent requests that provide a duplicate request ID for at least 60 minutes after the first request.For example, if an initial request times out, followed by another request with the same request ID, the server ignores the second request to prevent the creation of duplicate commitments.The request ID must be a valid UUID (https://en.wikipedia.org/wiki/Universally_unique_identifier#Format) A zero UUID (00000000-0000-0000-0000-000000000000) is not supported.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleLongrunningOperation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "GoogleLongrunningOperation",
+"properties": {
+"done": {
+"description": "If the value is false, it means the operation is still in progress. If true, the operation is completed, and either error or response is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "GoogleRpcStatus",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the name should be a resource name ending with operations/{unique_id}.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as Delete, the response is google.protobuf.Empty. If the original method is standard Get/Create/Update, the response should be the resource. For other methods, the response should have the type XxxResponse, where Xxx is the original method name. For example, if the original method name is TakeSnapshot(), the inferred response type is TakeSnapshotResponse.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"GoogleRpcStatus": {
+"description": "The Status type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by gRPC (https://github.com/grpc). Each Status message contains three pieces of data: error code, error message, and error details.You can find out more about this error model and how to work with it in the API Design Guide (https://cloud.google.com/apis/design/errors).",
+"id": "GoogleRpcStatus",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Dataproc Metastore API",
+"version": "v2alpha",
+"version_module": true
+}

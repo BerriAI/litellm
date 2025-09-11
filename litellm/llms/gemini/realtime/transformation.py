@@ -187,9 +187,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 vertex_gemini_config = VertexGeminiConfig()
                 vertex_gemini_config._map_function(value)
-                optional_params["generationConfig"]["tools"] = (
-                    vertex_gemini_config._map_function(value)
-                )
+                optional_params["generationConfig"][
+                    "tools"
+                ] = vertex_gemini_config._map_function(value)
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
             elif key == "turn_detection":
@@ -200,10 +200,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if (
                     len(transformed_audio_activity_config) > 0
                 ):  # if the config is not empty, add it to the optional params
-                    optional_params["realtimeInputConfig"] = (
-                        BidiGenerateContentRealtimeInputConfig(
-                            automaticActivityDetection=transformed_audio_activity_config
-                        )
+                    optional_params[
+                        "realtimeInputConfig"
+                    ] = BidiGenerateContentRealtimeInputConfig(
+                        automaticActivityDetection=transformed_audio_activity_config
                     )
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
@@ -837,9 +837,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "session_configuration_request"
         ]
         current_item_chunks = realtime_response_transform_input["current_item_chunks"]
-        current_delta_type: Optional[ALL_DELTA_TYPES] = (
-            realtime_response_transform_input["current_delta_type"]
-        )
+        current_delta_type: Optional[
+            ALL_DELTA_TYPES
+        ] = realtime_response_transform_input["current_delta_type"]
         returned_message: List[OpenAIRealtimeEvents] = []
 
         for key, value in json_message.items():

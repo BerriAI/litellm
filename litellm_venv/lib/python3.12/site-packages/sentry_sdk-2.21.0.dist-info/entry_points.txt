@@ -1,0 +1,2 @@
+[opentelemetry_propagator]
+sentry = sentry_sdk.integrations.opentelemetry:SentryPropagator

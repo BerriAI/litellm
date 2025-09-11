@@ -171,7 +171,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         kwags: dict = {
             "name": tool["name"],
-            "parameters": cast(dict, tool.get("input_schema") or {})
+            "parameters": cast(dict, tool.get("input_schema") or {}),
         }
 
         description = tool.get("description")

@@ -1,0 +1,59 @@
+Metadata-Version: 2.3
+Name: opentelemetry-exporter-otlp
+Version: 1.25.0
+Summary: OpenTelemetry Collector Exporters
+Project-URL: Homepage, https://github.com/open-telemetry/opentelemetry-python/tree/main/exporter/opentelemetry-exporter-otlp
+Author-email: OpenTelemetry Authors <cncf-opentelemetry-contributors@lists.cncf.io>
+License: Apache-2.0
+License-File: LICENSE
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Framework :: OpenTelemetry
+Classifier: Framework :: OpenTelemetry :: Exporters
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Typing :: Typed
+Requires-Python: >=3.8
+Requires-Dist: opentelemetry-exporter-otlp-proto-grpc==1.25.0
+Requires-Dist: opentelemetry-exporter-otlp-proto-http==1.25.0
+Description-Content-Type: text/x-rst
+
+OpenTelemetry Collector Exporters
+=================================
+
+|pypi|
+
+.. |pypi| image:: https://badge.fury.io/py/opentelemetry-exporter-otlp.svg
+   :target: https://pypi.org/project/opentelemetry-exporter-otlp/
+
+This library is provided as a convenience to install all supported OpenTelemetry Collector Exporters. Currently it installs:
+
+* opentelemetry-exporter-otlp-proto-grpc
+* opentelemetry-exporter-otlp-proto-http
+
+In the future, additional packages will be available:
+* opentelemetry-exporter-otlp-json-http
+
+To avoid unnecessary dependencies, users should install the specific package once they've determined their
+preferred serialization and protocol method.
+
+Installation
+------------
+
+::
+
+     pip install opentelemetry-exporter-otlp
+
+
+References
+----------
+
+* `OpenTelemetry Collector Exporter <https://opentelemetry-python.readthedocs.io/en/latest/exporter/otlp/otlp.html>`_
+* `OpenTelemetry Collector <https://github.com/open-telemetry/opentelemetry-collector/>`_
+* `OpenTelemetry <https://opentelemetry.io/>`_
+* `OpenTelemetry Protocol Specification <https://github.com/open-telemetry/oteps/blob/main/text/0035-opentelemetry-protocol.md>`_

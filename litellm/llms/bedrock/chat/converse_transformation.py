@@ -397,7 +397,11 @@ class AmazonConverseConfig(BaseConfig):
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
-                    value=value, model=model, optional_params=optional_params, non_default_params=non_default_params, is_thinking_enabled=is_thinking_enabled
+                    value=value,
+                    model=model,
+                    optional_params=optional_params,
+                    non_default_params=non_default_params,
+                    is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
@@ -446,11 +450,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         return optional_params
-    
+
     def _translate_response_format_param(
-        self, 
-        value: dict, 
-        model: str, 
+        self,
+        value: dict,
+        model: str,
         optional_params: dict,
         non_default_params: dict,
         is_thinking_enabled: bool,
@@ -497,14 +501,13 @@ class AmazonConverseConfig(BaseConfig):
             )
             and not is_thinking_enabled
         ):
-
             optional_params["tool_choice"] = ToolChoiceValuesBlock(
                 tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
             )
         optional_params["json_mode"] = True
         if non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
-        
+
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
@@ -991,7 +994,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1006,9 +1011,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1129,9 +1134,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
 
         if message is not None:
             (
@@ -1144,12 +1149,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if (
             json_mode is True
@@ -1167,7 +1172,6 @@ class AmazonConverseConfig(BaseConfig):
                 # Bedrock returns the response wrapped in a "properties" object
                 # We need to extract the actual content from this wrapper
                 try:
-
                     response_data = json.loads(json_mode_content_str)
 
                     # If Bedrock wrapped the response in "properties", extract the content

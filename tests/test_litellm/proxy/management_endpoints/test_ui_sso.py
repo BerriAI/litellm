@@ -787,11 +787,11 @@ class TestCLISSOCallbackFunction:
             "not-sk-key",
             "sk",  # too short
         ]
-        
+
         for invalid_key in invalid_keys:
             # This should fail validation before any database operations
             # We can test this by checking if the key starts with 'sk-'
-            if not invalid_key or not invalid_key.startswith('sk-'):
+            if not invalid_key or not invalid_key.startswith("sk-"):
                 # This would trigger the validation error
                 assert True  # Validation works as expected
 
@@ -804,14 +804,14 @@ class TestCLIPollingFunction:
         # Test key format validation logic
         invalid_keys = [
             "invalid-key",
-            "not-sk-key", 
+            "not-sk-key",
             "",
             "sk",  # too short
         ]
-        
+
         for invalid_key in invalid_keys:
             # Validation logic: key must start with 'sk-'
-            if not invalid_key.startswith('sk-'):
+            if not invalid_key.startswith("sk-"):
                 # This would trigger the validation error in the actual function
                 assert True  # Validation works as expected
 
@@ -825,7 +825,7 @@ class TestAuthCallbackRouting:
 
         # Test CLI state detection logic
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-test123"
-        
+
         # This mimics the logic in auth_callback
         if cli_state and cli_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
             # Extract the key ID from the state
@@ -837,18 +837,20 @@ class TestAuthCallbackRouting:
     def test_non_cli_state_routing(self):
         """Test that non-CLI states don't trigger CLI routing"""
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
-        
+
         non_cli_states = [
             "regular_oauth_state",
-            "some_random_string", 
+            "some_random_string",
             None,
             "",
-            "not_session_token:something"
+            "not_session_token:something",
         ]
-        
+
         for state in non_cli_states:
             # This mimics the routing logic in auth_callback
-            should_route_to_cli = state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
+            should_route_to_cli = state and state.startswith(
+                f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+            )
             assert not should_route_to_cli, f"State '{state}' should not route to CLI"
 
 
@@ -862,9 +864,9 @@ class TestGoogleLoginCLIIntegration:
         # Test the CLI state generation logic used in google_login
         source = "litellm-cli"
         key = "sk-test123"
-        
+
         cli_state = SSOAuthenticationHandler._get_cli_state(source=source, key=key)
-        
+
         assert cli_state is not None
         assert cli_state.startswith("litellm-session-token:")
         assert "sk-test123" in cli_state
@@ -880,10 +882,12 @@ class TestGoogleLoginCLIIntegration:
             (None, "sk-test123"),
             ("wrong-source", "sk-test123"),
         ]
-        
+
         for source, key in test_cases:
             cli_state = SSOAuthenticationHandler._get_cli_state(source=source, key=key)
-            assert cli_state is None, f"CLI state should not be generated for source='{source}', key='{key}'"
+            assert (
+                cli_state is None
+            ), f"CLI state should not be generated for source='{source}', key='{key}'"
 
 
 class TestSSOHandlerIntegration:
@@ -894,13 +898,24 @@ class TestSSOHandlerIntegration:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Test that SSO handler is used when client IDs are provided
-        assert SSOAuthenticationHandler.should_use_sso_handler(google_client_id="test") is True
-        assert SSOAuthenticationHandler.should_use_sso_handler(microsoft_client_id="test") is True
-        assert SSOAuthenticationHandler.should_use_sso_handler(generic_client_id="test") is True
-        
+        assert (
+            SSOAuthenticationHandler.should_use_sso_handler(google_client_id="test")
+            is True
+        )
+        assert (
+            SSOAuthenticationHandler.should_use_sso_handler(microsoft_client_id="test")
+            is True
+        )
+        assert (
+            SSOAuthenticationHandler.should_use_sso_handler(generic_client_id="test")
+            is True
+        )
+
         # Test that SSO handler is not used when no client IDs are provided
         assert SSOAuthenticationHandler.should_use_sso_handler() is False
-        assert SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
+        assert (
+            SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
+        )
 
     def test_get_redirect_url_for_sso(self):
         """Test the redirect URL generation for SSO"""
@@ -909,13 +924,12 @@ class TestSSOHandlerIntegration:
         # Mock request object
         mock_request = MagicMock()
         mock_request.base_url = "https://test.litellm.ai/"
-        
+
         # Test redirect URL generation
         redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
-            request=mock_request,
-            sso_callback_route="sso/callback"
+            request=mock_request, sso_callback_route="sso/callback"
         )
-        
+
         assert redirect_url.startswith("https://test.litellm.ai")
         assert "sso/callback" in redirect_url
 
@@ -926,21 +940,25 @@ class TestUISSO_FunctionsExistence:
     def test_cli_sso_callback_exists(self):
         """Test that cli_sso_callback function exists"""
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
         assert callable(cli_sso_callback)
 
     def test_cli_poll_key_exists(self):
         """Test that cli_poll_key function exists"""
         from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+
         assert callable(cli_poll_key)
 
     def test_auth_callback_exists(self):
         """Test that auth_callback function exists"""
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
         assert callable(auth_callback)
 
     def test_google_login_exists(self):
         """Test that google_login function exists"""
         from litellm.proxy.management_endpoints.ui_sso import google_login
+
         assert callable(google_login)
 
     def test_sso_authentication_handler_exists(self):
@@ -949,9 +967,9 @@ class TestUISSO_FunctionsExistence:
 
         # Check that the class exists
         assert SSOAuthenticationHandler is not None
-        
+
         # Check that the new _get_cli_state method exists
-        assert hasattr(SSOAuthenticationHandler, '_get_cli_state')
+        assert hasattr(SSOAuthenticationHandler, "_get_cli_state")
         assert callable(SSOAuthenticationHandler._get_cli_state)
 
 
@@ -961,9 +979,11 @@ class TestSSOStateHandling:
     def test_get_cli_state_valid(self):
         """Test generating CLI state with valid parameters"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
-        
-        state = SSOAuthenticationHandler._get_cli_state(source="litellm-cli", key="sk-test123")
-        
+
+        state = SSOAuthenticationHandler._get_cli_state(
+            source="litellm-cli", key="sk-test123"
+        )
+
         assert state is not None
         assert state.startswith("litellm-session-token:")
         assert "sk-test123" in state
@@ -971,25 +991,27 @@ class TestSSOStateHandling:
     def test_get_cli_state_invalid_source(self):
         """Test generating CLI state with invalid source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
-        
-        state = SSOAuthenticationHandler._get_cli_state(source="invalid_source", key="sk-test123")
-        
+
+        state = SSOAuthenticationHandler._get_cli_state(
+            source="invalid_source", key="sk-test123"
+        )
+
         assert state is None
 
     def test_get_cli_state_no_key(self):
         """Test generating CLI state without key"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
-        
+
         state = SSOAuthenticationHandler._get_cli_state(source="litellm-cli", key=None)
-        
+
         assert state is None
 
     def test_get_cli_state_no_source(self):
         """Test generating CLI state without source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
-        
+
         state = SSOAuthenticationHandler._get_cli_state(source=None, key="sk-test123")
-        
+
         assert state is None
 
 
@@ -1003,7 +1025,7 @@ class TestStateRouting:
         # Test CLI state format
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-test123"
         assert cli_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
-        
+
         # Test extraction of key from state
         key_id = cli_state.split(":", 1)[1]
         assert key_id == "sk-test123"
@@ -1018,9 +1040,9 @@ class TestStateRouting:
             "some_random_string",
             None,
             "",
-            "not_session_token:something"
+            "not_session_token:something",
         ]
-        
+
         for state in test_states:
             if state:
                 assert not state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
@@ -1039,10 +1061,10 @@ class TestHTMLIntegration:
 
         # Test that function exists and is callable
         assert callable(render_cli_sso_success_page)
-        
+
         # Test that it returns expected type
         html = render_cli_sso_success_page()
-        
+
         assert isinstance(html, str)
         assert len(html) > 0
 
@@ -1059,11 +1081,19 @@ class TestCustomUISSO:
         # Mock request
         mock_request = MagicMock()
         mock_request.base_url = "https://test.example.com/"
-        
+
         # Mock user_custom_ui_sso_sign_in_handler to exist but make enterprise import fail
         with patch("litellm.proxy.proxy_server.premium_user", True):
-            with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", MagicMock()):
-                with patch.dict('sys.modules', {'enterprise.litellm_enterprise.proxy.auth.custom_sso_handler': None}):
+            with patch(
+                "litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler",
+                MagicMock(),
+            ):
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "enterprise.litellm_enterprise.proxy.auth.custom_sso_handler": None
+                    },
+                ):
                     # Temporarily mock the google_login function call to test the import error path
                     async def mock_google_login():
                         # This mimics the relevant part of google_login that would trigger the import error
@@ -1071,13 +1101,19 @@ class TestCustomUISSO:
                             from enterprise.litellm_enterprise.proxy.auth.custom_sso_handler import (
                                 EnterpriseCustomSSOHandler,
                             )
+
                             return "success"
                         except ImportError:
-                            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
-                    
+                            raise ValueError(
+                                "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
+                            )
+
                     # Test that the ValueError is raised with the correct message
                     import pytest
-                    with pytest.raises(ValueError, match="Enterprise features are not available"):
+
+                    with pytest.raises(
+                        ValueError, match="Enterprise features are not available"
+                    ):
                         asyncio.run(mock_google_login())
 
     @pytest.mark.asyncio
@@ -1129,8 +1165,10 @@ class TestCustomUISSO:
                     return_value=mock_redirect_response,
                 ) as mock_get_redirect:
                     # Act
-                    result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                        request=mock_request
+                    result = (
+                        await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
+                            request=mock_request
+                        )
                     )
 
                     # Assert
@@ -1175,12 +1213,14 @@ class TestCustomUISSO:
             async def handle_custom_ui_sso_sign_in(self, request: Request) -> OpenID:
                 self.method_called = True
                 self.received_request = request
-                
+
                 # Parse headers like the actual implementation would
                 request_headers_dict = dict(request.headers)
                 return OpenID(
                     id=request_headers_dict.get("x-litellm-user-id", "default_user"),
-                    email=request_headers_dict.get("x-litellm-user-email", "default@test.com"),
+                    email=request_headers_dict.get(
+                        "x-litellm-user-email", "default@test.com"
+                    ),
                     first_name="Custom",
                     last_name="Handler",
                     display_name="Custom Handler Test",
@@ -1194,7 +1234,7 @@ class TestCustomUISSO:
         # Mock request with custom headers
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {
-            "x-litellm-user-id": "custom_test_user_456", 
+            "x-litellm-user-id": "custom_test_user_456",
             "x-litellm-user-email": "custom@example.com",
             "x-forwarded-for": "10.0.0.1",
         }
@@ -1215,8 +1255,10 @@ class TestCustomUISSO:
                     return_value=mock_redirect_response,
                 ) as mock_get_redirect:
                     # Act
-                    result = await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                        request=mock_request
+                    result = (
+                        await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
+                            request=mock_request
+                        )
                     )
 
                     # Assert that our custom handler was executed
@@ -1226,7 +1268,7 @@ class TestCustomUISSO:
                     # Verify the redirect response was called with the OpenID from our custom handler
                     mock_get_redirect.assert_called_once()
                     call_args = mock_get_redirect.call_args.kwargs
-                    
+
                     # Verify the OpenID object has the expected values from our custom handler
                     openid_result = call_args["result"]
                     assert openid_result.id == "custom_test_user_456"
@@ -1245,4 +1287,3 @@ class TestCustomUISSO:
                     # Verify the result is the redirect response
                     assert result == mock_redirect_response
                     assert result.status_code == 303
-

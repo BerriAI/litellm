@@ -1,0 +1,7 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.aiplatform.v1.schema.predict.instance_v1",
+  "protoPackage": "google.cloud.aiplatform.v1.schema.predict.instance",
+  "schema": "1.0"
+}

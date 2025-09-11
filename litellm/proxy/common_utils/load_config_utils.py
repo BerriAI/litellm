@@ -29,7 +29,7 @@ def get_file_contents_from_s3(bucket_name, object_key):
         # Read the file contents and directly parse YAML
         file_contents = response["Body"].read().decode("utf-8")
         verbose_proxy_logger.debug("File contents retrieved from S3")
-        
+
         # Parse YAML directly from string
         config = yaml.safe_load(file_contents)
         return config
@@ -71,12 +71,12 @@ def download_python_file_from_s3(
 ) -> bool:
     """
     Download a Python file from S3 and save it to local filesystem.
-    
+
     Args:
         bucket_name (str): S3 bucket name
         object_key (str): S3 object key (file path in bucket)
         local_file_path (str): Local path where file should be saved
-        
+
     Returns:
         bool: True if successful, False otherwise
     """
@@ -85,6 +85,7 @@ def download_python_file_from_s3(
         from botocore.credentials import Credentials
 
         from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
         base_aws_llm = BaseAWSLLM()
 
         credentials: Credentials = base_aws_llm.get_credentials()
@@ -94,24 +95,26 @@ def download_python_file_from_s3(
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,
         )
-        
+
         verbose_proxy_logger.debug(
             f"Downloading Python file {object_key} from S3 bucket: {bucket_name}"
         )
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-        
+
         # Read the file contents
         file_contents = response["Body"].read().decode("utf-8")
         verbose_proxy_logger.debug(f"File contents: {file_contents}")
-        
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-        
+
         # Write to local file
-        with open(local_file_path, 'w') as f:
+        with open(local_file_path, "w") as f:
             f.write(file_contents)
-            
-        verbose_proxy_logger.debug(f"Python file downloaded successfully to {local_file_path}")
+
+        verbose_proxy_logger.debug(
+            f"Python file downloaded successfully to {local_file_path}"
+        )
         return True
 
     except ImportError as e:
@@ -129,12 +132,12 @@ async def download_python_file_from_gcs(
 ) -> bool:
     """
     Download a Python file from GCS and save it to local filesystem.
-    
+
     Args:
         bucket_name (str): GCS bucket name
         object_key (str): GCS object key (file path in bucket)
         local_file_path (str): Local path where file should be saved
-        
+
     Returns:
         bool: True if successful, False otherwise
     """
@@ -147,22 +150,26 @@ async def download_python_file_from_gcs(
         file_contents = await gcs_bucket.download_gcs_object(object_key)
         if file_contents is None:
             raise Exception(f"File contents are None for {object_key}")
-            
+
         # file_contents is a bytes object, decode it
         file_contents = file_contents.decode("utf-8")
-        
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
-        
+
         # Write to local file
-        with open(local_file_path, 'w') as f:
+        with open(local_file_path, "w") as f:
             f.write(file_contents)
-            
-        verbose_proxy_logger.debug(f"Python file downloaded successfully to {local_file_path}")
+
+        verbose_proxy_logger.debug(
+            f"Python file downloaded successfully to {local_file_path}"
+        )
         return True
 
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error downloading Python file from GCS: {str(e)}")
+        verbose_proxy_logger.exception(
+            f"Error downloading Python file from GCS: {str(e)}"
+        )
         return False
 
 

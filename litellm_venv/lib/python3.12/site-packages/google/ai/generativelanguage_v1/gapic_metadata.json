@@ -1,0 +1,152 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.ai.generativelanguage_v1",
+  "protoPackage": "google.ai.generativelanguage.v1",
+  "schema": "1.0",
+  "services": {
+    "GenerativeService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "GenerativeServiceClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "GenerativeServiceAsyncClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "GenerativeServiceClient",
+          "rpcs": {
+            "BatchEmbedContents": {
+              "methods": [
+                "batch_embed_contents"
+              ]
+            },
+            "CountTokens": {
+              "methods": [
+                "count_tokens"
+              ]
+            },
+            "EmbedContent": {
+              "methods": [
+                "embed_content"
+              ]
+            },
+            "GenerateContent": {
+              "methods": [
+                "generate_content"
+              ]
+            },
+            "StreamGenerateContent": {
+              "methods": [
+                "stream_generate_content"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ModelService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "ModelServiceAsyncClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

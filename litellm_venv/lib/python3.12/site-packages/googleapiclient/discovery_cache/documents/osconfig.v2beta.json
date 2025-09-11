@@ -1,0 +1,2354 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://osconfig.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "OS Config",
+"description": "OS management tools that can be used for patch management, patch compliance, and configuration management on VM instances.",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/compute/docs/osconfig/rest",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "osconfig:v2beta",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://osconfig.mtls.googleapis.com/",
+"name": "osconfig",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"folders": {
+"resources": {
+"locations": {
+"resources": {
+"global": {
+"resources": {
+"policyOrchestrators": {
+"methods": {
+"create": {
+"description": "Creates a new policy orchestrator under the given folder resource. `name` field of the given orchestrator are ignored and instead replaced by a product of `parent` and `policy_orchestrator_id`. Orchestrator state field might be only set to `ACTIVE`, `STOPPED` or omitted (in which case, the created resource will be in `ACTIVE` state anyway).",
+"flatPath": "v2beta/folders/{foldersId}/locations/global/policyOrchestrators",
+"httpMethod": "POST",
+"id": "osconfig.folders.locations.global.policyOrchestrators.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name in the form of: * `organizations/{organization_id}/locations/global` * `folders/{folder_id}/locations/global` * `projects/{project_id_or_number}/locations/global`",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+},
+"policyOrchestratorId": {
+"description": "Required. The logical identifier of the policy orchestrator, with the following restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the parent.",
+"location": "query",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an existing policy orchestrator resource, parented by a folder.",
+"flatPath": "v2beta/folders/{foldersId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.folders.locations.global.policyOrchestrators.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. The current etag of the policy orchestrator. If an etag is provided and does not match the current etag of the policy orchestrator, deletion will be blocked and an ABORTED error will be returned.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. Name of the resource to be deleted.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Retrieves an existing policy orchestrator, parented by a folder.",
+"flatPath": "v2beta/folders/{foldersId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "GET",
+"id": "osconfig.folders.locations.global.policyOrchestrators.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the policy orchestrators under the given parent folder resource.",
+"flatPath": "v2beta/folders/{foldersId}/locations/global/policyOrchestrators",
+"httpMethod": "GET",
+"id": "osconfig.folders.locations.global.policyOrchestrators.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__ListPolicyOrchestratorsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates an existing policy orchestrator, parented by a folder.",
+"flatPath": "v2beta/folders/{foldersId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "PATCH",
+"id": "osconfig.folders.locations.global.policyOrchestrators.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. Identifier. In form of * `organizations/{organization_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `folders/{folder_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `projects/{project_id_or_number}/locations/global/policyOrchestrators/{orchestrator_id}`",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. The list of fields to merge into the existing policy orchestrator. A special [\"*\"] field mask can be used to simply replace the entire resource. Otherwise, for all paths referenced in the mask, following merge rules are used: * output only fields are ignored, * primitive fields are replaced, * repeated fields are replaced, * map fields are merged key by key, * message fields are cleared if not set in the request, otherwise they are merged recursively (in particular - message fields set to an empty message has no side effects) If field mask (or its paths) is not specified, it is automatically inferred from the request using following rules: * primitive fields are listed, if set to a non-default value (as there is no way to distinguish between default and unset value), * map and repeated fields are listed, * `google.protobuf.Any` fields are listed, * other message fields are traversed recursively. Note: implicit mask does not allow clearing fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v2beta/folders/{foldersId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "osconfig.folders.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v2beta/folders/{foldersId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.folders.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v2beta/folders/{foldersId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "osconfig.folders.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v2beta/folders/{foldersId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "osconfig.folders.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^folders/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+},
+"organizations": {
+"resources": {
+"locations": {
+"resources": {
+"global": {
+"resources": {
+"policyOrchestrators": {
+"methods": {
+"create": {
+"description": "Creates a new policy orchestrator under the given organizations resource. `name` field of the given orchestrator are ignored and instead replaced by a product of `parent` and `policy_orchestrator_id`. Orchestrator state field might be only set to `ACTIVE`, `STOPPED` or omitted (in which case, the created resource will be in `ACTIVE` state anyway).",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/global/policyOrchestrators",
+"httpMethod": "POST",
+"id": "osconfig.organizations.locations.global.policyOrchestrators.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name in the form of: * `organizations/{organization_id}/locations/global` * `folders/{folder_id}/locations/global` * `projects/{project_id_or_number}/locations/global`",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+},
+"policyOrchestratorId": {
+"description": "Required. The logical identifier of the policy orchestrator, with the following restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the parent.",
+"location": "query",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an existing policy orchestrator resource, parented by an organization.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.organizations.locations.global.policyOrchestrators.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. The current etag of the policy orchestrator. If an etag is provided and does not match the current etag of the policy orchestrator, deletion will be blocked and an ABORTED error will be returned.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. Name of the resource to be deleted.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Retrieves an existing policy orchestrator, parented by an organization.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "GET",
+"id": "osconfig.organizations.locations.global.policyOrchestrators.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the policy orchestrators under the given parent organization resource.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/global/policyOrchestrators",
+"httpMethod": "GET",
+"id": "osconfig.organizations.locations.global.policyOrchestrators.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__ListPolicyOrchestratorsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates an existing policy orchestrator, parented by an organization.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "PATCH",
+"id": "osconfig.organizations.locations.global.policyOrchestrators.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. Identifier. In form of * `organizations/{organization_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `folders/{folder_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `projects/{project_id_or_number}/locations/global/policyOrchestrators/{orchestrator_id}`",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. The list of fields to merge into the existing policy orchestrator. A special [\"*\"] field mask can be used to simply replace the entire resource. Otherwise, for all paths referenced in the mask, following merge rules are used: * output only fields are ignored, * primitive fields are replaced, * repeated fields are replaced, * map fields are merged key by key, * message fields are cleared if not set in the request, otherwise they are merged recursively (in particular - message fields set to an empty message has no side effects) If field mask (or its paths) is not specified, it is automatically inferred from the request using following rules: * primitive fields are listed, if set to a non-default value (as there is no way to distinguish between default and unset value), * map and repeated fields are listed, * `google.protobuf.Any` fields are listed, * other message fields are traversed recursively. Note: implicit mask does not allow clearing fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "osconfig.organizations.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.organizations.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "osconfig.organizations.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v2beta/organizations/{organizationsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "osconfig.organizations.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^organizations/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+},
+"projects": {
+"resources": {
+"locations": {
+"resources": {
+"global": {
+"resources": {
+"policyOrchestrators": {
+"methods": {
+"create": {
+"description": "Creates a new policy orchestrator under the given project resource. `name` field of the given orchestrator are ignored and instead replaced by a product of `parent` and `policy_orchestrator_id`. Orchestrator state field might be only set to `ACTIVE`, `STOPPED` or omitted (in which case, the created resource will be in `ACTIVE` state anyway).",
+"flatPath": "v2beta/projects/{projectsId}/locations/global/policyOrchestrators",
+"httpMethod": "POST",
+"id": "osconfig.projects.locations.global.policyOrchestrators.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource name in the form of: * `organizations/{organization_id}/locations/global` * `folders/{folder_id}/locations/global` * `projects/{project_id_or_number}/locations/global`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+},
+"policyOrchestratorId": {
+"description": "Required. The logical identifier of the policy orchestrator, with the following restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the parent.",
+"location": "query",
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes since the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an existing policy orchestrator resource, parented by a project.",
+"flatPath": "v2beta/projects/{projectsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.projects.locations.global.policyOrchestrators.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"etag": {
+"description": "Optional. The current etag of the policy orchestrator. If an etag is provided and does not match the current etag of the policy orchestrator, deletion will be blocked and an ABORTED error will be returned.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "Required. Name of the resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID so that if you must retry your request, the server will know to ignore the request if it has already been completed. The server will guarantee that for at least 60 minutes after the first request. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID, the server can check if original operation with the same request ID was received, and if so, will ignore the second request. This prevents clients from accidentally creating duplicate commitments. The request ID must be a valid UUID with the exception that zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Retrieves an existing policy orchestrator, parented by a project.",
+"flatPath": "v2beta/projects/{projectsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "GET",
+"id": "osconfig.projects.locations.global.policyOrchestrators.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the policy orchestrators under the given parent project resource.",
+"flatPath": "v2beta/projects/{projectsId}/locations/global/policyOrchestrators",
+"httpMethod": "GET",
+"id": "osconfig.projects.locations.global.policyOrchestrators.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filtering results",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Hint for how to order the results",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. Requested page size. Server may return fewer items than requested. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A token identifying a page of results the server should return.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent resource name.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/global$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+parent}/policyOrchestrators",
+"response": {
+"$ref": "GoogleCloudOsconfigV2beta__ListPolicyOrchestratorsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates an existing policy orchestrator, parented by a project.",
+"flatPath": "v2beta/projects/{projectsId}/locations/global/policyOrchestrators/{policyOrchestratorsId}",
+"httpMethod": "PATCH",
+"id": "osconfig.projects.locations.global.policyOrchestrators.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. Identifier. In form of * `organizations/{organization_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `folders/{folder_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `projects/{project_id_or_number}/locations/global/policyOrchestrators/{orchestrator_id}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/global/policyOrchestrators/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. The list of fields to merge into the existing policy orchestrator. A special [\"*\"] field mask can be used to simply replace the entire resource. Otherwise, for all paths referenced in the mask, following merge rules are used: * output only fields are ignored, * primitive fields are replaced, * repeated fields are replaced, * map fields are merged key by key, * message fields are cleared if not set in the request, otherwise they are merged recursively (in particular - message fields set to an empty message has no side effects) If field mask (or its paths) is not specified, it is automatically inferred from the request using following rules: * primitive fields are listed, if set to a non-default value (as there is no way to distinguish between default and unset value), * map and repeated fields are listed, * `google.protobuf.Any` fields are listed, * other message fields are traversed recursively. Note: implicit mask does not allow clearing fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"request": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v2beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "osconfig.projects.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v2beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "osconfig.projects.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v2beta/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "osconfig.projects.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v2beta/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v2beta/projects/{projectsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "osconfig.projects.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v2beta/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250511",
+"rootUrl": "https://osconfig.googleapis.com/",
+"schemas": {
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"FixedOrPercent": {
+"description": "Message encapsulating a value that can be either absolute (\"fixed\") or relative (\"percent\") to a value.",
+"id": "FixedOrPercent",
+"properties": {
+"fixed": {
+"description": "Specifies a fixed value.",
+"format": "int32",
+"type": "integer"
+},
+"percent": {
+"description": "Specifies the relative value defined as a percentage, which will be multiplied by a reference value.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV1__OSPolicyAssignmentOperationMetadata": {
+"description": "OS policy assignment operation metadata provided by OS policy assignment API methods that return long running operations.",
+"id": "GoogleCloudOsconfigV1__OSPolicyAssignmentOperationMetadata",
+"properties": {
+"apiMethod": {
+"description": "The OS policy assignment API method.",
+"enum": [
+"API_METHOD_UNSPECIFIED",
+"CREATE",
+"UPDATE",
+"DELETE"
+],
+"enumDescriptions": [
+"Invalid value",
+"Create OS policy assignment API method",
+"Update OS policy assignment API method",
+"Delete OS policy assignment API method"
+],
+"type": "string"
+},
+"osPolicyAssignment": {
+"description": "Reference to the `OSPolicyAssignment` API resource. Format: `projects/{project_number}/locations/{location}/osPolicyAssignments/{os_policy_assignment_id@revision_id}`",
+"type": "string"
+},
+"rolloutStartTime": {
+"description": "Rollout start time",
+"format": "google-datetime",
+"type": "string"
+},
+"rolloutState": {
+"description": "State of the rollout",
+"enum": [
+"ROLLOUT_STATE_UNSPECIFIED",
+"IN_PROGRESS",
+"CANCELLING",
+"CANCELLED",
+"SUCCEEDED"
+],
+"enumDescriptions": [
+"Invalid value",
+"The rollout is in progress.",
+"The rollout is being cancelled.",
+"The rollout is cancelled.",
+"The rollout has completed successfully."
+],
+"type": "string"
+},
+"rolloutUpdateTime": {
+"description": "Rollout update time",
+"format": "google-datetime",
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2__OperationMetadata": {
+"description": "Represents the metadata of the long-running operation.",
+"id": "GoogleCloudOsconfigV2__OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have been cancelled successfully have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta_OrchestrationScope_LocationSelector": {
+"description": "Selector containing locations in scope.",
+"id": "GoogleCloudOsconfigV2beta_OrchestrationScope_LocationSelector",
+"properties": {
+"includedLocations": {
+"description": "Optional. Names of the locations in scope. Format: `us-central1-a`",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta_OrchestrationScope_ResourceHierarchySelector": {
+"description": "Selector containing Cloud Resource Manager resource hierarchy nodes.",
+"id": "GoogleCloudOsconfigV2beta_OrchestrationScope_ResourceHierarchySelector",
+"properties": {
+"includedFolders": {
+"description": "Optional. Names of the folders in scope. Format: `folders/{folder_id}`",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"includedProjects": {
+"description": "Optional. Names of the projects in scope. Format: `projects/{project_number}`",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta_OrchestrationScope_Selector": {
+"description": "Selector for the resources in scope of orchestration.",
+"id": "GoogleCloudOsconfigV2beta_OrchestrationScope_Selector",
+"properties": {
+"locationSelector": {
+"$ref": "GoogleCloudOsconfigV2beta_OrchestrationScope_LocationSelector",
+"description": "Selector for selecting locations."
+},
+"resourceHierarchySelector": {
+"$ref": "GoogleCloudOsconfigV2beta_OrchestrationScope_ResourceHierarchySelector",
+"description": "Selector for selecting resource hierarchy."
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta_PolicyOrchestrator_IterationState": {
+"description": "Describes the state of a single iteration of the orchestrator.",
+"id": "GoogleCloudOsconfigV2beta_PolicyOrchestrator_IterationState",
+"properties": {
+"error": {
+"$ref": "Status",
+"description": "Output only. Error thrown in the wave iteration.",
+"readOnly": true
+},
+"failedActions": {
+"description": "Output only. Number of orchestration actions which failed so far. For more details, query the Cloud Logs.",
+"format": "int64",
+"readOnly": true,
+"type": "string"
+},
+"finishTime": {
+"description": "Output only. Finish time of the wave iteration.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"iterationId": {
+"description": "Output only. Unique identifier of the iteration.",
+"readOnly": true,
+"type": "string"
+},
+"performedActions": {
+"description": "Output only. Overall number of actions done by the orchestrator so far.",
+"format": "int64",
+"readOnly": true,
+"type": "string"
+},
+"progress": {
+"description": "Output only. An estimated percentage of the progress. Number between 0 and 100.",
+"format": "float",
+"readOnly": true,
+"type": "number"
+},
+"startTime": {
+"description": "Output only. Start time of the wave iteration.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"state": {
+"description": "Output only. State of the iteration.",
+"enum": [
+"STATE_UNSPECIFIED",
+"PROCESSING",
+"COMPLETED",
+"FAILED",
+"CANCELLED",
+"UNKNOWN"
+],
+"enumDescriptions": [
+"Default value. This value is unused.",
+"Iteration is in progress.",
+"Iteration completed, with all actions being successful.",
+"Iteration completed, with failures.",
+"Iteration was explicitly cancelled.",
+"Impossible to determine current state of the iteration."
+],
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta_PolicyOrchestrator_OrchestrationState": {
+"description": "Describes the state of the orchestration process.",
+"id": "GoogleCloudOsconfigV2beta_PolicyOrchestrator_OrchestrationState",
+"properties": {
+"currentIterationState": {
+"$ref": "GoogleCloudOsconfigV2beta_PolicyOrchestrator_IterationState",
+"description": "Output only. Current Wave iteration state.",
+"readOnly": true
+},
+"previousIterationState": {
+"$ref": "GoogleCloudOsconfigV2beta_PolicyOrchestrator_IterationState",
+"description": "Output only. Previous Wave iteration state.",
+"readOnly": true
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta__ListPolicyOrchestratorsResponse": {
+"description": "Response for the list policy orchestrator resources.",
+"id": "GoogleCloudOsconfigV2beta__ListPolicyOrchestratorsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token, which can be sent as `page_token` to retrieve the next page. If this field is omitted, there are no subsequent pages.",
+"type": "string"
+},
+"policyOrchestrators": {
+"description": "The policy orchestrators for the specified parent resource.",
+"items": {
+"$ref": "GoogleCloudOsconfigV2beta__PolicyOrchestrator"
+},
+"type": "array"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta__OperationMetadata": {
+"description": "Represents the metadata of the long-running operation.",
+"id": "GoogleCloudOsconfigV2beta__OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have been cancelled successfully have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta__OrchestratedResource": {
+"description": "Represents a resource that is being orchestrated by the policy orchestrator.",
+"id": "GoogleCloudOsconfigV2beta__OrchestratedResource",
+"properties": {
+"id": {
+"description": "Optional. ID of the resource to be used while generating set of affected resources. For UPSERT action the value is auto-generated during PolicyOrchestrator creation when not set. When the value is set it should following next restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the project. For DELETE action, ID must be specified explicitly during PolicyOrchestrator creation.",
+"type": "string"
+},
+"osPolicyAssignmentV1Payload": {
+"$ref": "OSPolicyAssignment",
+"description": "Optional. OSPolicyAssignment resource to be created, updated or deleted. Name field is ignored and replace with a generated value. With this field set, orchestrator will perform actions on `project/{project}/locations/{zone}/osPolicyAssignments/{resource_id}` resources, where `project` and `zone` pairs come from the expanded scope, and `resource_id` comes from the `resource_id` field of orchestrator resource."
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta__OrchestrationScope": {
+"description": "Defines a set of selectors which drive which resources are in scope of policy orchestration.",
+"id": "GoogleCloudOsconfigV2beta__OrchestrationScope",
+"properties": {
+"selectors": {
+"description": "Optional. Selectors of the orchestration scope. There is a logical AND between each selector defined. When there is no explicit `ResourceHierarchySelector` selector specified, the scope is by default bounded to the parent of the policy orchestrator resource.",
+"items": {
+"$ref": "GoogleCloudOsconfigV2beta_OrchestrationScope_Selector"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"GoogleCloudOsconfigV2beta__PolicyOrchestrator": {
+"description": "PolicyOrchestrator helps managing project+zone level policy resources (e.g. OS Policy Assignments), by providing tools to create, update and delete them across projects and locations, at scale. Policy orchestrator functions as an endless loop. Each iteration orchestrator computes a set of resources that should be affected, then progressively applies changes to them. If for some reason this set of resources changes over time (e.g. new projects are added), the future loop iterations will address that. Orchestrator can either upsert or delete policy resources. For more details, see the description of the `action`, and `orchestrated_resource` fields. Note that policy orchestrator do not \"manage\" the resources it creates. Every iteration is independent and only minimal history of past actions is retained (apart from Cloud Logging). If orchestrator gets deleted, it does not affect the resources it created in the past. Those will remain where they were. Same applies if projects are removed from the orchestrator's scope.",
+"id": "GoogleCloudOsconfigV2beta__PolicyOrchestrator",
+"properties": {
+"action": {
+"description": "Required. Action to be done by the orchestrator in `projects/{project_id}/zones/{zone_id}` locations defined by the `orchestration_scope`. Allowed values: - `UPSERT` - Orchestrator will create or update target resources. - `DELETE` - Orchestrator will delete target resources, if they exist",
+"type": "string"
+},
+"createTime": {
+"description": "Output only. Timestamp when the policy orchestrator resource was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"description": {
+"description": "Optional. Freeform text describing the purpose of the resource.",
+"type": "string"
+},
+"etag": {
+"description": "Output only. This checksum is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.",
+"readOnly": true,
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs",
+"type": "object"
+},
+"name": {
+"description": "Immutable. Identifier. In form of * `organizations/{organization_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `folders/{folder_id}/locations/global/policyOrchestrators/{orchestrator_id}` * `projects/{project_id_or_number}/locations/global/policyOrchestrators/{orchestrator_id}`",
+"type": "string"
+},
+"orchestratedResource": {
+"$ref": "GoogleCloudOsconfigV2beta__OrchestratedResource",
+"description": "Required. Resource to be orchestrated by the policy orchestrator."
+},
+"orchestrationScope": {
+"$ref": "GoogleCloudOsconfigV2beta__OrchestrationScope",
+"description": "Optional. Defines scope for the orchestration, in context of the enclosing PolicyOrchestrator resource. Scope is expanded into a list of pairs, in which the rollout action will take place. Expansion starts with a Folder resource parenting the PolicyOrchestrator resource: - All the descendant projects are listed. - List of project is cross joined with a list of all available zones. - Resulting list of pairs is filtered according to the selectors."
+},
+"orchestrationState": {
+"$ref": "GoogleCloudOsconfigV2beta_PolicyOrchestrator_OrchestrationState",
+"description": "Output only. State of the orchestration.",
+"readOnly": true
+},
+"reconciling": {
+"description": "Output only. Set to true, if the there are ongoing changes being applied by the orchestrator.",
+"readOnly": true,
+"type": "boolean"
+},
+"state": {
+"description": "Optional. State of the orchestrator. Can be updated to change orchestrator behaviour. Allowed values: - `ACTIVE` - orchestrator is actively looking for actions to be taken. - `STOPPED` - orchestrator won't make any changes. Note: There might be more states added in the future. We use string here instead of an enum, to avoid the need of propagating new states to all the client code.",
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Timestamp when the policy orchestrator resource was last modified.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"MessageSet": {
+"deprecated": true,
+"description": "This is proto2's version of MessageSet. DEPRECATED: DO NOT USE FOR NEW FIELDS. If you are using editions or proto2, please make your own extendable messages for your use case. If you are using proto3, please use `Any` instead. MessageSet was the implementation of extensions for proto1. When proto2 was introduced, extensions were implemented as a first-class feature. This schema for MessageSet was meant to be a \"bridge\" solution to migrate MessageSet-bearing messages from proto1 to proto2. This schema has been open-sourced only to facilitate the migration of Google products with MessageSet-bearing messages to open-source environments.",
+"id": "MessageSet",
+"properties": {},
+"type": "object"
+},
+"OSPolicy": {
+"description": "An OS policy defines the desired state configuration for a VM.",
+"id": "OSPolicy",
+"properties": {
+"allowNoResourceGroupMatch": {
+"description": "This flag determines the OS policy compliance status when none of the resource groups within the policy are applicable for a VM. Set this value to `true` if the policy needs to be reported as compliant even if the policy has nothing to validate or enforce.",
+"type": "boolean"
+},
+"description": {
+"description": "Policy description. Length of the description is limited to 1024 characters.",
+"type": "string"
+},
+"id": {
+"description": "Required. The id of the OS policy with the following restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the assignment.",
+"type": "string"
+},
+"mode": {
+"description": "Required. Policy mode",
+"enum": [
+"MODE_UNSPECIFIED",
+"VALIDATION",
+"ENFORCEMENT"
+],
+"enumDescriptions": [
+"Invalid mode",
+"This mode checks if the configuration resources in the policy are in their desired state. No actions are performed if they are not in the desired state. This mode is used for reporting purposes.",
+"This mode checks if the configuration resources in the policy are in their desired state, and if not, enforces the desired state."
+],
+"type": "string"
+},
+"resourceGroups": {
+"description": "Required. List of resource groups for the policy. For a particular VM, resource groups are evaluated in the order specified and the first resource group that is applicable is selected and the rest are ignored. If none of the resource groups are applicable for a VM, the VM is considered to be non-compliant w.r.t this policy. This behavior can be toggled by the flag `allow_no_resource_group_match`",
+"items": {
+"$ref": "OSPolicyResourceGroup"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignment": {
+"description": "OS policy assignment is an API resource that is used to apply a set of OS policies to a dynamically targeted group of Compute Engine VM instances. An OS policy is used to define the desired state configuration for a Compute Engine VM instance through a set of configuration resources that provide capabilities such as installing or removing software packages, or executing a script. For more information about the OS policy resource definitions and examples, see [OS policy and OS policy assignment](https://cloud.google.com/compute/docs/os-configuration-management/working-with-os-policies).",
+"id": "OSPolicyAssignment",
+"properties": {
+"baseline": {
+"description": "Output only. Indicates that this revision has been successfully rolled out in this zone and new VMs will be assigned OS policies from this revision. For a given OS policy assignment, there is only one revision with a value of `true` for this field.",
+"readOnly": true,
+"type": "boolean"
+},
+"deleted": {
+"description": "Output only. Indicates that this revision deletes the OS policy assignment.",
+"readOnly": true,
+"type": "boolean"
+},
+"description": {
+"description": "OS policy assignment description. Length of the description is limited to 1024 characters.",
+"type": "string"
+},
+"etag": {
+"description": "The etag for this OS policy assignment. If this is provided on update, it must match the server's etag.",
+"type": "string"
+},
+"instanceFilter": {
+"$ref": "OSPolicyAssignmentInstanceFilter",
+"description": "Required. Filter to select VMs."
+},
+"name": {
+"description": "Resource name. Format: `projects/{project_number}/locations/{location}/osPolicyAssignments/{os_policy_assignment_id}` This field is ignored when you create an OS policy assignment.",
+"type": "string"
+},
+"osPolicies": {
+"description": "Required. List of OS policies to be applied to the VMs.",
+"items": {
+"$ref": "OSPolicy"
+},
+"type": "array"
+},
+"reconciling": {
+"description": "Output only. Indicates that reconciliation is in progress for the revision. This value is `true` when the `rollout_state` is one of: * IN_PROGRESS * CANCELLING",
+"readOnly": true,
+"type": "boolean"
+},
+"revisionCreateTime": {
+"description": "Output only. The timestamp that the revision was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"revisionId": {
+"description": "Output only. The assignment revision ID A new revision is committed whenever a rollout is triggered for a OS policy assignment",
+"readOnly": true,
+"type": "string"
+},
+"rollout": {
+"$ref": "OSPolicyAssignmentRollout",
+"description": "Required. Rollout to deploy the OS policy assignment. A rollout is triggered in the following situations: 1) OSPolicyAssignment is created. 2) OSPolicyAssignment is updated and the update contains changes to one of the following fields: - instance_filter - os_policies 3) OSPolicyAssignment is deleted."
+},
+"rolloutState": {
+"description": "Output only. OS policy assignment rollout state",
+"enum": [
+"ROLLOUT_STATE_UNSPECIFIED",
+"IN_PROGRESS",
+"CANCELLING",
+"CANCELLED",
+"SUCCEEDED"
+],
+"enumDescriptions": [
+"Invalid value",
+"The rollout is in progress.",
+"The rollout is being cancelled.",
+"The rollout is cancelled.",
+"The rollout has completed successfully."
+],
+"readOnly": true,
+"type": "string"
+},
+"uid": {
+"description": "Output only. Server generated unique id for the OS policy assignment resource.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignmentInstanceFilter": {
+"description": "Filters to select target VMs for an assignment. If more than one filter criteria is specified below, a VM will be selected if and only if it satisfies all of them.",
+"id": "OSPolicyAssignmentInstanceFilter",
+"properties": {
+"all": {
+"description": "Target all VMs in the project. If true, no other criteria is permitted.",
+"type": "boolean"
+},
+"exclusionLabels": {
+"description": "List of label sets used for VM exclusion. If the list has more than one label set, the VM is excluded if any of the label sets are applicable for the VM.",
+"items": {
+"$ref": "OSPolicyAssignmentLabelSet"
+},
+"type": "array"
+},
+"inclusionLabels": {
+"description": "List of label sets used for VM inclusion. If the list has more than one `LabelSet`, the VM is included if any of the label sets are applicable for the VM.",
+"items": {
+"$ref": "OSPolicyAssignmentLabelSet"
+},
+"type": "array"
+},
+"inventories": {
+"description": "List of inventories to select VMs. A VM is selected if its inventory data matches at least one of the following inventories.",
+"items": {
+"$ref": "OSPolicyAssignmentInstanceFilterInventory"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignmentInstanceFilterInventory": {
+"description": "VM inventory details.",
+"id": "OSPolicyAssignmentInstanceFilterInventory",
+"properties": {
+"osShortName": {
+"description": "Required. The OS short name",
+"type": "string"
+},
+"osVersion": {
+"description": "The OS version Prefix matches are supported if asterisk(*) is provided as the last character. For example, to match all versions with a major version of `7`, specify the following value for this field `7.*` An empty string matches all OS versions.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignmentLabelSet": {
+"description": "Message representing label set. * A label is a key value pair set for a VM. * A LabelSet is a set of labels. * Labels within a LabelSet are ANDed. In other words, a LabelSet is applicable for a VM only if it matches all the labels in the LabelSet. * Example: A LabelSet with 2 labels: `env=prod` and `type=webserver` will only be applicable for those VMs with both labels present.",
+"id": "OSPolicyAssignmentLabelSet",
+"properties": {
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Labels are identified by key/value pairs in this map. A VM should contain all the key/value pairs specified in this map to be selected.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignmentOperationMetadata": {
+"description": "OS policy assignment operation metadata provided by OS policy assignment API methods that return long running operations.",
+"id": "OSPolicyAssignmentOperationMetadata",
+"properties": {
+"apiMethod": {
+"description": "The OS policy assignment API method.",
+"enum": [
+"API_METHOD_UNSPECIFIED",
+"CREATE",
+"UPDATE",
+"DELETE"
+],
+"enumDescriptions": [
+"Invalid value",
+"Create OS policy assignment API method",
+"Update OS policy assignment API method",
+"Delete OS policy assignment API method"
+],
+"type": "string"
+},
+"osPolicyAssignment": {
+"description": "Reference to the `OSPolicyAssignment` API resource. Format: `projects/{project_number}/locations/{location}/osPolicyAssignments/{os_policy_assignment_id@revision_id}`",
+"type": "string"
+},
+"rolloutStartTime": {
+"description": "Rollout start time",
+"format": "google-datetime",
+"type": "string"
+},
+"rolloutState": {
+"description": "State of the rollout",
+"enum": [
+"ROLLOUT_STATE_UNSPECIFIED",
+"IN_PROGRESS",
+"CANCELLING",
+"CANCELLED",
+"SUCCEEDED"
+],
+"enumDescriptions": [
+"Invalid value",
+"The rollout is in progress.",
+"The rollout is being cancelled.",
+"The rollout is cancelled.",
+"The rollout has completed successfully."
+],
+"type": "string"
+},
+"rolloutUpdateTime": {
+"description": "Rollout update time",
+"format": "google-datetime",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyAssignmentRollout": {
+"description": "Message to configure the rollout at the zonal level for the OS policy assignment.",
+"id": "OSPolicyAssignmentRollout",
+"properties": {
+"disruptionBudget": {
+"$ref": "FixedOrPercent",
+"description": "Required. The maximum number (or percentage) of VMs per zone to disrupt at any given moment."
+},
+"minWaitDuration": {
+"description": "Required. This determines the minimum duration of time to wait after the configuration changes are applied through the current rollout. A VM continues to count towards the `disruption_budget` at least until this duration of time has passed after configuration changes are applied.",
+"format": "google-duration",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyInventoryFilter": {
+"description": "Filtering criteria to select VMs based on inventory details.",
+"id": "OSPolicyInventoryFilter",
+"properties": {
+"osShortName": {
+"description": "Required. The OS short name",
+"type": "string"
+},
+"osVersion": {
+"description": "The OS version Prefix matches are supported if asterisk(*) is provided as the last character. For example, to match all versions with a major version of `7`, specify the following value for this field `7.*` An empty string matches all OS versions.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResource": {
+"description": "An OS policy resource is used to define the desired state configuration and provides a specific functionality like installing/removing packages, executing a script etc. The system ensures that resources are always in their desired state by taking necessary actions if they have drifted from their desired state.",
+"id": "OSPolicyResource",
+"properties": {
+"exec": {
+"$ref": "OSPolicyResourceExecResource",
+"description": "Exec resource"
+},
+"file": {
+"$ref": "OSPolicyResourceFileResource",
+"description": "File resource"
+},
+"id": {
+"description": "Required. The id of the resource with the following restrictions: * Must contain only lowercase letters, numbers, and hyphens. * Must start with a letter. * Must be between 1-63 characters. * Must end with a number or a letter. * Must be unique within the OS policy.",
+"type": "string"
+},
+"pkg": {
+"$ref": "OSPolicyResourcePackageResource",
+"description": "Package resource"
+},
+"repository": {
+"$ref": "OSPolicyResourceRepositoryResource",
+"description": "Package repository resource"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceExecResource": {
+"description": "A resource that allows executing scripts on the VM. The `ExecResource` has 2 stages: `validate` and `enforce` and both stages accept a script as an argument to execute. When the `ExecResource` is applied by the agent, it first executes the script in the `validate` stage. The `validate` stage can signal that the `ExecResource` is already in the desired state by returning an exit code of `100`. If the `ExecResource` is not in the desired state, it should return an exit code of `101`. Any other exit code returned by this stage is considered an error. If the `ExecResource` is not in the desired state based on the exit code from the `validate` stage, the agent proceeds to execute the script from the `enforce` stage. If the `ExecResource` is already in the desired state, the `enforce` stage will not be run. Similar to `validate` stage, the `enforce` stage should return an exit code of `100` to indicate that the resource in now in its desired state. Any other exit code is considered an error. NOTE: An exit code of `100` was chosen over `0` (and `101` vs `1`) to have an explicit indicator of `in desired state`, `not in desired state` and errors. Because, for example, Powershell will always return an exit code of `0` unless an `exit` statement is provided in the script. So, for reasons of consistency and being explicit, exit codes `100` and `101` were chosen.",
+"id": "OSPolicyResourceExecResource",
+"properties": {
+"enforce": {
+"$ref": "OSPolicyResourceExecResourceExec",
+"description": "What to run to bring this resource into the desired state. An exit code of 100 indicates \"success\", any other exit code indicates a failure running enforce."
+},
+"validate": {
+"$ref": "OSPolicyResourceExecResourceExec",
+"description": "Required. What to run to validate this resource is in the desired state. An exit code of 100 indicates \"in desired state\", and exit code of 101 indicates \"not in desired state\". Any other exit code indicates a failure running validate."
+}
+},
+"type": "object"
+},
+"OSPolicyResourceExecResourceExec": {
+"description": "A file or script to execute.",
+"id": "OSPolicyResourceExecResourceExec",
+"properties": {
+"args": {
+"description": "Optional arguments to pass to the source during execution.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"file": {
+"$ref": "OSPolicyResourceFile",
+"description": "A remote or local file."
+},
+"interpreter": {
+"description": "Required. The script interpreter to use.",
+"enum": [
+"INTERPRETER_UNSPECIFIED",
+"NONE",
+"SHELL",
+"POWERSHELL"
+],
+"enumDescriptions": [
+"Invalid value, the request will return validation error.",
+"If an interpreter is not specified, the source is executed directly. This execution, without an interpreter, only succeeds for executables and scripts that have shebang lines.",
+"Indicates that the script runs with `/bin/sh` on Linux and `cmd.exe` on Windows.",
+"Indicates that the script runs with PowerShell."
+],
+"type": "string"
+},
+"outputFilePath": {
+"description": "Only recorded for enforce Exec. Path to an output file (that is created by this Exec) whose content will be recorded in OSPolicyResourceCompliance after a successful run. Absence or failure to read this file will result in this ExecResource being non-compliant. Output file size is limited to 500K bytes.",
+"type": "string"
+},
+"script": {
+"description": "An inline script. The size of the script is limited to 32KiB.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceFile": {
+"description": "A remote or local file.",
+"id": "OSPolicyResourceFile",
+"properties": {
+"allowInsecure": {
+"description": "Defaults to false. When false, files are subject to validations based on the file type: Remote: A checksum must be specified. Cloud Storage: An object generation number must be specified.",
+"type": "boolean"
+},
+"gcs": {
+"$ref": "OSPolicyResourceFileGcs",
+"description": "A Cloud Storage object."
+},
+"localPath": {
+"description": "A local path within the VM to use.",
+"type": "string"
+},
+"remote": {
+"$ref": "OSPolicyResourceFileRemote",
+"description": "A generic remote file."
+}
+},
+"type": "object"
+},
+"OSPolicyResourceFileGcs": {
+"description": "Specifies a file available as a Cloud Storage Object.",
+"id": "OSPolicyResourceFileGcs",
+"properties": {
+"bucket": {
+"description": "Required. Bucket of the Cloud Storage object.",
+"type": "string"
+},
+"generation": {
+"description": "Generation number of the Cloud Storage object.",
+"format": "int64",
+"type": "string"
+},
+"object": {
+"description": "Required. Name of the Cloud Storage object.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceFileRemote": {
+"description": "Specifies a file available via some URI.",
+"id": "OSPolicyResourceFileRemote",
+"properties": {
+"sha256Checksum": {
+"description": "SHA256 checksum of the remote file.",
+"type": "string"
+},
+"uri": {
+"description": "Required. URI from which to fetch the object. It should contain both the protocol and path following the format `{protocol}://{location}`.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceFileResource": {
+"description": "A resource that manages the state of a file.",
+"id": "OSPolicyResourceFileResource",
+"properties": {
+"content": {
+"description": "A a file with this content. The size of the content is limited to 32KiB.",
+"type": "string"
+},
+"file": {
+"$ref": "OSPolicyResourceFile",
+"description": "A remote or local source."
+},
+"path": {
+"description": "Required. The absolute path of the file within the VM.",
+"type": "string"
+},
+"permissions": {
+"description": "Consists of three octal digits which represent, in order, the permissions of the owner, group, and other users for the file (similarly to the numeric mode used in the linux chmod utility). Each digit represents a three bit number with the 4 bit corresponding to the read permissions, the 2 bit corresponds to the write bit, and the one bit corresponds to the execute permission. Default behavior is 755. Below are some examples of permissions and their associated values: read, write, and execute: 7 read and execute: 5 read and write: 6 read only: 4",
+"type": "string"
+},
+"state": {
+"description": "Required. Desired state of the file.",
+"enum": [
+"DESIRED_STATE_UNSPECIFIED",
+"PRESENT",
+"ABSENT",
+"CONTENTS_MATCH"
+],
+"enumDescriptions": [
+"Unspecified is invalid.",
+"Ensure file at path is present.",
+"Ensure file at path is absent.",
+"Ensure the contents of the file at path matches. If the file does not exist it will be created."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceGroup": {
+"description": "Resource groups provide a mechanism to group OS policy resources. Resource groups enable OS policy authors to create a single OS policy to be applied to VMs running different operating Systems. When the OS policy is applied to a target VM, the appropriate resource group within the OS policy is selected based on the `OSFilter` specified within the resource group.",
+"id": "OSPolicyResourceGroup",
+"properties": {
+"inventoryFilters": {
+"description": "List of inventory filters for the resource group. The resources in this resource group are applied to the target VM if it satisfies at least one of the following inventory filters. For example, to apply this resource group to VMs running either `RHEL` or `CentOS` operating systems, specify 2 items for the list with following values: inventory_filters[0].os_short_name='rhel' and inventory_filters[1].os_short_name='centos' If the list is empty, this resource group will be applied to the target VM unconditionally.",
+"items": {
+"$ref": "OSPolicyInventoryFilter"
+},
+"type": "array"
+},
+"resources": {
+"description": "Required. List of resources configured for this resource group. The resources are executed in the exact order specified here.",
+"items": {
+"$ref": "OSPolicyResource"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResource": {
+"description": "A resource that manages a system package.",
+"id": "OSPolicyResourcePackageResource",
+"properties": {
+"apt": {
+"$ref": "OSPolicyResourcePackageResourceAPT",
+"description": "A package managed by Apt."
+},
+"deb": {
+"$ref": "OSPolicyResourcePackageResourceDeb",
+"description": "A deb package file."
+},
+"desiredState": {
+"description": "Required. The desired state the agent should maintain for this package.",
+"enum": [
+"DESIRED_STATE_UNSPECIFIED",
+"INSTALLED",
+"REMOVED"
+],
+"enumDescriptions": [
+"Unspecified is invalid.",
+"Ensure that the package is installed.",
+"The agent ensures that the package is not installed and uninstalls it if detected."
+],
+"type": "string"
+},
+"googet": {
+"$ref": "OSPolicyResourcePackageResourceGooGet",
+"description": "A package managed by GooGet."
+},
+"msi": {
+"$ref": "OSPolicyResourcePackageResourceMSI",
+"description": "An MSI package."
+},
+"rpm": {
+"$ref": "OSPolicyResourcePackageResourceRPM",
+"description": "An rpm package file."
+},
+"yum": {
+"$ref": "OSPolicyResourcePackageResourceYUM",
+"description": "A package managed by YUM."
+},
+"zypper": {
+"$ref": "OSPolicyResourcePackageResourceZypper",
+"description": "A package managed by Zypper."
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceAPT": {
+"description": "A package managed by APT. - install: `apt-get update && apt-get -y install [name]` - remove: `apt-get -y remove [name]`",
+"id": "OSPolicyResourcePackageResourceAPT",
+"properties": {
+"name": {
+"description": "Required. Package name.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceDeb": {
+"description": "A deb package file. dpkg packages only support INSTALLED state.",
+"id": "OSPolicyResourcePackageResourceDeb",
+"properties": {
+"pullDeps": {
+"description": "Whether dependencies should also be installed. - install when false: `dpkg -i package` - install when true: `apt-get update && apt-get -y install package.deb`",
+"type": "boolean"
+},
+"source": {
+"$ref": "OSPolicyResourceFile",
+"description": "Required. A deb package."
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceGooGet": {
+"description": "A package managed by GooGet. - install: `googet -noconfirm install package` - remove: `googet -noconfirm remove package`",
+"id": "OSPolicyResourcePackageResourceGooGet",
+"properties": {
+"name": {
+"description": "Required. Package name.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceMSI": {
+"description": "An MSI package. MSI packages only support INSTALLED state.",
+"id": "OSPolicyResourcePackageResourceMSI",
+"properties": {
+"properties": {
+"description": "Additional properties to use during installation. This should be in the format of Property=Setting. Appended to the defaults of `ACTION=INSTALL REBOOT=ReallySuppress`.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"source": {
+"$ref": "OSPolicyResourceFile",
+"description": "Required. The MSI package."
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceRPM": {
+"description": "An RPM package file. RPM packages only support INSTALLED state.",
+"id": "OSPolicyResourcePackageResourceRPM",
+"properties": {
+"pullDeps": {
+"description": "Whether dependencies should also be installed. - install when false: `rpm --upgrade --replacepkgs package.rpm` - install when true: `yum -y install package.rpm` or `zypper -y install package.rpm`",
+"type": "boolean"
+},
+"source": {
+"$ref": "OSPolicyResourceFile",
+"description": "Required. An rpm package."
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceYUM": {
+"description": "A package managed by YUM. - install: `yum -y install package` - remove: `yum -y remove package`",
+"id": "OSPolicyResourcePackageResourceYUM",
+"properties": {
+"name": {
+"description": "Required. Package name.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourcePackageResourceZypper": {
+"description": "A package managed by Zypper. - install: `zypper -y install package` - remove: `zypper -y rm package`",
+"id": "OSPolicyResourcePackageResourceZypper",
+"properties": {
+"name": {
+"description": "Required. Package name.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceRepositoryResource": {
+"description": "A resource that manages a package repository.",
+"id": "OSPolicyResourceRepositoryResource",
+"properties": {
+"apt": {
+"$ref": "OSPolicyResourceRepositoryResourceAptRepository",
+"description": "An Apt Repository."
+},
+"goo": {
+"$ref": "OSPolicyResourceRepositoryResourceGooRepository",
+"description": "A Goo Repository."
+},
+"yum": {
+"$ref": "OSPolicyResourceRepositoryResourceYumRepository",
+"description": "A Yum Repository."
+},
+"zypper": {
+"$ref": "OSPolicyResourceRepositoryResourceZypperRepository",
+"description": "A Zypper Repository."
+}
+},
+"type": "object"
+},
+"OSPolicyResourceRepositoryResourceAptRepository": {
+"description": "Represents a single apt package repository. These will be added to a repo file that will be managed at `/etc/apt/sources.list.d/google_osconfig.list`.",
+"id": "OSPolicyResourceRepositoryResourceAptRepository",
+"properties": {
+"archiveType": {
+"description": "Required. Type of archive files in this repository.",
+"enum": [
+"ARCHIVE_TYPE_UNSPECIFIED",
+"DEB",
+"DEB_SRC"
+],
+"enumDescriptions": [
+"Unspecified is invalid.",
+"Deb indicates that the archive contains binary files.",
+"Deb-src indicates that the archive contains source files."
+],
+"type": "string"
+},
+"components": {
+"description": "Required. List of components for this repository. Must contain at least one item.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"distribution": {
+"description": "Required. Distribution of this repository.",
+"type": "string"
+},
+"gpgKey": {
+"description": "URI of the key file for this repository. The agent maintains a keyring at `/etc/apt/trusted.gpg.d/osconfig_agent_managed.gpg`.",
+"type": "string"
+},
+"uri": {
+"description": "Required. URI for this repository.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceRepositoryResourceGooRepository": {
+"description": "Represents a Goo package repository. These are added to a repo file that is managed at `C:/ProgramData/GooGet/repos/google_osconfig.repo`.",
+"id": "OSPolicyResourceRepositoryResourceGooRepository",
+"properties": {
+"name": {
+"description": "Required. The name of the repository.",
+"type": "string"
+},
+"url": {
+"description": "Required. The url of the repository.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceRepositoryResourceYumRepository": {
+"description": "Represents a single yum package repository. These are added to a repo file that is managed at `/etc/yum.repos.d/google_osconfig.repo`.",
+"id": "OSPolicyResourceRepositoryResourceYumRepository",
+"properties": {
+"baseUrl": {
+"description": "Required. The location of the repository directory.",
+"type": "string"
+},
+"displayName": {
+"description": "The display name of the repository.",
+"type": "string"
+},
+"gpgKeys": {
+"description": "URIs of GPG keys.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"id": {
+"description": "Required. A one word, unique name for this repository. This is the `repo id` in the yum config file and also the `display_name` if `display_name` is omitted. This id is also used as the unique identifier when checking for resource conflicts.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"OSPolicyResourceRepositoryResourceZypperRepository": {
+"description": "Represents a single zypper package repository. These are added to a repo file that is managed at `/etc/zypp/repos.d/google_osconfig.repo`.",
+"id": "OSPolicyResourceRepositoryResourceZypperRepository",
+"properties": {
+"baseUrl": {
+"description": "Required. The location of the repository directory.",
+"type": "string"
+},
+"displayName": {
+"description": "The display name of the repository.",
+"type": "string"
+},
+"gpgKeys": {
+"description": "URIs of GPG keys.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"id": {
+"description": "Required. A one word, unique name for this repository. This is the `repo id` in the zypper config file and also the `display_name` if `display_name` is omitted. This id is also used as the unique identifier when checking for GuestPolicy conflicts.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"StatusProto": {
+"description": "Wire-format for a Status object",
+"id": "StatusProto",
+"properties": {
+"canonicalCode": {
+"description": "copybara:strip_begin(b/383363683) copybara:strip_end_and_replace optional int32 canonical_code = 6;",
+"format": "int32",
+"type": "integer"
+},
+"code": {
+"description": "Numeric code drawn from the space specified below. Often, this is the canonical error space, and code is drawn from google3/util/task/codes.proto copybara:strip_begin(b/383363683) copybara:strip_end_and_replace optional int32 code = 1;",
+"format": "int32",
+"type": "integer"
+},
+"message": {
+"description": "Detail message copybara:strip_begin(b/383363683) copybara:strip_end_and_replace optional string message = 3;",
+"type": "string"
+},
+"messageSet": {
+"$ref": "MessageSet",
+"description": "message_set associates an arbitrary proto message with the status. copybara:strip_begin(b/383363683) copybara:strip_end_and_replace optional proto2.bridge.MessageSet message_set = 5;"
+},
+"space": {
+"description": "copybara:strip_begin(b/383363683) Space to which this status belongs copybara:strip_end_and_replace optional string space = 2; // Space to which this status belongs",
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "OS Config API",
+"version": "v2beta",
+"version_module": true
+}

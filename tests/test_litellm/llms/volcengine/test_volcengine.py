@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 
-from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineConfig
+from litellm.llms.volcengine.chat.transformation import (
+    VolcEngineChatConfig as VolcEngineConfig,
+)
 from litellm.utils import get_optional_params
 
 
@@ -43,7 +45,7 @@ class TestVolcEngineConfig:
     def test_thinking_parameter_handling(self):
         """Test comprehensive thinking parameter handling scenarios"""
         config = VolcEngineConfig()
-        
+
         # Test 1: thinking enabled - should appear in extra_body
         result_enabled = config.map_openai_params(
             non_default_params={"thinking": {"type": "enabled"}},
@@ -51,21 +53,17 @@ class TestVolcEngineConfig:
             model="doubao-seed-1.6",
             drop_params=False,
         )
-        assert result_enabled == {
-            "extra_body": {"thinking": {"type": "enabled"}}
-        }
-        
+        assert result_enabled == {"extra_body": {"thinking": {"type": "enabled"}}}
+
         # Test 2: thinking None - should appear in extra_body as None
         result_none = config.map_openai_params(
             non_default_params={"thinking": None},
             optional_params={},
-            model="doubao-seed-1.6", 
+            model="doubao-seed-1.6",
             drop_params=False,
         )
-        assert result_none == {
-            "extra_body": {"thinking": None}
-        }
-        
+        assert result_none == {"extra_body": {"thinking": None}}
+
         # Test 3: thinking with custom value - should appear in extra_body
         result_custom = config.map_openai_params(
             non_default_params={"thinking": "custom_mode"},
@@ -73,10 +71,8 @@ class TestVolcEngineConfig:
             model="doubao-seed-1.6",
             drop_params=False,
         )
-        assert result_custom == {
-            "extra_body": {"thinking": "custom_mode"}
-        }
-        
+        assert result_custom == {"extra_body": {"thinking": "custom_mode"}}
+
         # Test 4: thinking disabled - should NOT appear in extra_body
         result_disabled = config.map_openai_params(
             non_default_params={"thinking": {"type": "disabled"}},
@@ -85,7 +81,7 @@ class TestVolcEngineConfig:
             drop_params=False,
         )
         assert result_disabled == {}
-        
+
         # Test 5: No thinking parameter - should return empty dict
         result_no_thinking = config.map_openai_params(
             non_default_params={},
@@ -132,4 +128,7 @@ class TestVolcEngineConfig:
             mock_create.assert_called_once()
             print(mock_create.call_args.kwargs)
             # Fixed: thinking disabled should NOT appear in extra_body
-            assert "extra_body" not in mock_create.call_args.kwargs or "thinking" not in mock_create.call_args.kwargs.get("extra_body", {})
+            assert (
+                "extra_body" not in mock_create.call_args.kwargs
+                or "thinking" not in mock_create.call_args.kwargs.get("extra_body", {})
+            )

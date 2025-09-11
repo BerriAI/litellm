@@ -55,7 +55,6 @@ class CustomGuardrail(CustomLogger):
         self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
-
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
@@ -76,7 +75,6 @@ class CustomGuardrail(CustomLogger):
         ],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
-
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: Union[List[GuardrailEventHooks], List[str]],
             supported_event_hooks: List[GuardrailEventHooks],
@@ -126,15 +124,12 @@ class CustomGuardrail(CustomLogger):
         self,
         requested_guardrails: Union[List[str], List[Dict[str, DynamicGuardrailParams]]],
     ) -> bool:
-
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
-
                     return True
             elif isinstance(_guardrail, str):
                 if self.guardrail_name == _guardrail:
-
                     return True
 
         return False
@@ -142,7 +137,6 @@ class CustomGuardrail(CustomLogger):
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
-
         from litellm.proxy._types import UserAPIKeyAuth
 
         # should run guardrail

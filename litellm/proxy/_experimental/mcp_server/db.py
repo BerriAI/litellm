@@ -76,12 +76,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_unique(
-            where={
-                "server_id": server_id,
-            }
-        )
+    mcp_server: Optional[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
+        where={
+            "server_id": server_id,
+        }
     )
     return mcp_server
 
@@ -92,12 +92,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_many(
-            where={
-                "server_id": {"in": server_ids},
-            }
-        )
+    _mcp_servers: List[
+        LiteLLM_MCPServerTable
+    ] = await prisma_client.db.litellm_mcpservertable.find_many(
+        where={
+            "server_id": {"in": server_ids},
+        }
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:

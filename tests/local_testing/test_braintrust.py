@@ -51,6 +51,7 @@ def test_braintrust_logging():
         time.sleep(2)
         mock_client.assert_called()
 
+
 def test_braintrust_logging_specific_project_id():
     import litellm
 
@@ -63,13 +64,18 @@ def test_braintrust_logging_specific_project_id():
         # set braintrust as a callback, litellm will send the data to braintrust
         litellm.callbacks = ["braintrust"]
 
-        response = litellm.completion(model="openai/gpt-4o", messages=[{ "content": "Hello, how are you?","role": "user"}], metadata={"project_id": "123"})
+        response = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"content": "Hello, how are you?", "role": "user"}],
+            metadata={"project_id": "123"},
+        )
 
         time.sleep(2)
-        
+
         # Check that the log was inserted into the correct project
         mock_client.assert_called()
         _, kwargs = mock_client.call_args
-        assert 'url' in kwargs
-        assert kwargs['url'] == "https://api.braintrustdata.com/v1/project_logs/123/insert"
-
+        assert "url" in kwargs
+        assert (
+            kwargs["url"] == "https://api.braintrustdata.com/v1/project_logs/123/insert"
+        )

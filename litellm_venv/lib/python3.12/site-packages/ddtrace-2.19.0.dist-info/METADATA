@@ -1,0 +1,71 @@
+Metadata-Version: 2.2
+Name: ddtrace
+Version: 2.19.0
+Summary: Datadog APM client library
+Author-email: "Datadog, Inc." <dev@datadoghq.com>
+License: LICENSE.BSD3
+Project-URL: Bug Tracker, https://github.com/DataDog/dd-trace-py/issues
+Project-URL: Changelog, https://github.com/DataDog/dd-trace-py/releases
+Project-URL: Documentation, https://ddtrace.readthedocs.io/en/stable/
+Project-URL: Homepage, https://github.com/DataDog/dd-trace-py
+Project-URL: Source Code, https://github.com/DataDog/dd-trace-py/
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: LICENSE.Apache
+License-File: LICENSE.BSD3
+License-File: NOTICE
+Requires-Dist: bytecode>=0.16.0; python_version >= "3.13.0"
+Requires-Dist: bytecode>=0.15.0; python_version ~= "3.12.0"
+Requires-Dist: bytecode>=0.14.0; python_version ~= "3.11.0"
+Requires-Dist: bytecode>=0.13.0; python_version < "3.11"
+Requires-Dist: envier~=0.5
+Requires-Dist: importlib_metadata<=6.5.0; python_version < "3.8"
+Requires-Dist: legacy-cgi>=2.0.0; python_version >= "3.13.0"
+Requires-Dist: opentelemetry-api>=1
+Requires-Dist: protobuf>=3
+Requires-Dist: typing_extensions
+Requires-Dist: xmltodict>=0.12
+Requires-Dist: wrapt>=1
+Provides-Extra: opentracing
+Requires-Dist: opentracing>=2.0.0; extra == "opentracing"
+Provides-Extra: openai
+Requires-Dist: tiktoken; extra == "openai"
+
+# `ddtrace`
+
+[![CircleCI](https://circleci.com/gh/DataDog/dd-trace-py/tree/main.svg?style=svg)](https://circleci.com/gh/DataDog/dd-trace-py/tree/main)
+[![PypiVersions](https://img.shields.io/pypi/v/ddtrace.svg)](https://pypi.org/project/ddtrace/)
+[![Pyversions](https://img.shields.io/pypi/pyversions/ddtrace.svg?style=flat)](https://pypi.org/project/ddtrace/)
+
+<img align="right" src="https://user-images.githubusercontent.com/6321485/167082083-53f6e48f-1843-4708-9b98-587c94f7ddb3.png" alt="bits python" width="200px"/>
+
+This library powers [Distributed Tracing](https://docs.datadoghq.com/tracing/),
+ [Continuous Profiling](https://docs.datadoghq.com/tracing/profiler/),
+ [Error Tracking](https://docs.datadoghq.com/tracing/error_tracking/),
+ [Continuous Integration Visibility](https://docs.datadoghq.com/continuous_integration/),
+ [Deployment Tracking](https://docs.datadoghq.com/tracing/deployment_tracking/),
+ [Code Hotspots](https://docs.datadoghq.com/tracing/profiler/connect_traces_and_profiles/),
+ [Dynamic Instrumentation](https://docs.datadoghq.com/dynamic_instrumentation/),
+ and more.
+
+To get started with tracing, check out the [product documentation][setup docs] or the [glossary][visualization docs].
+
+For advanced usage and configuration information, check out the [library documentation][api docs].
+
+To get started as a contributor, see [the contributing docs](https://ddtrace.readthedocs.io/en/stable/contributing.html) first.
+
+[setup docs]: https://docs.datadoghq.com/tracing/setup/python/
+[api docs]: https://ddtrace.readthedocs.io/
+[visualization docs]: https://docs.datadoghq.com/tracing/visualization/

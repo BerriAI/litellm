@@ -1,0 +1,227 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.cloud.iam_v3",
+  "protoPackage": "google.iam.v3",
+  "schema": "1.0",
+  "services": {
+    "PolicyBindings": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "PolicyBindingsClient",
+          "rpcs": {
+            "CreatePolicyBinding": {
+              "methods": [
+                "create_policy_binding"
+              ]
+            },
+            "DeletePolicyBinding": {
+              "methods": [
+                "delete_policy_binding"
+              ]
+            },
+            "GetPolicyBinding": {
+              "methods": [
+                "get_policy_binding"
+              ]
+            },
+            "ListPolicyBindings": {
+              "methods": [
+                "list_policy_bindings"
+              ]
+            },
+            "SearchTargetPolicyBindings": {
+              "methods": [
+                "search_target_policy_bindings"
+              ]
+            },
+            "UpdatePolicyBinding": {
+              "methods": [
+                "update_policy_binding"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "PolicyBindingsAsyncClient",
+          "rpcs": {
+            "CreatePolicyBinding": {
+              "methods": [
+                "create_policy_binding"
+              ]
+            },
+            "DeletePolicyBinding": {
+              "methods": [
+                "delete_policy_binding"
+              ]
+            },
+            "GetPolicyBinding": {
+              "methods": [
+                "get_policy_binding"
+              ]
+            },
+            "ListPolicyBindings": {
+              "methods": [
+                "list_policy_bindings"
+              ]
+            },
+            "SearchTargetPolicyBindings": {
+              "methods": [
+                "search_target_policy_bindings"
+              ]
+            },
+            "UpdatePolicyBinding": {
+              "methods": [
+                "update_policy_binding"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "PolicyBindingsClient",
+          "rpcs": {
+            "CreatePolicyBinding": {
+              "methods": [
+                "create_policy_binding"
+              ]
+            },
+            "DeletePolicyBinding": {
+              "methods": [
+                "delete_policy_binding"
+              ]
+            },
+            "GetPolicyBinding": {
+              "methods": [
+                "get_policy_binding"
+              ]
+            },
+            "ListPolicyBindings": {
+              "methods": [
+                "list_policy_bindings"
+              ]
+            },
+            "SearchTargetPolicyBindings": {
+              "methods": [
+                "search_target_policy_bindings"
+              ]
+            },
+            "UpdatePolicyBinding": {
+              "methods": [
+                "update_policy_binding"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "PrincipalAccessBoundaryPolicies": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "PrincipalAccessBoundaryPoliciesClient",
+          "rpcs": {
+            "CreatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "create_principal_access_boundary_policy"
+              ]
+            },
+            "DeletePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "delete_principal_access_boundary_policy"
+              ]
+            },
+            "GetPrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "get_principal_access_boundary_policy"
+              ]
+            },
+            "ListPrincipalAccessBoundaryPolicies": {
+              "methods": [
+                "list_principal_access_boundary_policies"
+              ]
+            },
+            "SearchPrincipalAccessBoundaryPolicyBindings": {
+              "methods": [
+                "search_principal_access_boundary_policy_bindings"
+              ]
+            },
+            "UpdatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "update_principal_access_boundary_policy"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "PrincipalAccessBoundaryPoliciesAsyncClient",
+          "rpcs": {
+            "CreatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "create_principal_access_boundary_policy"
+              ]
+            },
+            "DeletePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "delete_principal_access_boundary_policy"
+              ]
+            },
+            "GetPrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "get_principal_access_boundary_policy"
+              ]
+            },
+            "ListPrincipalAccessBoundaryPolicies": {
+              "methods": [
+                "list_principal_access_boundary_policies"
+              ]
+            },
+            "SearchPrincipalAccessBoundaryPolicyBindings": {
+              "methods": [
+                "search_principal_access_boundary_policy_bindings"
+              ]
+            },
+            "UpdatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "update_principal_access_boundary_policy"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "PrincipalAccessBoundaryPoliciesClient",
+          "rpcs": {
+            "CreatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "create_principal_access_boundary_policy"
+              ]
+            },
+            "DeletePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "delete_principal_access_boundary_policy"
+              ]
+            },
+            "GetPrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "get_principal_access_boundary_policy"
+              ]
+            },
+            "ListPrincipalAccessBoundaryPolicies": {
+              "methods": [
+                "list_principal_access_boundary_policies"
+              ]
+            },
+            "SearchPrincipalAccessBoundaryPolicyBindings": {
+              "methods": [
+                "search_principal_access_boundary_policy_bindings"
+              ]
+            },
+            "UpdatePrincipalAccessBoundaryPolicy": {
+              "methods": [
+                "update_principal_access_boundary_policy"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

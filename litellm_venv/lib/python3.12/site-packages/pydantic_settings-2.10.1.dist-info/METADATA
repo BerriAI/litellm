@@ -1,0 +1,63 @@
+Metadata-Version: 2.4
+Name: pydantic-settings
+Version: 2.10.1
+Summary: Settings management using Pydantic
+Project-URL: Homepage, https://github.com/pydantic/pydantic-settings
+Project-URL: Funding, https://github.com/sponsors/samuelcolvin
+Project-URL: Source, https://github.com/pydantic/pydantic-settings
+Project-URL: Changelog, https://github.com/pydantic/pydantic-settings/releases
+Project-URL: Documentation, https://docs.pydantic.dev/dev-v2/concepts/pydantic_settings/
+Author-email: Samuel Colvin <s@muelcolvin.com>, Eric Jolibois <em.jolibois@gmail.com>, Hasan Ramezani <hasan.r67@gmail.com>
+License-Expression: MIT
+License-File: LICENSE
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Environment :: MacOS X
+Classifier: Framework :: Pydantic
+Classifier: Framework :: Pydantic :: 2
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Information Technology
+Classifier: Intended Audience :: System Administrators
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Operating System :: Unix
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Internet
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.9
+Requires-Dist: pydantic>=2.7.0
+Requires-Dist: python-dotenv>=0.21.0
+Requires-Dist: typing-inspection>=0.4.0
+Provides-Extra: aws-secrets-manager
+Requires-Dist: boto3-stubs[secretsmanager]; extra == 'aws-secrets-manager'
+Requires-Dist: boto3>=1.35.0; extra == 'aws-secrets-manager'
+Provides-Extra: azure-key-vault
+Requires-Dist: azure-identity>=1.16.0; extra == 'azure-key-vault'
+Requires-Dist: azure-keyvault-secrets>=4.8.0; extra == 'azure-key-vault'
+Provides-Extra: gcp-secret-manager
+Requires-Dist: google-cloud-secret-manager>=2.23.1; extra == 'gcp-secret-manager'
+Provides-Extra: toml
+Requires-Dist: tomli>=2.0.1; extra == 'toml'
+Provides-Extra: yaml
+Requires-Dist: pyyaml>=6.0.1; extra == 'yaml'
+Description-Content-Type: text/markdown
+
+# pydantic-settings
+
+[![CI](https://github.com/pydantic/pydantic-settings/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/pydantic/pydantic-settings/actions/workflows/ci.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/pydantic/pydantic-settings/branch/main/graph/badge.svg)](https://codecov.io/gh/pydantic/pydantic-settings)
+[![pypi](https://img.shields.io/pypi/v/pydantic-settings.svg)](https://pypi.python.org/pypi/pydantic-settings)
+[![license](https://img.shields.io/github/license/pydantic/pydantic-settings.svg)](https://github.com/pydantic/pydantic-settings/blob/main/LICENSE)
+[![downloads](https://static.pepy.tech/badge/pydantic-settings/month)](https://pepy.tech/project/pydantic-settings)
+[![versions](https://img.shields.io/pypi/pyversions/pydantic-settings.svg)](https://github.com/pydantic/pydantic-settings)
+
+Settings management using Pydantic.
+
+See [documentation](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) for more details.

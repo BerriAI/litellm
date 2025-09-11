@@ -1,0 +1,4324 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/cloud-platform": {
+"description": "See, edit, configure, and delete your Google Cloud data and see the email address for your Google Account."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://managedkafka.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Managed Kafka",
+"description": "Manage Apache Kafka clusters and resources. ",
+"discoveryVersion": "v1",
+"documentationLink": "https://cloud.google.com/managed-service-for-apache-kafka/docs",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "managedkafka:v1",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://managedkafka.mtls.googleapis.com/",
+"name": "managedkafka",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"projects": {
+"resources": {
+"locations": {
+"methods": {
+"get": {
+"description": "Gets information about a location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Resource name for the location.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Location"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists information about the supported locations for this service.",
+"flatPath": "v1/projects/{projectsId}/locations",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"extraLocationTypes": {
+"description": "Optional. Do not use this field. It is unsupported and is ignored unless explicitly documented otherwise. This is primarily for internal usage.",
+"location": "query",
+"repeated": true,
+"type": "string"
+},
+"filter": {
+"description": "A filter to narrow down results to a preferred subset. The filtering language accepts strings like `\"displayName=tokyo\"`, and is documented in more detail in [AIP-160](https://google.aip.dev/160).",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The resource that owns the locations collection, if applicable.",
+"location": "path",
+"pattern": "^projects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The maximum number of results to return. If not set, the service selects a default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "A page token received from the `next_page_token` field in the response. Send that page token to receive the subsequent page.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/locations",
+"response": {
+"$ref": "ListLocationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"clusters": {
+"methods": {
+"create": {
+"description": "Creates a new cluster in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.clusters.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"clusterId": {
+"description": "Required. The ID to use for the cluster, which will become the final component of the cluster's name. The ID must be 1-63 characters long, and match the regular expression `[a-z]([-a-z0-9]*[a-z0-9])?` to comply with RFC 1035. This value is structured like: `my-cluster-id`.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent region in which to create the cluster. Structured like `projects/{project}/locations/{location}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/clusters",
+"request": {
+"$ref": "Cluster"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.clusters.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the cluster to delete.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the cluster whose configuration to return.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Cluster"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the clusters in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filter expression for the result.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Order by fields for the result.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of clusters to return. The service may return fewer than this value. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListClusters` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListClusters` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent location whose clusters are to be listed. Structured like `projects/{project}/locations/{location}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/clusters",
+"response": {
+"$ref": "ListClustersResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a single cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.clusters.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name of the cluster. Structured like: projects/{project_number}/locations/{location}/clusters/{cluster_id}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the cluster resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The mask is required and a value of * will update all fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Cluster"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"acls": {
+"methods": {
+"addAclEntry": {
+"description": "Incremental update: Adds an acl entry to an acl. Creates the acl if it does not exist yet.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls/{aclsId}:addAclEntry",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.clusters.acls.addAclEntry",
+"parameterOrder": [
+"acl"
+],
+"parameters": {
+"acl": {
+"description": "Required. The name of the acl to add the acl entry to. Structured like: `projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id}`. The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. See `Acl.name` for details.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/acls/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+acl}:addAclEntry",
+"request": {
+"$ref": "AclEntry"
+},
+"response": {
+"$ref": "AddAclEntryResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"create": {
+"description": "Creates a new acl in the given project, location, and cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.clusters.acls.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"aclId": {
+"description": "Required. The ID to use for the acl, which will become the final component of the acl's name. The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. `acl_id` is structured like one of the following: For acls on the cluster: `cluster` For acls on a single resource within the cluster: `topic/{resource_name}` `consumerGroup/{resource_name}` `transactionalId/{resource_name}` For acls on all resources that match a prefix: `topicPrefixed/{resource_name}` `consumerGroupPrefixed/{resource_name}` `transactionalIdPrefixed/{resource_name}` For acls on all resources of a given type (i.e. the wildcard literal \"*\"): `allTopics` (represents `topic/*`) `allConsumerGroups` (represents `consumerGroup/*`) `allTransactionalIds` (represents `transactionalId/*`)",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent cluster in which to create the acl. Structured like `projects/{project}/locations/{location}/clusters/{cluster}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/acls",
+"request": {
+"$ref": "Acl"
+},
+"response": {
+"$ref": "Acl"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes an acl.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls/{aclsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.clusters.acls.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the acl to delete. Structured like: `projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id}`. The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. See `Acl.name` for details.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/acls/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single acl.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls/{aclsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.acls.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the acl to return. Structured like: `projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id}`. The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. See `Acl.name` for details.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/acls/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Acl"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the acls in a given cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.acls.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of acls to return. The service may return fewer than this value. If unset or zero, all acls for the parent is returned.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListAcls` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListAcls` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent cluster whose acls are to be listed. Structured like `projects/{project}/locations/{location}/clusters/{cluster}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/acls",
+"response": {
+"$ref": "ListAclsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a single acl.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls/{aclsId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.clusters.acls.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name for the acl. Represents a single Resource Pattern. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id} The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. `acl_id` is structured like one of the following: For acls on the cluster: `cluster` For acls on a single resource within the cluster: `topic/{resource_name}` `consumerGroup/{resource_name}` `transactionalId/{resource_name}` For acls on all resources that match a prefix: `topicPrefixed/{resource_name}` `consumerGroupPrefixed/{resource_name}` `transactionalIdPrefixed/{resource_name}` For acls on all resources of a given type (i.e. the wildcard literal \"*\"): `allTopics` (represents `topic/*`) `allConsumerGroups` (represents `consumerGroup/*`) `allTransactionalIds` (represents `transactionalId/*`)",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/acls/.*$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. Field mask is used to specify the fields to be overwritten in the Acl resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Acl"
+},
+"response": {
+"$ref": "Acl"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"removeAclEntry": {
+"description": "Incremental update: Removes an acl entry from an acl. Deletes the acl if its acl entries become empty (i.e. if the removed entry was the last one in the acl).",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/acls/{aclsId}:removeAclEntry",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.clusters.acls.removeAclEntry",
+"parameterOrder": [
+"acl"
+],
+"parameters": {
+"acl": {
+"description": "Required. The name of the acl to remove the acl entry from. Structured like: `projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id}`. The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. See `Acl.name` for details.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/acls/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+acl}:removeAclEntry",
+"request": {
+"$ref": "AclEntry"
+},
+"response": {
+"$ref": "RemoveAclEntryResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"consumerGroups": {
+"methods": {
+"delete": {
+"description": "Deletes a single consumer group.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/consumerGroups/{consumerGroupsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.clusters.consumerGroups.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the consumer group to delete. `projects/{project}/locations/{location}/clusters/{cluster}/consumerGroups/{consumerGroup}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/consumerGroups/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single consumer group.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/consumerGroups/{consumerGroupsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.consumerGroups.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the consumer group whose configuration to return. `projects/{project}/locations/{location}/clusters/{cluster}/consumerGroups/{consumerGroup}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/consumerGroups/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "ConsumerGroup"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the consumer groups in a given cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/consumerGroups",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.consumerGroups.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of consumer groups to return. The service may return fewer than this value. If unset or zero, all consumer groups for the parent is returned.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListConsumerGroups` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListConsumerGroups` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent cluster whose consumer groups are to be listed. Structured like `projects/{project}/locations/{location}/clusters/{cluster}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/consumerGroups",
+"response": {
+"$ref": "ListConsumerGroupsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a single consumer group.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/consumerGroups/{consumerGroupsId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.clusters.consumerGroups.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name of the consumer group. The `consumer_group` segment is used when connecting directly to the cluster. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/consumerGroups/{consumer_group}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/consumerGroups/.*$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the ConsumerGroup resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The mask is required and a value of * will update all fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "ConsumerGroup"
+},
+"response": {
+"$ref": "ConsumerGroup"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"topics": {
+"methods": {
+"create": {
+"description": "Creates a new topic in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/topics",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.clusters.topics.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent cluster in which to create the topic. Structured like `projects/{project}/locations/{location}/clusters/{cluster}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"topicId": {
+"description": "Required. The ID to use for the topic, which will become the final component of the topic's name. This value is structured like: `my-topic-name`.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/topics",
+"request": {
+"$ref": "Topic"
+},
+"response": {
+"$ref": "Topic"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single topic.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/topics/{topicsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.clusters.topics.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the topic to delete. `projects/{project}/locations/{location}/clusters/{cluster}/topics/{topic}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/topics/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single topic.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/topics/{topicsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.topics.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the topic whose configuration to return. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/topics/{topic}.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/topics/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Topic"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the topics in a given cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/topics",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.clusters.topics.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of topics to return. The service may return fewer than this value. If unset or zero, all topics for the parent is returned.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListTopics` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListTopics` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent cluster whose topics are to be listed. Structured like `projects/{project}/locations/{location}/clusters/{cluster}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/topics",
+"response": {
+"$ref": "ListTopicsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a single topic.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/clusters/{clustersId}/topics/{topicsId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.clusters.topics.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name of the topic. The `topic` segment is used when connecting directly to the cluster. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/topics/{topic}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/clusters/[^/]+/topics/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the Topic resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The mask is required and a value of * will update all fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Topic"
+},
+"response": {
+"$ref": "Topic"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"connectClusters": {
+"methods": {
+"create": {
+"description": "Creates a new Kafka Connect cluster in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"connectClusterId": {
+"description": "Required. The ID to use for the Connect cluster, which will become the final component of the cluster's name. The ID must be 1-63 characters long, and match the regular expression `[a-z]([-a-z0-9]*[a-z0-9])?` to comply with RFC 1035. This value is structured like: `my-cluster-id`.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent project/location in which to create the Kafka Connect cluster. Structured like `projects/{project}/locations/{location}/`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/connectClusters",
+"request": {
+"$ref": "ConnectCluster"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a single Connect cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.connectClusters.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Kafka Connect cluster to delete. Structured like `projects/{project}/locations/{location}/connectClusters/{connect_cluster_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single Kafka Connect cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.connectClusters.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the Kafka Connect cluster whose configuration to return. Structured like `projects/{project}/locations/{location}/connectClusters/{connect_cluster_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "ConnectCluster"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the Kafka Connect clusters in a given project and location.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.connectClusters.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"filter": {
+"description": "Optional. Filter expression for the result.",
+"location": "query",
+"type": "string"
+},
+"orderBy": {
+"description": "Optional. Order by fields for the result.",
+"location": "query",
+"type": "string"
+},
+"pageSize": {
+"description": "Optional. The maximum number of Connect clusters to return. The service may return fewer than this value. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListConnectClusters` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListConnectClusters` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent project/location whose Connect clusters are to be listed. Structured like `projects/{project}/locations/{location}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/connectClusters",
+"response": {
+"$ref": "ListConnectClustersResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a single Kafka Connect cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.connectClusters.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name of the Kafka Connect cluster. Structured like: projects/{project_number}/locations/{location}/connectClusters/{connect_cluster_id}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+$",
+"required": true,
+"type": "string"
+},
+"requestId": {
+"description": "Optional. An optional request ID to identify requests. Specify a unique request ID to avoid duplication of requests. If a request times out or fails, retrying with the same ID allows the server to recognize the previous attempt. For at least 60 minutes, the server ignores duplicate requests bearing the same ID. For example, consider a situation where you make an initial request and the request times out. If you make the request again with the same request ID within 60 minutes of the last request, the server checks if an original operation with the same request ID was received. If so, the server ignores the second request. The request ID must be a valid UUID. A zero UUID is not supported (00000000-0000-0000-0000-000000000000).",
+"location": "query",
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the cluster resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The mask is required and a value of * will update all fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "ConnectCluster"
+},
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"connectors": {
+"methods": {
+"create": {
+"description": "Creates a new connector in a given Connect cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.connectors.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"connectorId": {
+"description": "Required. The ID to use for the connector, which will become the final component of the connector's name. The ID must be 1-63 characters long, and match the regular expression `[a-z]([-a-z0-9]*[a-z0-9])?` to comply with RFC 1035. This value is structured like: `my-connector-id`.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent Connect cluster in which to create the connector. Structured like `projects/{project}/locations/{location}/connectClusters/{connect_cluster_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/connectors",
+"request": {
+"$ref": "Connector"
+},
+"response": {
+"$ref": "Connector"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a connector.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.connectClusters.connectors.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to delete. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Returns the properties of a single connector.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.connectClusters.connectors.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector whose configuration to return. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Connector"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists the connectors in a given Connect cluster.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.connectClusters.connectors.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. The maximum number of connectors to return. The service may return fewer than this value. If unspecified, server will pick an appropriate default.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. A page token, received from a previous `ListConnectors` call. Provide this to retrieve the subsequent page. When paginating, all other parameters provided to `ListConnectors` must match the call that provided the page token.",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. The parent Connect cluster whose connectors are to be listed. Structured like `projects/{project}/locations/{location}/connectClusters/{connect_cluster_id}`.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/connectors",
+"response": {
+"$ref": "ListConnectorsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"patch": {
+"description": "Updates the properties of a connector.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}",
+"httpMethod": "PATCH",
+"id": "managedkafka.projects.locations.connectClusters.connectors.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Identifier. The name of the connector. Structured like: projects/{project}/locations/{location}/connectClusters/{connect_cluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Required. Field mask is used to specify the fields to be overwritten in the cluster resource by the update. The fields specified in the update_mask are relative to the resource, not the full request. A field will be overwritten if it is in the mask. The mask is required and a value of * will update all fields.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "Connector"
+},
+"response": {
+"$ref": "Connector"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"pause": {
+"description": "Pauses the connector and its tasks.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}:pause",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.connectors.pause",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to pause. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:pause",
+"request": {
+"$ref": "PauseConnectorRequest"
+},
+"response": {
+"$ref": "PauseConnectorResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"restart": {
+"description": "Restarts the connector.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}:restart",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.connectors.restart",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to restart. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:restart",
+"request": {
+"$ref": "RestartConnectorRequest"
+},
+"response": {
+"$ref": "RestartConnectorResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"resume": {
+"description": "Resumes the connector and its tasks.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}:resume",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.connectors.resume",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to pause. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:resume",
+"request": {
+"$ref": "ResumeConnectorRequest"
+},
+"response": {
+"$ref": "ResumeConnectorResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"stop": {
+"description": "Stops the connector.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/connectClusters/{connectClustersId}/connectors/{connectorsId}:stop",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.connectClusters.connectors.stop",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the connector to stop. Structured like: projects/{project}/locations/{location}/connectClusters/{connectCluster}/connectors/{connector}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/connectClusters/[^/]+/connectors/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:stop",
+"request": {
+"$ref": "StopConnectorRequest"
+},
+"response": {
+"$ref": "StopConnectorResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"operations": {
+"methods": {
+"cancel": {
+"description": "Starts asynchronous cancellation on a long-running operation. The server makes a best effort to cancel the operation, but success is not guaranteed. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`. Clients can use Operations.GetOperation or other methods to check whether the cancellation succeeded or whether the operation completed despite cancellation. On successful cancellation, the operation is not deleted; instead, it becomes an operation with an Operation.error value with a google.rpc.Status.code of `1`, corresponding to `Code.CANCELLED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}:cancel",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.operations.cancel",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be cancelled.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}:cancel",
+"request": {
+"$ref": "CancelOperationRequest"
+},
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Deletes a long-running operation. This method indicates that the client is no longer interested in the operation result. It does not cancel the operation. If the server doesn't support this method, it returns `google.rpc.Code.UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.operations.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource to be deleted.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Gets the latest state of a long-running operation. Clients can use this method to poll the operation result at intervals as recommended by the API service.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations/{operationsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.operations.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "The name of the operation resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/operations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Operation"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Lists operations that match the specified filter in the request. If the server doesn't support this method, it returns `UNIMPLEMENTED`.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/operations",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.operations.list",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"filter": {
+"description": "The standard list filter.",
+"location": "query",
+"type": "string"
+},
+"name": {
+"description": "The name of the operation's parent resource.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"pageSize": {
+"description": "The standard list page size.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "The standard list page token.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/operations",
+"response": {
+"$ref": "ListOperationsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"schemaRegistries": {
+"methods": {
+"create": {
+"description": "Create a schema registry instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent whose schema registry instance is to be created. Structured like: `projects/{project}/locations/{location}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/schemaRegistries",
+"request": {
+"$ref": "CreateSchemaRegistryRequest"
+},
+"response": {
+"$ref": "SchemaRegistry"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Delete a schema registry instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema registry instance to delete. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Empty"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get the schema registry instance.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema registry instance to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaRegistry"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "List schema registries.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent whose schema registry instances are to be listed. Structured like: `projects/{project}/locations/{location}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+$",
+"required": true,
+"type": "string"
+},
+"view": {
+"description": "Optional. Specifies the view to return for the schema registry instances. If not specified, the default view is SCHEMA_REGISTRY_VIEW_BASIC.",
+"enum": [
+"SCHEMA_REGISTRY_VIEW_UNSPECIFIED",
+"SCHEMA_REGISTRY_VIEW_BASIC",
+"SCHEMA_REGISTRY_VIEW_FULL"
+],
+"enumDescriptions": [
+"The unset value. The API will default to SCHEMA_REGISTRY_VIEW_BASIC.",
+"If SchemaRegistryView is not specified, this is the default value. Returns only the name of the schema registry. The contexts associated with it are not included.",
+"Returns the name of the schema registry and all the contexts associated with it."
+],
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/schemaRegistries",
+"response": {
+"$ref": "ListSchemaRegistriesResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"compatibility": {
+"methods": {
+"checkCompatibility": {
+"description": "Check compatibility of a schema with all versions or a specific version of a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/compatibility/{compatibilityId}",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.compatibility.checkCompatibility",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the resource to check compatibility for. The format is either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/compatibility/subjects/*/versions: Check compatibility with one or more versions of the specified subject. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/compatibility/subjects/{subject}/versions/{version}: Check compatibility with a specific version of the subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/compatibility/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "CheckCompatibilityRequest"
+},
+"response": {
+"$ref": "CheckCompatibilityResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"config": {
+"methods": {
+"delete": {
+"description": "Delete schema config for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/config/{configId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.config.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of subject to delete the config for. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get schema config at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/config/{configId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.config.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"defaultToGlobal": {
+"description": "Optional. If true, the config will fall back to the config at the global level if no subject level config is found.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The resource name to get the config for. It can be either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config: Get config at global level. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}: Get config for a specific subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"update": {
+"description": "Update config at global level or for a subject. Creates a SchemaSubject-level SchemaConfig if it does not exist.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/config/{configId}",
+"httpMethod": "PUT",
+"id": "managedkafka.projects.locations.schemaRegistries.config.update",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name to update the config for. It can be either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config: Update config at global level. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}: Update config for a specific subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "UpdateSchemaConfigRequest"
+},
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"contexts": {
+"methods": {
+"get": {
+"description": "Get the context.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the context to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Context"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "List contexts for a schema registry.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent of the contexts. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/contexts",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"compatibility": {
+"methods": {
+"checkCompatibility": {
+"description": "Check compatibility of a schema with all versions or a specific version of a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/compatibility/{compatibilityId}",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.compatibility.checkCompatibility",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the resource to check compatibility for. The format is either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/compatibility/subjects/*/versions: Check compatibility with one or more versions of the specified subject. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/compatibility/subjects/{subject}/versions/{version}: Check compatibility with a specific version of the subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/compatibility/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "CheckCompatibilityRequest"
+},
+"response": {
+"$ref": "CheckCompatibilityResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"config": {
+"methods": {
+"delete": {
+"description": "Delete schema config for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/config/{configId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.config.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of subject to delete the config for. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get schema config at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/config/{configId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.config.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"defaultToGlobal": {
+"description": "Optional. If true, the config will fall back to the config at the global level if no subject level config is found.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The resource name to get the config for. It can be either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config: Get config at global level. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}: Get config for a specific subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"update": {
+"description": "Update config at global level or for a subject. Creates a SchemaSubject-level SchemaConfig if it does not exist.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/config/{configId}",
+"httpMethod": "PUT",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.config.update",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name to update the config for. It can be either of following: * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config: Update config at global level. * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/config/{subject}: Update config for a specific subject.",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/config/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "UpdateSchemaConfigRequest"
+},
+"response": {
+"$ref": "SchemaConfig"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"mode": {
+"methods": {
+"delete": {
+"description": "Delete schema mode for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/mode/{modeId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.mode.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of subject to delete the mode for. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject} * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get mode at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/mode/{modeId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.mode.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the mode. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject}: mode for a schema registry, or * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}: mode for a specific subject in a specific context",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"update": {
+"description": "Update mode at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/mode/{modeId}",
+"httpMethod": "PUT",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.mode.update",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the mode. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject}: mode for a schema registry, or * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}: mode for a specific subject in a specific context",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "UpdateSchemaModeRequest"
+},
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"schemas": {
+"methods": {
+"get": {
+"description": "Get the schema for the given schema id.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/schemas/{schemasId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.schemas.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. Used to limit the search for the schema ID to a specific subject, otherwise the schema ID will be searched for in all subjects in the given specified context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Schema"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getSchema": {
+"description": "Get the schema string for the given schema id. The response will be the schema string.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/schemas/{schemasId}/schema",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.schemas.getSchema",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. Used to limit the search for the schema ID to a specific subject, otherwise the schema ID will be searched for in all subjects in the given specified context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/schema",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"subjects": {
+"methods": {
+"list": {
+"description": "List subjects which reference a particular schema id. The response will be an array of subject names.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/schemas/{schemasId}/subjects",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.schemas.subjects.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted subjects. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The schema resource whose associated subjects are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. The subject to filter the subjects by.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/subjects",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"types": {
+"methods": {
+"list": {
+"description": "List the supported schema types. The response will be an array of schema types.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/schemas/types",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.schemas.types.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent schema registry whose schema types are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/schemas/types",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"versions": {
+"methods": {
+"list": {
+"description": "List the schema versions for the given schema id. The response will be an array of subject-version pairs as: [{\"subject\":\"subject1\", \"version\":1}, {\"subject\":\"subject2\", \"version\":2}].",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/schemas/{schemasId}/versions",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.schemas.versions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted versions of the schema, even if the subject is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The schema whose schema versions are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. The subject to filter the subjects by.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"subjects": {
+"methods": {
+"delete": {
+"description": "Delete a subject. The response will be an array of versions of the deleted subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the subject to delete. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"permanent": {
+"description": "Optional. If true, the subject and all associated metadata including the schema ID will be deleted permanently. Otherwise, only the subject is soft-deleted. The default is false. Soft-deleted subjects can still be searched in ListSubjects API call with deleted=true query parameter. A soft-delete of a subject must be performed before a hard-delete.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "List subjects in the schema registry. The response will be an array of subject names.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted subjects. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The parent schema registry/context whose subjects are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+$",
+"required": true,
+"type": "string"
+},
+"subjectPrefix": {
+"description": "Optional. The context to filter the subjects by, in the format of `:.{context}:`. If unset, all subjects in the registry are returned. Set to empty string or add as '?subjectPrefix=' at the end of this request to list subjects in the default context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/subjects",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"lookupVersion": {
+"description": "Lookup a schema under the specified subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.lookupVersion",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The subject to lookup the schema in. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}",
+"request": {
+"$ref": "LookupVersionRequest"
+},
+"response": {
+"$ref": "SchemaVersion"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"versions": {
+"methods": {
+"create": {
+"description": "Register a new version under a given subject with the given schema.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The subject to create the version for. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"request": {
+"$ref": "CreateVersionRequest"
+},
+"response": {
+"$ref": "CreateVersionResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Delete a version of a subject. The response will be the deleted version id.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions/{versionsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the subject version to delete. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+},
+"permanent": {
+"description": "Optional. If true, both the version and the referenced schema ID will be permanently deleted. The default is false. If false, the version will be deleted but the schema ID will be retained. Soft-deleted versions can still be searched in ListVersions API call with deleted=true query parameter. A soft-delete of a version must be performed before a hard-delete.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get a versioned schema (schema with subject/version) of a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions/{versionsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, no matter if the subject/version is soft-deleted or not, it returns the version details. If false, it returns NOT_FOUND error if the subject/version is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the subject to return versions. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaVersion"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getSchema": {
+"description": "Get the schema string only for a version of a subject. The response will be the schema string.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions/{versionsId}/schema",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.getSchema",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, no matter if the subject/version is soft-deleted or not, it returns the version details. If false, it returns NOT_FOUND error if the subject/version is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the subject to return versions. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}/schema",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Get all versions of a subject. The response will be an array of versions of the subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted versions of an active or soft-deleted subject. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The subject whose versions are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"referencedby": {
+"methods": {
+"list": {
+"description": "Get a list of IDs of schemas that reference the schema with the given subject and version.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/contexts/{contextsId}/subjects/{subjectsId}/versions/{versionsId}/referencedby",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.contexts.subjects.versions.referencedby.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The version to list referenced by. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/contexts/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/referencedby",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+}
+},
+"mode": {
+"methods": {
+"delete": {
+"description": "Delete schema mode for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/mode/{modeId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.mode.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of subject to delete the mode for. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject} * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get mode at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/mode/{modeId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.mode.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the mode. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject}: mode for a schema registry, or * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}: mode for a specific subject in a specific context",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"update": {
+"description": "Update mode at global level or for a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/mode/{modeId}",
+"httpMethod": "PUT",
+"id": "managedkafka.projects.locations.schemaRegistries.mode.update",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The resource name of the mode. The format is * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/mode/{subject}: mode for a schema registry, or * projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/mode/{subject}: mode for a specific subject in a specific context",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/mode/.*$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"request": {
+"$ref": "UpdateSchemaModeRequest"
+},
+"response": {
+"$ref": "SchemaMode"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"schemas": {
+"methods": {
+"get": {
+"description": "Get the schema for the given schema id.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/schemas/{schemasId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.schemas.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. Used to limit the search for the schema ID to a specific subject, otherwise the schema ID will be searched for in all subjects in the given specified context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "Schema"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getSchema": {
+"description": "Get the schema string for the given schema id. The response will be the schema string.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/schemas/{schemasId}/schema",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.schemas.getSchema",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the schema to return. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. Used to limit the search for the schema ID to a specific subject, otherwise the schema ID will be searched for in all subjects in the given specified context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+name}/schema",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"subjects": {
+"methods": {
+"list": {
+"description": "List subjects which reference a particular schema id. The response will be an array of subject names.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/schemas/{schemasId}/subjects",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.schemas.subjects.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted subjects. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The schema resource whose associated subjects are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. The subject to filter the subjects by.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/subjects",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"types": {
+"methods": {
+"list": {
+"description": "List the supported schema types. The response will be an array of schema types.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/schemas/types",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.schemas.types.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent schema registry whose schema types are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/schemas/types",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+},
+"versions": {
+"methods": {
+"list": {
+"description": "List the schema versions for the given schema id. The response will be an array of subject-version pairs as: [{\"subject\":\"subject1\", \"version\":1}, {\"subject\":\"subject2\", \"version\":2}].",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/schemas/{schemasId}/versions",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.schemas.versions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted versions of the schema, even if the subject is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The schema whose schema versions are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/schemas/ids/{schema}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/schemas/ids/{schema}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/schemas/.*$",
+"required": true,
+"type": "string"
+},
+"subject": {
+"description": "Optional. The subject to filter the subjects by.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+},
+"subjects": {
+"methods": {
+"delete": {
+"description": "Delete a subject. The response will be an array of versions of the deleted subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the subject to delete. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+},
+"permanent": {
+"description": "Optional. If true, the subject and all associated metadata including the schema ID will be deleted permanently. Otherwise, only the subject is soft-deleted. The default is false. Soft-deleted subjects can still be searched in ListSubjects API call with deleted=true query parameter. A soft-delete of a subject must be performed before a hard-delete.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "List subjects in the schema registry. The response will be an array of subject names.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted subjects. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The parent schema registry/context whose subjects are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+$",
+"required": true,
+"type": "string"
+},
+"subjectPrefix": {
+"description": "Optional. The context to filter the subjects by, in the format of `:.{context}:`. If unset, all subjects in the registry are returned. Set to empty string or add as '?subjectPrefix=' at the end of this request to list subjects in the default context.",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1/{+parent}/subjects",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"lookupVersion": {
+"description": "Lookup a schema under the specified subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.lookupVersion",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The subject to lookup the schema in. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}",
+"request": {
+"$ref": "LookupVersionRequest"
+},
+"response": {
+"$ref": "SchemaVersion"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"versions": {
+"methods": {
+"create": {
+"description": "Register a new version under a given subject with the given schema.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions",
+"httpMethod": "POST",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The subject to create the version for. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"request": {
+"$ref": "CreateVersionRequest"
+},
+"response": {
+"$ref": "CreateVersionResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"delete": {
+"description": "Delete a version of a subject. The response will be the deleted version id.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions/{versionsId}",
+"httpMethod": "DELETE",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.delete",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. The name of the subject version to delete. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+},
+"permanent": {
+"description": "Optional. If true, both the version and the referenced schema ID will be permanently deleted. The default is false. If false, the version will be deleted but the schema ID will be retained. Soft-deleted versions can still be searched in ListVersions API call with deleted=true query parameter. A soft-delete of a version must be performed before a hard-delete.",
+"location": "query",
+"type": "boolean"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"get": {
+"description": "Get a versioned schema (schema with subject/version) of a subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions/{versionsId}",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, no matter if the subject/version is soft-deleted or not, it returns the version details. If false, it returns NOT_FOUND error if the subject/version is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the subject to return versions. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}",
+"response": {
+"$ref": "SchemaVersion"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"getSchema": {
+"description": "Get the schema string only for a version of a subject. The response will be the schema string.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions/{versionsId}/schema",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.getSchema",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, no matter if the subject/version is soft-deleted or not, it returns the version details. If false, it returns NOT_FOUND error if the subject/version is soft-deleted. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"name": {
+"description": "Required. The name of the subject to return versions. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+name}/schema",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+},
+"list": {
+"description": "Get all versions of a subject. The response will be an array of versions of the subject.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"deleted": {
+"description": "Optional. If true, the response will include soft-deleted versions of an active or soft-deleted subject. The default is false.",
+"location": "query",
+"type": "boolean"
+},
+"parent": {
+"description": "Required. The subject whose versions are to be listed. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/versions",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+},
+"resources": {
+"referencedby": {
+"methods": {
+"list": {
+"description": "Get a list of IDs of schemas that reference the schema with the given subject and version.",
+"flatPath": "v1/projects/{projectsId}/locations/{locationsId}/schemaRegistries/{schemaRegistriesId}/subjects/{subjectsId}/versions/{versionsId}/referencedby",
+"httpMethod": "GET",
+"id": "managedkafka.projects.locations.schemaRegistries.subjects.versions.referencedby.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The version to list referenced by. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/subjects/{subject}/versions/{version}` or `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}/subjects/{subject}/versions/{version}`",
+"location": "path",
+"pattern": "^projects/[^/]+/locations/[^/]+/schemaRegistries/[^/]+/subjects/[^/]+/versions/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1/{+parent}/referencedby",
+"response": {
+"$ref": "HttpBody"
+},
+"scopes": [
+"https://www.googleapis.com/auth/cloud-platform"
+]
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+},
+"revision": "20250814",
+"rootUrl": "https://managedkafka.googleapis.com/",
+"schemas": {
+"AccessConfig": {
+"description": "The configuration of access to the Kafka cluster.",
+"id": "AccessConfig",
+"properties": {
+"networkConfigs": {
+"description": "Required. Virtual Private Cloud (VPC) networks that must be granted direct access to the Kafka cluster. Minimum of 1 network is required. Maximum 10 networks can be specified.",
+"items": {
+"$ref": "NetworkConfig"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Acl": {
+"description": "Represents the set of ACLs for a given Kafka Resource Pattern, which consists of resource_type, resource_name and pattern_type.",
+"id": "Acl",
+"properties": {
+"aclEntries": {
+"description": "Required. The ACL entries that apply to the resource pattern. The maximum number of allowed entries 100.",
+"items": {
+"$ref": "AclEntry"
+},
+"type": "array"
+},
+"etag": {
+"description": "Optional. `etag` is used for concurrency control. An `etag` is returned in the response to `GetAcl` and `CreateAcl`. Callers are required to put that etag in the request to `UpdateAcl` to ensure that their change will be applied to the same version of the acl that exists in the Kafka Cluster. A terminal 'T' character in the etag indicates that the AclEntries were truncated; more entries for the Acl exist on the Kafka Cluster, but can't be returned in the Acl due to repeated field limits.",
+"type": "string"
+},
+"name": {
+"description": "Identifier. The name for the acl. Represents a single Resource Pattern. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/acls/{acl_id} The structure of `acl_id` defines the Resource Pattern (resource_type, resource_name, pattern_type) of the acl. `acl_id` is structured like one of the following: For acls on the cluster: `cluster` For acls on a single resource within the cluster: `topic/{resource_name}` `consumerGroup/{resource_name}` `transactionalId/{resource_name}` For acls on all resources that match a prefix: `topicPrefixed/{resource_name}` `consumerGroupPrefixed/{resource_name}` `transactionalIdPrefixed/{resource_name}` For acls on all resources of a given type (i.e. the wildcard literal \"*\"): `allTopics` (represents `topic/*`) `allConsumerGroups` (represents `consumerGroup/*`) `allTransactionalIds` (represents `transactionalId/*`)",
+"type": "string"
+},
+"patternType": {
+"description": "Output only. The ACL pattern type derived from the name. One of: LITERAL, PREFIXED.",
+"readOnly": true,
+"type": "string"
+},
+"resourceName": {
+"description": "Output only. The ACL resource name derived from the name. For cluster resource_type, this is always \"kafka-cluster\". Can be the wildcard literal \"*\".",
+"readOnly": true,
+"type": "string"
+},
+"resourceType": {
+"description": "Output only. The ACL resource type derived from the name. One of: CLUSTER, TOPIC, GROUP, TRANSACTIONAL_ID.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"AclEntry": {
+"description": "Represents the access granted for a given Resource Pattern in an ACL.",
+"id": "AclEntry",
+"properties": {
+"host": {
+"description": "Required. The host. Must be set to \"*\" for Managed Service for Apache Kafka.",
+"type": "string"
+},
+"operation": {
+"description": "Required. The operation type. Allowed values are (case insensitive): ALL, READ, WRITE, CREATE, DELETE, ALTER, DESCRIBE, CLUSTER_ACTION, DESCRIBE_CONFIGS, ALTER_CONFIGS, and IDEMPOTENT_WRITE. See https://kafka.apache.org/documentation/#operations_resources_and_protocols for valid combinations of resource_type and operation for different Kafka API requests.",
+"type": "string"
+},
+"permissionType": {
+"description": "Required. The permission type. Accepted values are (case insensitive): ALLOW, DENY.",
+"type": "string"
+},
+"principal": {
+"description": "Required. The principal. Specified as Google Cloud account, with the Kafka StandardAuthorizer prefix \"User:\". For example: \"User:test-kafka-client@test-project.iam.gserviceaccount.com\". Can be the wildcard \"User:*\" to refer to all users.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"AddAclEntryResponse": {
+"description": "Response for AddAclEntry.",
+"id": "AddAclEntryResponse",
+"properties": {
+"acl": {
+"$ref": "Acl",
+"description": "The updated acl."
+},
+"aclCreated": {
+"description": "Whether the acl was created as a result of adding the acl entry.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"CancelOperationRequest": {
+"description": "The request message for Operations.CancelOperation.",
+"id": "CancelOperationRequest",
+"properties": {},
+"type": "object"
+},
+"CapacityConfig": {
+"description": "A capacity configuration of a Kafka cluster.",
+"id": "CapacityConfig",
+"properties": {
+"memoryBytes": {
+"description": "Required. The memory to provision for the cluster in bytes. The CPU:memory ratio (vCPU:GiB) must be between 1:1 and 1:8. Minimum: 3221225472 (3 GiB).",
+"format": "int64",
+"type": "string"
+},
+"vcpuCount": {
+"description": "Required. The number of vCPUs to provision for the cluster. Minimum: 3.",
+"format": "int64",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CertificateAuthorityServiceConfig": {
+"description": "A configuration for the Google Certificate Authority Service.",
+"id": "CertificateAuthorityServiceConfig",
+"properties": {
+"caPool": {
+"description": "Required. The name of the CA pool to pull CA certificates from. Structured like: projects/{project}/locations/{location}/caPools/{ca_pool}. The CA pool does not need to be in the same project or location as the Kafka cluster.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CheckCompatibilityRequest": {
+"description": "Request for CheckCompatibility.",
+"id": "CheckCompatibilityRequest",
+"properties": {
+"references": {
+"description": "Optional. The schema references used by the schema.",
+"items": {
+"$ref": "SchemaReference"
+},
+"type": "array"
+},
+"schema": {
+"description": "Required. The schema payload",
+"type": "string"
+},
+"schemaType": {
+"description": "Optional. The schema type of the schema.",
+"enum": [
+"SCHEMA_TYPE_UNSPECIFIED",
+"AVRO",
+"JSON",
+"PROTOBUF"
+],
+"enumDescriptions": [
+"No schema type. The default will be AVRO.",
+"Avro schema type.",
+"JSON schema type.",
+"Protobuf schema type."
+],
+"type": "string"
+},
+"verbose": {
+"description": "Optional. If true, the response will contain the compatibility check result with reasons for failed checks. The default is false.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"CheckCompatibilityResponse": {
+"description": "Response for CheckCompatibility.",
+"id": "CheckCompatibilityResponse",
+"properties": {
+"is_compatible": {
+"description": "The compatibility check result. If true, the schema is compatible with the resource.",
+"type": "boolean"
+},
+"messages": {
+"description": "Failure reasons if verbose = true.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Cluster": {
+"description": "An Apache Kafka cluster deployed in a location.",
+"id": "Cluster",
+"properties": {
+"capacityConfig": {
+"$ref": "CapacityConfig",
+"description": "Required. Capacity configuration for the Kafka cluster."
+},
+"createTime": {
+"description": "Output only. The time when the cluster was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"gcpConfig": {
+"$ref": "GcpConfig",
+"description": "Required. Configuration properties for a Kafka cluster deployed to Google Cloud Platform."
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the cluster. Structured like: projects/{project_number}/locations/{location}/clusters/{cluster_id}",
+"type": "string"
+},
+"rebalanceConfig": {
+"$ref": "RebalanceConfig",
+"description": "Optional. Rebalance configuration for the Kafka cluster."
+},
+"satisfiesPzi": {
+"description": "Output only. Reserved for future use.",
+"readOnly": true,
+"type": "boolean"
+},
+"satisfiesPzs": {
+"description": "Output only. Reserved for future use.",
+"readOnly": true,
+"type": "boolean"
+},
+"state": {
+"description": "Output only. The current state of the cluster.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"ACTIVE",
+"DELETING"
+],
+"enumDescriptions": [
+"A state was not specified.",
+"The cluster is being created.",
+"The cluster is active.",
+"The cluster is being deleted."
+],
+"readOnly": true,
+"type": "string"
+},
+"tlsConfig": {
+"$ref": "TlsConfig",
+"description": "Optional. TLS configuration for the Kafka cluster."
+},
+"updateTime": {
+"description": "Output only. The time when the cluster was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ConnectAccessConfig": {
+"description": "The configuration of access to the Kafka Connect cluster.",
+"id": "ConnectAccessConfig",
+"properties": {
+"networkConfigs": {
+"description": "Required. Virtual Private Cloud (VPC) networks that must be granted direct access to the Kafka Connect cluster. Minimum of 1 network is required. Maximum 10 networks can be specified.",
+"items": {
+"$ref": "ConnectNetworkConfig"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ConnectCluster": {
+"description": "An Apache Kafka Connect cluster deployed in a location.",
+"id": "ConnectCluster",
+"properties": {
+"capacityConfig": {
+"$ref": "CapacityConfig",
+"description": "Required. Capacity configuration for the Kafka Connect cluster."
+},
+"config": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Configurations for the worker that are overridden from the defaults. The key of the map is a Kafka Connect worker property name, for example: `exactly.once.source.support`.",
+"type": "object"
+},
+"createTime": {
+"description": "Output only. The time when the cluster was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"gcpConfig": {
+"$ref": "ConnectGcpConfig",
+"description": "Required. Configuration properties for a Kafka Connect cluster deployed to Google Cloud Platform."
+},
+"kafkaCluster": {
+"description": "Required. Immutable. The name of the Kafka cluster this Kafka Connect cluster is attached to. Structured like: projects/{project}/locations/{location}/clusters/{cluster}",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Labels as key value pairs.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the Kafka Connect cluster. Structured like: projects/{project_number}/locations/{location}/connectClusters/{connect_cluster_id}",
+"type": "string"
+},
+"satisfiesPzi": {
+"description": "Output only. Reserved for future use.",
+"readOnly": true,
+"type": "boolean"
+},
+"satisfiesPzs": {
+"description": "Output only. Reserved for future use.",
+"readOnly": true,
+"type": "boolean"
+},
+"state": {
+"description": "Output only. The current state of the cluster.",
+"enum": [
+"STATE_UNSPECIFIED",
+"CREATING",
+"ACTIVE",
+"DELETING"
+],
+"enumDescriptions": [
+"A state was not specified.",
+"The cluster is being created.",
+"The cluster is active.",
+"The cluster is being deleted."
+],
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. The time when the cluster was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"ConnectGcpConfig": {
+"description": "Configuration properties for a Kafka Connect cluster deployed to Google Cloud Platform.",
+"id": "ConnectGcpConfig",
+"properties": {
+"accessConfig": {
+"$ref": "ConnectAccessConfig",
+"description": "Required. Access configuration for the Kafka Connect cluster."
+},
+"secretPaths": {
+"description": "Optional. Secrets to load into workers. Exact SecretVersions from Secret Manager must be provided -- aliases are not supported. Up to 32 secrets may be loaded into one cluster. Format: projects//secrets//versions/",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ConnectNetworkConfig": {
+"description": "The configuration of a Virtual Private Cloud (VPC) network that can access the Kafka Connect cluster.",
+"id": "ConnectNetworkConfig",
+"properties": {
+"additionalSubnets": {
+"description": "Optional. Additional subnets may be specified. They may be in another region, but must be in the same VPC network. The Connect workers can communicate with network endpoints in either the primary or additional subnets.",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"dnsDomainNames": {
+"description": "Optional. Additional DNS domain names from the subnet's network to be made visible to the Connect Cluster. When using MirrorMaker2, it's necessary to add the bootstrap address's dns domain name of the target cluster to make it visible to the connector. For example: my-kafka-cluster.us-central1.managedkafka.my-project.cloud.goog",
+"items": {
+"type": "string"
+},
+"type": "array"
+},
+"primarySubnet": {
+"description": "Required. VPC subnet to make available to the Kafka Connect cluster. Structured like: projects/{project}/regions/{region}/subnetworks/{subnet_id} It is used to create a Private Service Connect (PSC) interface for the Kafka Connect workers. It must be located in the same region as the Kafka Connect cluster. The CIDR range of the subnet must be within the IPv4 address ranges for private networks, as specified in RFC 1918. The primary subnet CIDR range must have a minimum size of /22 (1024 addresses).",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Connector": {
+"description": "A Kafka Connect connector in a given ConnectCluster.",
+"id": "Connector",
+"properties": {
+"configs": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Connector config as keys/values. The keys of the map are connector property names, for example: `connector.class`, `tasks.max`, `key.converter`.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the connector. Structured like: projects/{project}/locations/{location}/connectClusters/{connect_cluster}/connectors/{connector}",
+"type": "string"
+},
+"state": {
+"description": "Output only. The current state of the connector.",
+"enum": [
+"STATE_UNSPECIFIED",
+"UNASSIGNED",
+"RUNNING",
+"PAUSED",
+"FAILED",
+"RESTARTING",
+"STOPPED"
+],
+"enumDescriptions": [
+"A state was not specified.",
+"The connector is not assigned to any tasks, usually transient.",
+"The connector is running.",
+"The connector has been paused.",
+"The connector has failed. See logs for why.",
+"The connector is restarting.",
+"The connector has been stopped."
+],
+"readOnly": true,
+"type": "string"
+},
+"taskRestartPolicy": {
+"$ref": "TaskRetryPolicy",
+"description": "Optional. Restarts the individual tasks of a Connector."
+}
+},
+"type": "object"
+},
+"ConsumerGroup": {
+"description": "A Kafka consumer group in a given cluster.",
+"id": "ConsumerGroup",
+"properties": {
+"name": {
+"description": "Identifier. The name of the consumer group. The `consumer_group` segment is used when connecting directly to the cluster. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/consumerGroups/{consumer_group}",
+"type": "string"
+},
+"topics": {
+"additionalProperties": {
+"$ref": "ConsumerTopicMetadata"
+},
+"description": "Optional. Metadata for this consumer group for all topics it has metadata for. The key of the map is a topic name, structured like: projects/{project}/locations/{location}/clusters/{cluster}/topics/{topic}",
+"type": "object"
+}
+},
+"type": "object"
+},
+"ConsumerPartitionMetadata": {
+"description": "Metadata for a consumer group corresponding to a specific partition.",
+"id": "ConsumerPartitionMetadata",
+"properties": {
+"metadata": {
+"description": "Optional. The associated metadata for this partition, or empty if it does not exist.",
+"type": "string"
+},
+"offset": {
+"description": "Required. The current offset for this partition, or 0 if no offset has been committed.",
+"format": "int64",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ConsumerTopicMetadata": {
+"description": "Metadata for a consumer group corresponding to a specific topic.",
+"id": "ConsumerTopicMetadata",
+"properties": {
+"partitions": {
+"additionalProperties": {
+"$ref": "ConsumerPartitionMetadata"
+},
+"description": "Optional. Metadata for this consumer group and topic for all partition indexes it has metadata for.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"Context": {
+"description": "Context represents an independent schema grouping in a schema registry instance.",
+"id": "Context",
+"properties": {
+"name": {
+"description": "Identifier. The name of the context. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}/contexts/{context}` The context name {context} can contain the following: * Up to 255 characters. * Allowed characters: letters (uppercase or lowercase), numbers, and the following special characters: `.`, `-`, `_`, `+`, `%`, and `~`.",
+"type": "string"
+},
+"subjects": {
+"description": "Optional. The subjects of the context.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"CreateSchemaRegistryRequest": {
+"description": "Request to create a schema registry instance.",
+"id": "CreateSchemaRegistryRequest",
+"properties": {
+"schemaRegistry": {
+"$ref": "SchemaRegistry",
+"description": "Required. The schema registry instance to create. The name field is ignored."
+},
+"schemaRegistryId": {
+"description": "Required. The schema registry instance ID to use for this schema registry. The ID must contain only letters (a-z, A-Z), numbers (0-9), and underscores (-). The maximum length is 63 characters. The ID must not start with a number.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"CreateVersionRequest": {
+"description": "Request for CreateVersion.",
+"id": "CreateVersionRequest",
+"properties": {
+"id": {
+"description": "Optional. The schema ID of the schema. If not specified, the schema ID will be generated by the server. If the schema ID is specified, it must not be used by an existing schema that is different from the schema to be created.",
+"format": "int32",
+"type": "integer"
+},
+"normalize": {
+"description": "Optional. If true, the schema will be normalized before being stored. The default is false.",
+"type": "boolean"
+},
+"references": {
+"description": "Optional. The schema references used by the schema.",
+"items": {
+"$ref": "SchemaReference"
+},
+"type": "array"
+},
+"schema": {
+"description": "Required. The schema payload",
+"type": "string"
+},
+"schemaType": {
+"description": "Optional. The type of the schema. It is optional. If not specified, the schema type will be AVRO.",
+"enum": [
+"SCHEMA_TYPE_UNSPECIFIED",
+"AVRO",
+"JSON",
+"PROTOBUF"
+],
+"enumDescriptions": [
+"No schema type. The default will be AVRO.",
+"Avro schema type.",
+"JSON schema type.",
+"Protobuf schema type."
+],
+"type": "string"
+},
+"version": {
+"description": "Optional. The version to create. It is optional. If not specified, the version will be created with the max version ID of the subject increased by 1. If the version ID is specified, it will be used as the new version ID and must not be used by an existing version of the subject.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"CreateVersionResponse": {
+"description": "Response for CreateVersion.",
+"id": "CreateVersionResponse",
+"properties": {
+"id": {
+"description": "The unique identifier of the schema created.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"Empty": {
+"description": "A generic empty message that you can re-use to avoid defining duplicated empty messages in your APIs. A typical example is to use it as the request or the response type of an API method. For instance: service Foo { rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty); }",
+"id": "Empty",
+"properties": {},
+"type": "object"
+},
+"GcpConfig": {
+"description": "Configuration properties for a Kafka cluster deployed to Google Cloud Platform.",
+"id": "GcpConfig",
+"properties": {
+"accessConfig": {
+"$ref": "AccessConfig",
+"description": "Required. Access configuration for the Kafka cluster."
+},
+"kmsKey": {
+"description": "Optional. Immutable. The Cloud KMS Key name to use for encryption. The key must be located in the same region as the cluster and cannot be changed. Structured like: projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{crypto_key}.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"HttpBody": {
+"description": "Message that represents an arbitrary HTTP body. It should only be used for payload formats that can't be represented as JSON, such as raw binary or an HTML page. This message can be used both in streaming and non-streaming API methods in the request as well as the response. It can be used as a top-level request field, which is convenient if one wants to extract parameters from either the URL or HTTP template into the request fields and also want access to the raw HTTP body. Example: message GetResourceRequest { // A unique request id. string request_id = 1; // The raw HTTP body is bound to this field. google.api.HttpBody http_body = 2; } service ResourceService { rpc GetResource(GetResourceRequest) returns (google.api.HttpBody); rpc UpdateResource(google.api.HttpBody) returns (google.protobuf.Empty); } Example with streaming methods: service CaldavService { rpc GetCalendar(stream google.api.HttpBody) returns (stream google.api.HttpBody); rpc UpdateCalendar(stream google.api.HttpBody) returns (stream google.api.HttpBody); } Use of this type only changes how the request and response bodies are handled, all other features will continue to work unchanged.",
+"id": "HttpBody",
+"properties": {
+"contentType": {
+"description": "The HTTP Content-Type header value specifying the content type of the body.",
+"type": "string"
+},
+"data": {
+"description": "The HTTP request/response body as raw binary.",
+"format": "byte",
+"type": "string"
+},
+"extensions": {
+"description": "Application specific response metadata. Must be set in the first response for streaming APIs.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListAclsResponse": {
+"description": "Response for ListAcls.",
+"id": "ListAclsResponse",
+"properties": {
+"acls": {
+"description": "The list of acls in the requested parent. The order of the acls is unspecified.",
+"items": {
+"$ref": "Acl"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListClustersResponse": {
+"description": "Response for ListClusters.",
+"id": "ListClustersResponse",
+"properties": {
+"clusters": {
+"description": "The list of Clusters in the requested parent.",
+"items": {
+"$ref": "Cluster"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListConnectClustersResponse": {
+"description": "Response for ListConnectClusters.",
+"id": "ListConnectClustersResponse",
+"properties": {
+"connectClusters": {
+"description": "The list of Connect clusters in the requested parent.",
+"items": {
+"$ref": "ConnectCluster"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+},
+"unreachable": {
+"description": "Locations that could not be reached.",
+"items": {
+"type": "string"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListConnectorsResponse": {
+"description": "Response for ListConnectors.",
+"id": "ListConnectorsResponse",
+"properties": {
+"connectors": {
+"description": "The list of connectors in the requested parent.",
+"items": {
+"$ref": "Connector"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListConsumerGroupsResponse": {
+"description": "Response for ListConsumerGroups.",
+"id": "ListConsumerGroupsResponse",
+"properties": {
+"consumerGroups": {
+"description": "The list of consumer group in the requested parent. The order of the consumer groups is unspecified.",
+"items": {
+"$ref": "ConsumerGroup"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListLocationsResponse": {
+"description": "The response message for Locations.ListLocations.",
+"id": "ListLocationsResponse",
+"properties": {
+"locations": {
+"description": "A list of locations that matches the specified filter in the request.",
+"items": {
+"$ref": "Location"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"ListOperationsResponse": {
+"description": "The response message for Operations.ListOperations.",
+"id": "ListOperationsResponse",
+"properties": {
+"nextPageToken": {
+"description": "The standard List next-page token.",
+"type": "string"
+},
+"operations": {
+"description": "A list of operations that matches the specified filter in the request.",
+"items": {
+"$ref": "Operation"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListSchemaRegistriesResponse": {
+"description": "Request for ListSchemaRegistries.",
+"id": "ListSchemaRegistriesResponse",
+"properties": {
+"schemaRegistries": {
+"description": "The schema registry instances.",
+"items": {
+"$ref": "SchemaRegistry"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"ListTopicsResponse": {
+"description": "Response for ListTopics.",
+"id": "ListTopicsResponse",
+"properties": {
+"nextPageToken": {
+"description": "A token that can be sent as `page_token` to retrieve the next page of results. If this field is omitted, there are no more results.",
+"type": "string"
+},
+"topics": {
+"description": "The list of topics in the requested parent. The order of the topics is unspecified.",
+"items": {
+"$ref": "Topic"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"Location": {
+"description": "A resource that represents a Google Cloud location.",
+"id": "Location",
+"properties": {
+"displayName": {
+"description": "The friendly name for this location, typically a nearby city name. For example, \"Tokyo\".",
+"type": "string"
+},
+"labels": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Cross-service attributes for the location. For example {\"cloud.googleapis.com/region\": \"us-east1\"}",
+"type": "object"
+},
+"locationId": {
+"description": "The canonical id for this location. For example: `\"us-east1\"`.",
+"type": "string"
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata. For example the available capacity at the given location.",
+"type": "object"
+},
+"name": {
+"description": "Resource name for the location, which may vary between implementations. For example: `\"projects/example-project/locations/us-east1\"`",
+"type": "string"
+}
+},
+"type": "object"
+},
+"LookupVersionRequest": {
+"description": "Request for LookupVersion.",
+"id": "LookupVersionRequest",
+"properties": {
+"deleted": {
+"description": "Optional. If true, soft-deleted versions will be included in lookup, no matter if the subject is active or soft-deleted. If false, soft-deleted versions will be excluded. The default is false.",
+"type": "boolean"
+},
+"normalize": {
+"description": "Optional. If true, the schema will be normalized before being looked up. The default is false.",
+"type": "boolean"
+},
+"references": {
+"description": "Optional. The schema references used by the schema.",
+"items": {
+"$ref": "SchemaReference"
+},
+"type": "array"
+},
+"schema": {
+"description": "Required. The schema payload",
+"type": "string"
+},
+"schemaType": {
+"description": "Optional. The schema type of the schema.",
+"enum": [
+"SCHEMA_TYPE_UNSPECIFIED",
+"AVRO",
+"JSON",
+"PROTOBUF"
+],
+"enumDescriptions": [
+"No schema type. The default will be AVRO.",
+"Avro schema type.",
+"JSON schema type.",
+"Protobuf schema type."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"NetworkConfig": {
+"description": "The configuration of a Virtual Private Cloud (VPC) network that can access the Kafka cluster.",
+"id": "NetworkConfig",
+"properties": {
+"subnet": {
+"description": "Required. Name of the VPC subnet in which to create Private Service Connect (PSC) endpoints for the Kafka brokers and bootstrap address. Structured like: projects/{project}/regions/{region}/subnetworks/{subnet_id} The subnet must be located in the same region as the Kafka cluster. The project may differ. Multiple subnets from the same parent network must not be specified.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Operation": {
+"description": "This resource represents a long-running operation that is the result of a network API call.",
+"id": "Operation",
+"properties": {
+"done": {
+"description": "If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.",
+"type": "boolean"
+},
+"error": {
+"$ref": "Status",
+"description": "The error result of the operation in case of failure or cancellation."
+},
+"metadata": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata. Any method that returns a long-running operation should document the metadata type, if any.",
+"type": "object"
+},
+"name": {
+"description": "The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.",
+"type": "string"
+},
+"response": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"description": "The normal, successful response of the operation. If the original method returns no data on success, such as `Delete`, the response is `google.protobuf.Empty`. If the original method is standard `Get`/`Create`/`Update`, the response should be the resource. For other methods, the response should have the type `XxxResponse`, where `Xxx` is the original method name. For example, if the original method name is `TakeSnapshot()`, the inferred response type is `TakeSnapshotResponse`.",
+"type": "object"
+}
+},
+"type": "object"
+},
+"OperationMetadata": {
+"description": "Represents the metadata of the long-running operation.",
+"id": "OperationMetadata",
+"properties": {
+"apiVersion": {
+"description": "Output only. API version used to start the operation.",
+"readOnly": true,
+"type": "string"
+},
+"createTime": {
+"description": "Output only. The time the operation was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"endTime": {
+"description": "Output only. The time the operation finished running.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"requestedCancellation": {
+"description": "Output only. Identifies whether the user has requested cancellation of the operation. Operations that have been cancelled successfully have Operation.error value with a google.rpc.Status.code of 1, corresponding to `Code.CANCELLED`.",
+"readOnly": true,
+"type": "boolean"
+},
+"statusMessage": {
+"description": "Output only. Human-readable status of the operation, if any.",
+"readOnly": true,
+"type": "string"
+},
+"target": {
+"description": "Output only. Server-defined resource path for the target of the operation.",
+"readOnly": true,
+"type": "string"
+},
+"verb": {
+"description": "Output only. Name of the verb executed by the operation.",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"PauseConnectorRequest": {
+"description": "Request for PauseConnector.",
+"id": "PauseConnectorRequest",
+"properties": {},
+"type": "object"
+},
+"PauseConnectorResponse": {
+"description": "Response for PauseConnector.",
+"id": "PauseConnectorResponse",
+"properties": {},
+"type": "object"
+},
+"RebalanceConfig": {
+"description": "Defines rebalancing behavior of a Kafka cluster.",
+"id": "RebalanceConfig",
+"properties": {
+"mode": {
+"description": "Optional. The rebalance behavior for the cluster. When not specified, defaults to `NO_REBALANCE`.",
+"enum": [
+"MODE_UNSPECIFIED",
+"NO_REBALANCE",
+"AUTO_REBALANCE_ON_SCALE_UP"
+],
+"enumDescriptions": [
+"A mode was not specified. Do not use.",
+"Do not rebalance automatically.",
+"Automatically rebalance topic partitions among brokers when the cluster is scaled up."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"RemoveAclEntryResponse": {
+"description": "Response for RemoveAclEntry.",
+"id": "RemoveAclEntryResponse",
+"properties": {
+"acl": {
+"$ref": "Acl",
+"description": "The updated acl. Returned if the removed acl entry was not the last entry in the acl."
+},
+"aclDeleted": {
+"description": "Returned with value true if the removed acl entry was the last entry in the acl, resulting in acl deletion.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"RestartConnectorRequest": {
+"description": "Request for RestartConnector.",
+"id": "RestartConnectorRequest",
+"properties": {},
+"type": "object"
+},
+"RestartConnectorResponse": {
+"description": "Response for RestartConnector.",
+"id": "RestartConnectorResponse",
+"properties": {},
+"type": "object"
+},
+"ResumeConnectorRequest": {
+"description": "Request for ResumeConnector.",
+"id": "ResumeConnectorRequest",
+"properties": {},
+"type": "object"
+},
+"ResumeConnectorResponse": {
+"description": "Response for ResumeConnector.",
+"id": "ResumeConnectorResponse",
+"properties": {},
+"type": "object"
+},
+"Schema": {
+"description": "Schema for a Kafka message.",
+"id": "Schema",
+"properties": {
+"references": {
+"description": "Optional. The schema references used by the schema.",
+"items": {
+"$ref": "SchemaReference"
+},
+"type": "array"
+},
+"schema": {
+"description": "The schema payload.",
+"type": "string"
+},
+"schemaType": {
+"description": "Optional. The schema type of the schema.",
+"enum": [
+"SCHEMA_TYPE_UNSPECIFIED",
+"AVRO",
+"JSON",
+"PROTOBUF"
+],
+"enumDescriptions": [
+"No schema type. The default will be AVRO.",
+"Avro schema type.",
+"JSON schema type.",
+"Protobuf schema type."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"SchemaConfig": {
+"description": "SchemaConfig represents configuration for a schema registry or a specific subject.",
+"id": "SchemaConfig",
+"properties": {
+"alias": {
+"description": "Optional. The subject to which this subject is an alias of. Only applicable for subject config.",
+"type": "string"
+},
+"compatibility": {
+"description": "Required. The compatibility type of the schema. The default value is BACKWARD. If unset in a SchemaSubject-level SchemaConfig, defaults to the global value. If unset in a SchemaRegistry-level SchemaConfig, reverts to the default value.",
+"enum": [
+"NONE",
+"BACKWARD",
+"BACKWARD_TRANSITIVE",
+"FORWARD",
+"FORWARD_TRANSITIVE",
+"FULL",
+"FULL_TRANSITIVE"
+],
+"enumDescriptions": [
+"No compatibility check.",
+"Backwards compatible with the most recent version.",
+"Backwards compatible with all previous versions.",
+"Forwards compatible with the most recent version.",
+"Forwards compatible with all previous versions.",
+"Backwards and forwards compatible with the most recent version.",
+"Backwards and forwards compatible with all previous versions."
+],
+"type": "string"
+},
+"normalize": {
+"description": "Optional. If true, the schema will be normalized before being stored or looked up. The default is false. If unset in a SchemaSubject-level SchemaConfig, the global value will be used. If unset in a SchemaRegistry-level SchemaConfig, reverts to the default value.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"SchemaMode": {
+"description": "SchemaMode represents the mode of a schema registry or a specific subject. Four modes are supported: * NONE: deprecated. This was the default mode for a subject, but now the default is unset (which means use the global schema registry setting) * READONLY: The schema registry is in read-only mode. * READWRITE: The schema registry is in read-write mode, which allows limited write operations on the schema. * IMPORT: The schema registry is in import mode, which allows more editing operations on the schema for data importing purposes.",
+"id": "SchemaMode",
+"properties": {
+"mode": {
+"description": "Required. The mode type of a schema registry (READWRITE by default) or of a subject (unset by default, which means use the global schema registry setting).",
+"enum": [
+"NONE",
+"READONLY",
+"READWRITE",
+"IMPORT"
+],
+"enumDescriptions": [
+"The default / unset value. The subject mode is NONE/unset by default, which means use the global schema registry mode. This should not be used for setting the mode.",
+"READONLY mode.",
+"READWRITE mode.",
+"IMPORT mode."
+],
+"type": "string"
+}
+},
+"type": "object"
+},
+"SchemaReference": {
+"description": "SchemaReference is a reference to a schema.",
+"id": "SchemaReference",
+"properties": {
+"name": {
+"description": "Required. The name of the reference.",
+"type": "string"
+},
+"subject": {
+"description": "Required. The subject of the reference.",
+"type": "string"
+},
+"version": {
+"description": "Required. The version of the reference.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"SchemaRegistry": {
+"description": "SchemaRegistry is a schema registry instance.",
+"id": "SchemaRegistry",
+"properties": {
+"contexts": {
+"description": "Output only. The contexts of the schema registry instance.",
+"items": {
+"type": "string"
+},
+"readOnly": true,
+"type": "array"
+},
+"name": {
+"description": "Identifier. The name of the schema registry instance. Structured like: `projects/{project}/locations/{location}/schemaRegistries/{schema_registry}` The instance name {schema_registry} can contain the following: * Up to 255 characters. * Letters (uppercase or lowercase), numbers, and underscores.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"SchemaVersion": {
+"description": "Version of a schema.",
+"id": "SchemaVersion",
+"properties": {
+"id": {
+"description": "Required. The schema ID.",
+"format": "int32",
+"type": "integer"
+},
+"references": {
+"description": "Optional. The schema references used by the schema.",
+"items": {
+"$ref": "SchemaReference"
+},
+"type": "array"
+},
+"schema": {
+"description": "Required. The schema payload.",
+"type": "string"
+},
+"schemaType": {
+"description": "Optional. The schema type of the schema.",
+"enum": [
+"SCHEMA_TYPE_UNSPECIFIED",
+"AVRO",
+"JSON",
+"PROTOBUF"
+],
+"enumDescriptions": [
+"No schema type. The default will be AVRO.",
+"Avro schema type.",
+"JSON schema type.",
+"Protobuf schema type."
+],
+"type": "string"
+},
+"subject": {
+"description": "Required. The subject of the version.",
+"type": "string"
+},
+"version": {
+"description": "Required. The version ID",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"Status": {
+"description": "The `Status` type defines a logical error model that is suitable for different programming environments, including REST APIs and RPC APIs. It is used by [gRPC](https://github.com/grpc). Each `Status` message contains three pieces of data: error code, error message, and error details. You can find out more about this error model and how to work with it in the [API Design Guide](https://cloud.google.com/apis/design/errors).",
+"id": "Status",
+"properties": {
+"code": {
+"description": "The status code, which should be an enum value of google.rpc.Code.",
+"format": "int32",
+"type": "integer"
+},
+"details": {
+"description": "A list of messages that carry the error details. There is a common set of message types for APIs to use.",
+"items": {
+"additionalProperties": {
+"description": "Properties of the object. Contains field @type with type URL.",
+"type": "any"
+},
+"type": "object"
+},
+"type": "array"
+},
+"message": {
+"description": "A developer-facing error message, which should be in English. Any user-facing error message should be localized and sent in the google.rpc.Status.details field, or localized by the client.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"StopConnectorRequest": {
+"description": "Request for StopConnector.",
+"id": "StopConnectorRequest",
+"properties": {},
+"type": "object"
+},
+"StopConnectorResponse": {
+"description": "Response for StopConnector.",
+"id": "StopConnectorResponse",
+"properties": {},
+"type": "object"
+},
+"TaskRetryPolicy": {
+"description": "Task Retry Policy is implemented on a best-effort basis. Retry delay will be exponential based on provided minimum and maximum backoffs. https://en.wikipedia.org/wiki/Exponential_backoff. Note that the delay between consecutive task restarts may not always precisely match the configured settings. This can happen when the ConnectCluster is in rebalancing state or if the ConnectCluster is unresponsive etc. The default values for minimum and maximum backoffs are 60 seconds and 30 minutes respectively.",
+"id": "TaskRetryPolicy",
+"properties": {
+"maximumBackoff": {
+"description": "Optional. The maximum amount of time to wait before retrying a failed task. This sets an upper bound for the backoff delay.",
+"format": "google-duration",
+"type": "string"
+},
+"minimumBackoff": {
+"description": "Optional. The minimum amount of time to wait before retrying a failed task. This sets a lower bound for the backoff delay.",
+"format": "google-duration",
+"type": "string"
+}
+},
+"type": "object"
+},
+"TlsConfig": {
+"description": "The TLS configuration for the Kafka cluster.",
+"id": "TlsConfig",
+"properties": {
+"sslPrincipalMappingRules": {
+"description": "Optional. A list of rules for mapping from SSL principal names to short names. These are applied in order by Kafka. Refer to the Apache Kafka documentation for `ssl.principal.mapping.rules` for the precise formatting details and syntax. Example: \"RULE:^CN=(.*?),OU=ServiceUsers.*$/$1@example.com/,DEFAULT\" This is a static Kafka broker configuration. Setting or modifying this field will trigger a rolling restart of the Kafka brokers to apply the change. An empty string means no rules are applied (Kafka default).",
+"type": "string"
+},
+"trustConfig": {
+"$ref": "TrustConfig",
+"description": "Optional. The configuration of the broker truststore. If specified, clients can use mTLS for authentication."
+}
+},
+"type": "object"
+},
+"Topic": {
+"description": "A Kafka topic in a given cluster.",
+"id": "Topic",
+"properties": {
+"configs": {
+"additionalProperties": {
+"type": "string"
+},
+"description": "Optional. Configurations for the topic that are overridden from the cluster defaults. The key of the map is a Kafka topic property name, for example: `cleanup.policy`, `compression.type`.",
+"type": "object"
+},
+"name": {
+"description": "Identifier. The name of the topic. The `topic` segment is used when connecting directly to the cluster. Structured like: projects/{project}/locations/{location}/clusters/{cluster}/topics/{topic}",
+"type": "string"
+},
+"partitionCount": {
+"description": "Required. The number of partitions this topic has. The partition count can only be increased, not decreased. Please note that if partitions are increased for a topic that has a key, the partitioning logic or the ordering of the messages will be affected.",
+"format": "int32",
+"type": "integer"
+},
+"replicationFactor": {
+"description": "Required. Immutable. The number of replicas of each partition. A replication factor of 3 is recommended for high availability.",
+"format": "int32",
+"type": "integer"
+}
+},
+"type": "object"
+},
+"TrustConfig": {
+"description": "Sources of CA certificates to install in the broker's truststore.",
+"id": "TrustConfig",
+"properties": {
+"casConfigs": {
+"description": "Optional. Configuration for the Google Certificate Authority Service. Maximum 10.",
+"items": {
+"$ref": "CertificateAuthorityServiceConfig"
+},
+"type": "array"
+}
+},
+"type": "object"
+},
+"UpdateSchemaConfigRequest": {
+"description": "Request for updating schema config. On a SchemaSubject-level SchemaConfig, an unset field will be removed from the SchemaConfig.",
+"id": "UpdateSchemaConfigRequest",
+"properties": {
+"compatibility": {
+"description": "Required. The compatibility type of the schemas. Cannot be unset for a SchemaRegistry-level SchemaConfig. If unset on a SchemaSubject-level SchemaConfig, removes the compatibility field for the SchemaConfig.",
+"enum": [
+"NONE",
+"BACKWARD",
+"BACKWARD_TRANSITIVE",
+"FORWARD",
+"FORWARD_TRANSITIVE",
+"FULL",
+"FULL_TRANSITIVE"
+],
+"enumDescriptions": [
+"No compatibility check.",
+"Backwards compatible with the most recent version.",
+"Backwards compatible with all previous versions.",
+"Forwards compatible with the most recent version.",
+"Forwards compatible with all previous versions.",
+"Backwards and forwards compatible with the most recent version.",
+"Backwards and forwards compatible with all previous versions."
+],
+"type": "string"
+},
+"normalize": {
+"description": "Optional. If true, the schema will be normalized before being stored or looked up. The default is false. Cannot be unset for a SchemaRegistry-level SchemaConfig. If unset on a SchemaSubject-level SchemaConfig, removes the normalize field for the SchemaConfig.",
+"type": "boolean"
+}
+},
+"type": "object"
+},
+"UpdateSchemaModeRequest": {
+"description": "Request for updating schema registry or subject mode.",
+"id": "UpdateSchemaModeRequest",
+"properties": {
+"mode": {
+"description": "Required. The mode type.",
+"enum": [
+"NONE",
+"READONLY",
+"READWRITE",
+"IMPORT"
+],
+"enumDescriptions": [
+"The default / unset value. The subject mode is NONE/unset by default, which means use the global schema registry mode. This should not be used for setting the mode.",
+"READONLY mode.",
+"READWRITE mode.",
+"IMPORT mode."
+],
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Managed Service for Apache Kafka API",
+"version": "v1",
+"version_module": true
+}

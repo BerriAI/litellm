@@ -345,6 +345,7 @@ async def test_pass_through_request_logging_failure_with_stream(
 
         # Check if it's a streaming response or regular response
         from fastapi.responses import StreamingResponse
+
         if isinstance(response, StreamingResponse):
             # For streaming responses in tests, we just verify it's the right type
             # and status code since iterating over it is complex in test context

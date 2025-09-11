@@ -2278,7 +2278,6 @@ async def test_redis_caching_llm_caching_ttl(sync_mode):
             cache_obj.set_cache(key="test", value="test")
             mock_set.assert_called_once_with(name="test", value="test", ex=120)
     else:
-
         # Patch self.init_async_client to return our mock Redis client
         with patch.object(
             cache_obj, "init_async_client", return_value=mock_redis_instance

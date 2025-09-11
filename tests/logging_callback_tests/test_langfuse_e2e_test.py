@@ -62,7 +62,6 @@ def assert_langfuse_request_matches_expected(
 
     # Replace dynamic values in actual request body
     for item in actual_request_body["batch"]:
-
         # Replace IDs with expected IDs
         if item["type"] == "trace-create":
             item["id"] = expected_request_body["batch"][0]["id"]
@@ -381,7 +380,7 @@ class TestLangfuseLogging:
             await self._verify_langfuse_call(
                 setup["mock_post"], "completion_with_no_choices.json", setup["trace_id"]
             )
-    
+
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion_with_bedrock_llm_response(
         self, mock_setup
@@ -411,8 +410,11 @@ class TestLangfuseLogging:
                 aws_region="us-east-1",
             )
             await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_bedrock_call.json", setup["trace_id"]
+                setup["mock_post"],
+                "completion_with_bedrock_call.json",
+                setup["trace_id"],
             )
+
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion_with_vertex_llm_response(
         self, mock_setup
@@ -441,7 +443,9 @@ class TestLangfuseLogging:
                 api_key="my-mock-credentials-2",
             )
             await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_vertex_call.json", setup["trace_id"]
+                setup["mock_post"],
+                "completion_with_vertex_call.json",
+                setup["trace_id"],
             )
 
     @pytest.mark.asyncio
@@ -457,7 +461,7 @@ class TestLangfuseLogging:
                         "model": "gpt-3.5-turbo",
                         "mock_response": "Hello! How can I assist you today?",
                         "api_key": "test_api_key",
-                    }
+                    },
                 }
             ]
         )

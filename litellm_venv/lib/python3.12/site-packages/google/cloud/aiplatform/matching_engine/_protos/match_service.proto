@@ -1,0 +1,251 @@
+syntax = "proto3";
+
+package google.cloud.aiplatform.container.v1;
+
+import "google/rpc/status.proto";
+
+// MatchService is a Google managed service for efficient vector similarity
+// search at scale.
+service MatchService {
+  // Returns the nearest neighbors for the query. If it is a sharded
+  // deployment, calls the other shards and aggregates the responses.
+  rpc Match(MatchRequest) returns (MatchResponse) {}
+
+  // Returns the nearest neighbors for batch queries. If it is a sharded
+  // deployment, calls the other shards and aggregates the responses.
+  rpc BatchMatch(BatchMatchRequest) returns (BatchMatchResponse) {}
+
+  // Looks up the embeddings.
+  rpc BatchGetEmbeddings(BatchGetEmbeddingsRequest)
+      returns (BatchGetEmbeddingsResponse) {}
+}
+
+// Parameters for a match query.
+message MatchRequest {
+  // The ID of the DeploydIndex that will serve the request.
+  // This MatchRequest is sent to a specific IndexEndpoint of the Control API,
+  // as per the IndexEndpoint.network. That IndexEndpoint also has
+  // IndexEndpoint.deployed_indexes, and each such index has an
+  // DeployedIndex.id field.
+  // The value of the field below must equal one of the DeployedIndex.id
+  // fields of the IndexEndpoint that is being called for this request.
+  string deployed_index_id = 1;
+
+  // The embedding values.
+  repeated float float_val = 2;
+
+  // The number of nearest neighbors to be retrieved from database for
+  // each query. If not set, will use the default from
+  // the service configuration.
+  int32 num_neighbors = 3;
+
+  // The list of restricts.
+  repeated Namespace restricts = 4;
+
+  //The list of numeric restricts.
+  repeated NumericNamespace numeric_restricts = 11;
+
+  // Crowding is a constraint on a neighbor list produced by nearest neighbor
+  // search requiring that no more than some value k' of the k neighbors
+  // returned have the same value of crowding_attribute.
+  // It's used for improving result diversity.
+  // This field is the maximum number of matches with the same crowding tag.
+  int32 per_crowding_attribute_num_neighbors = 5;
+
+  // The number of neighbors to find via approximate search before
+  // exact reordering is performed. If not set, the default value from scam
+  // config is used; if set, this value must be > 0.
+  int32 approx_num_neighbors = 6;
+
+  // TO BE DEPRECATED. Use [fraction_leaf_nodes_to_search_override] instead.
+  int32 leaf_nodes_to_search_percent_override = 7;
+
+  // The fraction of the number of leaves to search, set at query time allows
+  // user to tune search performance. This value increase result in both search
+  // accuracy and latency increase. The value should be between 0.0 and 1.0. If
+  // not set or set to 0.0, query uses the default value specified in
+  // NearestNeighborSearchConfig.TreeAHConfig.fraction_leaf_nodes_to_search.
+  double fraction_leaf_nodes_to_search_override = 9;
+
+  // If set to true, besides the doc id, query result will also include the
+  // embedding. Set this value may impact the query performance (e.g, increase
+  // query latency, etc).
+  bool embedding_enabled = 8;
+
+  // The embedding id.
+  // If embedding values (float_val) is set, will use embedding values do
+  // nearest neighbor search. If embedding values isn't set, will first uses
+  // embedding_id to lookup embedding values from dataset, if embedding exist in
+  // the dataset, do nearest neighbor search.
+  string embedding_id = 10;
+}
+
+// Embedding on query result.
+message Embedding {
+  // The id of the matched neighbor.
+  string id = 1;
+
+  // The embedding values.
+  repeated float float_val = 2;
+
+  // The list of restricts.
+  repeated Namespace restricts = 3;
+
+  // The list of numeric restricts.
+  repeated NumericNamespace numeric_restricts = 5;
+
+  // The attribute value used for crowding.  The maximum number of neighbors
+  // to return per crowding attribute value
+  // (per_crowding_attribute_num_neighbors) is configured per-query.
+  int64 crowding_attribute = 4;
+}
+
+// Response of a match query.
+message MatchResponse {
+  message Neighbor {
+    // The ids of the matches.
+    string id = 1;
+
+    // The distances of the matches.
+    double distance = 2;
+
+    // If crowding is enabled, the crowding attribute of this neighbor will
+    // be stored here.
+    int64 crowding_attribute = 3;
+  }
+  // All its neighbors.
+  repeated Neighbor neighbor = 1;
+
+  // Embedding values for all returned neighbors.
+  // This is only set when query.embedding_enabled is set to true.
+  repeated Embedding embeddings = 2;
+}
+
+// Request of a Batch Get Embeddings query.
+message BatchGetEmbeddingsRequest {
+  // The ID of the DeploydIndex that will serve the request.
+  string deployed_index_id = 1;
+
+  // The ids to be looked up.
+  repeated string id = 2;
+}
+
+// Response of a Batch Get Embeddings query.
+message BatchGetEmbeddingsResponse {
+  // Embedding values for all ids in the query request.
+  repeated Embedding embeddings = 1;
+}
+
+// Parameters for a batch match query.
+message BatchMatchRequest {
+  // Batched requests against one index.
+  message BatchMatchRequestPerIndex {
+    // The ID of the DeploydIndex that will serve the request.
+    string deployed_index_id = 1;
+
+    // The requests against the index identified by the above deployed_index_id.
+    repeated MatchRequest requests = 2;
+
+    // Selects the optimal batch size to use for low-level batching. Queries
+    // within each low level batch are executed sequentially while low level
+    // batches are executed in parallel.
+    // This field is optional, defaults to 0 if not set. A non-positive number
+    // disables low level batching, i.e. all queries are executed sequentially.
+    int32 low_level_batch_size = 3;
+  }
+
+  // The batch requests grouped by indexes.
+  repeated BatchMatchRequestPerIndex requests = 1;
+}
+
+// Response of a batch match query.
+message BatchMatchResponse {
+  // Batched responses for one index.
+  message BatchMatchResponsePerIndex {
+    // The ID of the DeployedIndex that produced the responses.
+    string deployed_index_id = 1;
+
+    // The match responses produced by the index identified by the above
+    // deployed_index_id. This field is set only when the query against that
+    // index succeed.
+    repeated MatchResponse responses = 2;
+
+    // The status of response for the batch query identified by the above
+    // deployed_index_id.
+    google.rpc.Status status = 3;
+  }
+
+  // The batched responses grouped by indexes.
+  repeated BatchMatchResponsePerIndex responses = 1;
+}
+
+// Namespace specifies the rules for determining the datapoints that are
+// eligible for each matching query, overall query is an AND across namespaces.
+//  This uses categorical tokens.
+message Namespace {
+  // The string name of the namespace that this proto is specifying,
+  // such as "color", "shape", "geo", or "tags".
+  string name = 1;
+
+  // The allowed tokens in the namespace.
+  repeated string allow_tokens = 2;
+
+  // The denied tokens in the namespace.
+  // The denied tokens have exactly the same format as the token fields, but
+  // represents a negation. When a token is denied, then matches will be
+  // excluded whenever the other datapoint has that token.
+  //
+  // For example, if a query specifies {color: red, blue, !purple}, then that
+  // query will match datapoints that are red or blue, but if those points are
+  // also purple, then they will be excluded even if they are red/blue.
+  repeated string deny_tokens = 3;
+}
+
+// NumericNamespace specifies the rules for determining the datapoints that are
+// eligible for each matching query, overall query is an AND across namespaces.
+// This uses numeric comparisons.
+message NumericNamespace {
+
+  // The string name of the namespace that this proto is specifying,
+  // such as "size" or "cost".
+  string name = 1;
+
+  // The type of Value must be consistent for all datapoints with a given
+  // namespace name. This is verified at runtime.
+  oneof Value {
+    // Represents 64 bit integer.
+    int64 value_int = 2;
+    // Represents 32 bit float.
+    float value_float = 3;
+    // Represents 64 bit float.
+    double value_double = 4;
+  }
+
+  // Which comparison operator to use.  Should be specified for queries only;
+  // specifying this for a datapoint is an error.
+  //
+  // Datapoints for which Operator is true relative to the query's Value
+  // field will be allowlisted.
+  enum Operator {
+    // Default value of the enum.
+    OPERATOR_UNSPECIFIED = 0;
+
+    // Datapoints are eligible iff their value is < the query's.
+    LESS = 1;
+
+    // Datapoints are eligible iff their value is <= the query's.
+    LESS_EQUAL = 2;
+
+    // Datapoints are eligible iff their value is == the query's.
+    EQUAL = 3;
+
+    // Datapoints are eligible iff their value is >= the query's.
+    GREATER_EQUAL = 4;
+
+    // Datapoints are eligible iff their value is > the query's.
+    GREATER = 5;
+  }
+
+  // Which comparison operator to use.
+  Operator op = 5;
+}

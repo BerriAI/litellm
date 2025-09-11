@@ -73,7 +73,6 @@ async def test_aaateam_logging():
     """
     try:
         async with aiohttp.ClientSession() as session:
-
             key = await generate_key(
                 session, models=["fake-openai-endpoint"], team_id="team-1"
             )  # team-1 logs to project 1
@@ -139,7 +138,6 @@ async def test_team_2logging():
 
     try:
         async with aiohttp.ClientSession() as session:
-
             key = await generate_key(
                 session, models=["fake-openai-endpoint"], team_id="team-2"
             )  # team-1 logs to project 1

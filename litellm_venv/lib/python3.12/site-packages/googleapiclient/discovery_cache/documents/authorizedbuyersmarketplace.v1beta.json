@@ -1,0 +1,397 @@
+{
+"auth": {
+"oauth2": {
+"scopes": {
+"https://www.googleapis.com/auth/authorized-buyers-marketplace": {
+"description": "See, create, edit, and delete your Authorized Buyers Marketplace entities."
+}
+}
+}
+},
+"basePath": "",
+"baseUrl": "https://authorizedbuyersmarketplace.googleapis.com/",
+"batchPath": "batch",
+"canonicalName": "Authorized Buyers Marketplace",
+"description": "The Authorized Buyers Marketplace API lets buyers programmatically discover inventory; propose, retrieve and negotiate deals with publishers.",
+"discoveryVersion": "v1",
+"documentationLink": "https://developers.google.com/authorized-buyers/apis/marketplace/reference/rest/",
+"fullyEncodeReservedExpansion": true,
+"icons": {
+"x16": "http://www.google.com/images/icons/product/search-16.gif",
+"x32": "http://www.google.com/images/icons/product/search-32.gif"
+},
+"id": "authorizedbuyersmarketplace:v1beta",
+"kind": "discovery#restDescription",
+"mtlsRootUrl": "https://authorizedbuyersmarketplace.mtls.googleapis.com/",
+"name": "authorizedbuyersmarketplace",
+"ownerDomain": "google.com",
+"ownerName": "Google",
+"parameters": {
+"$.xgafv": {
+"description": "V1 error format.",
+"enum": [
+"1",
+"2"
+],
+"enumDescriptions": [
+"v1 error format",
+"v2 error format"
+],
+"location": "query",
+"type": "string"
+},
+"access_token": {
+"description": "OAuth access token.",
+"location": "query",
+"type": "string"
+},
+"alt": {
+"default": "json",
+"description": "Data format for response.",
+"enum": [
+"json",
+"media",
+"proto"
+],
+"enumDescriptions": [
+"Responses with Content-Type of application/json",
+"Media download with context-dependent Content-Type",
+"Responses with Content-Type of application/x-protobuf"
+],
+"location": "query",
+"type": "string"
+},
+"callback": {
+"description": "JSONP",
+"location": "query",
+"type": "string"
+},
+"fields": {
+"description": "Selector specifying which fields to include in a partial response.",
+"location": "query",
+"type": "string"
+},
+"key": {
+"description": "API key. Your API key identifies your project and provides you with API access, quota, and reports. Required unless you provide an OAuth 2.0 token.",
+"location": "query",
+"type": "string"
+},
+"oauth_token": {
+"description": "OAuth 2.0 token for the current user.",
+"location": "query",
+"type": "string"
+},
+"prettyPrint": {
+"default": "true",
+"description": "Returns response with indentations and line breaks.",
+"location": "query",
+"type": "boolean"
+},
+"quotaUser": {
+"description": "Available to use for quota purposes for server-side applications. Can be any arbitrary string assigned to a user, but should not exceed 40 characters.",
+"location": "query",
+"type": "string"
+},
+"uploadType": {
+"description": "Legacy upload protocol for media (e.g. \"media\", \"multipart\").",
+"location": "query",
+"type": "string"
+},
+"upload_protocol": {
+"description": "Upload protocol for media (e.g. \"raw\", \"multipart\").",
+"location": "query",
+"type": "string"
+}
+},
+"protocol": "rest",
+"resources": {
+"curators": {
+"resources": {
+"dataSegments": {
+"methods": {
+"activate": {
+"description": "Activates a data segment.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments/{dataSegmentsId}:activate",
+"httpMethod": "POST",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.activate",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of data segment to activate. v1alpha format: `buyers/{accountId}/dataSegments/{curatorDataSegmentId}` v1beta format: `curators/{accountId}/dataSegments/{curatorDataSegmentId}`",
+"location": "path",
+"pattern": "^curators/[^/]+/dataSegments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:activate",
+"request": {
+"$ref": "ActivateDataSegmentRequest"
+},
+"response": {
+"$ref": "DataSegment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+},
+"create": {
+"description": "Creates a data segment owned by the listed curator. The data segment will be created in the `ACTIVE` state, meaning it will be immediately available for buyers to use in preferred deals, private auction deals, and auction packages.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments",
+"httpMethod": "POST",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.create",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"parent": {
+"description": "Required. The parent resource where this data segment will be created. v1alpha format: `buyers/{accountId}` v1beta format: `curators/{accountId}`",
+"location": "path",
+"pattern": "^curators/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+parent}/dataSegments",
+"request": {
+"$ref": "DataSegment"
+},
+"response": {
+"$ref": "DataSegment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+},
+"deactivate": {
+"description": "Deactivates a data segment.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments/{dataSegmentsId}:deactivate",
+"httpMethod": "POST",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.deactivate",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of data segment to deactivate. v1alpha format: `buyers/{accountId}/dataSegments/{curatorDataSegmentId}` v1beta format: `curators/{accountId}/dataSegments/{curatorDataSegmentId}`",
+"location": "path",
+"pattern": "^curators/[^/]+/dataSegments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}:deactivate",
+"request": {
+"$ref": "DeactivateDataSegmentRequest"
+},
+"response": {
+"$ref": "DataSegment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+},
+"get": {
+"description": "Gets a data segment given its name.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments/{dataSegmentsId}",
+"httpMethod": "GET",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.get",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Required. Name of data segment to get. v1alpha format: `buyers/{accountId}/dataSegments/{curatorDataSegmentId}` v1beta format: `curators/{accountId}/dataSegments/{curatorDataSegmentId}`",
+"location": "path",
+"pattern": "^curators/[^/]+/dataSegments/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"response": {
+"$ref": "DataSegment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+},
+"list": {
+"description": "List the data segments owned by a curator.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments",
+"httpMethod": "GET",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.list",
+"parameterOrder": [
+"parent"
+],
+"parameters": {
+"pageSize": {
+"description": "Optional. Requested page size. The server may return fewer results than requested. Max allowed page size is 500. If unspecified, the server will default to 500.",
+"format": "int32",
+"location": "query",
+"type": "integer"
+},
+"pageToken": {
+"description": "Optional. The page token as returned. ListDataSegmentsResponse.nextPageToken",
+"location": "query",
+"type": "string"
+},
+"parent": {
+"description": "Required. Name of the parent curator that can access the data segment. v1alpha format: `buyers/{accountId}` v1beta format: `curators/{accountId}`",
+"location": "path",
+"pattern": "^curators/[^/]+$",
+"required": true,
+"type": "string"
+}
+},
+"path": "v1beta/{+parent}/dataSegments",
+"response": {
+"$ref": "ListDataSegmentsResponse"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+},
+"patch": {
+"description": "Updates a data segment.",
+"flatPath": "v1beta/curators/{curatorsId}/dataSegments/{dataSegmentsId}",
+"httpMethod": "PATCH",
+"id": "authorizedbuyersmarketplace.curators.dataSegments.patch",
+"parameterOrder": [
+"name"
+],
+"parameters": {
+"name": {
+"description": "Immutable. Identifier. The unique identifier for the data segment. Account ID corresponds to the account ID that created the segment. v1alpha format: `buyers/{accountId}/dataSegments/{curatorDataSegmentId}` v1beta format: `curators/{curatorAccountId}/dataSegments/{curatorDataSegmentId}`",
+"location": "path",
+"pattern": "^curators/[^/]+/dataSegments/[^/]+$",
+"required": true,
+"type": "string"
+},
+"updateMask": {
+"description": "Optional. List of fields to be updated. If empty or unspecified, the service will update all fields populated in the update request excluding the output only fields and primitive fields with default value. Note that explicit field mask is required in order to reset a primitive field back to its default value, for example, false for boolean fields, 0 for integer fields. A special field mask consisting of a single path \"*\" can be used to indicate full replacement(the equivalent of PUT method), updatable fields unset or unspecified in the input will be cleared or set to default value. Output only fields will be ignored regardless of the value of updateMask.",
+"format": "google-fieldmask",
+"location": "query",
+"type": "string"
+}
+},
+"path": "v1beta/{+name}",
+"request": {
+"$ref": "DataSegment"
+},
+"response": {
+"$ref": "DataSegment"
+},
+"scopes": [
+"https://www.googleapis.com/auth/authorized-buyers-marketplace"
+]
+}
+}
+}
+}
+}
+},
+"revision": "20250616",
+"rootUrl": "https://authorizedbuyersmarketplace.googleapis.com/",
+"schemas": {
+"ActivateDataSegmentRequest": {
+"description": "Request message for activating a data segment",
+"id": "ActivateDataSegmentRequest",
+"properties": {},
+"type": "object"
+},
+"DataSegment": {
+"description": "Defines an identifier for a segment of inventory that can be targeted by curators or media planners in the deals or auction packages UI. Curation of inventory is done by curators on external platforms.",
+"id": "DataSegment",
+"properties": {
+"cpmFee": {
+"$ref": "Money",
+"description": "Required. This will be charged when other accounts use this data segment. For example, when other accounts add this data segment to a deal or auction package. Once set, the currency code cannot be changed."
+},
+"createTime": {
+"description": "Output only. Time the data segment was created.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+},
+"name": {
+"description": "Immutable. Identifier. The unique identifier for the data segment. Account ID corresponds to the account ID that created the segment. v1alpha format: `buyers/{accountId}/dataSegments/{curatorDataSegmentId}` v1beta format: `curators/{curatorAccountId}/dataSegments/{curatorDataSegmentId}`",
+"type": "string"
+},
+"state": {
+"description": "Output only. The state of the data segment.",
+"enum": [
+"STATE_UNSPECIFIED",
+"ACTIVE",
+"INACTIVE"
+],
+"enumDescriptions": [
+"Default value.",
+"The data segment is active.",
+"The data segment is inactive."
+],
+"readOnly": true,
+"type": "string"
+},
+"updateTime": {
+"description": "Output only. Time the data segment was last updated.",
+"format": "google-datetime",
+"readOnly": true,
+"type": "string"
+}
+},
+"type": "object"
+},
+"DeactivateDataSegmentRequest": {
+"description": "Request message for deactivating a data segment",
+"id": "DeactivateDataSegmentRequest",
+"properties": {},
+"type": "object"
+},
+"ListDataSegmentsResponse": {
+"description": "Response message for listing data segments.",
+"id": "ListDataSegmentsResponse",
+"properties": {
+"dataSegments": {
+"description": "The list of data segments.",
+"items": {
+"$ref": "DataSegment"
+},
+"type": "array"
+},
+"nextPageToken": {
+"description": "Continuation token for fetching the next page of results. Pass this value in the ListDataSegmentsRequest.pageToken field in the subsequent call to the `ListDataSegments` method to retrieve the next page of results.",
+"type": "string"
+}
+},
+"type": "object"
+},
+"Money": {
+"description": "Represents an amount of money with its currency type.",
+"id": "Money",
+"properties": {
+"currencyCode": {
+"description": "The three-letter currency code defined in ISO 4217.",
+"type": "string"
+},
+"nanos": {
+"description": "Number of nano (10^-9) units of the amount. The value must be between -999,999,999 and +999,999,999 inclusive. If `units` is positive, `nanos` must be positive or zero. If `units` is zero, `nanos` can be positive, zero, or negative. If `units` is negative, `nanos` must be negative or zero. For example $-1.75 is represented as `units`=-1 and `nanos`=-750,000,000.",
+"format": "int32",
+"type": "integer"
+},
+"units": {
+"description": "The whole units of the amount. For example if `currencyCode` is `\"USD\"`, then 1 unit is one US dollar.",
+"format": "int64",
+"type": "string"
+}
+},
+"type": "object"
+}
+},
+"servicePath": "",
+"title": "Authorized Buyers Marketplace API",
+"version": "v1beta",
+"version_module": true
+}

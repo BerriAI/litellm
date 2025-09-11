@@ -183,7 +183,9 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         assert (
             response_date.month == expected_month
         ), f"Expected month {expected_month}, got {response_date.month} for {key}"
-        assert response_date.day == 1, f"Expected day 1, got {response_date.day} for {key}"
+        assert (
+            response_date.day == 1
+        ), f"Expected day 1, got {response_date.day} for {key}"
 
 
 @pytest.mark.asyncio
@@ -507,7 +509,6 @@ def test_get_new_token_with_invalid_key():
     assert "New key must start with 'sk-'" in str(exc_info.value.detail)
 
 
-
 @pytest.mark.asyncio
 async def test_generate_service_account_requires_team_id():
     with pytest.raises(HTTPException):
@@ -529,11 +530,11 @@ async def test_generate_service_account_works_with_team_id():
     from unittest.mock import patch
 
     # Mock the database and router dependencies from proxy_server
-    with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma, \
-         patch('litellm.proxy.proxy_server.llm_router') as mock_router, \
-         patch('litellm.proxy.proxy_server.premium_user', False), \
-         patch('litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn') as mock_generate_key:
-        
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ) as mock_router, patch("litellm.proxy.proxy_server.premium_user", False), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+    ) as mock_generate_key:
         # Configure mocks
         mock_prisma.return_value = AsyncMock()
         mock_router.return_value = None
@@ -542,9 +543,9 @@ async def test_generate_service_account_works_with_team_id():
             "key": "sk-test-key",
             "expires": None,
             "user_id": "test-user",
-            "team_id": "IJ"
+            "team_id": "IJ",
         }
-        
+
         # This should not raise an exception since team_id is provided
         await _common_key_generation_helper(
             data=GenerateKeyRequest(
@@ -559,7 +560,6 @@ async def test_generate_service_account_works_with_team_id():
         )
 
 
-
 @pytest.mark.asyncio
 async def test_update_service_account_requires_team_id():
     data = UpdateKeyRequest(key="sk-1", metadata={"service_account_id": "sa"})
@@ -571,7 +571,9 @@ async def test_update_service_account_requires_team_id():
 
 @pytest.mark.asyncio
 async def test_update_service_account_works_with_team_id():
-    data = UpdateKeyRequest(key="sk-1", metadata={"service_account_id": "sa"}, team_id="IJ")
+    data = UpdateKeyRequest(
+        key="sk-1", metadata={"service_account_id": "sa"}, team_id="IJ"
+    )
     existing_key = LiteLLM_VerificationToken(token="hashed")
 
     await prepare_key_update_data(data=data, existing_key_row=existing_key)
@@ -580,22 +582,22 @@ async def test_update_service_account_works_with_team_id():
 @pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_team_id():
     """
-    Test that validate_team_id_used_in_service_account_request raises HTTPException 
+    Test that validate_team_id_used_in_service_account_request raises HTTPException
     when team_id is None for service account key generation.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         validate_team_id_used_in_service_account_request,
     )
-    
+
     mock_prisma_client = AsyncMock()
-    
+
     # Test that HTTPException is raised when team_id is None
     with pytest.raises(HTTPException) as exc_info:
         await validate_team_id_used_in_service_account_request(
             team_id=None,
             prisma_client=mock_prisma_client,
         )
-    
+
     assert exc_info.value.status_code == 400
     assert "team_id is required for service account keys" in str(exc_info.value.detail)
 
@@ -603,7 +605,7 @@ async def test_validate_team_id_used_in_service_account_request_requires_team_id
 @pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_requires_prisma_client():
     """
-    Test that validate_team_id_used_in_service_account_request raises HTTPException 
+    Test that validate_team_id_used_in_service_account_request raises HTTPException
     when prisma_client is None for service account key generation.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -616,78 +618,76 @@ async def test_validate_team_id_used_in_service_account_request_requires_prisma_
             team_id="test-team-id",
             prisma_client=None,
         )
-    
+
     assert exc_info.value.status_code == 400
-    assert "prisma_client is required for service account keys" in str(exc_info.value.detail)
+    assert "prisma_client is required for service account keys" in str(
+        exc_info.value.detail
+    )
 
 
 @pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_checks_team_exists():
     """
-    Test that validate_team_id_used_in_service_account_request validates that 
+    Test that validate_team_id_used_in_service_account_request validates that
     the team_id exists in the database for service account key generation.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         validate_team_id_used_in_service_account_request,
     )
-    
+
     mock_prisma_client = AsyncMock()
-    
+
     # Mock the database query to return None (team doesn't exist)
     mock_find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_teamtable.find_unique = mock_find_unique
-    
+
     # Test that HTTPException is raised when team doesn't exist in DB
     with pytest.raises(HTTPException) as exc_info:
         await validate_team_id_used_in_service_account_request(
             team_id="non-existent-team-id",
             prisma_client=mock_prisma_client,
         )
-    
+
     assert exc_info.value.status_code == 400
     assert "team_id does not exist in the database" in str(exc_info.value.detail)
-    
+
     # Verify the database was queried with the correct parameters
-    mock_find_unique.assert_called_once_with(
-        where={"team_id": "non-existent-team-id"}
-    )
+    mock_find_unique.assert_called_once_with(where={"team_id": "non-existent-team-id"})
 
 
 @pytest.mark.asyncio
 async def test_validate_team_id_used_in_service_account_request_success():
     """
-    Test that validate_team_id_used_in_service_account_request returns True 
+    Test that validate_team_id_used_in_service_account_request returns True
     when team_id exists in the database for service account key generation.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         validate_team_id_used_in_service_account_request,
     )
-    
+
     mock_prisma_client = AsyncMock()
-    
+
     # Mock the database query to return a team object (team exists)
     mock_team = {"team_id": "existing-team-id", "team_name": "Test Team"}
     mock_find_unique = AsyncMock(return_value=mock_team)
     mock_prisma_client.db.litellm_teamtable.find_unique = mock_find_unique
-    
+
     # Test that function returns True when team exists
     result = await validate_team_id_used_in_service_account_request(
         team_id="existing-team-id",
         prisma_client=mock_prisma_client,
     )
-    
+
     assert result is True
-    
+
     # Verify the database was queried with the correct parameters
-    mock_find_unique.assert_called_once_with(
-        where={"team_id": "existing-team-id"}
-    )
+    mock_find_unique.assert_called_once_with(where={"team_id": "existing-team-id"})
 
 
 @pytest.mark.asyncio
 async def test_generate_service_account_key_endpoint_validation():
     """
-    Test that the /key/service-account/generate endpoint properly validates 
+    Test that the /key/service-account/generate endpoint properly validates
     team_id requirement and team existence in database.
     """
     from unittest.mock import patch
@@ -705,16 +705,16 @@ async def test_generate_service_account_key_endpoint_validation():
             ),
             litellm_changed_by=None,
         )
-    
+
     assert exc_info.value.status_code == 400
     assert "team_id is required for service account keys" in str(exc_info.value.detail)
-    
-    # Test case 2: Team doesn't exist in database  
-    with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+
+    # Test case 2: Team doesn't exist in database
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         # Mock team not found
         mock_find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teamtable.find_unique = mock_find_unique
-        
+
         with pytest.raises(HTTPException) as exc_info:
             await generate_service_account_key_fn(
                 data=GenerateKeyRequest(team_id="non-existent-team"),
@@ -723,7 +723,6 @@ async def test_generate_service_account_key_endpoint_validation():
                 ),
                 litellm_changed_by=None,
             )
-        
+
         assert exc_info.value.status_code == 400
         assert "team_id does not exist in the database" in str(exc_info.value.detail)
-

@@ -452,9 +452,7 @@ async def test_image_generation_async_additional_params():
 
 
 def test_get_supported_openai_params():
-
     class MyCustomLLM(CustomLLM):
-
         # This is what `get_supported_openai_params` should be returning:
         def get_supported_openai_params(self, model: str) -> list[str]:
             return [
@@ -505,6 +503,7 @@ def test_get_supported_openai_params():
     response = get_supported_openai_params(model="my-custom-llm/my-fake-model")
     assert response is not None
 
+
 def test_simple_embedding():
     my_custom_llm = MyCustomLLM()
     litellm.custom_provider_map = [
@@ -512,7 +511,7 @@ def test_simple_embedding():
     ]
     resp = litellm.embedding(
         model="custom_llm/my-fake-model",
-        input=["good morning from litellm", "good night from litellm"]
+        input=["good morning from litellm", "good night from litellm"],
     )
 
     assert resp.data[1] == {
@@ -520,6 +519,7 @@ def test_simple_embedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
 
 @pytest.mark.asyncio
 async def test_simple_aembedding():
@@ -529,7 +529,7 @@ async def test_simple_aembedding():
     ]
     resp = await litellm.aembedding(
         model="custom_llm/my-fake-model",
-        input=["good morning from litellm", "good night from litellm"]
+        input=["good morning from litellm", "good night from litellm"],
     )
 
     assert resp.data[1] == {

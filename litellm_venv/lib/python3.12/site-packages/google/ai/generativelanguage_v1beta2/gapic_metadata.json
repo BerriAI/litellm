@@ -1,0 +1,156 @@
+ {
+  "comment": "This file maps proto services/RPCs to the corresponding library clients/methods",
+  "language": "python",
+  "libraryPackage": "google.ai.generativelanguage_v1beta2",
+  "protoPackage": "google.ai.generativelanguage.v1beta2",
+  "schema": "1.0",
+  "services": {
+    "DiscussService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "DiscussServiceClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "DiscussServiceAsyncClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "DiscussServiceClient",
+          "rpcs": {
+            "CountMessageTokens": {
+              "methods": [
+                "count_message_tokens"
+              ]
+            },
+            "GenerateMessage": {
+              "methods": [
+                "generate_message"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "ModelService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "ModelServiceAsyncClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "ModelServiceClient",
+          "rpcs": {
+            "GetModel": {
+              "methods": [
+                "get_model"
+              ]
+            },
+            "ListModels": {
+              "methods": [
+                "list_models"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "TextService": {
+      "clients": {
+        "grpc": {
+          "libraryClient": "TextServiceClient",
+          "rpcs": {
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        },
+        "grpc-async": {
+          "libraryClient": "TextServiceAsyncClient",
+          "rpcs": {
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        },
+        "rest": {
+          "libraryClient": "TextServiceClient",
+          "rpcs": {
+            "EmbedText": {
+              "methods": [
+                "embed_text"
+              ]
+            },
+            "GenerateText": {
+              "methods": [
+                "generate_text"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
