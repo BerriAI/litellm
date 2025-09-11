@@ -1230,11 +1230,6 @@ def __getattr__(name: str) -> Any:
         # cache class
         setattr(modules[__name__], original_name, attr)
 
-        # if the request is a lowercase name → automatically instantiate
-        if name[0].islower():
-            instance = attr()
-            setattr(modules[__name__], name, instance)
-            return instance
         return attr
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
