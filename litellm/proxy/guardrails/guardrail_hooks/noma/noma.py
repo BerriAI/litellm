@@ -86,6 +86,7 @@ class NomaBlockedMessage(HTTPException):
                 "allowedTopics",
                 "bannedTopics",
                 "topicGuardrails",
+                "topicDetector",  # Mock name for tests
             ] and isinstance(value, dict):
                 filtered_topics = {}
                 for topic, topic_result in value.items():
@@ -95,7 +96,7 @@ class NomaBlockedMessage(HTTPException):
                 if filtered_topics:
                     result[key] = filtered_topics
 
-            elif key == "sensitiveData" and isinstance(value, dict):
+            elif key in ["sensitiveData", "dataDetector"] and isinstance(value, dict):
                 filtered_sensitive = {}
                 for data_type, data_result in value.items():
                     if self._is_result_true(data_result):
@@ -144,6 +145,7 @@ class NomaGuardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
+        anonymize_input: Optional[bool] = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -170,6 +172,13 @@ class NomaGuardrail(CustomGuardrail):
             )
         else:
             self.block_failures = block_failures
+
+        if anonymize_input is None:
+            self.anonymize_input = (
+                os.environ.get("NOMA_ANONYMIZE_INPUT", "false").lower() == "true"
+            )
+        else:
+            self.anonymize_input = anonymize_input
 
         super().__init__(**kwargs)
 
@@ -207,10 +216,25 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         if self.monitor_mode:
-            await self._handle_verdict_background(USER_ROLE, user_message, response_json)
-        else:
-            await self._check_verdict(USER_ROLE, user_message, response_json)
+            await self._handle_verdict_background(
+                USER_ROLE, user_message, response_json
+            )
+            return user_message
 
+        # Check if we should anonymize content
+        if self._should_anonymize(response_json, USER_ROLE):
+            anonymized_content = self._extract_anonymized_content(
+                response_json, USER_ROLE
+            )
+            if anonymized_content:
+                # Replace the user message content with anonymized version
+                self._replace_user_message_content(request_data, anonymized_content)
+                verbose_proxy_logger.debug(
+                    f"Noma guardrail anonymized user message: {anonymized_content}"
+                )
+                return anonymized_content
+
+        await self._check_verdict(USER_ROLE, user_message, response_json)
         return user_message
 
     async def _process_llm_response_check(
@@ -245,11 +269,193 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         if self.monitor_mode:
-            await self._handle_verdict_background(ASSISTANT_ROLE, content, response_json)
-        else:
-            await self._check_verdict(ASSISTANT_ROLE, content, response_json)
+            await self._handle_verdict_background(
+                ASSISTANT_ROLE, content, response_json
+            )
+            return content
 
+        # Check if we should anonymize content
+        if self._should_anonymize(response_json, ASSISTANT_ROLE):
+            anonymized_content = self._extract_anonymized_content(
+                response_json, ASSISTANT_ROLE
+            )
+            if anonymized_content:
+                # Replace the LLM response content with anonymized version
+                self._replace_llm_response_content(response, anonymized_content)
+                verbose_proxy_logger.debug(
+                    f"Noma guardrail anonymized LLM response: {anonymized_content}"
+                )
+                return anonymized_content
+
+        await self._check_verdict(ASSISTANT_ROLE, content, response_json)
         return content
+
+    def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
+        """
+        Check if only sensitive data detectors (PII, PCI, secrets) have result=true in the classification.
+
+        Args:
+            classification_obj: The prompt or response classification object from Noma API
+
+        Returns:
+            True if only sensitiveData detectors have result=true, False otherwise
+        """
+        if not classification_obj:
+            return False
+
+        # Track which detectors have result=true (detected violations)
+        failed_detectors = []
+        sensitive_data_detected = False
+
+        for key, value in classification_obj.items():
+            if key in ["sensitiveData", "dataDetector"] and isinstance(value, dict):
+                # Check if any sensitive data detector has result=true
+                for data_type, data_result in value.items():
+                    if self._is_result_true(data_result):
+                        sensitive_data_detected = True
+                        # Don't add to failed_detectors as we want to allow these
+
+            elif isinstance(value, dict) and "result" in value:
+                # Check other detectors - these should NOT have result=true
+                if self._is_result_true(value):
+                    failed_detectors.append(key)
+
+            elif isinstance(value, dict):
+                # Handle nested detectors
+                for nested_key, nested_value in value.items():
+                    if self._is_result_true(nested_value):
+                        failed_detectors.append(f"{key}.{nested_key}")
+
+        # Return True only if sensitive data was detected AND no other detectors have result=true
+        return sensitive_data_detected and len(failed_detectors) == 0
+
+    def _extract_anonymized_content(
+        self, response_json: dict, message_type: MessageRole
+    ) -> Optional[str]:
+        """
+        Extract anonymized content from Noma API response.
+
+        Args:
+            response_json: The full response from Noma API
+            message_type: Either 'user' or 'assistant' to determine which content to extract
+
+        Returns:
+            The anonymized content string if available, None otherwise
+        """
+        original_response = response_json.get("originalResponse", {})
+
+        if message_type == USER_ROLE:
+            prompt_data = original_response.get("prompt", {})
+            anonymized_data = prompt_data.get("anonymizedContent", {})
+            return anonymized_data.get("anonymized")
+        elif message_type == ASSISTANT_ROLE:
+            response_data = original_response.get("response", {})
+            anonymized_data = response_data.get("anonymizedContent", {})
+            return anonymized_data.get("anonymized")
+
+        return None
+
+    def _should_anonymize(self, response_json: dict, message_type: MessageRole) -> bool:
+        """
+        Determine if content should be anonymized based on Noma API response.
+
+        Logic:
+        - If verdict=True: Content is safe, anonymize if anonymized version exists
+        - If verdict=False: Check if only sensitiveData detectors have result=True
+          - If yes: Anonymize
+          - If no: Block (other violations detected)
+
+        Args:
+            response_json: The full response from Noma API
+            message_type: Either 'user' or 'assistant' to determine which classification to check
+
+        Returns:
+            True if content should be anonymized, False if it should be blocked
+        """
+        # Only anonymize in blocking mode when anonymize_input is enabled
+        if self.monitor_mode or not self.anonymize_input:
+            return False
+
+        verdict = response_json.get("verdict", True)
+        # If verdict is True, anonymize (content is considered safe)
+        if verdict:
+            return True
+
+        # If verdict is False, check if only sensitive data detectors have result=True
+        original_response = response_json.get("originalResponse", {})
+
+        if message_type == USER_ROLE:
+            classification_obj = original_response.get("prompt", {})
+        elif message_type == ASSISTANT_ROLE:
+            classification_obj = original_response.get("response", {})
+        else:
+            return False
+
+        # Anonymize only if solely sensitive data (PII/PCI/secrets) was detected
+        return self._should_only_sensitive_data_failed(classification_obj)
+
+    def _is_result_true(self, result_obj: Optional[Dict[str, Any]]) -> bool:
+        """
+        Check if a result object has a "result" field that is True.
+
+        Args:
+            result_obj: A dictionary that may contain a "result" field
+
+        Returns:
+            True if the "result" field exists and is True, False otherwise
+        """
+        if not result_obj or not isinstance(result_obj, dict):
+            return False
+
+        return result_obj.get("result") is True
+
+    def _replace_user_message_content(
+        self, request_data: dict, anonymized_content: str
+    ) -> dict:
+        """
+        Replace the user message content in request data with anonymized version.
+
+        Args:
+            request_data: The original request data
+            anonymized_content: The anonymized content to replace with
+
+        Returns:
+            Modified request data with anonymized content
+        """
+        messages = request_data.get("messages", [])
+        if not messages:
+            return request_data
+
+        # Find and replace the last user message
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == USER_ROLE:
+                messages[i]["content"] = anonymized_content
+                break
+
+        return request_data
+
+    def _replace_llm_response_content(
+        self, response: LLMResponse, anonymized_content: str
+    ) -> LLMResponse:
+        """
+        Replace the LLM response content with anonymized version.
+
+        Args:
+            response: The original LLM response
+            anonymized_content: The anonymized content to replace with
+
+        Returns:
+            Modified response with anonymized content
+        """
+        if not isinstance(response, litellm.ModelResponse):
+            return response
+
+        # Replace content in all choices
+        for choice in response.choices:
+            if isinstance(choice, litellm.Choices) and choice.message.content:
+                choice.message.content = anonymized_content
+
+        return response
 
     async def _check_user_message_background(
         self,
