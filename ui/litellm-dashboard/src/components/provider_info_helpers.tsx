@@ -13,7 +13,7 @@ export enum Providers {
   Cerebras = "Cerebras",                
   Cohere = "Cohere",         
   Dashscope = "Dashscope",
-  Databricks = "Databricks",            
+  Databricks = "Databricks (Qwen API)",            
   DeepInfra = "DeepInfra",             
   Deepgram = "Deepgram",                
   Deepseek = "Deepseek",               
