@@ -2758,6 +2758,44 @@ curl http://localhost:4000/v1/fine_tuning/jobs \
 </Tabs>
 
 
+## Labels
+
+
+Google enables you to add custom metadata to its `generateContent` and `streamGenerateContent` calls.
+This mechanism is useful in Vertex AI because it allows costs and usage tracking over multiple
+different applications or users.
+
+
+### Usage
+
+You can use that feature through LiteLLM by sending `labels` or `metadata` field in your requests.
+
+If the client sets the `labels` field in the request to the LiteLLM,
+the LiteLLM will pass the `labels` field to the Vertex AI backend.
+
+If the client sets the `metadata` field in the request to the LiteLLM and the `labels` field is not set,
+the LiteLLM will create the `labels` field filled with `metadata` key/value pairs for all string values and
+pass it to the Vertex AI backend.
+
+
+Here is an example JSON request demonstrating the labels usage:
+
+```json
+{
+    "model": "gemini-2.0-flash-lite",
+    "messages": [
+        { "role": "user", "content": "respond in 20 words. who are you?" }
+    ],
+    "labels": {
+        "client_app": "acme_comp_financial_app",
+        "department": "finance",
+        "project": "acme_ai"
+    }
+}
+```
+
+
+
 ## Extra
 
 ### Using `GOOGLE_APPLICATION_CREDENTIALS`
