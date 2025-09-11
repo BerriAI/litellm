@@ -197,6 +197,10 @@ litellm_settings:
 
 ### Use on LiteLLM UI 
 
+Follow this walkthrough to use your MCP on LiteLLM UI
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/57e0763267254bc79dbe6658d0b8758c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
 ### Use with Responses API
 
 Replace `http://localhost:4000` with your LiteLLM Proxy base URL.
