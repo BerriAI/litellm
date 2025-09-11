@@ -65,16 +65,11 @@ async def create_mcp_list_tools_events(
         )
         events.append(in_progress_event)
         
-        # Fetch MCP tools
-        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        # Process MCP tools through the complete pipeline (fetch + filter + deduplicate)
+        # Note: We don't transform to OpenAI format here since we need the original MCP tools for the events
+        filtered_mcp_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
             user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        )
-        
-        # Filter tools based on allowed_tools parameter
-        filtered_mcp_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mcp_tools_fetched,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
         )
         
         # Convert tools to dict format for the event
@@ -445,15 +440,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if non_mcp_tools:
                         params_for_llm[key] = non_mcp_tools
             
-            # Get the transformed MCP tools that should be sent to the LLM
+            # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
             from litellm.responses.mcp.litellm_proxy_mcp_handler import (
                 LiteLLM_Proxy_MCP_Handler,
             )
-            mcp_tools_openai = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            openai_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_tools_with_litellm_proxy=self.mcp_tools_with_litellm_proxy
             )
-            openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(mcp_tools_openai)
             
             # Add the transformed tools
             existing_tools = params_for_llm.get('tools', [])

@@ -86,6 +86,28 @@ class LiteLLM_Proxy_MCP_Handler:
         )
     
     @staticmethod
+    def _deduplicate_mcp_tools(mcp_tools: List[Any]) -> List[Any]:
+        """
+        Deduplicate MCP tools by name, keeping the first occurrence of each tool.
+        
+        Args:
+            mcp_tools: List of MCP tools that may contain duplicates
+            
+        Returns:
+            List of deduplicated MCP tools
+        """
+        seen_names = set()
+        deduplicated_tools = []
+        
+        for tool in mcp_tools:
+            tool_name = getattr(tool, 'name', None) if hasattr(tool, 'name') else tool.get('name') if isinstance(tool, dict) else None
+            if tool_name and tool_name not in seen_names:
+                seen_names.add(tool_name)
+                deduplicated_tools.append(tool)
+        
+        return deduplicated_tools
+
+    @staticmethod
     def _filter_mcp_tools_by_allowed_tools(
         mcp_tools: List[Any], 
         mcp_tools_with_litellm_proxy: List[ToolParam]
@@ -111,6 +133,90 @@ class LiteLLM_Proxy_MCP_Handler:
                 filtered_tools.append(mcp_tool)
         
         return filtered_tools
+    
+    @staticmethod
+    async def _process_mcp_tools_to_openai_format(
+        user_api_key_auth: Any,
+        mcp_tools_with_litellm_proxy: List[ToolParam]
+    ) -> List[Any]:
+        """
+        Centralized method to process MCP tools through the complete pipeline:
+        1. Fetch tools from MCP manager
+        2. Filter based on allowed_tools parameter  
+        3. Deduplicate tools by name
+        4. Transform to OpenAI format
+        
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+            
+        Returns:
+            List of tools in OpenAI format ready to be sent to the LLM
+        """
+        if not mcp_tools_with_litellm_proxy:
+            return []
+            
+        # Step 1: Fetch MCP tools from manager
+        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            user_api_key_auth=user_api_key_auth,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
+        
+        # Step 2: Filter tools based on allowed_tools parameter
+        filtered_mcp_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+            mcp_tools=mcp_tools_fetched,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
+        
+        # Step 3: Deduplicate tools after filtering
+        deduplicated_mcp_tools = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+            filtered_mcp_tools
+        )
+        
+        # Step 4: Transform to OpenAI format
+        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+            deduplicated_mcp_tools
+        )
+        
+        return openai_tools
+    
+    @staticmethod
+    async def _process_mcp_tools_without_openai_transform(
+        user_api_key_auth: Any,
+        mcp_tools_with_litellm_proxy: List[ToolParam]
+    ) -> List[Any]:
+        """
+        Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
+        This is useful for cases where we need the original MCP tool objects (e.g., for events).
+        
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+            
+        Returns:
+            List of filtered and deduplicated MCP tools in their original format
+        """
+        if not mcp_tools_with_litellm_proxy:
+            return []
+            
+        # Step 1: Fetch MCP tools from manager
+        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+            user_api_key_auth=user_api_key_auth,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
+        
+        # Step 2: Filter tools based on allowed_tools parameter
+        filtered_mcp_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+            mcp_tools=mcp_tools_fetched,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
+        
+        # Step 3: Deduplicate tools after filtering
+        deduplicated_mcp_tools = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+            filtered_mcp_tools
+        )
+        
+        return deduplicated_mcp_tools
     
     @staticmethod
     def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
