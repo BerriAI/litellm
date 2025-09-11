@@ -28,6 +28,7 @@ from litellm.types.utils import EmbeddingResponse, ImageResponse
 # Constants
 USER_ROLE: Final[Literal["user"]] = "user"
 ASSISTANT_ROLE: Final[Literal["assistant"]] = "assistant"
+SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector"]
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
@@ -96,7 +97,7 @@ class NomaBlockedMessage(HTTPException):
                 if filtered_topics:
                     result[key] = filtered_topics
 
-            elif key in ["sensitiveData", "dataDetector"] and isinstance(value, dict):
+            elif key in SENSITIVE_DATA_DETECTOR_KEYS and isinstance(value, dict):
                 filtered_sensitive = {}
                 for data_type, data_result in value.items():
                     if self._is_result_true(data_result):
@@ -308,7 +309,7 @@ class NomaGuardrail(CustomGuardrail):
         sensitive_data_detected = False
 
         for key, value in classification_obj.items():
-            if key in ["sensitiveData", "dataDetector"] and isinstance(value, dict):
+            if key in SENSITIVE_DATA_DETECTOR_KEYS and isinstance(value, dict):
                 # Check if any sensitive data detector has result=true
                 for data_type, data_result in value.items():
                     if self._is_result_true(data_result):
@@ -411,20 +412,17 @@ class NomaGuardrail(CustomGuardrail):
 
     def _replace_user_message_content(
         self, request_data: dict, anonymized_content: str
-    ) -> dict:
+    ):
         """
         Replace the user message content in request data with anonymized version.
 
         Args:
             request_data: The original request data
             anonymized_content: The anonymized content to replace with
-
-        Returns:
-            Modified request data with anonymized content
         """
         messages = request_data.get("messages", [])
         if not messages:
-            return request_data
+            return
 
         # Find and replace the last user message
         for i in range(len(messages) - 1, -1, -1):
@@ -432,30 +430,23 @@ class NomaGuardrail(CustomGuardrail):
                 messages[i]["content"] = anonymized_content
                 break
 
-        return request_data
-
     def _replace_llm_response_content(
         self, response: LLMResponse, anonymized_content: str
-    ) -> LLMResponse:
+    ):
         """
         Replace the LLM response content with anonymized version.
 
         Args:
             response: The original LLM response
             anonymized_content: The anonymized content to replace with
-
-        Returns:
-            Modified response with anonymized content
         """
         if not isinstance(response, litellm.ModelResponse):
-            return response
+            return
 
         # Replace content in all choices
         for choice in response.choices:
             if isinstance(choice, litellm.Choices) and choice.message.content:
                 choice.message.content = anonymized_content
-
-        return response
 
     async def _check_user_message_background(
         self,
