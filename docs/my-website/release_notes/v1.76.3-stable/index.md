@@ -19,6 +19,13 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+:::warning
+
+This release has a known issue where startup is leading to Out of Memory errors when deploying on Kubernetes. We recommend waiting before upgrading to this version.
+
+:::
+
+
 ## Deploy this version
 
 <Tabs>

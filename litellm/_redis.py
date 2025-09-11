@@ -142,7 +142,10 @@ def create_gcp_iam_redis_connect_func(
     """
     def iam_connect(self):
         """Initialize the connection and authenticate using GCP IAM"""
-        from redis.exceptions import AuthenticationError, AuthenticationWrongNumberOfArgsError
+        from redis.exceptions import (
+            AuthenticationError,
+            AuthenticationWrongNumberOfArgsError,
+        )
         from redis.utils import str_if_bytes
         
         self._parser.on_connect(self)
@@ -395,7 +398,7 @@ def get_redis_async_client(
         # Handle GCP IAM authentication for async clusters
         redis_connect_func = cluster_kwargs.pop("redis_connect_func", None)
         from litellm import get_secret_str
-        
+
         # Get GCP service account - first try from redis_connect_func, then from environment
         gcp_service_account = None
         if redis_connect_func and hasattr(redis_connect_func, '_gcp_service_account'):
@@ -403,22 +406,22 @@ def get_redis_async_client(
         else:
             gcp_service_account = redis_kwargs.get("gcp_service_account") or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
         
-        verbose_logger.info(f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}")
+        verbose_logger.debug(f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}")
         
         # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
         if redis_connect_func and gcp_service_account:
-            verbose_logger.info("DEBUG: Generating IAM token for service account (value not logged for security reasons)")
+            verbose_logger.debug("DEBUG: Generating IAM token for service account (value not logged for security reasons)")
             try:
                 # Generate IAM access token using the helper function
                 access_token = _generate_gcp_iam_access_token(gcp_service_account)
                 cluster_kwargs["password"] = access_token
-                verbose_logger.info("DEBUG: Successfully generated GCP IAM access token for async Redis cluster")
+                verbose_logger.debug("DEBUG: Successfully generated GCP IAM access token for async Redis cluster")
             except Exception as e:
                 verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
                 from redis.exceptions import AuthenticationError
                 raise AuthenticationError("Failed to generate GCP IAM access token")
         else:
-            verbose_logger.info(f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account={gcp_service_account}")
+            verbose_logger.debug(f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}")
         
         new_startup_nodes: List[ClusterNode] = []
 

@@ -473,7 +473,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
                 str(e)
             )
@@ -550,6 +550,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Validate user-provided key format
+    if data.key is not None and not data.key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+            }
+        )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
@@ -2004,7 +2013,7 @@ async def _rotate_master_key(
     # 2. process model table
     if models:
         decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
         )
         new_models = []
@@ -2018,9 +2027,9 @@ async def _rotate_master_key(
             )
             if new_model:
                 new_models.append(jsonify_object(new_model.model_dump()))
-        verbose_proxy_logger.info("Resetting proxy model table")
+        verbose_proxy_logger.debug("Resetting proxy model table")
         await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.info("Creating %s models", len(new_models))
+        verbose_proxy_logger.debug("Creating %s models", len(new_models))
         await prisma_client.db.litellm_proxymodeltable.create_many(
             data=new_models,
         )

@@ -1937,7 +1937,7 @@ class CustomStreamWrapper:
                 )
             ## Map to OpenAI Exception
             try:
-                exception_type(
+                raise exception_type(
                     model=self.model,
                     custom_llm_provider=self.custom_llm_provider,
                     original_exception=e,

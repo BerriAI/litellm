@@ -5,6 +5,7 @@ import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPTool } from "@/components/chat_ui/llm_calls/fetch_mcp_tools";
 import NotificationManager from "@/components/molecules/notifications_manager";
+import { MCPEvent } from "../MCPEventsDisplay";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -19,9 +20,10 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string,
+  selectedMCPTools?: string[],
   previousResponseId?: string | null,
-  onResponseId?: (responseId: string) => void
+  onResponseId?: (responseId: string) => void,
+  onMCPEvent?: (event: MCPEvent) => void
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -69,15 +71,13 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Format MCP tool if selected
-    const tools = selectedMCPTool ? [{
+    // Format MCP tools if selected
+    const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
       type: "mcp",
       server_label: "litellm",
-      server_url: `${proxyBaseUrl}/mcp`,
+      server_url: `litellm_proxy/mcp`,
       require_approval: "never",
-      headers: {
-        "x-litellm-api-key": `Bearer ${accessToken}`
-      }
+      allowed_tools: selectedMCPTools,
     }] : undefined;
 
     // Create request to OpenAI responses API
@@ -100,6 +100,29 @@ export async function makeOpenAIResponsesRequest(
 
       // Use a type-safe approach to handle events
       if (typeof event === 'object' && event !== null) {
+        // Handle MCP events first
+        if (event.type?.startsWith('response.mcp_') || 
+            (event.type === "response.output_item.done" && 
+             (event.item?.type === "mcp_list_tools" || event.item?.type === "mcp_call"))) {
+          console.log("MCP event received:", event);
+          
+          if (onMCPEvent) {
+            const mcpEvent: MCPEvent = {
+              type: event.type,
+              sequence_number: event.sequence_number,
+              output_index: event.output_index,
+              item_id: event.item_id || event.item?.id, // Handle both structures
+              item: event.item,
+              delta: event.delta,
+              arguments: event.arguments,
+              timestamp: Date.now()
+            };
+            onMCPEvent(mcpEvent);
+          }
+          
+          // Continue processing other aspects of the event
+        }
+
         // Check for MCP tool usage
         if (event.type === "response.output_item.done" && 
             event.item?.type === "mcp_call" && 

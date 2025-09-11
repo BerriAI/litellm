@@ -3854,7 +3854,7 @@ def embedding(  # noqa: PLR0915
     max_retries = kwargs.get("max_retries", None)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
-    azure_ad_token_provider = kwargs.pop("azure_ad_token_provider", None)
+    azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
     aembedding = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None)
@@ -5780,9 +5780,8 @@ async def ahealth_check(
                 input=input or ["test"],
             ),
             "audio_speech": lambda: litellm.aspeech(
-                **_filter_model_params(model_params),
+                **{**_filter_model_params(model_params), **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params) else {})},
                 input=prompt or "test",
-                voice="alloy",
             ),
             "audio_transcription": lambda: litellm.atranscription(
                 **_filter_model_params(model_params),

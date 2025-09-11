@@ -60,7 +60,7 @@ components in your system, including in logging tools.
 
 ### Redact Messages, Response Content
 
-Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata - e.g. spend, will still be tracked.
+Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to your logging provider, but request metadata - e.g. spend, will still be tracked. Useful for privacy/compliance when handling sensitive data.
 
 <Tabs>
 

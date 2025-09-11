@@ -205,7 +205,7 @@ async def anthropic_response(  # noqa: PLR0915
             data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
         )
 
-        verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(

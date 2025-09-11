@@ -169,12 +169,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         if tool is None:
             return None
 
+        kwags: dict = {
+            "name": tool["name"],
+            "parameters": cast(dict, tool.get("input_schema") or {})
+        }
+
+        description = tool.get("description")
+        if description is not None:
+            kwags["description"] = cast(Union[dict, str], description)
+
         return DatabricksTool(
             type="function",
-            function=DatabricksFunction(
-                name=tool["name"],
-                parameters=cast(dict, tool.get("input_schema") or {}),
-            ),
+            function=DatabricksFunction(name=tool["name"], **kwags),
         )
 
     def _map_openai_to_dbrx_tool(self, model: str, tools: List) -> List[DatabricksTool]:
@@ -331,8 +337,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         elif isinstance(content, list):
             content_str = ""
             for item in content:
-                if item["type"] == "text":
-                    content_str += item["text"]
+                if item.get("type") == "text":
+                    text_value = item.get("text", "")
+                    content_str += str(text_value) if text_value is not None else ""
             return content_str
         else:
             raise Exception(f"Unsupported content type: {type(content)}")
@@ -361,19 +368,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         reasoning_content: Optional[str] = None
         if isinstance(content, list):
             for item in content:
-                if item["type"] == "reasoning":
-                    for sum in item["summary"]:
-                        if reasoning_content is None:
-                            reasoning_content = ""
-                        reasoning_content += sum["text"]
-                        thinking_block = ChatCompletionThinkingBlock(
-                            type="thinking",
-                            thinking=sum.get("text", ""),
-                            signature=sum.get("signature", ""),
-                        )
-                        if thinking_blocks is None:
-                            thinking_blocks = []
-                        thinking_blocks.append(thinking_block)
+                if item.get("type") == "reasoning":
+                    summary_list = item.get("summary", [])
+                    if isinstance(summary_list, list):
+                        for sum in summary_list:
+                            if reasoning_content is None:
+                                reasoning_content = ""
+                            reasoning_content += sum["text"]
+                            thinking_block = ChatCompletionThinkingBlock(
+                                type="thinking",
+                                thinking=sum.get("text", ""),
+                                signature=sum.get("signature", ""),
+                            )
+                            if thinking_blocks is None:
+                                thinking_blocks = []
+                            thinking_blocks.append(thinking_block)
         return reasoning_content, thinking_blocks
 
     @staticmethod
