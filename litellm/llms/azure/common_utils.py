@@ -495,23 +495,33 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
         # If we have api_key, then we have higher priority
         azure_ad_token = litellm_params.get("azure_ad_token")
-        tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-        client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-        client_secret = litellm_params.get(
-            "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-        )
-        azure_username = litellm_params.get(
-            "azure_username", os.getenv("AZURE_USERNAME")
-        )
-        azure_password = litellm_params.get(
-            "azure_password", os.getenv("AZURE_PASSWORD")
-        )
-        scope = litellm_params.get(
-            "azure_scope",
-            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
-        )
+
+        # litellm_params sometimes contains the key, but the value is None
+        # We should respect environment variables in this case
+        tenant_id = litellm_params.get("tenant_id")
+        if tenant_id is None:
+            tenant_id = os.getenv("AZURE_TENANT_ID")
+
+        client_id = litellm_params.get("client_id")
+        if client_id is None:
+            client_id = os.getenv("AZURE_CLIENT_ID")
+
+        client_secret = litellm_params.get("client_secret")
+        if client_secret is None:
+            client_secret = os.getenv("AZURE_CLIENT_SECRET")
+
+        azure_username = litellm_params.get("azure_username")
+        if azure_username is None:
+            azure_username = os.getenv("AZURE_USERNAME")
+
+        azure_password = litellm_params.get("azure_password")
+        if azure_password is None:
+            azure_password = os.getenv("AZURE_PASSWORD")
+
+        scope = litellm_params.get("azure_scope")
         if scope is None:
-            scope = "https://cognitiveservices.azure.com/.default"
+            scope = os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default")
+
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
