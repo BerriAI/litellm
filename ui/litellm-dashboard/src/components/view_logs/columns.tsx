@@ -173,12 +173,16 @@ export const columns: ColumnDef<LogEntry>[] = [
   },
   {
     header: "Team Name",
-    accessorKey: "metadata.user_api_key_team_alias",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    accessorFn: (row: any) => row.metadata?.user_api_key_team_alias || "-",
+    cell: (info: any) => {
+      const value = info.getValue();
+      const displayValue = value === "-" ? "-" : String(value);
+      return (
+        <Tooltip title={displayValue}>
+          <span className="max-w-[15ch] truncate block">{displayValue}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Key Hash",
@@ -201,12 +205,16 @@ export const columns: ColumnDef<LogEntry>[] = [
   },
   {
     header: "Key Name",
-    accessorKey: "metadata.user_api_key_alias",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    accessorFn: (row: any) => row.metadata?.user_api_key_alias || "-",
+    cell: (info: any) => {
+      const value = info.getValue();
+      const displayValue = value === "-" ? "-" : String(value);
+      return (
+        <Tooltip title={displayValue}>
+          <span className="max-w-[15ch] truncate block">{displayValue}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Model",

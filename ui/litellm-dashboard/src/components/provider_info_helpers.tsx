@@ -78,7 +78,7 @@ export const provider_map: Record<string, string> = {
     Hosted_Vllm: "hosted_vllm",
 };
 
-const asset_logos_folder = '/ui/assets/logos/';
+const asset_logos_folder = '/assets/logos/';
 
 export const providerLogoMap: Record<string, string> = {
     [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,

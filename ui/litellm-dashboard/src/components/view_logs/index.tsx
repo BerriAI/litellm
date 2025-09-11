@@ -286,8 +286,6 @@ export default function SpendLogsTable({
 
     if (filters["Key Hash"]) {
       setSelectedKeyHash(filters["Key Hash"])
-    } else if (filters["Key Alias"]) {
-      fetchKeyHashForAlias(filters["Key Alias"])
     } else {
       setSelectedKeyHash("")
     }
