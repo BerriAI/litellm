@@ -45,15 +45,15 @@ async def create_mcp_list_tools_events(
         LiteLLM_Proxy_MCP_Handler,
     )
     
-    events = []
+    events: List[ResponsesAPIStreamingResponse] = []
     
     try:
         # Extract MCP server names
         mcp_servers = []
         for tool in mcp_tools_with_litellm_proxy:
             if isinstance(tool, dict) and "server_url" in tool:
-                server_url = tool["server_url"]
-                if server_url.startswith("litellm_proxy/mcp/"):
+                server_url = tool.get("server_url")
+                if isinstance(server_url, str) and server_url.startswith("litellm_proxy/mcp/"):
                     server_name = server_url.split("/")[-1]
                     mcp_servers.append(server_name)
         
@@ -72,7 +72,7 @@ async def create_mcp_list_tools_events(
         # Convert tools to dict format for the event
         mcp_tools_dict = []
         for tool in filtered_mcp_tools:
-            if hasattr(tool, 'model_dump'):
+            if hasattr(tool, 'model_dump') and callable(getattr(tool, 'model_dump')):
                 mcp_tools_dict.append(tool.model_dump())
             elif hasattr(tool, '__dict__'):
                 mcp_tools_dict.append(tool.__dict__)
@@ -96,7 +96,8 @@ async def create_mcp_list_tools_events(
         if mcp_tools_with_litellm_proxy:
             first_tool = mcp_tools_with_litellm_proxy[0]
             if isinstance(first_tool, dict):
-                server_label = first_tool.get("server_label", "")
+                server_label_value = first_tool.get("server_label", "")
+                server_label = str(server_label_value) if server_label_value is not None else ""
         
         # Format tools for OpenAI output_item.done format
         formatted_tools = []
@@ -109,9 +110,9 @@ async def create_mcp_list_tools_events(
             
             # Add input_schema if available
             if hasattr(tool, 'inputSchema'):
-                tool_dict["input_schema"] = tool.inputSchema
+                tool_dict["input_schema"] = getattr(tool, 'inputSchema')
             elif hasattr(tool, 'input_schema'):
-                tool_dict["input_schema"] = tool.input_schema
+                tool_dict["input_schema"] = getattr(tool, 'input_schema')
             
             formatted_tools.append(tool_dict)
         
@@ -171,7 +172,7 @@ def create_mcp_call_events(
     sequence_start: int = 1
 ) -> List[ResponsesAPIStreamingResponse]:
     """Create MCP call events following OpenAI's specification"""
-    events = []
+    events: List[ResponsesAPIStreamingResponse] = []
     item_id = base_item_id or f"mcp_{uuid.uuid4().hex[:8]}"
     
     # MCP call in progress event

@@ -27,10 +27,10 @@ class LiteLLM_Proxy_MCP_Handler:
         """
         if tools:
             for tool in tools:
-                if (isinstance(tool, dict) and 
-                    tool.get("type") == "mcp" and 
-                    tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL)):
-                    return True
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    server_url = tool.get("server_url", "")
+                    if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL):
+                        return True
         return False
     
     @staticmethod
@@ -46,10 +46,12 @@ class LiteLLM_Proxy_MCP_Handler:
         
         if tools:
             for tool in tools:
-                if (isinstance(tool, dict) and 
-                    tool.get("type") == "mcp" and 
-                    tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL)):
-                    mcp_tools_with_litellm_proxy.append(tool)
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    server_url = tool.get("server_url", "")
+                    if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL):
+                        mcp_tools_with_litellm_proxy.append(tool)
+                    else:
+                        other_tools.append(tool)
                 else:
                     other_tools.append(tool)
         
@@ -74,8 +76,9 @@ class LiteLLM_Proxy_MCP_Handler:
         if mcp_tools_with_litellm_proxy:
             for _tool in mcp_tools_with_litellm_proxy:
                 # if user specifies servers as server_url: litellm_proxy/mcp/zapier,github then return zapier,github
-                if _tool.get("server_url", "").startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
-                    mcp_servers.append(_tool.get("server_url", "").split("/")[-1])
+                server_url = _tool.get("server_url", "") if isinstance(_tool, dict) else ""
+                if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
+                    mcp_servers.append(server_url.split("/")[-1])
         
         return await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -588,7 +591,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm.responses.mcp.mcp_streaming_iterator import create_mcp_call_events
         
-        tool_execution_events = []
+        tool_execution_events: List[Any] = []
         
         # Create events for each tool execution
         for tool_result in tool_results:
