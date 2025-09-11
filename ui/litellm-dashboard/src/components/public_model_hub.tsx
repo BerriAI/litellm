@@ -822,6 +822,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     selectedTags: [],
     selectedVectorStores: [],
     selectedGuardrails: [],
+    selectedMCPTools: [],
     endpointType: getEndpointType(selectedModel.mode || 'chat'),
     selectedModel: selectedModel.model_group,
     selectedSdk: 'openai'
@@ -844,6 +845,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
+                        selectedMCPTools: [],
                         endpointType: getEndpointType(selectedModel.mode || 'chat'),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: 'openai'
