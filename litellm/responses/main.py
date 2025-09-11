@@ -165,23 +165,12 @@ async def aresponses_api_with_mcp(
         other_tools,
     ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
-    # Get available tools from MCP manager if we have MCP tools
-    openai_tools = []
-    mcp_tools_fetched: List[MCPTool] = []
-    if mcp_tools_with_litellm_proxy:
-        user_api_key_auth = kwargs.get("user_api_key_auth")
-        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
-            user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        )
-        # Filter tools based on allowed_tools parameter
-        filtered_mcp_tools = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mcp_tools_fetched,
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        )
-        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-            filtered_mcp_tools
-        )
+    # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
+    user_api_key_auth = kwargs.get("user_api_key_auth")
+    openai_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+        user_api_key_auth=user_api_key_auth,
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+    )
 
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -310,10 +299,15 @@ async def aresponses_api_with_mcp(
 
                 # Add custom output elements to the final response (for non-streaming)
                 elif isinstance(final_response, ResponsesAPIResponse):
+                    # Fetch MCP tools again for output elements (without OpenAI transformation)
+                    mcp_tools_for_output = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+                    )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                             response=final_response,
-                            mcp_tools_fetched=mcp_tools_fetched,
+                            mcp_tools_fetched=mcp_tools_for_output,
                             tool_results=tool_results,
                         )
                     )
