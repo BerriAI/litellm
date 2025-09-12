@@ -3,7 +3,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from typing import Optional
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
