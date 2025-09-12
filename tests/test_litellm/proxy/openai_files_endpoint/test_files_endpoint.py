@@ -476,3 +476,176 @@ def test_create_file_for_each_model(
             openai_call_found = True
             break
     assert openai_call_found, "OpenAI call not found with expected parameters"
+
+
+def test_get_files_provider_config_vertex_ai_with_model_list():
+    """
+    Test that get_files_provider_config correctly extracts Vertex AI config from model_list
+    This test verifies the fix for the proxy file upload issue
+    """
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_files_provider_config, files_config
+    from litellm.proxy.proxy_server import proxy_config
+    
+    # Mock the proxy_config with a model_list containing Vertex AI configuration
+    mock_config = {
+        'model_list': [
+            {
+                'model_name': 'gemini-2.5-flash',
+                'litellm_params': {
+                    'model': 'vertex_ai/gemini-2.5-flash',
+                    'vertex_project': 'test-project-123',
+                    'vertex_location': 'us-central1',
+                    'vertex_credentials': '/path/to/service_account.json'
+                }
+            },
+            {
+                'model_name': 'gpt-3.5-turbo',
+                'litellm_params': {
+                    'model': 'openai/gpt-3.5-turbo',
+                    'api_key': 'test-key'
+                }
+            }
+        ]
+    }
+    
+    # Mock proxy_config.config
+    original_config = getattr(proxy_config, 'config', None)
+    proxy_config.config = mock_config
+    
+    # Mock files_config to avoid ValueError for non-vertex_ai providers
+    original_files_config = files_config
+    import litellm.proxy.openai_files_endpoints.files_endpoints
+    litellm.proxy.openai_files_endpoints.files_endpoints.files_config = []
+    
+    try:
+        # Test that vertex_ai provider returns the correct config
+        result = get_files_provider_config('vertex_ai')
+        
+        assert result is not None, "get_files_provider_config should return config for vertex_ai"
+        assert result['vertex_project'] == 'test-project-123'
+        assert result['vertex_location'] == 'us-central1'
+        assert result['vertex_credentials'] == '/path/to/service_account.json'
+        
+        # Test that non-vertex_ai providers still work as before
+        result_openai = get_files_provider_config('openai')
+        assert result_openai is None  # Should return None when files_config is empty
+        
+    finally:
+        # Restore original config
+        if original_config is not None:
+            proxy_config.config = original_config
+        else:
+            delattr(proxy_config, 'config')
+        
+        # Restore original files_config
+        litellm.proxy.openai_files_endpoints.files_endpoints.files_config = original_files_config
+
+
+def test_get_files_provider_config_vertex_ai_no_model_list():
+    """
+    Test that get_files_provider_config returns None when no model_list is available
+    This ensures graceful handling when proxy_config is not properly initialized
+    """
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_files_provider_config
+    from litellm.proxy.proxy_server import proxy_config
+    
+    # Mock proxy_config without model_list
+    original_config = getattr(proxy_config, 'config', None)
+    proxy_config.config = {}
+    
+    try:
+        result = get_files_provider_config('vertex_ai')
+        assert result is None, "get_files_provider_config should return None when no model_list"
+        
+    finally:
+        # Restore original config
+        if original_config is not None:
+            proxy_config.config = original_config
+        else:
+            delattr(proxy_config, 'config')
+
+
+def test_get_files_provider_config_vertex_ai_no_vertex_models():
+    """
+    Test that get_files_provider_config returns None when no vertex_ai models are in model_list
+    This ensures the function handles cases where only non-vertex models are configured
+    """
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_files_provider_config
+    from litellm.proxy.proxy_server import proxy_config
+    
+    # Mock the proxy_config with a model_list containing only non-Vertex AI models
+    mock_config = {
+        'model_list': [
+            {
+                'model_name': 'gpt-3.5-turbo',
+                'litellm_params': {
+                    'model': 'openai/gpt-3.5-turbo',
+                    'api_key': 'test-key'
+                }
+            },
+            {
+                'model_name': 'claude-3',
+                'litellm_params': {
+                    'model': 'anthropic/claude-3',
+                    'api_key': 'test-key'
+                }
+            }
+        ]
+    }
+    
+    # Mock proxy_config.config
+    original_config = getattr(proxy_config, 'config', None)
+    proxy_config.config = mock_config
+    
+    try:
+        result = get_files_provider_config('vertex_ai')
+        assert result is None, "get_files_provider_config should return None when no vertex_ai models in model_list"
+        
+    finally:
+        # Restore original config
+        if original_config is not None:
+            proxy_config.config = original_config
+        else:
+            delattr(proxy_config, 'config')
+
+
+def test_get_files_provider_config_vertex_ai_partial_config():
+    """
+    Test that get_files_provider_config handles partial Vertex AI configuration gracefully
+    This ensures the function works even when some vertex_ai parameters are missing
+    """
+    from litellm.proxy.openai_files_endpoints.files_endpoints import get_files_provider_config
+    from litellm.proxy.proxy_server import proxy_config
+    
+    # Mock the proxy_config with partial Vertex AI configuration
+    mock_config = {
+        'model_list': [
+            {
+                'model_name': 'gemini-2.5-flash',
+                'litellm_params': {
+                    'model': 'vertex_ai/gemini-2.5-flash',
+                    'vertex_project': 'test-project-123',
+                    # Missing vertex_location and vertex_credentials
+                }
+            }
+        ]
+    }
+    
+    # Mock proxy_config.config
+    original_config = getattr(proxy_config, 'config', None)
+    proxy_config.config = mock_config
+    
+    try:
+        result = get_files_provider_config('vertex_ai')
+        
+        assert result is not None, "get_files_provider_config should return config even with partial vertex_ai params"
+        assert result['vertex_project'] == 'test-project-123'
+        assert 'vertex_location' not in result
+        assert 'vertex_credentials' not in result
+        
+    finally:
+        # Restore original config
+        if original_config is not None:
+            proxy_config.config = original_config
+        else:
+            delattr(proxy_config, 'config')
