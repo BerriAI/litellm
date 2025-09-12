@@ -20,7 +20,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         Accepts both explicit gpt-5 model names and the ``gpt5_series/`` prefix
         used for manual routing.
         """
-        return "gpt-5" in model or "gpt5_series" in model
+        return "gpt-5" in model or "gpt5_series" in model or "GPT5" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return OpenAIGPT5Config.get_supported_openai_params(self, model=model)
