@@ -189,10 +189,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         input_meta = InputMeta(
             messages=self._process_input_messages_preserving_tool_calls(messages)
         )
-        output_meta = OutputMeta(messages=self._get_response_messages(
-            standard_logging_payload=standard_logging_payload,
-            call_type=standard_logging_payload.get("call_type")
-        ))
+        output_meta = OutputMeta(
+            messages=self._get_response_messages(
+                standard_logging_payload=standard_logging_payload,
+                call_type=standard_logging_payload.get("call_type")
+            )
+        )
 
         error_info = self._assemble_error_info(standard_logging_payload)
 
@@ -288,8 +290,8 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 response_obj = ast.literal_eval(response_obj)
             except (ValueError, SyntaxError):
                 try:
-                    # Fallback to JSON parsing
-                    response_obj = json.loads(response_obj)
+                    # Fallback to JSON parsing - cast to ensure type safety
+                    response_obj = json.loads(str(response_obj))
                 except json.JSONDecodeError:
                     return []
         
