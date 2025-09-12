@@ -162,6 +162,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
+    tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
         Literal[
