@@ -344,6 +344,11 @@ def cost_per_token(  # noqa: PLR0915
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "dashscope":
+        from litellm.llms.dashscope.cost_calculator import (
+            cost_per_token as dashscope_cost_per_token,
+        )
+        return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider

@@ -45,36 +45,33 @@ def _calculate_tiered_cost(
     cost_key: str,
     fallback_cost_key: Optional[str] = None
 ) -> float:
-    """Calculate cost using tiered pricing structure."""
+    """Calculate cost using tiered pricing structure.
+    
+    Finds the appropriate tier based on token count and applies that tier's rate to all tokens.
+    """
     if not tiered_pricing or tokens <= 0:
         return 0.0
     
-    total_cost = 0.0
-    tokens_processed = 0
-    
+    # Find the appropriate tier for the token count
     for tier in tiered_pricing:
-        if tokens_processed >= tokens:
-            break
-            
         tier_range = tier.get("range", [])
         if len(tier_range) != 2:
             continue
             
         range_start, range_end = tier_range
         
-        if tokens <= range_start:
-            break
-            
-        tier_start = max(range_start, tokens_processed)
-        tier_end = min(range_end, tokens)
-        
-        if tier_end > tier_start:
-            tokens_in_tier = tier_end - tier_start
+        # Check if tokens fall within this tier's range
+        if range_start <= tokens <= range_end:
             cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-            total_cost += tokens_in_tier * cost_per_token
-            tokens_processed = tier_end
+            return tokens * cost_per_token
     
-    return total_cost
+    # If no tier matches, use the last tier (highest tier)
+    if tiered_pricing:
+        last_tier = tiered_pricing[-1]
+        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
+        return tokens * cost_per_token
+    
+    return 0.0
 
 
 def _calculate_flat_cost(tokens: int, cost_per_token: float) -> float:
