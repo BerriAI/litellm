@@ -7,6 +7,7 @@ To see all free guardrails see litellm/proxy/guardrails/*
 Exposed Routes:
 - /mask_pii
 """
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -28,10 +29,10 @@ async def apply_guardrail(
     """
     Mask PII from a given text, requires a guardrail to be added to litellm.
     """
-    active_guardrail: Optional[
-        CustomGuardrail
-    ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-        guardrail_name=request.guardrail_name
+    active_guardrail: Optional[CustomGuardrail] = (
+        GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
+        )
     )
     if active_guardrail is None:
         raise Exception(f"Guardrail {request.guardrail_name} not found")

@@ -528,8 +528,10 @@ class ChunkProcessor:
             )  # for anthropic
         if completion_tokens_details is not None:
             if isinstance(completion_tokens_details, CompletionTokensDetails):
-                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    **completion_tokens_details.model_dump()
+                returned_usage.completion_tokens_details = (
+                    CompletionTokensDetailsWrapper(
+                        **completion_tokens_details.model_dump()
+                    )
                 )
             else:
                 returned_usage.completion_tokens_details = completion_tokens_details

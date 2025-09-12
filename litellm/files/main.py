@@ -94,7 +94,9 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
+    custom_llm_provider: Optional[
+        Literal["openai", "azure", "vertex_ai", "bedrock"]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -154,10 +156,12 @@ def create_file(
                 api_key=optional_params.api_key,
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
                 timeout=timeout,
             )
         elif custom_llm_provider == "openai":

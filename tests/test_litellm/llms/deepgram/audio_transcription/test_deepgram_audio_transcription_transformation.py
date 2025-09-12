@@ -58,13 +58,13 @@ def test_audio_file_handling(fixture_name, request):
         optional_params={},
         litellm_params={},
     )
-    
+
     # Check that result is AudioTranscriptionRequestData
     assert isinstance(result, AudioTranscriptionRequestData)
-    
+
     # Check that data matches expected output
     assert result.data == expected_output
-    
+
     # Check that files is None for Deepgram (binary data)
     assert result.files is None
 

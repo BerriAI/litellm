@@ -176,6 +176,7 @@ def get_complete_model_list(
     """
 
     unique_models = []
+
     def append_unique(models):
         for model in models:
             if model not in unique_models:
@@ -188,7 +189,7 @@ def get_complete_model_list(
     else:
         append_unique(proxy_model_list)
         if include_model_access_groups:
-            append_unique(list(model_access_groups.keys())) # TODO: keys order
+            append_unique(list(model_access_groups.keys()))  # TODO: keys order
 
         if user_model:
             append_unique([user_model])

@@ -357,9 +357,11 @@ class NomaGuardrail(CustomGuardrail):
                     "ipAddress": request_data.get("metadata", {}).get(
                         "requester_ip_address", None
                     ),
-                    "userId": user_auth.user_email
-                    if user_auth.user_email
-                    else user_auth.user_id,
+                    "userId": (
+                        user_auth.user_email
+                        if user_auth.user_email
+                        else user_auth.user_id
+                    ),
                     "sessionId": call_id,
                     "requestId": llm_request_id,
                 },

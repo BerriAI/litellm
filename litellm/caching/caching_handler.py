@@ -304,7 +304,7 @@ class LLMCachingHandler:
                         result=cached_result,
                         start_time=start_time,
                         end_time=end_time,
-                        cache_hit=cache_hit
+                        cache_hit=cache_hit,
                     )
                     cache_key = litellm.cache._get_preset_cache_key_from_kwargs(
                         **kwargs
@@ -535,12 +535,18 @@ class LLMCachingHandler:
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
-                result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                result=cached_result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
             )
         )
 
         logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+            result=cached_result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
         )
 
     async def _retrieve_from_cache(

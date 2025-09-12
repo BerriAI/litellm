@@ -67,7 +67,15 @@ class SagemakerConfig(BaseConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> List:
-        return ["stream", "temperature", "max_tokens", "max_completion_tokens", "top_p", "stop", "n"]
+        return [
+            "stream",
+            "temperature",
+            "max_tokens",
+            "max_completion_tokens",
+            "top_p",
+            "stop",
+            "n",
+        ]
 
     def map_openai_params(
         self,
@@ -91,9 +99,9 @@ class SagemakerConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params[
-                    "do_sample"
-                ] = True  # Need to sample if you want best of for hf inference endpoints
+                optional_params["do_sample"] = (
+                    True  # Need to sample if you want best of for hf inference endpoints
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":

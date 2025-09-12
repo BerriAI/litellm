@@ -1714,12 +1714,16 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=current_call_id
-                            if (
-                                current_call_id := litellm_params.get("litellm_call_id")
-                            )
-                            is not None
-                            else str(uuid.uuid4()),
+                            litellm_call_id=(
+                                current_call_id
+                                if (
+                                    current_call_id := litellm_params.get(
+                                        "litellm_call_id"
+                                    )
+                                )
+                                is not None
+                                else str(uuid.uuid4())
+                            ),
                             print_verbose=print_verbose,
                         )
                     if callback == "wandb" and weightsBiasesLogger is not None:
@@ -3367,6 +3371,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return galileo_logger  # type: ignore
         elif logging_integration == "cloudzero":
             from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, CloudZeroLogger):
                     return callback  # type: ignore
@@ -3594,6 +3599,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                     return callback
         elif logging_integration == "cloudzero":
             from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, CloudZeroLogger):
                     return callback
@@ -4504,7 +4510,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4)) # noqa
+        print(json.dumps(payload, indent=4))  # noqa
 
 
 def get_standard_logging_metadata(

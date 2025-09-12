@@ -1253,9 +1253,7 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
 
         # Call the function we want to test
         try:
-            litellm.embedding(
-                model="jina_ai/jina-embeddings-v4", input=input_data
-            )
+            litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data)
         except Exception as e:
             pytest.fail(
                 f"litellm.embedding call failed with an unexpected exception: {e}"

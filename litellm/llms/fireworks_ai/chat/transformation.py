@@ -102,15 +102,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
-        
+
         # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
-        
+
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-        
+
         return supported_params
 
     def map_openai_params(
@@ -339,11 +339,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
 
         ## FIREWORKS AI sends tool calls in the content field instead of tool_calls
         for choice in response.choices:
-            cast(
-                Choices, choice
-            ).message = self._handle_message_content_with_tool_calls(
-                message=cast(Choices, choice).message,
-                tool_calls=optional_params.get("tools", None),
+            cast(Choices, choice).message = (
+                self._handle_message_content_with_tool_calls(
+                    message=cast(Choices, choice).message,
+                    tool_calls=optional_params.get("tools", None),
+                )
             )
 
         response._hidden_params = {"additional_headers": additional_headers}

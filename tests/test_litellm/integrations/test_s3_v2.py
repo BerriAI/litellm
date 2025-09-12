@@ -10,6 +10,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 class TestS3V2UnitTests:
     """Test that S3 v2 integration only uses safe_dumps and not json.dumps"""
+
     def test_s3_v2_source_code_analysis(self):
         """Test that S3 v2 source code only imports and uses safe_dumps"""
         import inspect
@@ -18,7 +19,8 @@ class TestS3V2UnitTests:
 
         # Get the source code of the s3_v2 module
         source_code = inspect.getsource(s3_v2)
-        
+
         # Verify that json.dumps is not used directly in the code
-        assert "json.dumps(" not in source_code, \
-            "S3 v2 should not use json.dumps directly"
+        assert (
+            "json.dumps(" not in source_code
+        ), "S3 v2 should not use json.dumps directly"

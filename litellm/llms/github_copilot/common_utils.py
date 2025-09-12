@@ -1,6 +1,7 @@
 """
 Constants for Copilot integration
 """
+
 from typing import Optional, Union
 
 import httpx

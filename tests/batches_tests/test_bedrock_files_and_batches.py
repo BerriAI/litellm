@@ -1,4 +1,3 @@
-
 # What is this?
 ## Unit Tests for OpenAI Batches API
 import asyncio
@@ -40,6 +39,7 @@ async def test_async_create_file():
         s3_bucket_name="litellm-proxy",
     )
 
+
 @pytest.mark.asyncio()
 async def test_async_file_and_batch():
     """
@@ -64,7 +64,6 @@ async def test_async_file_and_batch():
         input_file_id=file_obj.id,
         metadata={"key1": "value1", "key2": "value2"},
         custom_llm_provider="bedrock",
-        aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV"
+        aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
-

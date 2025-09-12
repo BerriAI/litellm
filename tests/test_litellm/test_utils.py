@@ -661,16 +661,16 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                                 "type": "array",
                                 "items": {"type": "number"},
                                 "minItems": 2,
-                                "maxItems": 2
+                                "maxItems": 2,
                             },
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
-                            "output_cost_per_reasoning_token": {"type": "number"}
+                            "output_cost_per_reasoning_token": {"type": "number"},
                         },
                         "required": ["range"],
-                        "additionalProperties": False
-                    }
+                        "additionalProperties": False,
+                    },
                 },
             },
             "additionalProperties": False,
@@ -843,7 +843,6 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-
 def test_supports_computer_use_utility():
     """
     Tests the litellm.utils.supports_computer_use utility function.
@@ -925,8 +924,7 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
     from litellm.utils import ProviderConfigManager, pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
-        model=model, 
-        provider=LlmProviders(custom_llm_provider)
+        model=model, provider=LlmProviders(custom_llm_provider)
     )
 
     class ResponseFormat(BaseModel):

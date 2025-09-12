@@ -33,9 +33,9 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "dimensions":
-                optional_params[
-                    "embeddingConfig"
-                ] = AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
+                optional_params["embeddingConfig"] = (
+                    AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
+                )
         return optional_params
 
     def _transform_request(

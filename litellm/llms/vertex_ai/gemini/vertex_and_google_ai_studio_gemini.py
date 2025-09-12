@@ -437,7 +437,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif model and "gemini-2.5-pro" in model.lower():
                 budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO
             elif model and "gemini-2.5-flash" in model.lower():
-                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
+                budget = (
+                    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
+                )
             else:
                 budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
 

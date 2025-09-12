@@ -185,19 +185,21 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            transformed_request = (
+                litellm.AmazonAnthropicClaudeConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
-            
+
             return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
@@ -327,7 +329,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
+                outputText = litellm.AmazonMistralConfig.get_outputText(
+                    completion_response, model_response
+                )
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:

@@ -162,7 +162,9 @@ class PassThroughEndpointLogging:
                 cohere_passthrough_logging_handler_result["result"]
             )
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(
+            url_route
+        ):
             from .llm_provider_handlers.openai_passthrough_logging_handler import (
                 OpenAIPassthroughLoggingHandler,
             )
@@ -185,9 +187,9 @@ class PassThroughEndpointLogging:
                 openai_passthrough_logging_handler_result["result"]
             )
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
-        return_dict[
-            "standard_logging_response_object"
-        ] = standard_logging_response_object
+        return_dict["standard_logging_response_object"] = (
+            standard_logging_response_object
+        )
         return_dict["kwargs"] = kwargs
         return return_dict
 
@@ -208,9 +210,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
         if self.is_assemblyai_route(url_route):
             if (
                 AssemblyAIPassthroughLoggingHandler._should_log_request(
@@ -324,11 +326,13 @@ class PassThroughEndpointLogging:
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
-        
+
         return (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route) or
-            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route) or
-            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
+                url_route
+            )
+            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
 
     def _set_cost_per_request(
@@ -350,8 +354,8 @@ class PassThroughEndpointLogging:
             kwargs["response_cost"] = passthrough_logging_payload.get(
                 "cost_per_request"
             )
-            logging_obj.model_call_details[
-                "response_cost"
-            ] = passthrough_logging_payload.get("cost_per_request")
+            logging_obj.model_call_details["response_cost"] = (
+                passthrough_logging_payload.get("cost_per_request")
+            )
 
         return kwargs

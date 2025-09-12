@@ -2258,7 +2258,10 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
 
     test_model_list = [
         {"model_name": "model-a"},
-        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+        {
+            "model_name": "model-b",
+            "model_info": {"disable_background_health_check": True},
+        },
     ]
     called_model_lists = []
 

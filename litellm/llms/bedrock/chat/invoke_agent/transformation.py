@@ -3,6 +3,7 @@ Transformation for Bedrock Invoke Agent
 
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_InvokeAgent.html
 """
+
 import base64
 import json
 import uuid

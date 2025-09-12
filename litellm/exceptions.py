@@ -153,6 +153,7 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+
 class ImageFetchError(BadRequestError):
     def __init__(
         self,

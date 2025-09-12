@@ -124,9 +124,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 current_model_tpm,
                 current_model_rpm,
             ) = await self.llm_router.get_model_group_usage(model_group=model)
-            model_group_info: Optional[
-                ModelGroupInfo
-            ] = self.llm_router.get_model_group_info(model_group=model)
+            model_group_info: Optional[ModelGroupInfo] = (
+                self.llm_router.get_model_group_info(model_group=model)
+            )
             total_model_tpm: Optional[int] = None
             total_model_rpm: Optional[int] = None
             if model_group_info is not None:
@@ -281,16 +281,16 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 ) = await self.check_available_usage(
                     model=model_info["model_name"], priority=key_priority
                 )
-                response._hidden_params[
-                    "additional_headers"
-                ] = {  # Add additional response headers - easier debugging
-                    "x-litellm-model_group": model_info["model_name"],
-                    "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
-                    "x-ratelimit-remaining-litellm-project-requests": available_rpm,
-                    "x-ratelimit-remaining-model-tokens": model_tpm,
-                    "x-ratelimit-remaining-model-requests": model_rpm,
-                    "x-ratelimit-current-active-projects": active_projects,
-                }
+                response._hidden_params["additional_headers"] = (
+                    {  # Add additional response headers - easier debugging
+                        "x-litellm-model_group": model_info["model_name"],
+                        "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
+                        "x-ratelimit-remaining-litellm-project-requests": available_rpm,
+                        "x-ratelimit-remaining-model-tokens": model_tpm,
+                        "x-ratelimit-remaining-model-requests": model_rpm,
+                        "x-ratelimit-current-active-projects": active_projects,
+                    }
+                )
 
                 return response
             return await super().async_post_call_success_hook(

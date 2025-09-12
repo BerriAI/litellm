@@ -384,19 +384,19 @@ class VertexBase:
     ) -> Tuple[str, str]:
         """
         Handle reauthentication when credentials refresh fails.
-        
+
         This method clears the cached credentials and attempts to reload them once.
         It should only be called when "Reauthentication is needed" error occurs.
-        
+
         Args:
             credentials: The original credentials
             project_id: The project ID
             credential_cache_key: The cache key to clear
             error: The original error that triggered reauthentication
-            
+
         Returns:
             Tuple of (access_token, project_id)
-            
+
         Raises:
             The original error if reauthentication fails
         """
@@ -404,11 +404,11 @@ class VertexBase:
             f"Handling reauthentication for project_id: {project_id}. "
             f"Clearing cache and retrying once."
         )
-        
+
         # Clear the cached credentials
         if credential_cache_key in self._credentials_project_mapping:
             del self._credentials_project_mapping[credential_cache_key]
-        
+
         # Retry once with _retry_reauth=True to prevent infinite recursion
         try:
             return self.get_access_token(
@@ -438,12 +438,12 @@ class VertexBase:
         3. Check if loaded credentials have expired
         4. If expired, refresh credentials
         5. Return access token and project id
-        
+
         Args:
             credentials: The credentials to use for authentication
             project_id: The Google Cloud project ID
             _retry_reauth: Internal flag to prevent infinite recursion during reauthentication
-        
+
         Returns:
             Tuple of (access_token, project_id)
         """
