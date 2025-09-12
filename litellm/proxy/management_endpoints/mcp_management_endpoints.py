@@ -17,8 +17,8 @@ Endpoints here:
 """
 
 import importlib
-from typing import Iterable, List, Optional
 from datetime import datetime
+from typing import Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -26,7 +26,9 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import validate_and_normalize_mcp_server_payload
+from litellm.proxy._experimental.mcp_server.utils import (
+    validate_and_normalize_mcp_server_payload,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -94,34 +96,17 @@ if MCP_AVAILABLE:
         """
         Get all MCP tools available for the current key, including those from access groups
         """
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
+        from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
+        tools = await _list_mcp_tools(
+            user_api_key_auth=user_api_key_dict,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            mcp_protocol_version=None,
         )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        dumped_tools = [dict(tool) for tool in tools]
 
-        # This now includes both direct and access group servers
-        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
-
-        tools = []
-        errors = []
-        for server_id in server_ids:
-            try:
-                server_tools = await global_mcp_server_manager.get_tools_for_server(server_id)
-                tools.extend(server_tools)
-                verbose_proxy_logger.debug(f"Successfully fetched {len(server_tools)} tools from server {server_id}")
-            except Exception as e:
-                error_msg = f"Failed to get tools from server {server_id}: {str(e)}"
-                verbose_proxy_logger.warning(error_msg)
-                errors.append(error_msg)
-                # Continue with other servers instead of failing completely
-
-        verbose_proxy_logger.debug(f"Available tools: {tools}")
-        if errors:
-            verbose_proxy_logger.warning(f"Some servers failed to respond: {errors}")
-
-        return {"tools": tools}
+        return {"tools": dumped_tools}
 
     @router.get(
         "/access_groups",
@@ -134,8 +119,10 @@ if MCP_AVAILABLE:
         """
         Get all available MCP access groups from the database AND config
         """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
         access_groups = set()
 

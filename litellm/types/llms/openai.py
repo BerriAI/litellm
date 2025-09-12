@@ -1112,6 +1112,16 @@ class ResponsesAPIStreamEvents(str, Enum):
     WEB_SEARCH_CALL_SEARCHING = "response.web_search_call.searching"
     WEB_SEARCH_CALL_COMPLETED = "response.web_search_call.completed"
 
+    # MCP events - matching OpenAI's official specification
+    MCP_LIST_TOOLS_IN_PROGRESS = "response.mcp_list_tools.in_progress"
+    MCP_LIST_TOOLS_COMPLETED = "response.mcp_list_tools.completed"
+    MCP_LIST_TOOLS_FAILED = "response.mcp_list_tools.failed"
+    MCP_CALL_IN_PROGRESS = "response.mcp_call.in_progress"
+    MCP_CALL_ARGUMENTS_DELTA = "response.mcp_call_arguments.delta"
+    MCP_CALL_ARGUMENTS_DONE = "response.mcp_call_arguments.done"
+    MCP_CALL_COMPLETED = "response.mcp_call.completed"
+    MCP_CALL_FAILED = "response.mcp_call.failed"
+
     # Error event
     ERROR = "error"
 
@@ -1275,6 +1285,66 @@ class WebSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
+# MCP List Tools Events
+class MCPListToolsInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPListToolsCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_FAILED]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+# MCP Call Events  
+class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPCallArgumentsDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA]
+    output_index: int
+    item_id: str
+    delta: str  # JSON string containing partial update to arguments
+    sequence_number: int
+
+
+class MCPCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE]
+    output_index: int
+    item_id: str
+    arguments: str  # JSON string containing finalized arguments
+    sequence_number: int
+
+
+class MCPCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_COMPLETED]
+    sequence_number: int
+    item_id: str
+    output_index: int
+
+
+class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_FAILED]
+    sequence_number: int
+    item_id: str
+    output_index: int
+
+
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     code: Optional[str]
@@ -1315,6 +1385,14 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallInProgressEvent,
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
+        MCPListToolsInProgressEvent,
+        MCPListToolsCompletedEvent,
+        MCPListToolsFailedEvent,
+        MCPCallInProgressEvent,
+        MCPCallArgumentsDeltaEvent,
+        MCPCallArgumentsDoneEvent,
+        MCPCallCompletedEvent,
+        MCPCallFailedEvent,
         ErrorEvent,
         GenericEvent,
     ],

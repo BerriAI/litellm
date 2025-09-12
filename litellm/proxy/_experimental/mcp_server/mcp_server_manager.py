@@ -241,6 +241,9 @@ class MCPServerManager:
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
+                authentication_token=server_config.get(
+                    "authentication_token", server_config.get("auth_value", None)
+                ),
                 mcp_info=mcp_info,
                 access_groups=server_config.get("access_groups", None),
             )
@@ -716,8 +719,8 @@ class MCPServerManager:
             tasks = []
             if proxy_logging_obj:
                 # Create synthetic LLM data for during hook processing
-                from litellm.types.mcp import MCPDuringCallRequestObject
                 from litellm.types.llms.base import HiddenParams
+                from litellm.types.mcp import MCPDuringCallRequestObject
                 
                 request_obj = MCPDuringCallRequestObject(
                     tool_name=name,

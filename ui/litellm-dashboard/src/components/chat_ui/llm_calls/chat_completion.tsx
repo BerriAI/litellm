@@ -17,7 +17,7 @@ export async function makeOpenAIChatCompletionRequest(
     traceId?: string,
     vector_store_ids?: string[],
     guardrails?: string[],
-    selectedMCPTool?: string,
+    selectedMCPTools?: string[],
     onImageGenerated?: (imageUrl: string, model?: string) => void
   ) {
     // base url should be the current base_url
@@ -49,12 +49,13 @@ export async function makeOpenAIChatCompletionRequest(
       let fullResponseContent = "";
       let fullReasoningContent = "";
 
-      // Format MCP tool if selected
-      const tools = selectedMCPTool ? [{
+      // Format MCP tools if selected
+      const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
         type: "mcp",
         server_label: "litellm",
         server_url: `${proxyBaseUrl}/mcp`,
         require_approval: "never",
+        allowed_tools: selectedMCPTools,
         headers: {
           "x-litellm-api-key": `Bearer ${accessToken}`
         }

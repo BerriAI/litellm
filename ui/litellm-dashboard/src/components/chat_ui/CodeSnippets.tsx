@@ -17,6 +17,7 @@ interface GenerateCodeParams {
 	selectedTags: string[];
 	selectedVectorStores: string[];
 	selectedGuardrails: string[];
+	selectedMCPTools: string[];
 	endpointType: string;
 	selectedModel: string | undefined;
 	selectedSdk: 'openai' | 'azure';
@@ -32,6 +33,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
 		selectedTags,
 		selectedVectorStores,
 		selectedGuardrails,
+		selectedMCPTools,
 		endpointType,
 		selectedModel,
 		selectedSdk,
