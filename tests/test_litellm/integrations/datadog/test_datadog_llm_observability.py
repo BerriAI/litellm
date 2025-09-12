@@ -1,11 +1,9 @@
 import asyncio
-import json
 import os
 import sys
-import uuid
 from datetime import datetime, timedelta
-from typing import Dict, Optional
-from unittest.mock import MagicMock, Mock, patch
+from typing import Optional
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -16,8 +14,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.types.integrations.datadog_llm_obs import (
     DatadogLLMObsInitParams,
-    LLMMetrics,
-    LLMObsPayload,
 )
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
@@ -192,7 +188,7 @@ class TestDataDogLLMObsLogger:
             # Test 3: Verify saved_cache_cost is in metadata 
             metadata = payload["meta"]["metadata"]
             assert metadata["saved_cache_cost"] == 0.02
-            assert metadata["cache_hit"] == True
+            assert metadata["cache_hit"] is True
             assert metadata["cache_key"] == "test-cache-key-789"
 
     def test_cache_metadata_fields(self, mock_env_vars, mock_response_obj):
@@ -203,21 +199,11 @@ class TestDataDogLLMObsLogger:
             
             standard_payload = create_standard_logging_payload_with_cache()
             
-            kwargs = {
-                "standard_logging_object": standard_payload,
-                "litellm_params": {"metadata": {}}
-            }
-            
-            start_time = datetime.now()
-            end_time = datetime.now()
-            
-            payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
-            
             # Test the _get_dd_llm_obs_payload_metadata method directly
             metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
             
             # Verify all cache-related fields are present
-            assert metadata["cache_hit"] == True
+            assert metadata["cache_hit"] is True
             assert metadata["cache_key"] == "test-cache-key-789"
             assert metadata["saved_cache_cost"] == 0.02
             assert metadata["id"] == "test-request-id-456"
@@ -381,9 +367,6 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
     assert dd_llms_obs_logger.logged_standard_logging_payload is not None
     assert test_s3_logger.logged_standard_logging_payload is not None
 
-    print("logged DD LLM Obs payload", json.dumps(dd_llms_obs_logger.logged_standard_logging_payload, indent=4, default=str))
-    print("\n\nlogged S3 payload", json.dumps(test_s3_logger.logged_standard_logging_payload, indent=4, default=str))
-
     assert dd_llms_obs_logger.logged_standard_logging_payload["messages"][0]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
     assert dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
 
@@ -413,8 +396,6 @@ async def test_create_llm_obs_payload(mock_env_vars):
         start_time=datetime.now(),
         end_time=datetime.now() + timedelta(seconds=1),
     )
-
-    print("dd created payload", payload)
 
     assert payload["name"] == "litellm_llm_call"
     assert payload["meta"]["kind"] == "llm"
@@ -610,7 +591,7 @@ def test_guardrail_information_in_metadata(mock_env_vars):
         assert guardrail_info["guardrail_request"]["input"] == "test input message"
         assert guardrail_info["guardrail_request"]["user_id"] == "test_user"
         assert guardrail_info["guardrail_response"]["output"] == "filtered output"
-        assert guardrail_info["guardrail_response"]["flagged"] == False
+        assert guardrail_info["guardrail_response"]["flagged"] is False
         assert guardrail_info["guardrail_response"]["score"] == 0.1
 
 
