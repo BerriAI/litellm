@@ -16,7 +16,8 @@ from litellm.proxy._types import (
     LitellmDataForBackendLLMCall,
     SpecialHeaders,
     TeamCallbackMetadata,
-    UserAPIKeyAuth, LitellmUserRoles,
+    UserAPIKeyAuth,
+    LitellmUserRoles,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
@@ -448,24 +449,20 @@ class LiteLLMProxyRequestSetup:
     def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
         if not user_header_mapping:
             return None
-        items = user_header_mapping
-        if isinstance(items, dict):
-            items = [items]
+        items = (
+            user_header_mapping
+            if isinstance(user_header_mapping, list)
+            else [user_header_mapping]
+        )
         for item in items:
-            if isinstance(item, dict):
-                role = item.get("litellm_user_role")
-                header_name = item.get("header_name")
-            else:
-                role = getattr(item, "litellm_user_role", None)
-                header_name = getattr(item, "header_name", None)
-
-            if role is None or header_name is None:
+            if not isinstance(item, dict):
                 continue
-
-            role_str = str(role).lower()
-            if role_str == str(LitellmUserRoles.INTERNAL_USER).lower():
-                if isinstance(header_name, str) and header_name.strip() != "":
-                    return header_name
+            role = item.get("litellm_user_role")
+            header_name = item.get("header_name")
+            if role is None or not header_name:
+                continue
+            if str(role).lower() == str(LitellmUserRoles.INTERNAL_USER).lower():
+                return header_name
         return None
 
     @staticmethod

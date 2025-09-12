@@ -474,49 +474,20 @@ def _has_user_setup_sso():
     return sso_setup
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
-    """
-    Determine which header name should be used to extract the end user id
-    based on `general_settings.user_header_mappings`.
-
-    Behavior:
-    - If a mapping with role == CUSTOMER exists, return its `header_name`.
-    - else return `None`.
-
-    Accepts either a list of dicts/pydantic objects or a single dict/object.
-    Returns None if nothing usable is found.
-    """
-    try:
-        if user_id_mapping is None:
-            return None
-
-        # Normalize to list
-        items = user_id_mapping
-        if isinstance(items, dict):
-            items = [items]
-
-        # look for a mapping explicitly marked as CUSTOMER
-        for item in items:
-            if isinstance(item, dict):
-                role = item.get("litellm_user_role")
-                header_name = item.get("header_name")
-            else:
-                role = getattr(item, "litellm_user_role", None)
-                header_name = getattr(item, "header_name", None)
-
-            if role is None or header_name is None:
-                continue
-
-            role_str = str(role).lower()
-            if role_str == str(LitellmUserRoles.CUSTOMER).lower():
-                if isinstance(header_name, str) and header_name.strip() != "":
-                    return header_name
+    """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
+    if not user_id_mapping:
         return None
-    except Exception as e:
-        # Be defensive; on any issue, don't block request processing
-        verbose_proxy_logger.debug(
-            f"get_customer_user_header_from_mapping error: {str(e)}"
-        )
-        return None
+    items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("litellm_user_role")
+        header_name = item.get("header_name")
+        if role is None or not header_name:
+            continue
+        if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
+            return header_name
+    return None
 
 
 def get_end_user_id_from_request_body(
@@ -526,13 +497,13 @@ def get_end_user_id_from_request_body(
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
+    # Check 1 : Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
         custom_header_name_to_check: Optional[str] = None
 
-        # Prefer mappings (new behavior)
+        # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
         if user_id_mapping:
             custom_header_name_to_check = get_customer_user_header_from_mapping(
