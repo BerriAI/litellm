@@ -66,7 +66,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
-messages = [{ "content": "Hello, how are you?","role": "user"}]
+messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # openai call
 response = completion(model="openai/gpt-4o", messages=messages)
