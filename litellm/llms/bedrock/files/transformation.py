@@ -440,6 +440,56 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         
         return dict(aws_request.headers), signed_body
 
+    def _convert_https_url_to_s3_uri(self, https_url: str) -> tuple[str, str]:
+        """
+        Convert HTTPS S3 URL to s3:// URI format.
+        
+        Args:
+            https_url: HTTPS S3 URL (e.g., "https://s3.us-west-2.amazonaws.com/bucket/key")
+        
+        Returns:
+            Tuple of (s3_uri, filename)
+        
+        Example:
+            Input: "https://s3.us-west-2.amazonaws.com/litellm-proxy/file.jsonl"
+            Output: ("s3://litellm-proxy/file.jsonl", "file.jsonl")
+        """
+        import re
+
+        # Match HTTPS S3 URL patterns
+        # Pattern 1: https://s3.region.amazonaws.com/bucket/key
+        # Pattern 2: https://bucket.s3.region.amazonaws.com/key
+        
+        pattern1 = r"https://s3\.([^.]+)\.amazonaws\.com/([^/]+)/(.+)"
+        pattern2 = r"https://([^.]+)\.s3\.([^.]+)\.amazonaws\.com/(.+)"
+        
+        match1 = re.match(pattern1, https_url)
+        match2 = re.match(pattern2, https_url)
+        
+        if match1:
+            # Pattern: https://s3.region.amazonaws.com/bucket/key
+            region, bucket, key = match1.groups()
+            s3_uri = f"s3://{bucket}/{key}"
+        elif match2:
+            # Pattern: https://bucket.s3.region.amazonaws.com/key
+            bucket, region, key = match2.groups()
+            s3_uri = f"s3://{bucket}/{key}"
+        else:
+            # Fallback: try to extract bucket and key from URL path
+            from urllib.parse import urlparse
+            parsed = urlparse(https_url)
+            path_parts = parsed.path.lstrip('/').split('/', 1)
+            if len(path_parts) >= 2:
+                bucket, key = path_parts[0], path_parts[1]
+                s3_uri = f"s3://{bucket}/{key}"
+            else:
+                raise ValueError(f"Unable to parse S3 URL: {https_url}")
+        
+        # Extract filename from key
+        filename = key.split("/")[-1] if "/" in key else key
+        
+        return s3_uri, filename
+
     def transform_create_file_response(
         self,
         model: Optional[str],
@@ -452,21 +502,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         # For S3 uploads, we typically get an ETag and other metadata
         response_headers = raw_response.headers
-        
         # Extract S3 object information from the response
         # S3 PUT object returns ETag and other metadata in headers
         content_length = response_headers.get("Content-Length", "0")
         
-        # Extract bucket and key from the request URL or litellm_params
-        bucket_name = litellm_params.get("s3_bucket_name") or os.getenv("AWS_S3_BUCKET_NAME")
-        
-        # Generate file ID in S3 format
-        object_key = getattr(logging_obj, 'object_key', None) or f"file-{int(time.time())}"
-        file_id = f"s3://{bucket_name}/{object_key}"
-        
-        # Extract filename from object key
-        filename = object_key.split("/")[-1] if "/" in object_key else object_key
-        
+        # Use the actual upload URL that was used for the S3 upload
+        upload_url = litellm_params.get("upload_url")
+        file_id: str = ""
+        filename: str = ""
+        if upload_url:
+            # Convert HTTPS S3 URL to s3:// URI format
+            file_id, filename = self._convert_https_url_to_s3_uri(upload_url)
+
         return OpenAIFileObject(
             purpose="batch",  # Default purpose for Bedrock files
             id=file_id,
