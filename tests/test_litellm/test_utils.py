@@ -652,6 +652,26 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "tiered_pricing": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2
+                            },
+                            "input_cost_per_token": {"type": "number"},
+                            "output_cost_per_token": {"type": "number"},
+                            "cache_read_input_token_cost": {"type": "number"},
+                            "output_cost_per_reasoning_token": {"type": "number"}
+                        },
+                        "required": ["range"],
+                        "additionalProperties": False
+                    }
+                },
             },
             "additionalProperties": False,
         },
