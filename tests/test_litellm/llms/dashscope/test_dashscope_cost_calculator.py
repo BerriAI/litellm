@@ -96,10 +96,10 @@ class TestDashscopeCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_multiple_tiers(self):
-        """Test tiered pricing when tokens span multiple tiers."""
+    def test_tiered_pricing_higher_tier(self):
+        """Test tiered pricing when tokens fall in higher tier (tier 3)."""
         usage = Usage(
-            prompt_tokens=150000,  # Spans tiers 1 (0-32K), 2 (32K-128K), 3 (128K-256K)
+            prompt_tokens=150000,  # Falls in tier 3 (128K-256K)
             completion_tokens=2000,
             total_tokens=152000
         )
@@ -110,13 +110,13 @@ class TestDashscopeCostCalculator:
         )
         
         # Expected input cost calculation:
-        # Tier 1 (0-32K): 32,000 tokens * $1e-6 = $0.032
-        # Tier 2 (32K-128K): 96,000 tokens * $1.8e-6 = $0.1728
-        # Tier 3 (128K-256K): 22,000 tokens * $3e-6 = $0.066
-        # Total input cost = $0.032 + $0.1728 + $0.066 = $0.2708
+        # 150,000 tokens falls in tier 3 (128K-256K), so all tokens are charged at tier 3 rate
+        # Input: 150,000 tokens * $3e-6 = $0.45
+        # Output: 2,000 tokens falls in tier 1 (0-32K), so charged at tier 1 rate
+        # Output: 2,000 tokens * $5e-6 = $0.01
         
-        expected_prompt_cost = (32000 * 1e-6) + (96000 * 1.8e-6) + (22000 * 3e-6)
-        expected_completion_cost = 2000 * 5e-6  # All in tier 1 for output
+        expected_prompt_cost = 150000 * 3e-6  # All tokens at tier 3 rate
+        expected_completion_cost = 2000 * 5e-6  # All tokens at tier 1 rate
         
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -140,20 +140,44 @@ class TestDashscopeCostCalculator:
         )
         
         # Expected cost calculation:
-        # Regular tokens: 40,000 (32K in tier 1 + 8K in tier 2)
-        # - Tier 1: 32,000 * $1e-6 = $0.032
-        # - Tier 2: 8,000 * $1.8e-6 = $0.0144
-        # Cached tokens: 10,000 in tier 1 at discounted rate
-        # - Tier 1 cached: 10,000 * $1e-7 = $0.001
-        # Total input cost = $0.032 + $0.0144 + $0.001 = $0.0474
+        # Regular tokens: 40,000 falls in tier 2 (32K-128K), so all charged at tier 2 rate
+        # - Regular: 40,000 * $1.8e-6 = $0.072
+        # Cached tokens: 10,000 falls in tier 1 (0-32K), so charged at tier 1 cached rate
+        # - Cached: 10,000 * $1e-7 = $0.001
+        # Total input cost = $0.072 + $0.001 = $0.073
         
         regular_tokens = 40000
         cached_tokens = 10000
         
-        expected_regular_cost = (32000 * 1e-6) + (8000 * 1.8e-6)
+        expected_regular_cost = regular_tokens * 1.8e-6  # Tier 2 rate
         expected_cached_cost = cached_tokens * 1e-7  # Tier 1 cached rate
         expected_prompt_cost = expected_regular_cost + expected_cached_cost
-        expected_completion_cost = 1000 * 5e-6
+        expected_completion_cost = 1000 * 5e-6  # Tier 1 rate
+        
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_tiered_pricing_highest_tier(self):
+        """Test tiered pricing when tokens exceed highest tier range."""
+        usage = Usage(
+            prompt_tokens=2000000,  # Exceeds tier 4 max (1M), should use tier 4 rate
+            completion_tokens=5000,
+            total_tokens=2005000
+        )
+        
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen3-coder-plus", 
+            usage=usage
+        )
+        
+        # Expected cost calculation:
+        # 2,000,000 tokens exceeds tier 4 (256K-1M), so use tier 4 rate for all tokens
+        # Input: 2,000,000 tokens * $6e-6 = $12.0
+        # Output: 5,000 tokens falls in tier 1 (0-32K), so charged at tier 1 rate
+        # Output: 5,000 tokens * $5e-6 = $0.025
+        
+        expected_prompt_cost = 2000000 * 6e-6  # Tier 4 rate (highest tier)
+        expected_completion_cost = 5000 * 5e-6  # Tier 1 rate
         
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
