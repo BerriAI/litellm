@@ -2201,7 +2201,6 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
-
         if _is_async:
             return self.async_create_file(
                 transformed_request=transformed_request,
@@ -2218,6 +2217,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client()
         else:
             sync_httpx_client = client
+        
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
@@ -2283,11 +2283,15 @@ class BaseLLMHTTPHandler:
                     provider_config=provider_config,
                 )
 
+        # Store the upload URL in litellm_params for the transformation method
+        litellm_params_with_url = dict(litellm_params)
+        litellm_params_with_url["upload_url"] = api_base
+        
         return provider_config.transform_create_file_response(
             model=None,
             raw_response=upload_response,
             logging_obj=logging_obj,
-            litellm_params=litellm_params,
+            litellm_params=litellm_params_with_url,
         )
 
     async def async_create_file(
@@ -2425,7 +2429,7 @@ class BaseLLMHTTPHandler:
         api_base = provider_config.get_complete_batch_url(
             api_base=api_base,
             api_key=api_key,
-            model="",
+            model=litellm_params.get("model") or "",
             optional_params={},
             litellm_params=litellm_params,
             data=create_batch_data,
@@ -2435,7 +2439,7 @@ class BaseLLMHTTPHandler:
 
         # Get the transformed request data
         transformed_request = provider_config.transform_create_batch_request(
-            model="",
+            model=litellm_params.get("model") or "",
             create_batch_data=create_batch_data,
             litellm_params=litellm_params,
             optional_params={},
