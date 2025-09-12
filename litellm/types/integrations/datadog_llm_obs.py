@@ -46,6 +46,7 @@ class LLMMetrics(TypedDict, total=False):
 class LLMObsPayload(TypedDict, total=False):
     parent_id: str
     trace_id: str
+    apm_id: str
     span_id: str
     name: str
     meta: Meta
@@ -53,7 +54,7 @@ class LLMObsPayload(TypedDict, total=False):
     duration: int
     metrics: LLMMetrics
     tags: List
-    status: Literal["ok", "error"] # Error status ("ok" or "error"). Defaults to "ok".
+    status: Literal["ok", "error"]  # Error status ("ok" or "error"). Defaults to "ok".
 
 
 class DDSpanAttributes(TypedDict):
