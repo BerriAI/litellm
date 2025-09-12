@@ -136,4 +136,3 @@ class GoogleAIStudioTokenCounter:
         except Exception as e:
             error_msg = f"Unexpected error during token counting: {str(e)}"
             raise Exception(error_msg) from e
-
