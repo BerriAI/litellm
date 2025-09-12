@@ -2642,6 +2642,12 @@ def get_optional_params_image_gen(
         openai_params=openai_params,
         additional_drop_params=additional_drop_params,
     )
+    # remove keys with None or empty dict/list values to avoid sending empty payloads
+    optional_params = {
+        k: v
+        for k, v in optional_params.items()
+        if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
+    }
     return optional_params
 
 
