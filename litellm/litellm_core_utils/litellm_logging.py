@@ -1509,20 +1509,25 @@ class Logging(LiteLLMLoggingBaseClass):
         Returns True if the call type is recognized for logging (eg. ModelResponse, ModelResponseStream, etc.)
         """
         if (
-            isinstance(logging_result, ModelResponse)
-            or isinstance(logging_result, ModelResponseStream)
-            or isinstance(logging_result, EmbeddingResponse)
-            or isinstance(logging_result, ImageResponse)
-            or isinstance(logging_result, TranscriptionResponse)
-            or isinstance(logging_result, TextCompletionResponse)
-            or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
-            or isinstance(logging_result, RerankResponse)
-            or isinstance(logging_result, FineTuningJob)
-            or isinstance(logging_result, LiteLLMBatch)
-            or isinstance(logging_result, ResponsesAPIResponse)
-            or isinstance(logging_result, OpenAIFileObject)
-            or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
-            or isinstance(logging_result, OpenAIModerationResponse)
+            isinstance(
+                logging_result,
+                (
+                        ModelResponse,
+                        ModelResponseStream,
+                        EmbeddingResponse,
+                        ImageResponse,
+                        TranscriptionResponse,
+                        TextCompletionResponse,
+                        HttpxBinaryResponseContent,  # tts
+                        RerankResponse,
+                        FineTuningJob,
+                        LiteLLMBatch,
+                        ResponsesAPIResponse,
+                        OpenAIFileObject,
+                        LiteLLMRealtimeStreamLoggingObject,
+                        OpenAIModerationResponse,
+                ),
+            )
             or (self.call_type == CallTypes.call_mcp_tool.value)
         ):
             return True
