@@ -69,6 +69,29 @@ def get_files_provider_config(
 ):
     global files_config
     if custom_llm_provider == "vertex_ai":
+        # For Vertex AI, extract config from model_list instead of files_config
+        from litellm.proxy.proxy_server import proxy_config
+
+        if hasattr(proxy_config, "config") and "model_list" in proxy_config.config:
+            for model in proxy_config.config["model_list"]:
+                if isinstance(model, dict) and "litellm_params" in model:
+                    litellm_params = model["litellm_params"]
+                    if litellm_params.get("model", "").startswith("vertex_ai/"):
+                        # Extract vertex_ai specific parameters
+                        vertex_config = {}
+                        if "vertex_project" in litellm_params:
+                            vertex_config["vertex_project"] = litellm_params[
+                                "vertex_project"
+                            ]
+                        if "vertex_location" in litellm_params:
+                            vertex_config["vertex_location"] = litellm_params[
+                                "vertex_location"
+                            ]
+                        if "vertex_credentials" in litellm_params:
+                            vertex_config["vertex_credentials"] = litellm_params[
+                                "vertex_credentials"
+                            ]
+                        return vertex_config
         return None
     if files_config is None:
         raise ValueError("files_settings is not set, set it on your config.yaml file.")
