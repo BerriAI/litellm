@@ -19065,8 +19065,8 @@
         "supports_reasoning": true,
         "mode": "chat",
         "tiered_pricing": [
-            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_token_thinking": 4e-06},
-            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_token_thinking": 1.2e-05}
+            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_reasoning_token": 4e-06},
+            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_reasoning_token": 1.2e-05}
         ],
         "source": "https://www.alibabacloud.com/help/en/model-studio/models"
     },
@@ -19076,7 +19076,7 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2e-07,
-        "output_cost_per_token_thinking": 5e-07,
+        "output_cost_per_reasoning_token": 5e-07,
         "litellm_provider": "dashscope",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -19233,8 +19233,8 @@
         "supports_reasoning": true,
         "mode": "chat",
         "tiered_pricing": [
-            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_token_thinking": 4e-06},
-            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_token_thinking": 1.2e-05}
+            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_reasoning_token": 4e-06},
+            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_reasoning_token": 1.2e-05}
         ],
         "source": "https://www.alibabacloud.com/help/en/model-studio/models"
     },
@@ -19248,8 +19248,8 @@
         "supports_reasoning": true,
         "mode": "chat",
         "tiered_pricing": [
-            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_token_thinking": 4e-06},
-            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_token_thinking": 1.2e-05}
+            {"range": [0, 256e3], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "output_cost_per_reasoning_token": 4e-06},
+            {"range": [256e3, 1e6], "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "output_cost_per_reasoning_token": 1.2e-05}
         ],
         "source": "https://www.alibabacloud.com/help/en/model-studio/models"
     },
@@ -19259,7 +19259,7 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 1.2e-06,
-        "output_cost_per_token_thinking": 4e-06,
+        "output_cost_per_reasoning_token": 4e-06,
         "litellm_provider": "dashscope",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -19273,7 +19273,7 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 1.2e-06,
-        "output_cost_per_token_thinking": 4e-06,
+        "output_cost_per_reasoning_token": 4e-06,
         "litellm_provider": "dashscope",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -19316,7 +19316,7 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2e-07,
-        "output_cost_per_token_thinking": 5e-07,
+        "output_cost_per_reasoning_token": 5e-07,
         "litellm_provider": "dashscope",
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -19330,7 +19330,7 @@
         "max_output_tokens": 16384,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2e-07,
-        "output_cost_per_token_thinking": 5e-07,
+        "output_cost_per_reasoning_token": 5e-07,
         "litellm_provider": "dashscope",
         "supports_function_calling": true,
         "supports_tool_choice": true,
