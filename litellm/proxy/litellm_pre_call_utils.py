@@ -335,33 +335,21 @@ class LiteLLMProxyRequestSetup:
                 return value
         return None
 
-
     @staticmethod
-    def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
+    def add_internal_user_from_user_mapping(general_settings: Optional[Dict], user_api_key_dict: UserAPIKeyAuth, headers: dict) -> UserAPIKeyAuth:
+        if general_settings is None:
+            return user_api_key_dict
+        user_header_mapping = general_settings.get("user_header_mappings")
         if not user_header_mapping:
-            return None
-        # normalize to list for consistent processing
-        items = user_header_mapping
-        if isinstance(items, dict):
-            items = [items]
-        for item in items:
-            role = None
-            header_name = None
-            if isinstance(item, dict):
-                role = item.get("litellm_user_role")
-                header_name = item.get("header_name")
-            else:
-                role = getattr(item, "litellm_user_role", None)
-                header_name = getattr(item, "header_name", None)
-
-            if role is None or header_name is None:
-                continue
-
-            role_str = str(role).lower()
-            if role_str == str(LitellmUserRoles.INTERNAL_USER).lower():
-                if isinstance(header_name, str) and header_name.strip() != "":
-                    return header_name
-        return None
+            return user_api_key_dict
+        header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(user_header_mapping)
+        if not header_name:
+            return user_api_key_dict
+        header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
+        if header_value:
+            user_api_key_dict.user_id = header_value
+            return user_api_key_dict
+        return user_api_key_dict
 
     @staticmethod
     def get_user_from_headers(
@@ -372,12 +360,8 @@ class LiteLLMProxyRequestSetup:
         """
         if general_settings is None:
             return None
-        user_header_mapping = general_settings.get("user_header_mappings")
-        header_name = None
-        if user_header_mapping:
-            header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(user_header_mapping)
-        if header_name is None:
-            header_name = general_settings.get("user_header_name")
+
+        header_name = general_settings.get("user_header_name")
         if header_name is None or header_name == "":
             return None
 
@@ -459,6 +443,30 @@ class LiteLLMProxyRequestSetup:
             if _headers != {}:
                 data["headers"] = _headers
         return data
+
+    @staticmethod
+    def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
+        if not user_header_mapping:
+            return None
+        items = user_header_mapping
+        if isinstance(items, dict):
+            items = [items]
+        for item in items:
+            if isinstance(item, dict):
+                role = item.get("litellm_user_role")
+                header_name = item.get("header_name")
+            else:
+                role = getattr(item, "litellm_user_role", None)
+                header_name = getattr(item, "header_name", None)
+
+            if role is None or header_name is None:
+                continue
+
+            role_str = str(role).lower()
+            if role_str == str(LitellmUserRoles.INTERNAL_USER).lower():
+                if isinstance(header_name, str) and header_name.strip() != "":
+                    return header_name
+        return None
 
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
@@ -757,6 +765,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
+
+    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(general_settings, user_api_key_dict, _headers)
 
     # Parse user info from headers
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
