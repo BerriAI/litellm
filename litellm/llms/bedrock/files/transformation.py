@@ -361,6 +361,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=api_base,
             optional_params=optional_params,
         )
+
+        litellm_params["upload_url"] = api_base
         
         # Return a dict that tells the HTTP handler exactly what to do
         return {

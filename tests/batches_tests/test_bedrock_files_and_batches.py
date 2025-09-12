@@ -64,6 +64,11 @@ async def test_async_file_and_batch():
         input_file_id=file_obj.id,
         metadata={"key1": "value1", "key2": "value2"},
         custom_llm_provider="bedrock",
+        
+        #########################################################
+        # bedrock specific params
+        #########################################################
+        model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
         aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV"
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
