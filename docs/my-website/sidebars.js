@@ -485,7 +485,8 @@ const sidebars = {
         "providers/bytez",
         "providers/heroku",
         "providers/oci",
-        "providers/datarobot",  
+        "providers/datarobot",
+        "providers/ovhcloud",  
       ],
     },
     {

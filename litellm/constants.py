@@ -311,6 +311,7 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "ovhcloud",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -1019,6 +1020,7 @@ SENTRY_DENYLIST = [
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
+    "OVHCLOUD_API_KEY",
     # Database and Connection Strings
     "database_url",
     "redis_url",
