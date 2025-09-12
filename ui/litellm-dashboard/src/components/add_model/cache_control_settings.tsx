@@ -1,44 +1,64 @@
-import React from "react";
-import { Form, Switch, Select, Input, Typography } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons';
-import NumericalInput from "../shared/numerical_input";
+import React from "react"
+import { Form, Switch, Select, Input, Typography } from "antd"
+import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons"
+import NumericalInput from "../shared/numerical_input"
 
-const { Text } = Typography;
+const { Text } = Typography
 
 interface CacheControlInjectionPoint {
-  location: "message";
-  role?: "user" | "system" | "assistant";
-  index?: number;
+  location: "message"
+  role?: "user" | "system" | "assistant"
+  index?: number
 }
 
 interface CacheControlSettingsProps {
   form: any; // Form instance from parent
   showCacheControl: boolean;
   onCacheControlChange: (checked: boolean) => void;
+  isEditMode?: boolean; // New prop to distinguish between add and edit modes
 }
 
 const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
   form,
   showCacheControl,
   onCacheControlChange,
+  isEditMode = false,
 }) => {
   const updateCacheControlPoints = (injectionPoints: CacheControlInjectionPoint[]) => {
-    const currentParams = form.getFieldValue('litellm_extra_params');
-    try {
-      let paramsObj = currentParams ? JSON.parse(currentParams) : {};
-      if (injectionPoints.length > 0) {
-        paramsObj.cache_control_injection_points = injectionPoints;
-      } else {
-        delete paramsObj.cache_control_injection_points;
+    if (isEditMode) {
+      // For edit mode, update cache_control_injection_points directly
+      form.setFieldValue('cache_control_injection_points', injectionPoints);
+    } else {
+      // For add mode, update litellm_extra_params
+      const currentParams = form.getFieldValue('litellm_extra_params');
+      try {
+        let paramsObj = currentParams ? JSON.parse(currentParams) : {};
+        if (injectionPoints.length > 0) {
+          paramsObj.cache_control_injection_points = injectionPoints;
+        } else {
+          delete paramsObj.cache_control_injection_points;
+        }
+        if (Object.keys(paramsObj).length > 0) {
+          form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
+        } else {
+          form.setFieldValue('litellm_extra_params', '');
+        }
+      } catch (error) {
+        console.error('Error updating cache control points:', error);
       }
-      if (Object.keys(paramsObj).length > 0) {
-        form.setFieldValue('litellm_extra_params', JSON.stringify(paramsObj, null, 2));
-      } else {
-        form.setFieldValue('litellm_extra_params', '');
-      }
-    } catch (error) {
-      console.error('Error updating cache control points:', error);
     }
+  };
+
+  const handleCacheControlToggle = (checked: boolean) => {    
+    if (!checked) {
+      if (isEditMode) {
+        form.setFieldValue('cache_control_injection_points', []);
+      } else {
+        updateCacheControlPoints([]);
+      }
+    }
+    
+    onCacheControlChange(checked);
   };
 
   return (
@@ -50,7 +70,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
         className="mb-4"
         tooltip="Tell litellm where to inject cache control checkpoints. You can specify either by role (to apply to all messages of that role) or by specific message index."
       >
-        <Switch onChange={onCacheControlChange} className="bg-gray-600" />
+        <Switch onChange={handleCacheControlToggle} className="bg-gray-600" />
       </Form.Item>
 
       {showCacheControl && (
@@ -151,7 +171,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
         </div>
       )}
     </>
-  );
-};
+  )
+}
 
-export default CacheControlSettings; 
+export default CacheControlSettings

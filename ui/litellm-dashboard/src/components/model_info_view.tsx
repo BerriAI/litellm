@@ -86,21 +86,25 @@ export default function ModelInfoView({
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined
-  console.log("usingExistingCredential, ", usingExistingCredential)
-  console.log("modelData.litellm_params.litellm_credential_name, ", modelData?.litellm_params?.litellm_credential_name)
 
   useEffect(() => {
     const getExistingCredential = async () => {
-      console.log("accessToken, ", accessToken)
       if (!accessToken) return
       if (usingExistingCredential) return
-      let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId)
-      console.log("existingCredentialResponse, ", existingCredentialResponse)
-      setExistingCredential({
-        credential_name: existingCredentialResponse["credential_name"],
-        credential_values: existingCredentialResponse["credential_values"],
-        credential_info: existingCredentialResponse["credential_info"],
-      })
+      
+      try {
+        let existingCredentialResponse = await credentialGetCall(accessToken, null, modelId)
+        console.log("existingCredentialResponse, ", existingCredentialResponse)
+        setExistingCredential({
+          credential_name: existingCredentialResponse["credential_name"],
+          credential_values: existingCredentialResponse["credential_values"],
+          credential_info: existingCredentialResponse["credential_info"],
+        })
+      } catch (error) {
+        console.log("No existing credential found or error fetching credential:", error)
+        // This is expected for models without credentials, so we don't need to show an error
+        setExistingCredential(null)
+      }
     }
 
     const getModelInfo = async () => {
@@ -111,8 +115,14 @@ export default function ModelInfoView({
       setLocalModelData(specificModelData)
 
       // Check if cache control is enabled
-      if (specificModelData?.litellm_params?.cache_control_injection_points) {
+      if (
+        specificModelData?.litellm_params?.cache_control_injection_points &&
+        Array.isArray(specificModelData.litellm_params.cache_control_injection_points) &&
+        specificModelData.litellm_params.cache_control_injection_points.length > 0
+      ) {
         setShowCacheControl(true)
+      } else {
+        setShowCacheControl(false)
       }
     }
 
@@ -130,7 +140,7 @@ export default function ModelInfoView({
     getExistingCredential()
     getModelInfo()
     fetchGuardrails()
-  }, [accessToken, modelId])
+  }, [accessToken, modelId, usingExistingCredential])
 
   const handleReuseCredential = async (values: any) => {
     console.log("values, ", values)
@@ -457,7 +467,12 @@ export default function ModelInfoView({
                     output_cost: localModelData.litellm_params?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token * 1_000_000
                       : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
-                    cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
+                    cache_control:
+                      localModelData.litellm_params?.cache_control_injection_points &&
+                      Array.isArray(localModelData.litellm_params.cache_control_injection_points) &&
+                      localModelData.litellm_params.cache_control_injection_points.length > 0
+                        ? true
+                        : false,
                     cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
                     model_access_group: Array.isArray(localModelData.model_info?.access_groups)
                       ? localModelData.model_info.access_groups
@@ -744,13 +759,20 @@ export default function ModelInfoView({
                         <CacheControlSettings
                           form={form}
                           showCacheControl={showCacheControl}
-                          onCacheControlChange={(checked) => setShowCacheControl(checked)}
+                          onCacheControlChange={(checked) => {
+                            setShowCacheControl(checked)
+                            if (!checked) {
+                              form.setFieldValue("cache_control_injection_points", [])
+                            }
+                          }}
+                          isEditMode={true}
                         />
                       ) : (
                         <div>
                           <Text className="font-medium">Cache Control</Text>
                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                            {localModelData.litellm_params?.cache_control_injection_points &&
+                            {localModelData.litellm_params.cache_control_injection_points &&
+                            Array.isArray(localModelData.litellm_params.cache_control_injection_points) &&
                             localModelData.litellm_params.cache_control_injection_points.length > 0 ? (
                               <div>
                                 <p>Enabled</p>
