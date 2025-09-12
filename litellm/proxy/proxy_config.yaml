@@ -9,9 +9,9 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
-  - model_name: gemini/*
+  - model_name: dashscope/*
     litellm_params:
-      model: gemini/*
+      model: dashscope/*
 
 
 litellm_settings:
