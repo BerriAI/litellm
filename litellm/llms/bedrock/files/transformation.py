@@ -111,6 +111,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         # Remove bedrock/ prefix if present
         if _model.startswith("bedrock/"):
             _model = _model[8:]
+        
+        # Replace colons with hyphens for Bedrock S3 URI compliance
+        _model = _model.replace(":", "-")
+        
         object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
         return object_name
 
