@@ -1059,3 +1059,63 @@ async def test_add_litellm_metadata_from_request_headers():
     assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
 
         
+
+def test_get_internal_user_header_from_mapping_returns_expected_header():
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert header_name == "X-OpenWebUI-User-Id"
+
+
+def test_get_internal_user_header_from_mapping_none_when_absent():
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
+    ]
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert header_name is None
+
+    single = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single)
+    assert header_name is None
+
+
+def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+    headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
+    general_settings = {
+        "user_header_mappings": [
+            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+            {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+        ]
+    }
+
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, headers
+    )
+
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id == "internal-user-123"
+
+
+def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_unchanged():
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        None, user_api_key_dict, {"X-OpenWebUI-User-Id": "abc"}
+    )
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id is None
+
+    general_settings = {
+        "user_header_mappings": [
+            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+        ]
+    }
+    result = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, {"Other": "value"}
+    )
+    assert result is user_api_key_dict
+    assert user_api_key_dict.user_id is None
