@@ -183,7 +183,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         messages = standard_logging_payload["messages"]
         messages = self._ensure_string_content(messages=messages)
-        response_obj = standard_logging_payload.get("response")
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
