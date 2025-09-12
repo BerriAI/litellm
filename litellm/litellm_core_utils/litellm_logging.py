@@ -242,6 +242,11 @@ in_memory_trace_id_cache = ServiceTraceIDCache()
 in_memory_dynamic_logger_cache = DynamicLoggingCache()
 
 
+AssembledStreamingResponse = Optional[
+    Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
+]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
@@ -1366,6 +1371,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time=None,
         cache_hit=None,
         standard_logging_object: Optional[StandardLoggingPayload] = None,
+        complete_streaming_response: AssembledStreamingResponse = None,
     ):
         try:
             if start_time is None:
@@ -1394,74 +1400,63 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result = self.normalize_logging_result(result=result)
 
-            if (
+            should_do_full_processing = (
                 standard_logging_object is None
                 and result is not None
                 and self.stream is not True
-            ):
-                if self._is_recognized_call_type_for_logging(
-                    logging_result=logging_result
-                ):
-                    ## HIDDEN PARAMS ##
-                    hidden_params = getattr(logging_result, "_hidden_params", {})
-                    if hidden_params:
-                        # add to metadata for logging
-                        if self.model_call_details.get("litellm_params") is not None:
-                            self.model_call_details["litellm_params"].setdefault(
-                                "metadata", {}
-                            )
-                            if (
-                                self.model_call_details["litellm_params"]["metadata"]
-                                is None
-                            ):
-                                self.model_call_details["litellm_params"][
-                                    "metadata"
-                                ] = {}
+                and self._is_recognized_call_type_for_logging(logging_result=logging_result)
+            )
 
-                            self.model_call_details["litellm_params"]["metadata"][  # type: ignore
-                                "hidden_params"
-                            ] = getattr(
-                                logging_result, "_hidden_params", {}
-                            )
-                    ## RESPONSE COST - Only calculate if not in hidden_params ##
-                    if "response_cost" in hidden_params:
-                        self.model_call_details["response_cost"] = hidden_params[
-                            "response_cost"
-                        ]
-                    else:
-                        self.model_call_details["response_cost"] = (
-                            self._response_cost_calculator(result=logging_result)
-                        )
-                    ## STANDARDIZED LOGGING PAYLOAD
+            should_create_logging_object = (
+                standard_logging_object is None
+                and result is not None
+                and (self.stream is not True or complete_streaming_response is not None)
+            )
 
-                    self.model_call_details["standard_logging_object"] = (
-                        get_standard_logging_object_payload(
-                            kwargs=self.model_call_details,
-                            init_response_obj=logging_result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            logging_obj=self,
-                            status="success",
-                            standard_built_in_tools_params=self.standard_built_in_tools_params,
+            # Execute full processing if needed
+            if should_do_full_processing:
+                ## HIDDEN PARAMS ##
+                hidden_params = getattr(logging_result, "_hidden_params", {})
+                if hidden_params:
+                    # add to metadata for logging
+                    if self.model_call_details.get("litellm_params") is not None:
+                        self.model_call_details["litellm_params"].setdefault("metadata", {})
+                        if self.model_call_details["litellm_params"]["metadata"] is None:
+                            self.model_call_details["litellm_params"]["metadata"] = {}
+
+                        self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(
+                            logging_result, "_hidden_params", {}
                         )
-                    )
-                elif isinstance(result, dict) or isinstance(result, list):
-                    ## STANDARDIZED LOGGING PAYLOAD
-                    self.model_call_details["standard_logging_object"] = (
-                        get_standard_logging_object_payload(
-                            kwargs=self.model_call_details,
-                            init_response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            logging_obj=self,
-                            status="success",
-                            standard_built_in_tools_params=self.standard_built_in_tools_params,
-                        )
-                    )
-            elif standard_logging_object is not None:
-                self.model_call_details["standard_logging_object"] = (
-                    standard_logging_object
+
+                ## RESPONSE COST - Only calculate if not in hidden_params ##
+                if "response_cost" in hidden_params:
+                    self.model_call_details["response_cost"] = hidden_params["response_cost"]
+                else:
+                    self.model_call_details["response_cost"] = self._response_cost_calculator(result=logging_result)
+
+            # Handle standard_logging_object creation
+            if should_create_logging_object:
+                # Determine init_response_obj based on processing type
+                if should_do_full_processing:
+                    init_response_obj = logging_result
+                elif complete_streaming_response is not None:
+                    init_response_obj = complete_streaming_response
+                else:
+                    init_response_obj = result
+
+
+                ## STANDARDIZED LOGGING PAYLOAD
+                self.model_call_details["standard_logging_object"] = get_standard_logging_object_payload(
+                    kwargs=self.model_call_details,
+                    init_response_obj=init_response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=self,
+                    status="success",
+                    standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
+            elif standard_logging_object is not None:
+                self.model_call_details["standard_logging_object"] = standard_logging_object
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
@@ -1587,7 +1582,15 @@ class Logging(LiteLLMLoggingBaseClass):
         return
 
     def success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, *, helper_called: bool = False, **kwargs
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        *,
+        unified_flow: bool = False,
+        complete_streaming_response: AssembledStreamingResponse = None,
+        **kwargs,
     ):
         verbose_logger.debug(
             f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}"
@@ -1597,7 +1600,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
 
-        if not helper_called:  # see unified_success_handler
+        if not unified_flow:  # see unified_success_handler
             start_time, end_time, result = self._success_handler_helper_fn(
                 start_time=start_time,
                 end_time=end_time,
@@ -1606,9 +1609,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 standard_logging_object=kwargs.get("standard_logging_object", None),
             )
         try:
-            if "complete_streaming_response" in self.model_call_details:
-                return  # break out of this.
-            complete_streaming_response = self._get_assembled_streaming_response(result)
+            if not unified_flow:  # see unified_success_handler
+                complete_streaming_response = self._get_assembled_streaming_response(
+                    result
+                )
             if complete_streaming_response is not None:
                 verbose_logger.debug(
                     "Logging Details LiteLLM-Success Call streaming complete"
@@ -2036,6 +2040,8 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
     async def unified_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None):
+        complete_streaming_response = self._get_assembled_streaming_response(result)
+
         # don't let _success_handler_helper_fn block the loop
         start_time, end_time, result = await asyncio.get_event_loop().run_in_executor(
             executor,
@@ -2045,6 +2051,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 end_time=end_time,
                 result=result,
                 cache_hit=cache_hit,
+                complete_streaming_response=complete_streaming_response,
             ),
         )
         self.handle_sync_success_callbacks_for_async_calls(
@@ -2052,18 +2059,28 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time=end_time,
             result=result,
             cache_hit=cache_hit,
-            helper_called=True,
+            unified_flow=True,
+            complete_streaming_response=complete_streaming_response,
         )
         await self.async_success_handler(
             start_time=start_time,
             end_time=end_time,
             result=result,
             cache_hit=cache_hit,
-            helper_called=True,
+            unified_flow=True,
+            complete_streaming_response=complete_streaming_response,
         )
 
     async def async_success_handler(  # noqa: PLR0915
-        self, result=None, start_time=None, end_time=None, cache_hit=None, *, helper_called: bool = False, **kwargs
+        self,
+        result=None,
+        start_time=None,
+        end_time=None,
+        cache_hit=None,
+        *,
+        unified_flow: bool = False,
+        complete_streaming_response: AssembledStreamingResponse = None,
+        **kwargs,
     ):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
@@ -2113,7 +2130,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-        if not helper_called:  # see unified_success_handler
+        if not unified_flow:  # see unified_success_handler
             # don't let _success_handler_helper_fn block the loop
             start_time, end_time, result = await asyncio.get_event_loop().run_in_executor(
                 executor,
@@ -2130,9 +2147,11 @@ class Logging(LiteLLMLoggingBaseClass):
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
-        complete_streaming_response: Optional[
-            Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
-        ] = self._get_assembled_streaming_response(result)
+
+        if not unified_flow:  # see unified_success_helper
+            complete_streaming_response: Optional[
+                Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]
+            ] = self._get_assembled_streaming_response(result)
 
         if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
@@ -2742,7 +2761,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: Optional[Any] = None,
         *,
-        helper_called: bool = False,
+        unified_flow: bool = False,
+        complete_streaming_response: AssembledStreamingResponse = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -2758,7 +2778,8 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time,
             end_time,
             cache_hit,
-            helper_called=helper_called,
+            unified_flow=unified_flow,
+            complete_streaming_response=complete_streaming_response,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
@@ -2859,12 +2880,10 @@ class Logging(LiteLLMLoggingBaseClass):
             ResponseCompletedEvent,
             Any,
         ],
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
-        if isinstance(result, ModelResponse):
+    ) -> AssembledStreamingResponse:
+        if isinstance(result, (ModelResponse, TextCompletionResponse)):
             return result
-        elif isinstance(result, TextCompletionResponse):
-            return result
-        elif isinstance(result, ResponseCompletedEvent):
+        if isinstance(result, ResponseCompletedEvent):
             return result.response
         return None
 
