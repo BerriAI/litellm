@@ -273,6 +273,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
     print(f"Non-streaming response: {json.dumps(response, indent=2)}")
     return response
 
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_fallbacks():
     """
@@ -293,14 +294,15 @@ async def test_anthropic_messages_fallbacks():
                 "litellm_params": {
                     "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 },
-            }
+            },
         ],
         fallbacks=[
             {
-                "anthropic/claude-opus-4-20250514": 
-                ["bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"]
+                "anthropic/claude-opus-4-20250514": [
+                    "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ]
             }
-        ]
+        ],
     )
 
     # Set up test parameters

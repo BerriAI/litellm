@@ -159,7 +159,7 @@ async def test_json_parsing_error_handling():
     """
     # Test case 1: Trailing comma error
     mock_request = MagicMock()
-    invalid_json_with_trailing_comma = b'''{
+    invalid_json_with_trailing_comma = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -171,8 +171,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request.body = AsyncMock(return_value=invalid_json_with_trailing_comma)
     mock_request.headers = {"content-type": "application/json"}
     mock_request.scope = {}
@@ -180,14 +180,14 @@ async def test_json_parsing_error_handling():
     # Should raise ProxyException for trailing comma
     with pytest.raises(ProxyException) as exc_info:
         await _read_request_body(mock_request)
-    
+
     assert exc_info.value.code == "400"
     assert "Invalid JSON payload" in exc_info.value.message
     assert "trailing comma" in exc_info.value.message
 
     # Test case 2: Unquoted property name error
     mock_request2 = MagicMock()
-    invalid_json_unquoted_property = b'''{
+    invalid_json_unquoted_property = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -196,8 +196,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request2.body = AsyncMock(return_value=invalid_json_unquoted_property)
     mock_request2.headers = {"content-type": "application/json"}
     mock_request2.scope = {}
@@ -205,13 +205,13 @@ async def test_json_parsing_error_handling():
     # Should raise ProxyException for unquoted property
     with pytest.raises(ProxyException) as exc_info2:
         await _read_request_body(mock_request2)
-    
+
     assert exc_info2.value.code == "400"
     assert "Invalid JSON payload" in exc_info2.value.message
 
     # Test case 3: Valid JSON should work normally
     mock_request3 = MagicMock()
-    valid_json = b'''{
+    valid_json = b"""{
         "model": "gpt-4o",
         "tools": [
             {
@@ -223,8 +223,8 @@ async def test_json_parsing_error_handling():
             }
         ],
         "input": "Run available tools"
-    }'''
-    
+    }"""
+
     mock_request3.body = AsyncMock(return_value=valid_json)
     mock_request3.headers = {"content-type": "application/json"}
     mock_request3.scope = {}

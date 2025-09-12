@@ -442,9 +442,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(

@@ -498,9 +498,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -808,9 +808,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1352,9 +1352,11 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
-                        "index": self.tool_calls_index
-                        if self.tool_calls_index is not None
-                        else index,
+                        "index": (
+                            self.tool_calls_index
+                            if self.tool_calls_index is not None
+                            else index
+                        ),
                     }
                 elif "reasoningContent" in delta_obj:
                     provider_specific_fields = {
@@ -1384,9 +1386,11 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": "{}",
                         },
-                        "index": self.tool_calls_index
-                        if self.tool_calls_index is not None
-                        else index,
+                        "index": (
+                            self.tool_calls_index
+                            if self.tool_calls_index is not None
+                            else index
+                        ),
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))

@@ -15,9 +15,15 @@ def mock_gcs_dependencies():
     mock_sync_client = MagicMock()
     mock_async_client = AsyncMock()
 
-    with patch("litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client), \
-         patch("litellm.caching.gcs_cache.get_async_httpx_client", return_value=mock_async_client), \
-         patch("litellm.caching.gcs_cache.GCSBucketBase.sync_construct_request_headers", return_value={}):
+    with patch(
+        "litellm.caching.gcs_cache._get_httpx_client", return_value=mock_sync_client
+    ), patch(
+        "litellm.caching.gcs_cache.get_async_httpx_client",
+        return_value=mock_async_client,
+    ), patch(
+        "litellm.caching.gcs_cache.GCSBucketBase.sync_construct_request_headers",
+        return_value={},
+    ):
         yield {
             "sync_client": mock_sync_client,
             "async_client": mock_async_client,
@@ -31,6 +37,6 @@ async def test_gcs_cache_async_set_and_get(mock_gcs_dependencies):
     mock_gcs_dependencies["async_client"].post.assert_called_once()
 
     mock_gcs_dependencies["async_client"].get.return_value.status_code = 200
-    mock_gcs_dependencies["async_client"].get.return_value.text = "{\"foo\": \"bar\"}"
+    mock_gcs_dependencies["async_client"].get.return_value.text = '{"foo": "bar"}'
     result = await cache.async_get_cache("key")
     assert result == {"foo": "bar"}

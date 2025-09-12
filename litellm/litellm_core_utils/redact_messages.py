@@ -73,13 +73,15 @@ def perform_redaction(model_call_details: dict, result):
     # Redact result
     if result is not None:
         # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
-        if (asyncio.iscoroutine(result) or 
-            asyncio.iscoroutinefunction(result) or
-            hasattr(result, '__aiter__') or  # async generator
-            hasattr(result, '__anext__')):   # async iterator
+        if (
+            asyncio.iscoroutine(result)
+            or asyncio.iscoroutinefunction(result)
+            or hasattr(result, "__aiter__")  # async generator
+            or hasattr(result, "__anext__")
+        ):  # async iterator
             # For async objects, return a simple redacted response without deepcopy
             return {"text": "redacted-by-litellm"}
-        
+
         _result = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:
@@ -91,7 +93,9 @@ def perform_redaction(model_call_details: dict, result):
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 for output_item in _result.output:
-                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
+                    if hasattr(output_item, "content") and isinstance(
+                        output_item.content, list
+                    ):
                         for content_part in output_item.content:
                             if hasattr(content_part, "text"):
                                 content_part.text = "redacted-by-litellm"

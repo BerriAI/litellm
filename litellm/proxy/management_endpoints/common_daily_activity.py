@@ -438,8 +438,12 @@ async def get_daily_activity(
                 total_api_requests=aggregated["totals"].api_requests,
                 total_successful_requests=aggregated["totals"].successful_requests,
                 total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_read_input_tokens=aggregated[
+                    "totals"
+                ].cache_read_input_tokens,
+                total_cache_creation_input_tokens=aggregated[
+                    "totals"
+                ].cache_creation_input_tokens,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -518,8 +522,12 @@ async def get_daily_activity_aggregated(
                 total_api_requests=aggregated["totals"].api_requests,
                 total_successful_requests=aggregated["totals"].successful_requests,
                 total_failed_requests=aggregated["totals"].failed_requests,
-                total_cache_read_input_tokens=aggregated["totals"].cache_read_input_tokens,
-                total_cache_creation_input_tokens=aggregated["totals"].cache_creation_input_tokens,
+                total_cache_read_input_tokens=aggregated[
+                    "totals"
+                ].cache_read_input_tokens,
+                total_cache_creation_input_tokens=aggregated[
+                    "totals"
+                ].cache_creation_input_tokens,
                 page=1,
                 total_pages=1,
                 has_more=False,

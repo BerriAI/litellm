@@ -732,7 +732,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,

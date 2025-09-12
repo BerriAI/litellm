@@ -110,11 +110,11 @@ async def get_audit_logs(
 
     # Return paginated response
     return PaginatedAuditLogResponse(
-        audit_logs=[
-            AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs
-        ]
-        if audit_logs
-        else [],
+        audit_logs=(
+            [AuditLogResponse(**audit_log.model_dump()) for audit_log in audit_logs]
+            if audit_logs
+            else []
+        ),
         total=total_count,
         page=page,
         page_size=page_size,

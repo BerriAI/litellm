@@ -86,8 +86,10 @@ class VertexEmbedding(VertexBase):
             mode="embedding",
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input, optional_params=optional_params, model=model
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input, optional_params=optional_params, model=model
+            )
         )
 
         _client_params = {}
@@ -176,8 +178,10 @@ class VertexEmbedding(VertexBase):
             mode="embedding",
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input, optional_params=optional_params, model=model
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input, optional_params=optional_params, model=model
+            )
         )
 
         _async_client_params = {}

@@ -401,7 +401,11 @@ class LiteLLMAnthropicMessagesAdapter:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name or "",
-                            input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
+                            input=(
+                                json.loads(tool_call.function.arguments)
+                                if tool_call.function.arguments
+                                else {}
+                            ),
                         )
                     )
             elif choice.message.content is not None:

@@ -267,7 +267,10 @@ class CompletionCustomHandler(
         try:
             print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
             self.states.append("async_success")
-            print("############### CompletionCustomHandler async success, kwargs: ", kwargs)
+            print(
+                "############### CompletionCustomHandler async success, kwargs: ",
+                kwargs,
+            )
             ## START TIME
             assert isinstance(start_time, datetime)
             ## END TIME

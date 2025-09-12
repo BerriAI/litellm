@@ -1007,7 +1007,7 @@ async def test_soft_budget_alerts():
 
         # Verify alert message contains correct percentage
         alert_message = mock_send_alert.call_args[1]["message"]
-        
+
         print("GOT MESSAGE\n\n", alert_message)
 
         expected_message = (
@@ -1077,10 +1077,10 @@ key_no_max_budget_info = CallInfo(
 async def test_soft_budget_alerts_webhook(entity_info):
     """
     Tests that soft budget alerts are triggered for different entity types.
-    
+
     Tests:
     - Key with max budget
-    - Team 
+    - Team
     - User
     - Key without max budget
     """
@@ -1097,7 +1097,7 @@ async def test_soft_budget_alerts_webhook(entity_info):
         # Verify the webhook event
         call_args = mock_send_alert.call_args[1]
         logged_webhook_event: WebhookEvent = call_args["user_info"]
-        
+
         # Validate the webhook event has all expected fields
         assert logged_webhook_event.spend == entity_info.spend
         assert logged_webhook_event.soft_budget == entity_info.soft_budget
@@ -1106,10 +1106,3 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
-        
-        
-        
-        
-        
-        
-        

@@ -60,7 +60,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-
     def transform_request(
         self,
         model: str,

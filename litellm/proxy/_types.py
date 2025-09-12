@@ -787,6 +787,7 @@ class GenerateKeyRequest(KeyRequestBase):
         description="Type of key that determines default allowed routes.",
     )
 
+
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
     key_name: Optional[str] = None
@@ -1621,6 +1622,7 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     """
     Map an incoming HTTP header to a LiteLLM user role.
     """
+
     header_name: str
     litellm_user_role: Literal[
         LitellmUserRoles.INTERNAL_USER,
@@ -1630,6 +1632,7 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     model_config = {
         "extra": "forbid",
     }
+
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
@@ -2939,10 +2942,12 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     user: Optional[str]
     num_retries: Optional[int]
 
+
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     """
     Headers a user can pass that will get added to litellm metadata for the request
     """
+
     spend_logs_metadata: Optional[dict]
 
 

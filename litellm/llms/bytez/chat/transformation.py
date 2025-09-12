@@ -141,7 +141,6 @@ class BytezChatConfig(BaseConfig):
         if not api_key:
             raise Exception("Missing api_key, make sure you pass in your api key")
 
-
         return headers
 
     def get_complete_url(

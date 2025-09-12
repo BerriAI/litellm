@@ -25,19 +25,17 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
     IMAGE_EDIT_ENDPOINT: str = "v1/images/imageToImage"
     DEFAULT_STRENGTH: float = 0.2
-    
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List:
+
+    def get_supported_openai_params(self, model: str) -> List:
         """
         Supported OpenAI parameters that can be mapped to Recraft image edit API.
-        
+
         Based on Recraft API docs: https://www.recraft.ai/docs#image-to-image
         """
         return [
-            "n",              # Maps to n (number of images)
-            "response_format", # Maps to response_format (url or b64_json)
-            "style"            # Maps to style parameter
+            "n",  # Maps to n (number of images)
+            "response_format",  # Maps to response_format (url or b64_json)
+            "style",  # Maps to style parameter
         ]
 
     def map_openai_params(
@@ -52,14 +50,13 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         """
         # Start with all params like OpenAI does
         all_params = dict(image_edit_optional_params)
-        
+
         # Filter to only supported Recraft parameters
         supported_params = self.get_supported_openai_params(model)
         filtered_params = {k: v for k, v in all_params.items() if k in supported_params}
-        
+
         return filtered_params
 
-    
     def get_complete_url(
         self,
         model: str,
@@ -72,9 +69,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         Some providers need `model` in `api_base`
         """
         complete_url: str = (
-            api_base 
-            or get_secret_str("RECRAFT_API_BASE") 
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
@@ -87,16 +82,12 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         model: str,
         api_key: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("RECRAFT_API_KEY")
-        )
+        final_api_key: Optional[str] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
-        
-        headers["Authorization"] = f"Bearer {final_api_key}"        
-        return headers
 
+        headers["Authorization"] = f"Bearer {final_api_key}"
+        return headers
 
     def transform_image_edit_request(
         self,
@@ -113,11 +104,13 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
         https://www.recraft.ai/docs#image-to-image
         """
-        
+
         request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
             model=model,
             prompt=prompt,
-            strength=image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
+            strength=image_edit_optional_request_params.pop(
+                "strength", self.DEFAULT_STRENGTH
+            ),
             **image_edit_optional_request_params,
         )
         request_dict = cast(Dict, request_body)
@@ -126,16 +119,15 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         #########################################################
         files_list = self._get_image_files_for_request(image=image)
         data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
-        
+
         return data_without_images, files_list
-    
 
     def _get_image_files_for_request(
         self,
         image: FileTypes,
     ) -> List[Tuple[str, Any]]:
         files_list: List[Tuple[str, Any]] = []
-        
+
         # Handle single image (Recraft expects single image, not array)
         if image:
             # OpenAI wraps images in arrays, but for Recraft we need single image
@@ -143,9 +135,11 @@ class RecraftImageEditConfig(BaseImageEditConfig):
                 _image = image[0] if image else None  # Take first image for Recraft
             else:
                 _image = image
-                
+
             if _image is not None:
-                image_content_type: str = ImageEditRequestUtils.get_image_content_type(_image)
+                image_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                    _image
+                )
                 if isinstance(_image, BufferedReader):
                     files_list.append(
                         ("image", (_image.name, _image, image_content_type))
@@ -156,7 +150,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
                     )
 
         return files_list
-    
+
     def transform_image_edit_response(
         self,
         model: str,
@@ -174,11 +168,13 @@ class RecraftImageEditConfig(BaseImageEditConfig):
             )
         if not model_response.data:
             model_response.data = []
-        
+
         for image_data in response_data["data"]:
-            model_response.data.append(ImageObject(
-                url=image_data.get("url", None),
-                b64_json=image_data.get("b64_json", None),
-            ))
-        
+            model_response.data.append(
+                ImageObject(
+                    url=image_data.get("url", None),
+                    b64_json=image_data.get("b64_json", None),
+                )
+            )
+
         return model_response

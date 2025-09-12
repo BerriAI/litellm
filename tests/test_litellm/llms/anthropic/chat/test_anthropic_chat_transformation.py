@@ -58,50 +58,48 @@ def test_calculate_usage():
     assert usage._cache_creation_input_tokens == 12304
     assert usage._cache_read_input_tokens == 0
 
-@pytest.mark.parametrize("usage_object,expected_usage", [
+
+@pytest.mark.parametrize(
+    "usage_object,expected_usage",
     [
-        {
-            "cache_creation_input_tokens": None,
-            "cache_read_input_tokens": None,
-            "input_tokens": None,
-            "output_tokens": 43,
-            "server_tool_use": None
-        },
-        {
-            "prompt_tokens": 0,
-            "completion_tokens": 43,
-            "total_tokens": 43,
-            "_cache_creation_input_tokens": 0,
-            "_cache_read_input_tokens": 0
-        }
+        [
+            {
+                "cache_creation_input_tokens": None,
+                "cache_read_input_tokens": None,
+                "input_tokens": None,
+                "output_tokens": 43,
+                "server_tool_use": None,
+            },
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 43,
+                "total_tokens": 43,
+                "_cache_creation_input_tokens": 0,
+                "_cache_read_input_tokens": 0,
+            },
+        ],
+        [
+            {
+                "cache_creation_input_tokens": 100,
+                "cache_read_input_tokens": 200,
+                "input_tokens": 1,
+                "output_tokens": None,
+                "server_tool_use": None,
+            },
+            {
+                "prompt_tokens": 1 + 200,
+                "completion_tokens": 0,
+                "total_tokens": 1 + 200,
+                "_cache_creation_input_tokens": 100,
+                "_cache_read_input_tokens": 200,
+            },
+        ],
+        [
+            {"server_tool_use": {"web_search_requests": 10}},
+            {"server_tool_use": ServerToolUse(web_search_requests=10)},
+        ],
     ],
-    [
-        {
-            "cache_creation_input_tokens": 100,
-            "cache_read_input_tokens": 200,
-            "input_tokens": 1,
-            "output_tokens": None,
-            "server_tool_use": None
-        },
-        {
-            "prompt_tokens": 1 + 200,
-            "completion_tokens": 0,
-            "total_tokens": 1 + 200,
-            "_cache_creation_input_tokens": 100,
-            "_cache_read_input_tokens": 200,
-        }
-    ],
-    [
-        {
-            "server_tool_use": {
-                "web_search_requests": 10
-            }
-        },
-        {
-            "server_tool_use": ServerToolUse(web_search_requests=10)
-        }
-    ]
-])
+)
 def test_calculate_usage_nulls(usage_object, expected_usage):
     """
     Correctly deal with null values in usage object
@@ -115,16 +113,11 @@ def test_calculate_usage_nulls(usage_object, expected_usage):
         assert hasattr(usage, k)
         assert getattr(usage, k) == v
 
-@pytest.mark.parametrize("usage_object", [
-    {
-        "server_tool_use": {
-            "web_search_requests": None
-        }
-    },
-    {
-        "server_tool_use": None
-    }
-])
+
+@pytest.mark.parametrize(
+    "usage_object",
+    [{"server_tool_use": {"web_search_requests": None}}, {"server_tool_use": None}],
+)
 def test_calculate_usage_server_tool_null(usage_object):
     """
     Correctly deal with null values in usage object
@@ -132,9 +125,10 @@ def test_calculate_usage_server_tool_null(usage_object):
     Fixes https://github.com/BerriAI/litellm/issues/11920
     """
     config = AnthropicConfig()
-    
+
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
     assert not hasattr(usage, "server_tool_use")
+
 
 def test_extract_response_content_with_citations():
     config = AnthropicConfig()

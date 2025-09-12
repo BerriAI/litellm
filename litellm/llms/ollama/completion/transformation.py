@@ -229,7 +229,7 @@ class OllamaConfig(BaseConfig):
             model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         api_key = self.get_api_key()
-        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
             response = litellm.module_level_client.post(
