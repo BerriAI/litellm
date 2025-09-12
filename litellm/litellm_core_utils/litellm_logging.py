@@ -996,8 +996,14 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
+            if self.litellm_request_debug:
+                attr = "warning"
+            else:
+                attr = "debug"
+
             if json_logs:
-                verbose_logger.debug(
+                callattr = getattr(verbose_logger, attr)
+                callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get(
                             "original_response", self.model_call_details
@@ -1005,7 +1011,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                 )
             else:
-                print_verbose(
+                callattr = getattr(verbose_logger, attr)
+                callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get(
                             "original_response", self.model_call_details
