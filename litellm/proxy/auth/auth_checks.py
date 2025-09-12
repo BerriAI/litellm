@@ -880,6 +880,31 @@ async def _delete_cache_key_object(
         )
 
 
+async def _create_team_with_defaults(
+    team_id: str, prisma_client: PrismaClient
+) -> LiteLLM_TeamTable:
+    """
+    Creates a new team and applies default settings from the proxy config.
+    """
+    new_team_data = {"team_id": team_id}
+
+    if (
+        isinstance(litellm.default_team_settings, list)
+        and len(litellm.default_team_settings) > 0
+        and isinstance(litellm.default_team_settings[0], dict)
+    ):
+        default_settings = litellm.default_team_settings[0]
+        default_budget = default_settings.get("max_budget")
+        if default_budget is not None:
+            new_team_data["max_budget"] = default_budget
+        # can be extended for other defaults
+
+    new_team = await prisma_client.db.litellm_teamtable.create(
+        data=new_team_data
+    )
+    return new_team
+
+
 @log_db_metrics
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
@@ -889,8 +914,8 @@ async def _get_team_db_check(
     )
 
     if response is None and team_id_upsert:
-        response = await prisma_client.db.litellm_teamtable.create(
-            data={"team_id": team_id}
+        response = await _create_team_with_defaults(
+            team_id=team_id, prisma_client=prisma_client
         )
 
     return response

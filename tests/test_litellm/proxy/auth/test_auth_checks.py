@@ -28,6 +28,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     get_user_object,
     vector_store_access_check,
+    _get_team_db_check,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.utils import get_utc_datetime
@@ -190,6 +191,73 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+@pytest.mark.asyncio
+async def test_get_team_db_check_applies_default_budget_on_upsert(monkeypatch):
+    """
+    Test that _get_team_db_check correctly applies the default budget
+    from default_team_settings when a new team is created via upsert.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+
+    # Simulate the team not being found in the DB
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    # Define the mock default team settings
+    test_default_settings = [{"max_budget": 123.45, "models": ["gpt-4"]}]
+    monkeypatch.setattr(litellm, "default_team_settings", test_default_settings)
+
+    team_id_to_create = "new-jwt-team"
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True, # Critical for triggering creation
+    )
+
+    # Verify that the create method was called once
+    mock_prisma_client.db.litellm_teamtable.create.assert_called_once()
+    
+    # Verify it was called with the correct data, including the default budget
+    creation_args = mock_prisma_client.db.litellm_teamtable.create.call_args[1]["data"]
+    assert creation_args["team_id"] == team_id_to_create
+    assert creation_args["max_budget"] == 123.45
+    # Ensure other default params are NOT being applied yet
+    assert "models" not in creation_args
+
+
+@pytest.mark.asyncio
+async def test_get_team_db_check_handles_no_default_budget(monkeypatch):
+    """
+    Test that _get_team_db_check creates a team without a budget
+    if default_team_settings does not contain 'max_budget'.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique.return_value = None
+
+    # Define mock settings WITHOUT 'max_budget'
+    test_default_settings_no_budget = [{"models": ["gpt-4"]}]
+    monkeypatch.setattr(litellm, "default_team_settings", test_default_settings_no_budget)
+
+    team_id_to_create = "new-jwt-team-no-budget"
+
+    await _get_team_db_check(
+        team_id=team_id_to_create,
+        prisma_client=mock_prisma_client,
+        team_id_upsert=True,
+    )
+
+    mock_prisma_client.db.litellm_teamtable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_teamtable.create.call_args[1]["data"]
+    
+    # Assert that team_id is correct and max_budget is NOT in the creation data
+    assert creation_args["team_id"] == team_id_to_create
+    assert "max_budget" not in creation_args
 
 
 # Vector Store Auth Check Tests
