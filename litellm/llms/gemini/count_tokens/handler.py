@@ -28,31 +28,20 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        if not isinstance(contents, list):
-            return contents
+        from google.genai.types import FunctionResponse
 
         cleaned_contents = copy.deepcopy(contents)
 
         for content in cleaned_contents:
-            if isinstance(content, dict) and "parts" in content:
-                parts = content["parts"]
-                if isinstance(parts, list):
-                    for part in parts:
-                        # Check for both camelCase and snake_case variants
-                        function_response = None
-                        if isinstance(part, dict):
-                            if "functionResponse" in part:
-                                function_response = part["functionResponse"]
-                            elif "function_response" in part:
-                                function_response = part["function_response"]
-
-                        if (
-                            function_response
-                            and isinstance(function_response, dict)
-                            and "id" in function_response
-                        ):
-                            # Remove the unsupported 'id' field
-                            del function_response["id"]
+            parts = content["parts"]
+            for part in parts:
+                if "functionResponse" in part:
+                    function_response_data = part["functionResponse"]
+                    function_response_part = FunctionResponse(**function_response_data)
+                    function_response_part.id = None
+                    part["functionResponse"] = function_response_part.model_dump(
+                        exclude_none=True
+                    )
 
         return cleaned_contents
 
