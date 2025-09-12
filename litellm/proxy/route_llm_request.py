@@ -86,11 +86,6 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
-    # Preprocess Google GenAI generate content requests
-    if route_type in ["agenerate_content", "agenerate_content_stream"]:
-        # Map generationConfig to config parameter for Google GenAI compatibility
-        if "generationConfig" in data and "config" not in data:
-            data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
