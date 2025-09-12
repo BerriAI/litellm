@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# OVHCloud AI Endpoints
+# 🆕 OVHCloud AI Endpoints
 Leading French Cloud provider in Europe with data sovereignty and privacy.
 
 You can explore the last models we made available in our [catalog](https://endpoints.ai.cloud.ovh.net/catalog).
