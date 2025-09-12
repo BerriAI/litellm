@@ -1,3 +1,5 @@
+from typing import Optional
+
 from litellm.types.llms.openai import CreateFileRequest
 from litellm.types.utils import ExtractedFileData
 
@@ -13,6 +15,13 @@ class FilesAPIUtils:
         """
         return (
             create_file_data.get("purpose") == "batch"
-            and extracted_file_data.get("content_type") == "application/jsonl"
+            and FilesAPIUtils.valid_content_type(extracted_file_data.get("content_type"))
             and extracted_file_data.get("content") is not None
         )
+    
+    @staticmethod
+    def valid_content_type(content_type: Optional[str]) -> bool:
+        """
+        Check if the content type is valid
+        """
+        return content_type in set(["application/jsonl", "application/octet-stream"])
