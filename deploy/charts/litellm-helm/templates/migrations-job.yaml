@@ -7,6 +7,8 @@ metadata:
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
   annotations:
+    argocd.argoproj.io/hook: {{ .Values.migrationJob.hook | default "PreSync" }}
+    argocd.argoproj.io/hook-delete-policy: {{ .Values.migrationJob.hookDeletePolicy | default "BeforeHookCreation" }}
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -17,6 +19,9 @@ metadata:
     helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "1" | quote }}
     {{- end }}
     checksum/config: {{ toYaml .Values | sha256sum }}
+    {{- if .Values.migrationJob.annotations }}
+    {{- toYaml .Values.migrationJob.annotations | nindent 4 }}
+    {{- end }}
 spec:
   template:
     metadata:
@@ -92,11 +97,15 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       restartPolicy: OnFailure
-      {{- with .Values.affinity }}
+      {{- with (or .Values.migrationJob.nodeSelector .Values.nodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (or .Values.migrationJob.affinity .Values.affinity) }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with (or .Values.migrationJob.tolerations .Values.tolerations) }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
