@@ -262,7 +262,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         """
         # Handle error information for failure cases according to DD LLM Obs API spec
         error_info: Optional[DDLLMObsError] = None
-
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
             error_information: Optional[
