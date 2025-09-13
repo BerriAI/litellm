@@ -107,7 +107,6 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
-    _parse_content_for_reasoning,
     convert_to_model_response_object,
     convert_to_streaming_response,
     convert_to_streaming_response_async,
@@ -121,6 +120,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
@@ -2426,6 +2428,8 @@ def get_optional_params_transcription(
 
     # retrieve all parameters passed to the function
     passed_params = locals()
+
+    passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = passed_params.pop("drop_params")
     special_params = passed_params.pop("kwargs")
@@ -2490,6 +2494,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
@@ -4087,6 +4092,7 @@ def add_provider_specific_params_to_optional_params(
     """
     Add provider specific params to optional_params
     """
+
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
@@ -7213,6 +7219,12 @@ class ProviderConfigManager:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
             else:
                 return litellm.OpenAIWhisperAudioTranscriptionConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.transcriptions.transformation import (
+                HostedVLLMAudioTranscriptionConfig,
+            )
+
+            return HostedVLLMAudioTranscriptionConfig()
         return None
 
     @staticmethod
