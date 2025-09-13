@@ -19,6 +19,9 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+
+# Cache special headers as a frozenset for O(1) lookup performance
+_SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -54,6 +57,13 @@ def parse_cache_control(cache_control):
     return cache_dict
 
 
+LITELLM_METADATA_ROUTES = (
+    "batches",
+    "/v1/messages",
+    "responses",
+    "files",
+)
+
 def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
@@ -65,22 +75,10 @@ def _get_metadata_variable_name(request: Request) -> str:
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
 
-    LITELLM_METADATA_ROUTES = [
-        "batches",
-        "/v1/messages",
-        "responses",
-        "files",
-    ]
-
-    if any(
-        [
-            litellm_metadata_route in request.url.path
-            for litellm_metadata_route in LITELLM_METADATA_ROUTES
-        ]
-    ):
+    if any(route in request.url.path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
-    else:
-        return "metadata"
+
+    return "metadata"
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
@@ -235,14 +233,13 @@ def clean_headers(
     """
     Removes litellm api key from headers
     """
-    special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
-    special_headers = special_headers
-    if litellm_key_header_name is not None:
-        special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
-
+    litellm_key_lower = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    
     for header, value in headers.items():
-        if header.lower() not in special_headers:
+        header_lower = header.lower()
+        # Check if header should be excluded: either in special headers cache or matches custom litellm key
+        if (header_lower not in _SPECIAL_HEADERS_CACHE and (litellm_key_lower is None or header_lower != litellm_key_lower)):
             clean_headers[header] = value
     return clean_headers
 
