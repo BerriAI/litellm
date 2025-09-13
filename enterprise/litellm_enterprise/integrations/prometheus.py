@@ -1040,13 +1040,6 @@ class PrometheusLogger(CustomLogger):
 
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
-            end_user_id=end_user_id,
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            model=model,
-            user_api_team=user_api_team,
-            user_api_team_alias=user_api_team_alias,
-            user_id=user_id,
             response_cost=response_cost,
             enum_values=enum_values,
         )
@@ -1213,13 +1206,6 @@ class PrometheusLogger(CustomLogger):
 
     def _increment_top_level_request_and_spend_metrics(
         self,
-        end_user_id: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
-        model: Optional[str],
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
-        user_id: Optional[str],
         response_cost: float,
         enum_values: UserAPIKeyLabelValues,
     ):
