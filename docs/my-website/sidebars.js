@@ -141,6 +141,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/forward_client_headers",
             "proxy/model_discovery",
           ],
         },
@@ -410,6 +411,7 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_agents",
+            "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
         },

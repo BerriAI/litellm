@@ -1660,6 +1660,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by key alias"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1727,6 +1730,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model is not None:
             where_conditions["model"] = model
+        
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias
+            }
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}
