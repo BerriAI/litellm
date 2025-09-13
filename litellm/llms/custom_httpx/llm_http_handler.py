@@ -2200,7 +2200,6 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
-
         if _is_async:
             return self.async_create_file(
                 transformed_request=transformed_request,
@@ -2217,6 +2216,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client()
         else:
             sync_httpx_client = client
+        
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
@@ -2284,11 +2284,15 @@ class BaseLLMHTTPHandler:
                     provider_config=provider_config,
                 )
 
+        # Store the upload URL in litellm_params for the transformation method
+        litellm_params_with_url = dict(litellm_params)
+        litellm_params_with_url["upload_url"] = api_base
+        
         return provider_config.transform_create_file_response(
             model=None,
             raw_response=upload_response,
             logging_obj=logging_obj,
-            litellm_params=litellm_params,
+            litellm_params=litellm_params_with_url,
         )
 
     async def async_create_file(
@@ -2411,15 +2415,19 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        model: Optional[str] = None,
     ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
         """
         Creates a batch using provider-specific batch creation process
         """
         # get config from model, custom llm provider
+        if model is None:
+            raise ValueError("model is required for create_batch")
+            
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
-            model="",
+            model=model,
             messages=[],
             optional_params={},
             litellm_params=litellm_params,
@@ -2428,7 +2436,7 @@ class BaseLLMHTTPHandler:
         api_base = provider_config.get_complete_batch_url(
             api_base=api_base,
             api_key=api_key,
-            model="",
+            model=model,
             optional_params={},
             litellm_params=litellm_params,
             data=create_batch_data,
@@ -2438,7 +2446,7 @@ class BaseLLMHTTPHandler:
 
         # Get the transformed request data
         transformed_request = provider_config.transform_create_batch_request(
-            model="",
+            model=model,
             create_batch_data=create_batch_data,
             litellm_params=litellm_params,
             optional_params={},
@@ -2506,7 +2514,7 @@ class BaseLLMHTTPHandler:
         }
 
         return provider_config.transform_create_batch_response(
-            model=None,
+            model=model,
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_request,
@@ -2523,6 +2531,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         create_batch_data: Optional["CreateBatchRequest"] = None,
+        model: Optional[str] = None,
     ):
         """
         Async version of create_batch
@@ -2591,7 +2600,7 @@ class BaseLLMHTTPHandler:
         }
 
         return provider_config.transform_create_batch_response(
-            model=None,
+            model=model,
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_request,

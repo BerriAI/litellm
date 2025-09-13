@@ -1,5 +1,6 @@
 import os
 import sys
+from unittest.mock import patch
 
 from pydantic import BaseModel
 
@@ -53,3 +54,32 @@ class TestLMStudioChatConfigResponseFormat:
         assert mapped_schema["properties"] == schema["properties"]
         opt_schema = optional_params["response_format"]["json_schema"]["schema"]
         assert opt_schema["properties"] == schema["properties"]
+
+
+def test_lm_studio_get_openai_compatible_provider_info():
+    """Test provider info retrieval"""
+    config = LMStudioChatConfig()
+    
+    # Test default behavior (no API key provided)
+    _, api_key = config._get_openai_compatible_provider_info(None, None)
+    assert api_key == "fake-api-key"
+    
+    # Test explicit API key
+    _, api_key = config._get_openai_compatible_provider_info(None, "test-key")
+    assert api_key == "test-key"
+
+
+def test_lm_studio_get_openai_compatible_provider_info_with_env():
+    """Test provider info retrieval with environment variables."""
+    config = LMStudioChatConfig()
+    
+    with patch.dict(
+        "os.environ",
+        {
+            "LM_STUDIO_API_BASE": "http://localhost:1234/v1",
+            "LM_STUDIO_API_KEY": "env_api_key",
+        },
+    ):
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "http://localhost:1234/v1"
+        assert api_key == "env_api_key"
