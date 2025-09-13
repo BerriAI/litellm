@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
 
+from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -260,10 +261,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
-        if (
-            create_file_data.get("purpose") == "batch"
-            and extracted_file_data.get("content_type") == "application/jsonl"
-            and extracted_file_data_content is not None
+        
+        if extracted_file_data_content is None:
+            raise ValueError("file content is required")
+            
+        if FilesAPIUtils.is_batch_jsonl_file(
+            create_file_data=create_file_data,
+            extracted_file_data=extracted_file_data,
         ):
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(

@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
 
+from litellm._logging import verbose_logger
+from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -21,6 +23,7 @@ from litellm.types.llms.openai import (
     PathLike,
 )
 from litellm.types.utils import ExtractedFileData, LlmProviders
+from litellm.utils import get_llm_provider
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
@@ -195,24 +198,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> dict:
         return optional_params
 
-    def _get_bedrock_provider_from_model(self, model: str) -> Optional[str]:
-        """
-        Extract provider from Bedrock model name
-        """
-        if model.startswith("anthropic."):
-            return "anthropic"
-        elif model.startswith("cohere."):
-            return "cohere"
-        elif model.startswith("meta.") or model.startswith("llama"):
-            return "meta"
-        elif model.startswith("mistral."):
-            return "mistral"
-        elif model.startswith("ai21."):
-            return "ai21"
-        elif model.startswith("amazon."):
-            return "amazon"
-        else:
-            return None
 
     def _map_openai_to_bedrock_params(
         self,
@@ -222,11 +207,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         Transform OpenAI request body to Bedrock-compatible modelInput parameters using existing transformation logic
         """
+        from litellm.types.utils import LlmProviders
         _model = openai_request_body.get("model", "")
         messages = openai_request_body.get("messages", [])
         
         # Use existing Anthropic transformation logic for Anthropic models
-        if provider == "anthropic":
+        if provider == LlmProviders.ANTHROPIC:
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
@@ -235,16 +221,22 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             
             # Extract optional params (everything except model and messages)
             optional_params = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+            mapped_params = anthropic_config.map_openai_params(
+                non_default_params={},
+                optional_params=optional_params,
+                model=_model,
+                drop_params=False
+            )
             
             # Transform using existing Anthropic logic
             bedrock_params = anthropic_config.transform_request(
                 model=_model,
                 messages=messages,
-                optional_params=optional_params,
+                optional_params=mapped_params,
                 litellm_params={},
                 headers={}
             )
-            
+
             return bedrock_params
         else:
             # For other providers, use basic mapping
@@ -282,9 +274,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
             model = openai_body.get("model", "")
+
+            try:
+                model, _, _, _ = get_llm_provider(
+                            model=model, 
+                            custom_llm_provider=None, 
+                    )
+            except Exception as e:
+                verbose_logger.exception(f"litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - {str(e)}")
             
             # Determine provider from model name
-            provider = self._get_bedrock_provider_from_model(model)
+            provider = self.get_bedrock_invoke_provider(model)
             
             # Transform to Bedrock modelInput format
             model_input = self._map_openai_to_bedrock_params(
@@ -319,11 +319,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
         
+        if extracted_file_data_content is None:
+            raise ValueError("file content is required")
+            
         # Get and transform the file content
-        if (
-            create_file_data.get("purpose") == "batch"
-            and extracted_file_data.get("content_type") == "application/jsonl"
-            and extracted_file_data_content is not None
+        if FilesAPIUtils.is_batch_jsonl_file(
+            create_file_data=create_file_data,
+            extracted_file_data=extracted_file_data,
         ):
             ## Transform JSONL content to Bedrock format
             original_file_content = self._get_content_from_openai_file(
