@@ -141,6 +141,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/forward_client_headers",
             "proxy/model_discovery",
           ],
         },
