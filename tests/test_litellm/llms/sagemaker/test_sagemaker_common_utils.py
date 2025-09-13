@@ -9,6 +9,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+
 
 
 @pytest.mark.asyncio
@@ -138,3 +140,37 @@ class TestSagemakerTransform:
 
         # The function should properly map max_tokens if max_completion_tokens is not provided
         assert result == {"temperature": 0.7, "max_new_tokens": 200}
+
+
+class TestSagemakerChatTransform:
+    def setup_method(self):
+        self.config = SagemakerChatConfig()
+        self.model = "test"
+        self.messages = []
+        self.optional_params = {"model_id": "test"}
+        self.logging_obj = MagicMock()
+
+    def test_inference_component_header(self):
+        """Test that inference component headers are present"""
+
+        result = self.config.validate_environment(
+            headers={},
+            model=self.model,
+            messages=[],
+            optional_params=self.optional_params,
+            litellm_params={},
+        )
+        assert result == {"X-Amzn-SageMaker-Inference-Component": "test"}
+
+    def test_inference_component_model_not_in_request(self):
+        """Test that `model` is not part of the request body"""
+
+        result = self.config.transform_request(
+            model=self.model,
+            messages=self.messages,
+            optional_params=self.optional_params,
+            litellm_params=None,
+            headers=None,
+        )
+
+        assert "model" not in result
