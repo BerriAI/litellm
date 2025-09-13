@@ -10,16 +10,26 @@ Use Amazon Bedrock Batch Inference API through LiteLLM.
 | Description | Amazon Bedrock Batch Inference allows you to run inference on large datasets asynchronously |
 | Provider Doc | [AWS Bedrock Batch Inference ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html) |
 
-## Quick Start
+## Overview
 
-#### 1. Configure your model in config.yaml
+Use this to:
 
-<Tabs>
-<TabItem value="config-yaml" label="config.yaml">
+- Run batch inference on large datasets with Bedrock models
+- Control batch model access by key/user/team (same as chat completion models)
+- Manage S3 storage for batch input/output files
 
-```yaml showLineNumbers title="LiteLLM Proxy Configuration"
+## (Proxy Admin) Usage
+
+Here's how to give developers access to your Bedrock Batch models.
+
+### 1. Setup config.yaml
+
+- Specify `mode: batch` for each model: Allows developers to know this is a batch model
+- Configure S3 bucket and AWS credentials for batch operations
+
+```yaml showLineNumbers title="litellm_config.yaml"
 model_list:
-  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+  - model_name: "bedrock-batch-claude"
     litellm_params:
       model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
       #########################################################
@@ -30,11 +40,8 @@ model_list:
       s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
     model_info: 
-      mode: batch
+      mode: batch # 👈 SPECIFY MODE AS BATCH, to tell user this is a batch model
 ```
-
-</TabItem>
-</Tabs>
 
 **Required Parameters:**
 - `s3_bucket_name`: S3 bucket for input/output files
@@ -44,18 +51,43 @@ model_list:
 - `aws_batch_role_arn`: IAM role ARN for Bedrock batch operations
 - `mode: batch`: Indicates this is a batch model
 
-#### 2. Start the LiteLLM Proxy
+### 2. Create Virtual Key
 
-```bash showLineNumbers title="Start LiteLLM Proxy"
-litellm --config config.yaml
+```bash showLineNumbers title="create_virtual_key.sh"
+curl -L -X POST 'https://{PROXY_BASE_URL}/key/generate' \
+-H 'Authorization: Bearer ${PROXY_API_KEY}' \
+-H 'Content-Type: application/json' \
+-d '{"models": ["bedrock-batch-claude"]}'
 ```
 
-#### 3. Create and manage batch requests
+You can now use the virtual key to access the batch models (See Developer flow).
 
-<Tabs>
-<TabItem value="python" label="Python">
+## (Developer) Usage
 
-```python showLineNumbers title="Complete Bedrock Batch Example"
+Here's how to create a LiteLLM managed file and execute Bedrock Batch CRUD operations with the file.
+
+### 1. Create request.jsonl
+
+- Check models available via `/model_group/info`
+- See all models with `mode: batch`
+- Set `model` in .jsonl to the model from `/model_group/info`
+
+```json showLineNumbers title="bedrock_batch_completions.jsonl"
+{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock-batch-claude", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
+{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock-batch-claude", "messages": [{"role": "system", "content": "You are an unhelpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
+```
+
+Expectation:
+
+- LiteLLM translates this to the bedrock deployment specific value (e.g. `bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0`)
+
+### 2. Upload File
+
+Specify `target_model_names: "<model-name>"` to enable LiteLLM managed files and request validation.
+
+model-name should be the same as the model-name in the request.jsonl
+
+```python showLineNumbers title="bedrock_batch.py"
 from openai import OpenAI
 
 client = OpenAI(
@@ -63,16 +95,23 @@ client = OpenAI(
     api_key="sk-1234",
 )
 
-BEDROCK_BATCH_MODEL = "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0"
-
 # Upload file
 batch_input_file = client.files.create(
-    file=open("./bedrock_batch_completions.jsonl", "rb"),
+    file=open("./bedrock_batch_completions.jsonl", "rb"), # {"model": "bedrock-batch-claude"} <-> {"model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"}
     purpose="batch",
-    extra_body={"target_model_names": BEDROCK_BATCH_MODEL}
+    extra_body={"target_model_names": "bedrock-batch-claude"}
 )
 print(batch_input_file)
+```
 
+**Where is the file written?**:
+
+The file is written to S3 bucket specified in your config and prepared for Bedrock batch inference.
+
+### 3. Create the batch
+
+```python showLineNumbers title="bedrock_batch.py"
+...
 # Create batch
 batch = client.batches.create( 
     input_file_id=batch_input_file.id,
@@ -83,128 +122,15 @@ batch = client.batches.create(
 print(batch)
 ```
 
-</TabItem>
+## FAQ
 
-<TabItem value="curl" label="Curl">
+### Where are my files written?
 
-```bash showLineNumbers title="Upload File"
-curl http://localhost:4000/v1/files \
-    -H "Authorization: Bearer sk-1234" \
-    -F purpose="batch" \
-    -F file="@bedrock_batch_completions.jsonl" \
-    -F extra_body='{"target_model_names": "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0"}'
-```
+When a `target_model_names` is specified, the file is written to the S3 bucket configured in your Bedrock batch model configuration.
 
-```bash showLineNumbers title="Create Batch Request"
-curl http://localhost:4000/v1/batches \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "input_file_id": "file-abc123",
-        "endpoint": "/v1/chat/completions",
-        "completion_window": "24h",
-        "metadata": {"description": "Test batch job"}
-    }'
-```
+### What models are supported?
 
-```bash showLineNumbers title="Retrieve Batch Status"
-curl http://localhost:4000/v1/batches/batch_abc123 \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json"
-```
-
-```bash showLineNumbers title="List Batches"
-curl http://localhost:4000/v1/batches \
-    -H "Authorization: Bearer sk-1234" \
-    -H "Content-Type: application/json"
-```
-
-</TabItem>
-</Tabs>
-
-## Input File Format
-
-Create a JSONL file with your batch requests:
-
-```json showLineNumbers title="bedrock_batch_completions.jsonl"
-{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
-{"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0", "messages": [{"role": "system", "content": "You are an unhelpful assistant."}, {"role": "user", "content": "Hello world!"}], "max_tokens": 1000}}
-```
-
-## Batch Workflow
-
-1. **Upload Input File**: Upload your JSONL file containing batch requests
-2. **Create Batch Job**: Submit the batch job with the input file ID
-3. **Monitor Status**: Poll the batch status until completion
-4. **Retrieve Results**: Download the output file containing responses
-
-### Batch Status Values
-
-- `validating`: Input file is being validated
-- `in_progress`: Batch is being processed
-- `finalizing`: Batch processing is completing
-- `completed`: Batch completed successfully
-- `failed`: Batch failed
-- `expired`: Batch expired
-- `cancelled`: Batch was cancelled
-
-## LiteLLM Managed Files
-
-When using `target_model_names` in the file upload, LiteLLM provides additional features:
-
-- **Load Balancing**: Automatically distributes requests across multiple Bedrock deployments
-- **Request Validation**: Validates batch requests before processing
-- **Model Translation**: Translates virtual model names to actual deployment names
-
-See [LiteLLM Managed Batches](../proxy/managed_batches) for more details.
-
-## Authentication
-
-Bedrock batches require AWS credentials with appropriate permissions:
-
-```yaml showLineNumbers title="Required AWS Permissions"
-# IAM Policy for Bedrock Batch Operations
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "bedrock:CreateModelInvocationJob",
-                "bedrock:GetModelInvocationJob",
-                "bedrock:ListModelInvocationJobs",
-                "bedrock:StopModelInvocationJob"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:DeleteObject"
-            ],
-            "Resource": "arn:aws:s3:::your-bucket-name/*"
-        }
-    ]
-}
-```
-
-## Supported Models
-
-Bedrock batch inference supports various models:
-
-- **Anthropic Claude**: `anthropic.claude-3-5-sonnet-20240620-v1:0`, `anthropic.claude-3-haiku-20240307-v1:0`
-- **Amazon Titan**: `amazon.titan-text-express-v1`, `amazon.titan-text-lite-v1`
-- **Meta Llama**: `meta.llama3-8b-instruct-v1:0`, `meta.llama3-70b-instruct-v1:0`
-
-## Cost Tracking
-
-LiteLLM automatically tracks costs for Bedrock batch operations:
-
-- Initial batch creation is logged as `acreate_batch`
-- Final costs are calculated and logged as `batch_success` upon completion
-- Costs include both input and output token usage across all batch responses
+LiteLLM only supports Bedrock Anthropic Models for Batch API. If you want other bedrock models file an issue [here](https://github.com/BerriAI/litellm/issues/new/choose).
 
 ## Further Reading
 
