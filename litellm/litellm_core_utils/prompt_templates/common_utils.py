@@ -913,3 +913,20 @@ def _parse_content_for_reasoning(
         return reasoning_match.group(1), reasoning_match.group(2)
 
     return None, message_text
+
+
+def extract_images_from_message(message: AllMessageValues) -> List[str]:
+    """
+    Extract images from a message
+    """
+    images = []
+    message_content = message.get("content")
+    if isinstance(message_content, list):
+        for m in message_content:
+            image_url = m.get("image_url")
+            if image_url:
+                if isinstance(image_url, str):
+                    images.append(image_url)
+                elif isinstance(image_url, dict) and "url" in image_url:
+                    images.append(image_url["url"])
+    return images
