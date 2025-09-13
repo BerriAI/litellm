@@ -2,6 +2,7 @@
 Tests for the LoggingWorker class to ensure graceful shutdown handling.
 """
 import asyncio
+import contextvars
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -139,3 +140,81 @@ class TestLoggingWorker:
             # Should have logged queue full exceptions
             exception_calls = [call for call in mock_logger.exception.call_args_list if "queue is full" in str(call)]
             assert len(exception_calls) > 0
+
+    @pytest.mark.asyncio
+    async def test_context_propagation(self, logging_worker):
+        """Test that enqueued tasks execute in their original context."""
+        # Create a context variable for testing
+        test_context_var: contextvars.ContextVar[str] = contextvars.ContextVar('test_context_var')
+        
+        # Track results from multiple tasks
+        task_results = []
+        
+        async def test_task(task_id: str):
+            """A test coroutine that checks if it can access the context variable."""
+            # Sleep a bit to simulate real work and ensure context persists
+            await asyncio.sleep(0.1)
+            
+            try:
+                # Try to get the context variable value
+                value = test_context_var.get()
+                task_results.append({
+                    'task_id': task_id,
+                    'context_value': value,
+                    'context_accessible': True
+                })
+            except LookupError:
+                # Context variable not found
+                task_results.append({
+                    'task_id': task_id,
+                    'context_accessible': False,
+                    'context_value': None
+                })
+        
+        # Start the logging worker
+        logging_worker.start()
+        
+        # Create two separate contexts and enqueue tasks from each
+        
+        # Context 1: Set context var to "context_1"
+        ctx1 = contextvars.copy_context()
+        ctx1.run(test_context_var.set, "context_1")
+        ctx1.run(logging_worker.enqueue, test_task("task_1"))
+        
+        # Context 2: Set context var to "context_2"  
+        ctx2 = contextvars.copy_context()
+        ctx2.run(test_context_var.set, "context_2")
+        ctx2.run(logging_worker.enqueue, test_task("task_2"))
+        
+        # Context 3: No context variable set (should get LookupError)
+        ctx3 = contextvars.copy_context()
+        ctx3.run(logging_worker.enqueue, test_task("task_3"))
+        
+        # Wait for all tasks to be processed
+        await asyncio.sleep(0.5)
+        
+        # Stop the worker
+        await logging_worker.stop()
+        
+        # Sort results by task_id for consistent testing
+        task_results.sort(key=lambda x: x['task_id'])
+        
+        # Verify that each task saw its own context
+        assert len(task_results) == 3, f"Expected 3 results, got {len(task_results)}"
+        
+        # Task 1 should see "context_1"
+        task1_result = next((r for r in task_results if r['task_id'] == 'task_1'), None)
+        assert task1_result is not None, "Task 1 result not found"
+        assert task1_result['context_accessible'] is True, "Task 1 should have access to context variable"
+        assert task1_result['context_value'] == "context_1", f"Task 1 should see 'context_1', got: {task1_result['context_value']}"
+        
+        # Task 2 should see "context_2"
+        task2_result = next((r for r in task_results if r['task_id'] == 'task_2'), None)
+        assert task2_result is not None, "Task 2 result not found"
+        assert task2_result['context_accessible'] is True, "Task 2 should have access to context variable"
+        assert task2_result['context_value'] == "context_2", f"Task 2 should see 'context_2', got: {task2_result['context_value']}"
+        
+        # Task 3 should not have access to the context variable
+        task3_result = next((r for r in task_results if r['task_id'] == 'task_3'), None)
+        assert task3_result is not None, "Task 3 result not found"
+        assert task3_result['context_accessible'] is False, "Task 3 should not have access to context variable"

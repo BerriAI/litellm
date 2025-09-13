@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import traceback
+from unittest.mock import AsyncMock, patch
 
 
 sys.path.insert(
@@ -329,3 +330,33 @@ async def test_aiml_image_generation_with_dynamic_api_key():
         assert captured_json_data is not None
         assert captured_json_data["prompt"] == "A cute baby sea otter"
         assert captured_json_data["model"] == "flux-pro/v1.1"
+
+@pytest.mark.asyncio
+async def test_azure_image_generation_request_body():
+    from litellm import aimage_generation
+    test_dir = os.path.dirname(__file__)
+    expected_path = os.path.join(
+        test_dir, "request_payloads", "azure_gpt_image_1.json"
+    )
+    with open(expected_path, "r") as f:
+        expected_body = json.load(f)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.side_effect = Exception("test")
+
+        with pytest.raises(Exception):
+            await aimage_generation(
+                    model="azure/gpt-image-1",
+                    prompt="test prompt",
+                    api_base="https://example.azure.com",
+                    api_key="test-key",
+                    api_version="2025-04-01-preview",
+                )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        request_json = call_args.kwargs.get("json", {})
+        assert request_json == expected_body
