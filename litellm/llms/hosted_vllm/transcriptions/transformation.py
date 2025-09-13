@@ -2,30 +2,16 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional, Union
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
-)
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import (
-    OptionalRerankParams,
-    RerankBilledUnits,
-    RerankRequest,
-    RerankResponse,
-    RerankResponseDocument,
-    RerankResponseMeta,
-    RerankResponseResult,
-    RerankTokens,
 )
 from litellm.types.utils import FileTypes
 

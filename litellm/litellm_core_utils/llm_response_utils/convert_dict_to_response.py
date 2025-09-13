@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 import time
 import traceback
 import uuid
@@ -11,7 +10,6 @@ from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
-    _parse_content_for_reasoning,
 )
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
