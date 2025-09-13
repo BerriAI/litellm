@@ -70,7 +70,8 @@ async def create_mcp_list_tools_events(
         mcp_tools_dict = []
         for tool in filtered_mcp_tools:
             if hasattr(tool, 'model_dump') and callable(getattr(tool, 'model_dump')):
-                mcp_tools_dict.append(tool.model_dump())
+                # Type cast to help mypy understand this is safe after hasattr check
+                mcp_tools_dict.append(cast(Any, tool).model_dump())
             elif hasattr(tool, '__dict__'):
                 mcp_tools_dict.append(tool.__dict__)
             else:

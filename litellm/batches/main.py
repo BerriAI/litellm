@@ -19,6 +19,7 @@ from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -38,6 +39,7 @@ from litellm.utils import (
     ProviderConfigManager,
     client,
     get_litellm_params,
+    get_llm_provider,
     supports_httpx_timeout,
 )
 
@@ -47,6 +49,45 @@ azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _resolve_timeout(
+    optional_params: GenericLiteLLMParams,
+    kwargs: Dict[str, Any],
+    custom_llm_provider: str,
+    default_timeout: float = 600.0,
+) -> float:
+    """
+    Resolve timeout value from various sources and handle httpx.Timeout objects.
+    
+    Args:
+        optional_params: GenericLiteLLMParams object containing timeout
+        kwargs: Additional kwargs that may contain request_timeout
+        custom_llm_provider: Provider name for httpx timeout support check
+        default_timeout: Default timeout value to use
+        
+    Returns:
+        Resolved timeout as float
+    """
+    timeout = optional_params.timeout or kwargs.get("request_timeout", default_timeout) or default_timeout
+    
+    # Handle httpx.Timeout objects
+    if isinstance(timeout, httpx.Timeout):
+        if supports_httpx_timeout(custom_llm_provider) is False:
+            # Extract read timeout for providers that don't support httpx.Timeout
+            read_timeout = timeout.read or default_timeout
+            return float(read_timeout)
+        else:
+            # For providers that support httpx.Timeout, we still need to return a float
+            # This case might need to be handled differently based on the actual use case
+            return float(timeout.read or default_timeout)
+    
+    # Handle None case
+    if timeout is None:
+        return float(default_timeout)
+    
+    # Handle numeric values (int, float, string representations)
+    return float(timeout)
 
 
 @client
@@ -118,13 +159,23 @@ def create_batch(
         litellm_call_id = kwargs.get("litellm_call_id", None)
         proxy_server_request = kwargs.get("proxy_server_request", None)
         model_info = kwargs.get("model_info", None)
+        model: Optional[str] = kwargs.get("model", None)
+        try:
+            if model is not None:
+                model, _, _, _ = get_llm_provider(
+                                model=model, 
+                                custom_llm_provider=None,
+                        )
+        except Exception as e:
+            verbose_logger.exception(f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {str(e)}")
+            
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
         litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
         ### TIMEOUT LOGIC ###
-        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
         litellm_logging_obj.update_environment_variables(
-            model=None,
+            model=model,
             user=None,
             optional_params=optional_params.model_dump(),
             litellm_params={
@@ -138,18 +189,6 @@ def create_batch(
             },
             custom_llm_provider=custom_llm_provider,
         )
-
-        if (
-            timeout is not None
-            and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
-        ):
-            read_timeout = timeout.read or 600
-            timeout = read_timeout  # default 10 min timeout
-        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
-        elif timeout is None:
-            timeout = 600.0
         
 
         _create_batch_request = CreateBatchRequest(
@@ -160,10 +199,13 @@ def create_batch(
             extra_headers=extra_headers,
             extra_body=extra_body,
         )
-        provider_config = ProviderConfigManager.get_provider_batches_config(
-            model="",
-            provider=LlmProviders(custom_llm_provider),
-        )
+        if model is not None:
+            provider_config = ProviderConfigManager.get_provider_batches_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+            )
+        else:
+            provider_config = None
         if provider_config is not None:
             response = base_llm_http_handler.create_batch(
                 provider_config=provider_config,
@@ -179,6 +221,7 @@ def create_batch(
                 and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
                 else None,
                 timeout=timeout,
+                model=model,
             )
             return response
         api_base: Optional[str] = None

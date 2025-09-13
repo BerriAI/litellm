@@ -206,6 +206,22 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true
     }
   ],
+  [Providers.Dashscope]: [
+    {
+      key: "api_key",
+      label: "Dashscope API Key",
+      type: "password",
+      required: true
+    },
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      defaultValue: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      required: true,
+      tooltip: "The base URL for your Dashscope server. Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 if not specified."
+    }
+  ],
   [Providers.OpenAI_Text_Compatible]: [
     {
       key: "api_base",

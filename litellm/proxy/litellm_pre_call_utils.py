@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
+    LitellmUserRoles,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
@@ -336,6 +337,22 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def add_internal_user_from_user_mapping(general_settings: Optional[Dict], user_api_key_dict: UserAPIKeyAuth, headers: dict) -> UserAPIKeyAuth:
+        if general_settings is None:
+            return user_api_key_dict
+        user_header_mapping = general_settings.get("user_header_mappings")
+        if not user_header_mapping:
+            return user_api_key_dict
+        header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(user_header_mapping)
+        if not header_name:
+            return user_api_key_dict
+        header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
+        if header_value:
+            user_api_key_dict.user_id = header_value
+            return user_api_key_dict
+        return user_api_key_dict
+
+    @staticmethod
     def get_user_from_headers(
         headers: dict, general_settings: Optional[Dict] = None
     ) -> Optional[str]:
@@ -427,6 +444,26 @@ class LiteLLMProxyRequestSetup:
             if _headers != {}:
                 data["headers"] = _headers
         return data
+
+    @staticmethod
+    def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
+        if not user_header_mapping:
+            return None
+        items = (
+            user_header_mapping
+            if isinstance(user_header_mapping, list)
+            else [user_header_mapping]
+        )
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("litellm_user_role")
+            header_name = item.get("header_name")
+            if role is None or not header_name:
+                continue
+            if str(role).lower() == str(LitellmUserRoles.INTERNAL_USER).lower():
+                return header_name
+        return None
 
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
@@ -725,6 +762,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
+
+    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(general_settings, user_api_key_dict, _headers)
 
     # Parse user info from headers
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
