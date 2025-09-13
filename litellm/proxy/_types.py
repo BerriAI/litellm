@@ -1918,7 +1918,7 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
     organization_id: Optional[str] = None
