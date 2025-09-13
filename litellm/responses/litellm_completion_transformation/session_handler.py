@@ -141,7 +141,7 @@ class ResponsesSessionHandler:
         # Add Output messages for this Spend Log
         ############################################################
         _response_output = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict):
+        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response = ModelResponse(**_response_output)
             for choice in model_response.choices:
