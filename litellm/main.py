@@ -5267,7 +5267,10 @@ def transcription(
     model_response = litellm.utils.TranscriptionResponse()
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
     )  # type: ignore
 
     if dynamic_api_key is not None:
@@ -5283,6 +5286,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
+
     litellm_params_dict = get_litellm_params(**kwargs)
 
     litellm_logging_obj.update_environment_variables(
@@ -5347,9 +5351,8 @@ def transcription(
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
         )
-    elif (
-        custom_llm_provider == "openai"
-        or custom_llm_provider in litellm.openai_compatible_providers
+    elif custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers
     ):
         api_base = (
             api_base
@@ -5364,6 +5367,7 @@ def transcription(
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
         # set API KEY
+
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
@@ -5380,10 +5384,7 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
         )
-    elif custom_llm_provider in [
-        LlmProviders.DEEPGRAM.value,
-        LlmProviders.ELEVENLABS.value,
-    ]:
+    elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,
             audio_file=file,
