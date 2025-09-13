@@ -612,10 +612,8 @@ class Router:
         if self.alerting_config is not None:
             self._initialize_alerting()
 
-        # --- Lifecycle additions ---
-        # Internal shutdown coordination and bookkeeping for optional background activity
-        self._shutdown_event = threading.Event()
-        self._managed_threads: List[threading.Thread] = []
+        # --- Lifecycle additions (minimal) ---
+        # Track closed state for idempotent teardown
         self._closed: bool = False
 
         self.initialize_assistants_endpoint()
@@ -668,56 +666,27 @@ class Router:
     # ------------------------------
     # Public Lifecycle API
     # ------------------------------
-    def close(self, timeout: float = 0.5) -> None:
+    def close(self) -> None:
         """
-        Deterministically shut down Router background activity.
+        Deterministically tear down Router hooks/callbacks.
 
-        Safe and idempotent. Intended for short‑lived scripts/tests to avoid
-        lingering non‑daemon worker threads created indirectly by async helpers.
+        Minimal and idempotent: marks closed and unhooks callbacks so short‑lived
+        scripts/tests exit cleanly without lingering Router-managed globals.
         """
         if getattr(self, "_closed", False):
             return
-
         self._closed = True
-        try:
-            self._shutdown_event.set()
-        except Exception:
-            pass
-
-        # Best‑effort stop of known internal components (no‑ops if not present)
-        for attr_name in ("service_logger_obj", "scheduler", "router_budget_logger"):
-            component = getattr(self, attr_name, None)
-            if component is None:
-                continue
-            for stop_name in ("shutdown", "stop", "close"):
-                fn = getattr(component, stop_name, None)
-                if callable(fn):
-                    try:
-                        fn()
-                        break
-                    except Exception:
-                        # Ignore shutdown errors; teardown should be best‑effort
-                        pass
-
-        # Join any managed threads registered by the Router
-        for t in list(getattr(self, "_managed_threads", [])):
-            try:
-                if isinstance(t, threading.Thread) and t.is_alive():
-                    t.join(timeout=timeout)
-            except Exception:
-                pass
-
-        # Unhook router‑specific callbacks from global managers
+        # Unhook router-specific callbacks from global managers
         try:
             self.discard()
         except Exception:
             pass
 
-    async def aclose(self, timeout: float = 0.5) -> None:
+    async def aclose(self) -> None:
         """
-        Async variant of close(). Provided for symmetry and future async cleanup.
+        Async variant of close(). Provided for symmetry.
         """
-        self.close(timeout=timeout)
+        self.close()
 
     # ------------------------------
     # Context Manager Support
