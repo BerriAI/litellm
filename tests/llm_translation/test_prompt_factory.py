@@ -205,6 +205,50 @@ def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
+    assert response["type"] == "base64"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/test-image.jpg",
+        "https://example.com/test-image.png", 
+        "https://example.com/test-image.gif",
+        "https://example.com/test-image.webp",
+        "http://example.com/test-image.jpeg",
+        "https://example.com/api/image",  # No extension
+    ],
+)
+def test_url_image_input(url):
+    """Test that HTTP URLs are now preserved as URL type without media_type (per Anthropic docs)"""
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
+
+    assert response["type"] == "url"
+    assert "media_type" not in response  # URL images should not have media_type per Anthropic spec
+    assert response["data"] == url
+
+
+def test_url_image_with_format_override():
+    """Test that URL images don't include media_type even when format is provided (per Anthropic docs)"""
+    url = "https://example.com/unknown-image"
+    custom_format = "image/webp"
+    
+    response = convert_to_anthropic_image_obj(openai_image_url=url, format=custom_format)
+    
+    assert response["type"] == "url"
+    assert "media_type" not in response  # URL images should not have media_type per Anthropic spec
+    assert response["data"] == url
+
+
+def test_anthropic_image_url_backward_compatibility():
+    """Test that base64 data URLs still work correctly (backward compatibility)"""
+    base64_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEA"
+    
+    response = convert_to_anthropic_image_obj(openai_image_url=base64_url, format=None)
+    
+    assert response["type"] == "base64"
+    assert response["media_type"] == "image/png"
+    assert response["data"] == "iVBORw0KGgoAAAANSUhEUgAAAAEA"
 
 
 def test_anthropic_messages_tool_call():
