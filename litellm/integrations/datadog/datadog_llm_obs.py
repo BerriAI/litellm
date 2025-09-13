@@ -494,6 +494,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         latency_metrics = self._get_latency_metrics(standard_logging_payload)
         _metadata.update({"latency_metrics": dict(latency_metrics)})
 
+        #########################################################
+        # Add spend metrics to metadata
+        #########################################################
+        spend_metrics = self._get_spend_metrics(standard_logging_payload)
+        _metadata.update({"spend_metrics": dict(spend_metrics)})
+
         ## extract tool calls and add to metadata
         tool_call_metadata = self._extract_tool_call_metadata(standard_logging_payload)
         _metadata.update(tool_call_metadata)
@@ -542,6 +548,47 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 )
 
         return latency_metrics
+    
+    def _get_spend_metrics(
+            self, standard_logging_payload: StandardLoggingPayload
+    ) -> DDLLMObsSpendMetrics:
+        """
+        Get the spend metrics from the standard logging payload
+        """
+        spend_metrics: DDLLMObsSpendMetrics = DDLLMObsSpendMetrics()
+        
+        # Get response cost for litellm_spend_metric
+        response_cost = standard_logging_payload.get("response_cost", 0.0)
+        if response_cost > 0:
+            spend_metrics["litellm_spend_metric"] = response_cost
+
+        # Get budget information from metadata
+        metadata = standard_logging_payload.get("metadata", {})
+        
+        # API key max budget
+        user_api_key_max_budget = metadata.get("user_api_key_max_budget")
+        if user_api_key_max_budget is not None:
+            spend_metrics["litellm_api_key_max_budget_metric"] = user_api_key_max_budget
+
+        # API key budget remaining hours
+        user_api_key_budget_reset_at = metadata.get("user_api_key_budget_reset_at")
+        if user_api_key_budget_reset_at is not None:
+            try:
+                from datetime import datetime
+                if isinstance(user_api_key_budget_reset_at, str):
+                    # Parse ISO string if it's a string
+                    budget_reset_at = datetime.fromisoformat(user_api_key_budget_reset_at.replace('Z', '+00:00'))
+                else:
+                    budget_reset_at = user_api_key_budget_reset_at
+                
+                remaining_hours = (
+                    budget_reset_at - datetime.now(budget_reset_at.tzinfo)
+                ).total_seconds() / 3600
+                spend_metrics["litellm_api_key_budget_remaining_hours_metric"] = max(0, remaining_hours)
+            except Exception as e:
+                verbose_logger.debug(f"Error calculating remaining hours for budget reset: {e}")
+
+        return spend_metrics
 
     def _process_input_messages_preserving_tool_calls(
         self, messages: List[Any]
