@@ -7,6 +7,7 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from urlparse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
@@ -301,16 +302,28 @@ class VertexBase:
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
-                if gemini_api_key is None:
-                    raise ValueError(
-                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                # check if api_base has all the information
+                # otherwise this drops the core infomration required in proxy
+                if "v1beta" in api_base or "gemini" in api_base:
+                    url = "{}:{}".format(api_base, endpoint)
+                    if gemini_api_key is None:
+                        raise ValueError(
+                            "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                        )
+                    auth_header = (
+                        gemini_api_key  # cloudflare expects api key as bearer token
                     )
-                auth_header = (
-                    gemini_api_key  # cloudflare expects api key as bearer token
-                )
+                else:
+                    parsed_url = urlparse(url)
+                    base_url = "{}://{}".format(parsed_url.scheme, parsed_url.netloc)
+                    url = url.replace(base_url, api_base)
             else:
-                url = "{}:{}".format(api_base, endpoint)
+                if "v1beta" in api_base or "gemini" in api_base:
+                    url = "{}:{}".format(api_base, endpoint)
+                else:
+                    parsed_url = urlparse(url)
+                    base_url = "{}://{}".format(parsed_url.scheme, parsed_url.netloc)
+                    url = url.replace(base_url, api_base)
 
             if stream is True:
                 url = url + "?alt=sse"
