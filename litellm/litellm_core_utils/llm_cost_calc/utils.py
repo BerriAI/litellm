@@ -213,7 +213,7 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Opti
     
 
 
-def generic_cost_per_token(
+def generic_cost_per_token(  # noqa: PLR0915
     model: str, usage: Usage, custom_llm_provider: str
 ) -> Tuple[float, float]:
     """
@@ -239,6 +239,7 @@ def generic_cost_per_token(
     text_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
     audio_tokens = 0
+    image_tokens = 0
     character_count = 0
     image_count = 0
     video_length_seconds = 0
@@ -264,6 +265,10 @@ def generic_cost_per_token(
                 Optional[int],
                 getattr(usage.prompt_tokens_details, "character_count", 0),
             )
+            or 0
+        )
+        image_tokens = (
+            cast(Optional[int], getattr(usage.prompt_tokens_details, "image_tokens", 0))
             or 0
         )
         image_count = (
@@ -303,6 +308,16 @@ def generic_cost_per_token(
 
     prompt_cost += calculate_cost_component(
         model_info, "input_cost_per_character", character_count
+    )
+
+    ### IMAGE TOKEN COST
+    # For image token costs:
+    # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
+    image_token_cost_key = "input_cost_per_image_token"
+    if model_info.get(image_token_cost_key) is None:
+        image_token_cost_key = "input_cost_per_token"
+    prompt_cost += calculate_cost_component(
+        model_info, image_token_cost_key, image_tokens
     )
 
     ### IMAGE COUNT COST

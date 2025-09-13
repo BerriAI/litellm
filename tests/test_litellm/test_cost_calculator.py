@@ -40,17 +40,17 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-def test_cost_calculator_with_usage():
+def test_cost_calculator_with_usage(monkeypatch):
     from litellm import get_model_info
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
-        prompt_tokens=100,
+        prompt_tokens=120,
         completion_tokens=100,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=10, audio_tokens=90
+            text_tokens=10, audio_tokens=90, image_tokens=20,
         ),
     )
     mr = ModelResponse(usage=usage, model="gemini-2.0-flash-001")
@@ -67,11 +67,49 @@ def test_cost_calculator_with_usage():
 
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
 
+    # Step 1: Test a model where input_cost_per_image_token is not set.
+    # In this case the calculation should use input_cost_per_token as fallback.
+    assert model_info.get("input_cost_per_image_token") is None, "Test case expects that input_cost_per_image_token is not set"
+
     expected_cost = (
         usage.prompt_tokens_details.audio_tokens
         * model_info["input_cost_per_audio_token"]
         + usage.prompt_tokens_details.text_tokens * model_info["input_cost_per_token"]
+        + usage.prompt_tokens_details.image_tokens * model_info["input_cost_per_token"]
         + usage.completion_tokens * model_info["output_cost_per_token"]
+    )
+
+    assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
+
+    # Step 2: Set input_cost_per_image_token.
+    # In this case the explicit cost information should be used.
+    temp_model_info_object = dict(model_info)
+    temp_model_info_object["input_cost_per_image_token"] = 0.5
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "gemini-2.0-flash-001": temp_model_info_object
+        },
+    )
+
+    result = response_cost_calculator(
+        response_object=mr,
+        model="",
+        custom_llm_provider="vertex_ai",
+        call_type="acompletion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+    )
+
+    expected_cost = (
+        usage.prompt_tokens_details.audio_tokens
+        * temp_model_info_object["input_cost_per_audio_token"]
+        + usage.prompt_tokens_details.text_tokens * temp_model_info_object["input_cost_per_token"]
+        + usage.prompt_tokens_details.image_tokens * temp_model_info_object["input_cost_per_image_token"]
+        + usage.completion_tokens * temp_model_info_object["output_cost_per_token"]
     )
 
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
