@@ -27,3 +27,12 @@ class OllamaToolCall(TypedDict):
 class OllamaVisionModelObject(TypedDict):
     prompt: str
     images: List[str]
+
+
+class OllamaChatCompletionMessage(TypedDict, total=False):
+    role: Required[str]
+    content: str
+    thinking: str
+    images: List[str]
+    tool_calls: List[OllamaToolCall]
+    tool_name: str
