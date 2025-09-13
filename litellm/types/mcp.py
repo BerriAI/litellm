@@ -1,7 +1,7 @@
 import enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
@@ -86,7 +86,7 @@ class MCPPreCallRequestObject(BaseModel):
     arguments: Dict[str, Any]
     server_name: Optional[str] = None
     user_api_key_auth: Optional[Dict[str, Any]] = None
-    hidden_params: HiddenParams = HiddenParams()
+    hidden_params: HiddenParams = Field(default_factory=HiddenParams)
 
 
 class MCPPreCallResponseObject(BaseModel):
@@ -96,7 +96,7 @@ class MCPPreCallResponseObject(BaseModel):
     should_proceed: bool = True
     modified_arguments: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
-    hidden_params: HiddenParams = HiddenParams()
+    hidden_params: HiddenParams = Field(default_factory=HiddenParams)
 
 
 class MCPDuringCallRequestObject(BaseModel):
@@ -107,7 +107,7 @@ class MCPDuringCallRequestObject(BaseModel):
     arguments: Dict[str, Any]
     server_name: Optional[str] = None
     start_time: Optional[float] = None
-    hidden_params: HiddenParams = HiddenParams()
+    hidden_params: HiddenParams = Field(default_factory=HiddenParams)
 
 
 class MCPDuringCallResponseObject(BaseModel):
@@ -116,7 +116,7 @@ class MCPDuringCallResponseObject(BaseModel):
     """
     should_continue: bool = True
     error_message: Optional[str] = None
-    hidden_params: HiddenParams = HiddenParams()
+    hidden_params: HiddenParams = Field(default_factory=HiddenParams)
 
 
 class MCPPostCallResponseObject(BaseModel):

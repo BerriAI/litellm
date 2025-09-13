@@ -51,17 +51,17 @@ class RouterConfig(BaseModel):
     redis_password: Optional[str] = None
 
     cache_responses: Optional[bool] = False
-    cache_kwargs: Optional[Dict] = {}
+    cache_kwargs: Optional[Dict] = Field(default_factory=dict)
     caching_groups: Optional[List[Tuple[str, List[str]]]] = None
     client_ttl: Optional[int] = 3600
     num_retries: Optional[int] = 0
     timeout: Optional[float] = None
-    default_litellm_params: Optional[Dict[str, str]] = {}
+    default_litellm_params: Optional[Dict[str, str]] = Field(default_factory=dict)
     set_verbose: Optional[bool] = False
-    fallbacks: Optional[List] = []
+    fallbacks: Optional[List] = Field(default_factory=list)
     allowed_fails: Optional[int] = None
-    context_window_fallbacks: Optional[List] = []
-    model_group_alias: Optional[Dict[str, List[str]]] = {}
+    context_window_fallbacks: Optional[List] = Field(default_factory=list)
+    model_group_alias: Optional[Dict[str, List[str]]] = Field(default_factory=dict)
     retry_after: Optional[int] = 0
     routing_strategy: Literal[
         "simple-shuffle",
@@ -89,7 +89,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
-    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = Field(default_factory=dict)
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -597,7 +597,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
-    supported_openai_params: Optional[List[str]] = Field(default=[])
+    supported_openai_params: Optional[List[str]] = Field(default_factory=list)
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
     def __init__(self, **data):

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -24,7 +24,7 @@ class GetTeamMemberPermissionsResponse(BaseModel):
     The team id that the permissions are for
     """
 
-    team_member_permissions: Optional[List[str]] = []
+    team_member_permissions: Optional[List[str]] = Field(default_factory=list)
     """
     The team member permissions currently set for the team
     """
