@@ -2428,6 +2428,8 @@ def get_optional_params_transcription(
 
     # retrieve all parameters passed to the function
     passed_params = locals()
+
+    passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = passed_params.pop("drop_params")
     special_params = passed_params.pop("kwargs")
@@ -2492,6 +2494,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
@@ -4089,6 +4092,7 @@ def add_provider_specific_params_to_optional_params(
     """
     Add provider specific params to optional_params
     """
+
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
