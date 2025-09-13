@@ -118,7 +118,6 @@ class BaseLLMHTTPHandler:
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
