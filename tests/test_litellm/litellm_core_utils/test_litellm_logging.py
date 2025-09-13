@@ -473,13 +473,16 @@ async def test_logging_opentelemetry_context_propagation():
     Test that OpenTelemtry context propagation works with async completion.
     """
     import asyncio
-    import litellm
 
-    from litellm.integrations.custom_logger import CustomLogger
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -490,7 +493,7 @@ async def test_logging_opentelemetry_context_propagation():
     class MockOpenTelemetryLogger(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             span = tracer.start_span(start_time=start_time.timestamp() * 1e9, name="async_log_success_event")
-            span.end(end_time=end_time)
+            span.end(end_time=end_time.timestamp() * 1e9)
 
 
     mock_logging_obj = MockOpenTelemetryLogger()
