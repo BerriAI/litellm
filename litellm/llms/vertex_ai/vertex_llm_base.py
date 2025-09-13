@@ -301,7 +301,11 @@ class VertexBase:
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
+                # When endpoint is provided, use it. Otherwise just add a colon.
+                if endpoint:
+                    url = "{}:{}".format(api_base, endpoint)
+                else:
+                    url = "{}:".format(api_base)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
@@ -310,7 +314,11 @@ class VertexBase:
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
             else:
-                url = "{}:{}".format(api_base, endpoint)
+                # When endpoint is provided, use it. Otherwise just add a colon.
+                if endpoint:
+                    url = "{}:{}".format(api_base, endpoint)
+                else:
+                    url = "{}:".format(api_base)
 
             if stream is True:
                 url = url + "?alt=sse"
