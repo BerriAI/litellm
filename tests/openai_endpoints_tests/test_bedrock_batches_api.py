@@ -1,4 +1,5 @@
 from openai import OpenAI
+import pytest
 
 client = OpenAI(
     base_url="http://0.0.0.0:4000",
