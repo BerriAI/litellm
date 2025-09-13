@@ -329,6 +329,7 @@ const sidebars = {
           items: [
             "batches",
             "proxy/managed_batches",
+            "providers/bedrock_batches",
           ]
         },
         "realtime",
