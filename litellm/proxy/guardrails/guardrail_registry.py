@@ -453,9 +453,9 @@ class InMemoryGuardrailHandler:
         config_file_path: Optional[str] = None,
     ) -> Optional[CustomGuardrail]:
         """
-        Initialize a Custom Guardrail from a python file
+        Initialize a Custom Guardrail from a python file.
 
-        This initializes it by adding it to the litellm callback manager
+        This initializes it by adding it to the litellm callback manager.
         """
         if not config_file_path:
             raise Exception(
@@ -463,6 +463,7 @@ class InMemoryGuardrailHandler:
             )
 
         _file_name, _class_name = guardrail_type.split(".")
+
         verbose_proxy_logger.debug(
             "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
             guardrail_type,
@@ -490,11 +491,20 @@ class InMemoryGuardrailHandler:
             )
 
         default_on = litellm_params.default_on
-        _guardrail_callback = _guardrail_class(
-            guardrail_name=guardrail["guardrail_name"],
-            event_hook=mode,
-            default_on=default_on,
-        )
+        api_base = getattr(litellm_params, "api_base", None)
+
+        # Build kwargs to make api_base optional
+        guardrail_kwargs = {
+            "guardrail_name": guardrail["guardrail_name"],
+            "event_hook": mode,
+            "default_on": default_on,
+        }
+
+        # Only add api_base if it's not None
+        if api_base is not None:
+            guardrail_kwargs["api_base"] = api_base
+
+        _guardrail_callback = _guardrail_class(**guardrail_kwargs)
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 
         return _guardrail_callback
