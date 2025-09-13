@@ -1,7 +1,10 @@
 {
 	"name": "Python 3.11",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+	"dockerComposeFile": "./docker-compose.yaml",
+	"service": "workspace",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
 	// https://github.com/devcontainers/images/tree/main/src/python
 	// https://mcr.microsoft.com/en-us/product/devcontainers/python/tags
 
@@ -23,19 +26,21 @@
 				"ms-python.vscode-pylance",
 				"GitHub.copilot",
 				"GitHub.copilot-chat",
-				"ms-python.autopep8"
+				"ms-python.autopep8",
+				"ms-ossdata.vscode-pgsql"
 			]
 		}
 	},
-	
+
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	"forwardPorts": [4000],
 
 	"containerEnv": {
-		"LITELLM_LOG": "DEBUG"
+		"LITELLM_LOG": "DEBUG",
+		"DATABASE_URL": "postgresql://postgres:postgres@db:5432/litellm"
 	},
 
-	// Use 'portsAttributes' to set default properties for specific forwarded ports. 
+	// Use 'portsAttributes' to set default properties for specific forwarded ports.
 	// More info: https://containers.dev/implementors/json_reference/#port-attributes
 	"portsAttributes": {
 		"4000": {
