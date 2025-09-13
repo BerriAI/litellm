@@ -195,70 +195,169 @@ litellm_settings:
 
 ## Using your MCP
 
+### Use on LiteLLM UI 
+
+Follow this walkthrough to use your MCP on LiteLLM UI
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/57e0763267254bc79dbe6658d0b8758c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+### Use with Responses API
+
+Replace `http://localhost:4000` with your LiteLLM Proxy base URL.
+
+Demo Video Using Responses API with LiteLLM Proxy: [Demo video here](https://www.loom.com/share/34587e618c5c47c0b0d67b4e4d02718f?sid=2caf3d45-ead4-4490-bcc1-8d6dd6041c02)
+
+
 <Tabs>
-<TabItem value="openai" label="OpenAI API">
-
-#### Connect via OpenAI Responses API
-
-Use the OpenAI Responses API to connect to your LiteLLM MCP server:
+<TabItem value="curl" label="cURL">
 
 ```bash title="cURL Example" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'http://localhost:4000/v1/responses' \
 --header 'Content-Type: application/json' \
---header "Authorization: Bearer $OPENAI_API_KEY" \
+--header "Authorization: Bearer sk-1234" \
 --data '{
-    "model": "gpt-4o",
+    "model": "gpt-5",
+    "input": [
+    {
+      "role": "user",
+      "content": "give me TLDR of what BerriAI/litellm repo is about",
+      "type": "message"
+    }
+  ],
     "tools": [
         {
             "type": "mcp",
             "server_label": "litellm",
             "server_url": "litellm_proxy",
-            "require_approval": "never",
-            "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
-            }
+            "require_approval": "never"
         }
     ],
-    "input": "Run available tools",
+    "stream": true,
     "tool_choice": "required"
 }'
 ```
 
 </TabItem>
+<TabItem value="python" label="Python SDK">
 
-<TabItem value="litellm" label="LiteLLM Proxy">
+```python title="Python SDK Example" showLineNumbers
+"""
+Use LiteLLM Proxy MCP Gateway to call MCP tools.
 
-#### Connect via LiteLLM Proxy Responses API
+When using LiteLLM Proxy, you can use the same MCP tools across all your LLM providers.
+"""
+import openai
 
-Use this when calling LiteLLM Proxy for LLM API requests to `/v1/responses` endpoint.
+client = openai.OpenAI(
+    api_key="sk-1234", # paste your litellm proxy api key here
+    base_url="http://localhost:4000" # paste your litellm proxy base url here
+)
+print("Making API request to Responses API with MCP tools")
 
-```bash title="cURL Example" showLineNumbers
-curl --location '<your-litellm-proxy-base-url>/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer $LITELLM_API_KEY" \
---data '{
-    "model": "gpt-4o",
-    "tools": [
+response = client.responses.create(
+    model="gpt-5",
+    input=[
+        {
+            "role": "user",
+            "content": "give me TLDR of what BerriAI/litellm repo is about",
+            "type": "message"
+        }
+    ],
+    tools=[
         {
             "type": "mcp",
             "server_label": "litellm",
             "server_url": "litellm_proxy",
-            "require_approval": "never",
-            "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
-            }
+            "require_approval": "never"
         }
     ],
-    "input": "Run available tools",
+    stream=True,
+    tool_choice="required"
+)
+
+for chunk in response:
+    print("response chunk: ", chunk)
+```
+
+</TabItem>
+</Tabs>
+
+#### Specifying MCP Tools
+
+You can specify which MCP tools are available by using the `allowed_tools` parameter. This allows you to restrict access to specific tools within an MCP server.
+
+To get the list of allowed tools when using LiteLLM MCP Gateway, you can naigate to the LiteLLM UI on MCP Servers > MCP Tools > Click the Tool > Copy Tool Name.
+
+<Tabs>
+<TabItem value="curl" label="cURL">
+
+```bash title="cURL Example with allowed_tools" showLineNumbers
+curl --location 'http://localhost:4000/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer sk-1234" \
+--data '{
+    "model": "gpt-5",
+    "input": [
+    {
+      "role": "user",
+      "content": "give me TLDR of what BerriAI/litellm repo is about",
+      "type": "message"
+    }
+  ],
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy/mcp",
+            "require_approval": "never",
+            "allowed_tools": ["GitMCP-fetch_litellm_documentation"]
+        }
+    ],
+    "stream": true,
     "tool_choice": "required"
 }'
 ```
 
 </TabItem>
+<TabItem value="python" label="Python SDK">
 
-<TabItem value="cursor" label="Cursor IDE">
+```python title="Python SDK Example with allowed_tools" showLineNumbers
+import openai
 
-#### Connect via Cursor IDE
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+response = client.responses.create(
+    model="gpt-5",
+    input=[
+        {
+            "role": "user",
+            "content": "give me TLDR of what BerriAI/litellm repo is about",
+            "type": "message"
+        }
+    ],
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy/mcp",
+            "require_approval": "never",
+            "allowed_tools": ["GitMCP-fetch_litellm_documentation"]
+        }
+    ],
+    stream=True,
+    tool_choice="required"
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Use with Cursor IDE
 
 Use tools directly from Cursor IDE with LiteLLM MCP:
 
@@ -280,9 +379,6 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
   }
 }
 ```
-
-</TabItem>
-</Tabs>
 
 #### How it works when server_url="litellm_proxy"
 

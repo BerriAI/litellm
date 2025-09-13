@@ -346,6 +346,7 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json["allowed_routes"] = ["info_routes"]
     return data_json
 
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -358,13 +359,13 @@ async def validate_team_id_used_in_service_account_request(
             status_code=400,
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
             detail="prisma_client is required for service account keys. Please specify `prisma_client` in the request body.",
         )
-    
+
     # check if team_id exists in the database
     team = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id},
@@ -375,6 +376,7 @@ async def validate_team_id_used_in_service_account_request(
             detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
         )
     return True
+
 
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
@@ -550,6 +552,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Validate user-provided key format
+    if data.key is not None and not data.key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+            },
+        )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
@@ -2876,7 +2887,10 @@ async def unblock_key(
             param="key",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    hashed_token = hash_token(token=data.key)
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
