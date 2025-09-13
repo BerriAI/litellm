@@ -671,6 +671,7 @@ jobs:
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-genai==1.22.0"
             pip install pyarrow
             pip install "boto3==1.36.0"
             pip install "aioboto3==13.4.0"
