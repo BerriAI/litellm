@@ -843,6 +843,76 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
+@pytest.mark.asyncio
+async def test_supports_tool_choice():
+    """
+    Test that litellm.utils.supports_tool_choice() returns the correct value
+    for all models in model_prices_and_context_window.json.
+
+    The test:
+    1. Loads model pricing data
+    2. Iterates through each model
+    3. Checks if tool_choice support matches the model's supported parameters
+    """
+    # Load model prices
+    litellm._turn_on_debug()
+    # path = "../../model_prices_and_context_window.json"
+    path = "./model_prices_and_context_window.json"
+    with open(path, "r") as f:
+        model_prices = json.load(f)
+    litellm.model_cost = model_prices
+    config_manager = ProviderConfigManager()
+
+    for model_name, model_info in model_prices.items():
+        print(f"testing model: {model_name}")
+
+        # Skip certain models
+        if (
+            model_name == "sample_spec"
+            or model_info.get("mode") != "chat"
+            or any(skip in model_name for skip in SKIP_MODELS)
+            or any(provider in model_name for provider in OLD_PROVIDERS)
+            or model_info["litellm_provider"] in OLD_PROVIDERS
+            or model_name in block_list
+            or "azure/eu" in model_name
+            or "azure/us" in model_name
+            or "codestral" in model_name
+            or "o1" in model_name
+            or "o3" in model_name
+            or "mistral" in model_name
+            or "oci" in model_name
+            or "openrouter" in model_name
+        ):
+            continue
+
+        try:
+            model, provider, _, _ = get_llm_provider(model=model_name)
+        except Exception as e:
+            print(f"\033[91mERROR for {model_name}: {e}\033[0m")
+            continue
+
+        # Get provider config and supported params
+        print("LLM provider", provider)
+        provider_enum = LlmProviders(provider)
+        config = config_manager.get_provider_chat_config(model, provider_enum)
+        print("config", config)
+
+        if config:
+            supported_params = config.get_supported_openai_params(model)
+            print("supported_params", supported_params)
+        else:
+            raise Exception(f"No config found for {model_name}, provider: {provider}")
+
+        # Check tool_choice support
+        supports_tool_choice_result = litellm.utils.supports_tool_choice(
+            model=model_name, custom_llm_provider=provider
+        )
+        tool_choice_in_params = "tool_choice" in supported_params
+
+        assert (
+            supports_tool_choice_result == tool_choice_in_params
+        ), f"Tool choice support mismatch for {model_name}. supports_tool_choice() returned: {supports_tool_choice_result}, tool_choice in supported params: {tool_choice_in_params}\nConfig: {config}"
+
 
 def test_supports_computer_use_utility():
     """
@@ -977,9 +1047,15 @@ class TestProxyFunctionCalling:
     @pytest.fixture(autouse=True)
     def reset_mock_cache(self):
         """Reset model cache before each test."""
+        import os
         from litellm.utils import _model_cache
+        import litellm
 
         _model_cache.flush_cache()
+        
+        # Ensure we use local model cost map for tests
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")  # Load local backup
 
     @pytest.mark.parametrize(
         "direct_model,proxy_model,expected_result",
@@ -1012,10 +1088,15 @@ class TestProxyFunctionCalling:
             # Groq models (mixed support)
             ("groq/gemma-7b-it", "litellm_proxy/groq/gemma-7b-it", True),
             (
+                "groq/llama3-70b-8192",
+                "litellm_proxy/groq/llama3-70b-8192",
+                False,
+            ),  # This model doesn't support function calling
+            (
                 "groq/llama-3.3-70b-versatile",
                 "litellm_proxy/groq/llama-3.3-70b-versatile",
-                True,
-            ),
+                False,
+            ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
@@ -1084,7 +1165,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/claude-prod", "anthropic/claude-3-sonnet-20240229", False),
             ("litellm_proxy/claude-dev", "anthropic/claude-3-haiku-20240307", False),
             # Groq with custom names (cannot be resolved)
-            ("litellm_proxy/fast-llama", "groq/llama-3.1-8b-instant", False),
+            ("litellm_proxy/fast-llama", "groq/llama3-8b-8192", False),
             ("litellm_proxy/groq-gemma", "groq/gemma-7b-it", False),
             # Cohere with custom names (cannot be resolved)
             ("litellm_proxy/cohere-command", "cohere/command-r", False),
