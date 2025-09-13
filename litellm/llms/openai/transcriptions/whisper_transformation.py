@@ -18,6 +18,34 @@ from ..common_utils import OpenAIError
 
 
 class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        ## get the api base, attach the endpoint - v1/audio/transcriptions
+        # strip trailing slash if present
+        api_base = api_base.rstrip("/") if api_base else ""
+
+        # if endswith "/v1"
+        if api_base and api_base.endswith("/v1"):
+            api_base = f"{api_base}/audio/transcriptions"
+        else:
+            api_base = f"{api_base}/v1/audio/transcriptions"
+
+        return api_base or ""
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIAudioTranscriptionOptionalParams]:
@@ -77,7 +105,6 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         Transform the audio transcription request
         """
-
         data = {"model": model, "file": audio_file, **optional_params}
 
         if "response_format" not in data or (
