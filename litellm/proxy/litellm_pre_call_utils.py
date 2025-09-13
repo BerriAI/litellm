@@ -41,8 +41,6 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 
-from line_profiler import profile
-
 
 def parse_cache_control(cache_control):
     cache_dict = {}
@@ -67,10 +65,11 @@ LITELLM_METADATA_ROUTES = (
 
 def _get_metadata_variable_name(request: Request) -> str:
     """
-    Return the appropriate name for the metadata field based on the request path.
+    Helper to return what the "metadata" field should be called in the request data
 
-    - For assistants API requests and specific routes, use "litellm_metadata".
-    - For all other requests, use "metadata".
+    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
+
+    For ALL other endpoints we call this "metadata
     """
     path = request.url.path
 
@@ -85,14 +84,16 @@ def _get_metadata_variable_name(request: Request) -> str:
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
-        api_version = request.query_params.get("api-version")
-        if api_version is not None:
-            data["api_version"] = api_version
+        if hasattr(request, "query_params"):
+            query_params = dict(request.query_params)
+            if "api-version" in query_params:
+                data["api_version"] = query_params["api-version"]
+    except KeyError:
+        pass
     except Exception as e:
         verbose_logger.exception(
-            "error checking api version in query params: %s", e
+            "error checking api version in query params: %s", str(e)
         )
-
 
 
 def convert_key_logging_metadata_to_callback(
@@ -226,7 +227,6 @@ def _get_dynamic_logging_metadata(
         )
     return callback_settings_obj
 
-@profile
 def clean_headers(
     headers: Headers, litellm_key_header_name: Optional[str] = None
 ) -> dict:
@@ -649,7 +649,6 @@ class LiteLLMProxyRequestSetup:
         return tags
 
 
-@profile
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
     request: Request,
