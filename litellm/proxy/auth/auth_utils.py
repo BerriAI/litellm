@@ -473,6 +473,22 @@ def _has_user_setup_sso():
 
     return sso_setup
 
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+    """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
+    if not user_id_mapping:
+        return None
+    items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("litellm_user_role")
+        header_name = item.get("header_name")
+        if role is None or not header_name:
+            continue
+        if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
+            return header_name
+    return None
+
 
 def get_end_user_id_from_request_body(
     request_body: dict, request_headers: Optional[dict] = None
@@ -481,20 +497,34 @@ def get_end_user_id_from_request_body(
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
+    # Check 1 : Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        user_id_header_config_key = "user_header_name"
+        custom_header_name_to_check: Optional[str] = None
 
-        custom_header_name_to_check = general_settings.get(user_id_header_config_key)
+        # Prefer user mappings (new behavior)
+        user_id_mapping = general_settings.get("user_header_mappings", None)
+        if user_id_mapping:
+            custom_header_name_to_check = get_customer_user_header_from_mapping(
+                user_id_mapping
+            )
 
-        if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
+        # Fallback to deprecated user_header_name if mapping did not specify
+        if not custom_header_name_to_check:
+            user_id_header_config_key = "user_header_name"
+            value = general_settings.get(user_id_header_config_key)
+            if isinstance(value, str) and value.strip() != "":
+                custom_header_name_to_check = value
+
+        # If we have a header name to check, try to read it from request headers
+        if isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_from_header = header_value
-                    if user_id_from_header.strip():
-                        return str(user_id_from_header)
+                    user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+                    if user_id_str.strip():
+                        return user_id_str
 
     # Check 2: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:
