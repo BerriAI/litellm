@@ -310,6 +310,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "alibaba",
     "vercel_ai_gateway",
 ]
 
@@ -444,6 +445,7 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://portal.qwen.ai/v1",
     "https://ai-gateway.vercel.sh/v1",
 ]
 
@@ -489,6 +491,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "alibaba",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
