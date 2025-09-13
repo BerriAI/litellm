@@ -44,12 +44,15 @@ model_list:
 ```
 
 **Required Parameters:**
-- `s3_bucket_name`: S3 bucket for input/output files
-- `s3_region_name`: AWS region for S3 bucket
-- `s3_access_key_id`: AWS access key
-- `s3_secret_access_key`: AWS secret key
-- `aws_batch_role_arn`: IAM role ARN for Bedrock batch operations
-- `mode: batch`: Indicates this is a batch model
+
+| Parameter | Description |
+|-----------|-------------|
+| `s3_bucket_name` | S3 bucket for batch input/output files |
+| `s3_region_name` | AWS region for S3 bucket |
+| `s3_access_key_id` | AWS access key for S3 bucket |
+| `s3_secret_access_key` | AWS secret key for S3 bucket |
+| `aws_batch_role_arn` | IAM role ARN for Bedrock batch operations. Bedrock Batch APIs require an IAM role ARN to be set. |
+| `mode: batch` | Indicates to LiteLLM this is a batch model |
 
 ### 2. Create Virtual Key
 
