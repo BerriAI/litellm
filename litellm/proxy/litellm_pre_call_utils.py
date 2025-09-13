@@ -18,6 +18,9 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+
+# Cache special headers as a frozenset for O(1) lookup performance
+_SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -38,6 +41,8 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 
+from line_profiler import profile
+
 
 def parse_cache_control(cache_control):
     cache_dict = {}
@@ -53,47 +58,41 @@ def parse_cache_control(cache_control):
     return cache_dict
 
 
+LITELLM_METADATA_ROUTES = (
+    "batches",
+    "/v1/messages",
+    "responses",
+    "files",
+)
+
 def _get_metadata_variable_name(request: Request) -> str:
     """
-    Helper to return what the "metadata" field should be called in the request data
+    Return the appropriate name for the metadata field based on the request path.
 
-    For all /thread or /assistant endpoints we need to call this "litellm_metadata"
-
-    For ALL other endpoints we call this "metadata
+    - For assistants API requests and specific routes, use "litellm_metadata".
+    - For all other requests, use "metadata".
     """
+    path = request.url.path
+
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
 
-    LITELLM_METADATA_ROUTES = [
-        "batches",
-        "/v1/messages",
-        "responses",
-        "files",
-    ]
-
-    if any(
-        [
-            litellm_metadata_route in request.url.path
-            for litellm_metadata_route in LITELLM_METADATA_ROUTES
-        ]
-    ):
+    if any(route in path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
-    else:
-        return "metadata"
+
+    return "metadata"
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
     try:
-        if hasattr(request, "query_params"):
-            query_params = dict(request.query_params)
-            if "api-version" in query_params:
-                data["api_version"] = query_params["api-version"]
-    except KeyError:
-        pass
+        api_version = request.query_params.get("api-version")
+        if api_version is not None:
+            data["api_version"] = api_version
     except Exception as e:
         verbose_logger.exception(
-            "error checking api version in query params: %s", str(e)
+            "error checking api version in query params: %s", e
         )
+
 
 
 def convert_key_logging_metadata_to_callback(
@@ -227,21 +226,20 @@ def _get_dynamic_logging_metadata(
         )
     return callback_settings_obj
 
-
+@profile
 def clean_headers(
     headers: Headers, litellm_key_header_name: Optional[str] = None
 ) -> dict:
     """
     Removes litellm api key from headers
     """
-    special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
-    special_headers = special_headers
-    if litellm_key_header_name is not None:
-        special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
-
+    litellm_key_lower = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    
     for header, value in headers.items():
-        if header.lower() not in special_headers:
+        header_lower = header.lower()
+        # Check if header should be excluded: either in special headers cache or matches custom litellm key
+        if (header_lower not in _SPECIAL_HEADERS_CACHE and (litellm_key_lower is None or header_lower != litellm_key_lower)):
             clean_headers[header] = value
     return clean_headers
 
@@ -651,6 +649,7 @@ class LiteLLMProxyRequestSetup:
         return tags
 
 
+@profile
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
     request: Request,
