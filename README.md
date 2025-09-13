@@ -66,7 +66,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
-messages = [{ "content": "Hello, how are you?","role": "user"}]
+messages = [{"content": "Hello, how are you?", "role": "user"}]
 
 # openai call
 response = completion(model="openai/gpt-4o", messages=messages)
@@ -238,7 +238,7 @@ $ litellm --model huggingface/bigcode/starcoder
 
 ```python
 import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
+client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
