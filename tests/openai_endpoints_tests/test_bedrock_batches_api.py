@@ -19,7 +19,7 @@ async def test_bedrock_batches_api():
     """
     # Upload file
     batch_input_file = client.files.create(
-        file=open("./bedrock_batch_completions.jsonl", "rb"),
+        file=open("tests/openai_endpoints_tests/bedrock_batch_completions.jsonl", "rb"),
         purpose="batch",
         extra_body={"target_model_names": BEDROCK_BATCH_MODEL}
     )
