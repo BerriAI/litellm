@@ -7,7 +7,7 @@ Covers Batches, Files
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Supported Providers | OpenAI, Azure, Vertex, Bedrock | - |
+| Supported Providers | OpenAI, Azure, Vertex | - |
 | ✨ Cost Tracking | ✅ | LiteLLM Enterprise only |
 | Logging | ✅ | Works across all logging integrations |
 
@@ -178,7 +178,6 @@ print("list_batches_response=", list_batches_response)
 ### [Azure OpenAI](./providers/azure#azure-batches-api)
 ### [OpenAI](#quick-start)
 ### [Vertex AI](./providers/vertex#batch-apis)
-### [Bedrock](./providers/bedrock_batches)
 
 
 ## How Cost Tracking for Batches API Works
