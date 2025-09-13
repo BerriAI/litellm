@@ -1,4 +1,6 @@
-# liteLLM Proxy Server: 50+ LLM Models, Error Handling, Caching
+# Deploy liteLLM Proxy Server on Railway
+
+### 50+ LLM Models, Error Handling, Caching. Deploy in under 5 minutes.
 
 ### Azure, Llama2, OpenAI, Claude, Hugging Face, Replicate Models
 
@@ -153,7 +155,9 @@ All responses from the server are returned in the following format (for all LLM 
 
 ## Deploying
 
-1. Quick Start: Deploy on Railway
+Railway simplifies your infrastructure stack. The below template allows you to deploy a LiteLLM proxy server with pre-configured setup for Postgres DB access, Redis cache, and UI panel access.
+
+1. Quick Start: Deploy LiteLLM on Railway
 
    [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/DYqQAW?referralCode=t3ukrU&utm_medium=integration&utm_source=docs&utm_campaign=litellm)
 
