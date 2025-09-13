@@ -452,6 +452,7 @@ const sidebars = {
         "providers/elevenlabs",
         "providers/fireworks_ai",
         "providers/clarifai",
+        "providers/compactifai",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",

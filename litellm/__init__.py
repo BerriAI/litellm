@@ -1013,6 +1013,7 @@ from .llms.openai_like.chat.handler import OpenAILikeChatConfig
 from .llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
 from .llms.galadriel.chat.transformation import GaladrielChatConfig
 from .llms.github.chat.transformation import GithubChatConfig
+from .llms.compactifai.chat.transformation import CompactifAIChatConfig
 from .llms.empower.chat.transformation import EmpowerChatConfig
 from .llms.huggingface.chat.transformation import HuggingFaceChatConfig
 from .llms.huggingface.embedding.transformation import HuggingFaceEmbeddingConfig
