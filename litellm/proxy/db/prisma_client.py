@@ -154,7 +154,14 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
+                    redis_cache = None
+                    try:
+                        from litellm.caching.redis_cache import RedisCache
+                        redis_cache = RedisCache()
+                    except Exception as e:
+                        verbose_proxy_logger.debug(f"Redis cache not available: {e}")
+
+                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate, redis_cache=redis_cache)
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
