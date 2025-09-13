@@ -4,8 +4,9 @@ OpenAI Passthrough Logging Handler
 Handles cost tracking and logging for OpenAI passthrough endpoints, specifically /chat/completions.
 """
 
+import base64
 from datetime import datetime
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -18,7 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
-from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
@@ -29,11 +30,121 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
+from litellm.types.utils import (
+    ImageResponse,
+    LiteLLMBatch,
+    LlmProviders,
+    PassthroughCallTypes,
+    SpecialEnums,
+)
 from litellm.utils import ModelResponse, TextCompletionResponse
 
 
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
+    @staticmethod
+    def _get_unified_batch_id(batch_id: str, model_id: str) -> str:
+        """
+        Create a properly formatted and encoded unified batch ID for passthrough batches.
+
+        Args:
+            model_id: The model ID (e.g., 'gpt-4o')
+            batch_id: The OpenAI batch ID (e.g., 'batch_123')
+
+        Returns:
+            Base64-encoded unified batch ID that passes _is_base64_encoded_unified_file_id validation
+        """
+        unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(
+            model_id, batch_id
+        )
+        return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
+
+    @staticmethod
+    def _extract_model_from_batch_output(output_file_id: str) -> Optional[str]:
+        """
+        Extract the model ID from a completed batch's output file content.
+        This is used because in passthrough batches, the user doesn't specify the model, so we need to extract it from the file.
+
+        Args:
+            output_file_id: The ID of the batch output file
+
+        Returns:
+            The model ID extracted from the first request in the batch, or None if extraction fails
+        """
+        try:
+            from litellm.batches.batch_utils import _get_file_content_as_dictionary
+            from litellm.files.main import file_content
+
+            # Retrieve the file content
+            file_response = file_content(
+                file_id=output_file_id,
+                custom_llm_provider="openai",  # Passthrough batches are always OpenAI
+            )
+
+            # Handle both sync and async responses
+            if hasattr(file_response, 'content'):
+                content = file_response.content
+            else:
+                # If it's a coroutine, we can't handle it in sync context
+                return None
+
+            # Parse the file content as JSON Lines
+            file_content_dict = _get_file_content_as_dictionary(content)
+
+            # Extract model from the first request
+            if file_content_dict and len(file_content_dict) > 0:
+                first_request = file_content_dict[0]
+                if isinstance(first_request, dict) and "body" in first_request:
+                    body = first_request["body"]
+                    if isinstance(body, dict) and "model" in body:
+                        model = body["model"]
+                        return model
+
+            return None
+
+        except Exception:
+            return None
+
+    @staticmethod
+    def _create_user_api_key_dict_from_kwargs(kwargs: dict) -> Optional[UserAPIKeyAuth]:
+        """
+        Extract user information from kwargs metadata and create UserAPIKeyAuth object.
+
+        Args:
+            kwargs: The kwargs dictionary containing litellm_params and metadata
+
+        Returns:
+            UserAPIKeyAuth object if user_id is found, None otherwise
+        """
+        try:
+            # Extract user information from kwargs metadata
+            litellm_params = kwargs.get("litellm_params", {})
+            metadata = litellm_params.get("metadata", {})
+
+            # Extract user information from metadata
+            user_id = metadata.get("user_api_key_user_id")
+            api_key = metadata.get("user_api_key")
+            team_id = metadata.get("user_api_key_team_id")
+            team_alias = metadata.get("user_api_key_team_alias")
+            user_email = metadata.get("user_api_key_user_email")
+
+            if not user_id:
+                return None
+
+            # Create user_api_key_dict for managed files hook
+            return UserAPIKeyAuth(
+                user_id=user_id,
+                api_key=api_key,
+                team_id=team_id,
+                team_alias=team_alias,
+                user_role=None,  # Not available in metadata
+                user_email=user_email,
+                max_budget=None,  # Not available in metadata
+                models=[],  # Not available in metadata
+                metadata=metadata,  # Pass the full metadata
+            )
+        except Exception:
+            return None
+
     """
     OpenAI-specific passthrough logging handler that provides cost tracking for /chat/completions endpoints.
     """
@@ -74,6 +185,30 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 or "openai.azure.com" in parsed_url.hostname
             )
             and "/v1/images/generations" in parsed_url.path
+        )
+
+    @staticmethod
+    def is_openai_batch_route(url_route: str) -> bool:
+        """Check if the URL route is an OpenAI batch endpoint (only creation)."""
+        if not url_route:
+            return False
+        parsed_url = urlparse(url_route)
+        return bool(
+            parsed_url.hostname
+            and (
+                "api.openai.com" in parsed_url.hostname
+                or "openai.azure.com" in parsed_url.hostname
+            )
+            and parsed_url.path
+            in ["/v1/batches", "/batches"]  # Only creation endpoints
+        )
+
+    @staticmethod
+    def is_openai_batch_create_route(url_route: str, request_method: str) -> bool:
+        """Check if this is specifically a batch creation request (POST)."""
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_batch_route(url_route)
+            and request_method.upper() == "POST"
         )
 
     @staticmethod
@@ -189,6 +324,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         Handle OpenAI passthrough logging with cost tracking for chat completions, image generation, and image editing.
         """
+
         # Check if this is a supported endpoint for cost tracking
         is_chat_completions = (
             OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
@@ -199,8 +335,19 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_image_editing = (
             OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
+        is_batch_create = OpenAIPassthroughLoggingHandler.is_openai_batch_create_route(
+            url_route,
+            kwargs.get("litellm_params", {})
+            .get("proxy_server_request", {})
+            .get("method", request_body.get("method", "GET")),
+        )
 
-        if not (is_chat_completions or is_image_generation or is_image_editing):
+        if not (
+            is_chat_completions
+            or is_image_generation
+            or is_image_editing
+            or is_batch_create
+        ):
             # For unsupported endpoints, return None to let the system fall back to generic behavior
             return {
                 "result": None,
@@ -209,10 +356,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         # Extract model from request or response
         model = request_body.get("model", response_body.get("model", ""))
-        if not model:
-            verbose_proxy_logger.warning(
-                "No model found in request or response for OpenAI passthrough cost tracking"
-            )
+        if not model and not is_batch_create:
             base_handler = OpenAIPassthroughLoggingHandler()
             return base_handler.passthrough_chat_handler(
                 httpx_response=httpx_response,
@@ -229,7 +373,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         try:
             response_cost = 0.0
-            litellm_model_response: Optional[Union[ModelResponse, TextCompletionResponse, ImageResponse]] = None
+            litellm_model_response: Optional[
+                Union[
+                    ModelResponse, TextCompletionResponse, ImageResponse, LiteLLMBatch
+                ]
+            ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
             if is_chat_completions:
@@ -278,9 +426,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response._hidden_params = {}
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                if litellm_model_response is not None:
+                    if not hasattr(litellm_model_response, "_hidden_params"):
+                        litellm_model_response._hidden_params = {}
+                    litellm_model_response._hidden_params[
+                        "response_cost"
+                    ] = response_cost
             elif is_image_editing:
                 # Handle image editing cost calculation
                 response_cost = (
@@ -303,15 +454,73 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response._hidden_params = {}
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                if litellm_model_response is not None:
+                    if not hasattr(litellm_model_response, "_hidden_params"):
+                        litellm_model_response._hidden_params = {}
+                    litellm_model_response._hidden_params[
+                        "response_cost"
+                    ] = response_cost
+            elif is_batch_create:
+                # Handle batch creation cost calculation
+                response_cost = 0.0
 
+                # add it in base model first
+                litellm_model_response = LiteLLMBatch(**response_body)
+
+                if litellm_model_response.input_file_id:
+                    extracted_model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_output(
+                        litellm_model_response.input_file_id
+                    )
+                    if extracted_model:
+                        model = extracted_model
+                    else:
+                        model = "gpt-4o"  # Default fallback
+                else:
+                    model = "gpt-4o"  # Default fallback
+
+                # Replace the batch ID with encoded unified batch ID for proper polling compatibility
+                original_batch_id = litellm_model_response.id
+                unified_batch_id = (
+                    OpenAIPassthroughLoggingHandler._get_unified_batch_id(
+                        model_id=model, batch_id=original_batch_id
+                    )
+                )
+                litellm_model_response.id = unified_batch_id
+
+                # Set the calculated cost in _hidden_params to prevent recalculation
+                if litellm_model_response is not None:
+                    if not hasattr(litellm_model_response, "_hidden_params"):
+                        litellm_model_response._hidden_params = {}
+                    litellm_model_response._hidden_params[
+                        "response_cost"
+                    ] = response_cost
+                    # Add model_id to enable proper unified batch ID encoding in managed files hook
+                    litellm_model_response._hidden_params["model_id"] = model
+
+                # Trigger managed files hook for batch tracking (same as non-passthrough)
+                try:
+                    import asyncio
+
+                    from litellm.proxy.proxy_server import proxy_logging_obj
+
+                    # Create user_api_key_dict from kwargs
+                    user_api_key_dict = OpenAIPassthroughLoggingHandler._create_user_api_key_dict_from_kwargs(
+                        kwargs
+                    )
+                    if user_api_key_dict:
+                        # Trigger the managed files hook asynchronously
+                        asyncio.create_task(
+                            proxy_logging_obj.post_call_success_hook(
+                                data=request_body,
+                                user_api_key_dict=user_api_key_dict,
+                                response=litellm_model_response,
+                            )
+                        )
+                except Exception:
+                    pass
             # Update kwargs with cost information
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
-            kwargs["custom_llm_provider"] = "openai"
-
             # Extract user information for tracking
             passthrough_logging_payload: Optional[
                 PassthroughStandardLoggingPayload
@@ -348,13 +557,20 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 else "image_generation"
                 if is_image_generation
                 else "image_editing"
+                if is_image_editing
+                else "batch_create"
             )
             verbose_proxy_logger.debug(
                 f"OpenAI passthrough cost tracking - Endpoint: {endpoint_type}, Model: {model}, Cost: ${response_cost:.6f}"
             )
 
             return {
-                "result": litellm_model_response,
+                "result": cast(
+                    Optional[
+                        Union[ModelResponse, TextCompletionResponse, ImageResponse]
+                    ],
+                    litellm_model_response,
+                ),
                 "kwargs": kwargs,
             }
 
@@ -439,10 +655,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             return complete_streaming_response
 
-        except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error building complete streaming response: {str(e)}"
-            )
+        except Exception:
             return None
 
     @staticmethod
@@ -473,9 +686,6 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             )
 
             if complete_response is None:
-                verbose_proxy_logger.warning(
-                    "Failed to build complete response from OpenAI streaming chunks"
-                )
                 return {
                     "result": None,
                     "kwargs": {},
