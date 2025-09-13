@@ -16,6 +16,8 @@ import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
+import orjson
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -153,6 +155,7 @@ class RedisCache(BaseCache):
                     "Ignoring async redis ping. No running event loop."
                 )
             else:
+                # FIXME: this won't work really, create_task won't throw error inside a coroutine
                 verbose_logger.error(
                     "Error connecting to Async Redis client - {}".format(str(e)),
                     extra={"error": str(e)},
@@ -704,7 +707,7 @@ class RedisCache(BaseCache):
         # cached_response is in `b{} convert it to ModelResponse
         cached_response = cached_response.decode("utf-8")  # Convert bytes to string
         try:
-            cached_response = json.loads(
+            cached_response = orjson.loads(
                 cached_response
             )  # Convert string to dictionary
         except Exception:
