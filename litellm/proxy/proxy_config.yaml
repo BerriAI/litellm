@@ -11,6 +11,3 @@ model_list:
       aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
     model_info: 
       mode: batch
-
-litellm_settings:
-  callbacks: ["cloudzero"]
