@@ -57,6 +57,10 @@ def create_standard_logging_payload_with_cache() -> StandardLoggingPayload:
             user_api_key_team_id="test_team",
             user_api_key_user_id="test_user",
             user_api_key_team_alias="test_team_alias",
+            user_api_key_spend=1.23,
+            user_api_key_max_budget=10.0,
+            user_api_key_team_spend=2.34,
+            user_api_key_team_max_budget=20.0,
             spend_logs_metadata=None,
             requester_ip_address="127.0.0.1",
             requester_metadata=None,
@@ -451,6 +455,11 @@ async def test_create_llm_obs_payload(mock_env_vars):
     assert payload["metrics"]["input_tokens"] == 10
     assert payload["metrics"]["output_tokens"] == 20
     assert payload["metrics"]["total_tokens"] == 30
+    metadata = payload["meta"]["metadata"]
+    assert metadata["user_api_key_spend"] == 1.23
+    assert metadata["user_api_key_max_budget"] == 10.0
+    assert metadata["user_api_key_team_spend"] == 2.34
+    assert metadata["user_api_key_team_max_budget"] == 20.0
 
 
 def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPayload:
