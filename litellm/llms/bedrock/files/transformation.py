@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
 
+from litellm._logging import verbose_logger
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -274,10 +275,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             openai_body = _openai_jsonl_content.get("body", {})
             model = openai_body.get("model", "")
 
-            model, _, _, _ = get_llm_provider(
-                    model=model, 
-                    custom_llm_provider=None, 
-            )
+            try:
+                model, _, _, _ = get_llm_provider(
+                            model=model, 
+                            custom_llm_provider=None, 
+                    )
+            except Exception as e:
+                verbose_logger.exception(f"litellm.llms.bedrock.files.transformation.py::_transform_openai_jsonl_content_to_bedrock_jsonl_content() - Error inferring custom_llm_provider - {str(e)}")
             
             # Determine provider from model name
             provider = self.get_bedrock_invoke_provider(model)
