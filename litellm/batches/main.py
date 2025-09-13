@@ -51,6 +51,45 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+def _resolve_timeout(
+    optional_params: GenericLiteLLMParams,
+    kwargs: Dict[str, Any],
+    custom_llm_provider: str,
+    default_timeout: float = 600.0,
+) -> float:
+    """
+    Resolve timeout value from various sources and handle httpx.Timeout objects.
+    
+    Args:
+        optional_params: GenericLiteLLMParams object containing timeout
+        kwargs: Additional kwargs that may contain request_timeout
+        custom_llm_provider: Provider name for httpx timeout support check
+        default_timeout: Default timeout value to use
+        
+    Returns:
+        Resolved timeout as float
+    """
+    timeout = optional_params.timeout or kwargs.get("request_timeout", default_timeout) or default_timeout
+    
+    # Handle httpx.Timeout objects
+    if isinstance(timeout, httpx.Timeout):
+        if supports_httpx_timeout(custom_llm_provider) is False:
+            # Extract read timeout for providers that don't support httpx.Timeout
+            read_timeout = timeout.read or default_timeout
+            return float(read_timeout)
+        else:
+            # For providers that support httpx.Timeout, we still need to return a float
+            # This case might need to be handled differently based on the actual use case
+            return float(timeout.read or default_timeout)
+    
+    # Handle None case
+    if timeout is None:
+        return float(default_timeout)
+    
+    # Handle numeric values (int, float, string representations)
+    return float(timeout)
+
+
 @client
 async def acreate_batch(
     completion_window: Literal["24h"],
@@ -134,7 +173,7 @@ def create_batch(
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
         litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
         ### TIMEOUT LOGIC ###
-        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=None,
@@ -150,18 +189,6 @@ def create_batch(
             },
             custom_llm_provider=custom_llm_provider,
         )
-
-        if (
-            timeout is not None
-            and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
-        ):
-            read_timeout = timeout.read or 600
-            timeout = read_timeout  # default 10 min timeout
-        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
-        elif timeout is None:
-            timeout = 600.0
         
 
         _create_batch_request = CreateBatchRequest(
