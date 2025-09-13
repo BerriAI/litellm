@@ -584,12 +584,19 @@ async def pass_through_request(  # noqa: PLR0915
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        proxy_config,
+        add_litellm_data_to_request,
+        version,
+    )
 
     #########################################################
     # Initialize variables
     #########################################################
     litellm_call_id = str(uuid.uuid4())
     url: Optional[httpx.URL] = None
+    data: dict = {}
 
     # parsed request body
     _parsed_body: Optional[dict] = None
@@ -645,6 +652,16 @@ async def pass_through_request(  # noqa: PLR0915
 
         # create logging object
         start_time = datetime.now()
+
+        data = await add_litellm_data_to_request(
+            data=data,  # type: ignore
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
         logging_obj = Logging(
             model="unknown",
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -653,6 +670,7 @@ async def pass_through_request(  # noqa: PLR0915
             start_time=start_time,
             litellm_call_id=litellm_call_id,
             function_id="1245",
+            kwargs=data,
         )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
