@@ -1,8 +1,9 @@
 from typing import List, Optional, Union
 
-from httpx import Headers
+from httpx import Headers, Response
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -11,7 +12,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import FileTypes
+from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..common_utils import OpenAIError
 
@@ -72,7 +73,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict:
+    ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request
         """
@@ -82,11 +83,13 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if "response_format" not in data or (
             data["response_format"] == "text" or data["response_format"] == "json"
         ):
-            data[
-                "response_format"
-            ] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
+            data["response_format"] = (
+                "verbose_json"  # ensures 'duration' is received - used for cost calculation
+            )
 
-        return data
+        return AudioTranscriptionRequestData(
+            data=data,
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]
@@ -96,3 +99,25 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             message=error_message,
             headers=headers,
         )
+
+    def transform_audio_transcription_response(
+        self,
+        raw_response: Response,
+    ) -> TranscriptionResponse:
+        try:
+            raw_response_json = raw_response.json()
+        except Exception as e:
+            raise ValueError(
+                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
+            )
+
+        if any(
+            key in raw_response_json
+            for key in TranscriptionResponse.model_fields.keys()
+        ):
+            return TranscriptionResponse(**raw_response_json)
+        else:
+            raise ValueError(
+                "Invalid response format. Received response does not match the expected format. Got: ",
+                raw_response_json,
+            )
