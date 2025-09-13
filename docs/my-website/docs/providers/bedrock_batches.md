@@ -87,6 +87,9 @@ Specify `target_model_names: "<model-name>"` to enable LiteLLM managed files and
 
 model-name should be the same as the model-name in the request.jsonl
 
+<Tabs>
+<TabItem value="python" label="Python">
+
 ```python showLineNumbers title="bedrock_batch.py"
 from openai import OpenAI
 
@@ -104,11 +107,28 @@ batch_input_file = client.files.create(
 print(batch_input_file)
 ```
 
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Upload File"
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@bedrock_batch_completions.jsonl" \
+    -F extra_body='{"target_model_names": "bedrock-batch-claude"}'
+```
+
+</TabItem>
+</Tabs>
+
 **Where is the file written?**:
 
 The file is written to S3 bucket specified in your config and prepared for Bedrock batch inference.
 
 ### 3. Create the batch
+
+<Tabs>
+<TabItem value="python" label="Python">
 
 ```python showLineNumbers title="bedrock_batch.py"
 ...
@@ -121,6 +141,24 @@ batch = client.batches.create(
 )
 print(batch)
 ```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash showLineNumbers title="Create Batch Request"
+curl http://localhost:4000/v1/batches \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "input_file_id": "file-abc123",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "metadata": {"description": "Test batch job"}
+    }'
+```
+
+</TabItem>
+</Tabs>
 
 ## FAQ
 
