@@ -69,6 +69,7 @@ async def create_mcp_list_tools_events(
         # Convert tools to dict format for the event
         mcp_tools_dict = []
         for tool in filtered_mcp_tools:
+            # Treat tool as dynamic for serialization purposes; tolerate union types
             if hasattr(tool, 'model_dump') and callable(getattr(tool, 'model_dump')):
                 # Type cast to help mypy understand this is safe after hasattr check
                 mcp_tools_dict.append(cast(Any, tool).model_dump())

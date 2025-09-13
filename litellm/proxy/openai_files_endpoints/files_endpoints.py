@@ -232,22 +232,17 @@ async def create_file(
 
     data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        # Read the file content
-        file_content = await file.read()
-        custom_llm_provider = (
-            provider
-            or await get_custom_llm_provider_from_request_body(request=request)
-            or "openai"
-        )
+        # Resolve provider without re-reading multipart bodies
+        custom_llm_provider = provider or custom_llm_provider or "openai"
 
-        target_model_names_list = (
-            target_model_names.split(",") if target_model_names else []
-        )
-        target_model_names_list = [model.strip() for model in target_model_names_list]
-        # Prepare the data for forwarding
+        # Normalize target_model_names from either str or list
+        if isinstance(target_model_names, (list, tuple)):
+            _names = ",".join(target_model_names)
+        else:
+            _names = target_model_names or ""
+        target_model_names_list = [m.strip() for m in _names.split(",") if m.strip()]
 
-        # Replace with:
+        # Validate purpose early to fail fast on bad input
         valid_purposes = get_args(OpenAIFilesPurpose)
         if purpose not in valid_purposes:
             raise HTTPException(
@@ -258,6 +253,9 @@ async def create_file(
             )
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
+
+        # Read the file content only after validating purpose
+        file_content = await file.read()
 
         data = {}
 

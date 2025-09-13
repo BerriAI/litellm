@@ -1600,6 +1600,8 @@ def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
     Returns:
         bool: True if model matches the pattern, False otherwise
     """
+    if not isinstance(allowed_model_pattern, str):
+        return False
     if "*" in allowed_model_pattern:
         pattern = f"^{allowed_model_pattern.replace('*', '.*')}$"
         return bool(re.match(pattern, model))
@@ -1652,6 +1654,8 @@ def _model_custom_llm_provider_matches_wildcard_pattern(
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
     """
+    if not isinstance(allowed_model_pattern, str):
+        return False
     try:
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
@@ -1669,7 +1673,7 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
 
     Checks if `*` is in the pattern.
     """
-    return "*" in allowed_model_pattern
+    return isinstance(allowed_model_pattern, str) and ("*" in allowed_model_pattern)
 
 
 async def vector_store_access_check(

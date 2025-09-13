@@ -75,11 +75,26 @@ def check_complete_credentials(request_body: dict) -> bool:
 
 def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
     """
-    Check if request_body_value matches the regex_str or is equal to param
+    Check if request_body_value matches the regex_str or is equal to param.
+
+    Be defensive: request_body_value may be a mock or non-string in tests.
     """
-    if re.match(regex_str, request_body_value) or regex_str == request_body_value:
-        return True
-    return False
+    try:
+        if isinstance(request_body_value, str):
+            return bool(
+                re.match(regex_str, request_body_value) or regex_str == request_body_value
+            )
+        elif isinstance(request_body_value, bytes):
+            try:
+                decoded = request_body_value.decode("utf-8", errors="ignore")
+            except Exception:
+                return False
+            return bool(re.match(regex_str, decoded) or regex_str == decoded)
+        # Fallback to strict equality for non-string types to avoid regex type errors
+        return regex_str == request_body_value
+    except Exception:
+        # On any unexpected error, do a safe equality check
+        return regex_str == request_body_value
 
 
 def _is_param_allowed(

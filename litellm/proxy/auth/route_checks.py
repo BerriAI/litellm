@@ -275,6 +275,8 @@ class RouteChecks:
         deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
         engine_pattern = r"^/engines/[^/]+/chat/completions$"
 
+        if not isinstance(route, str):
+            return False
         if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
         return False
@@ -294,6 +296,8 @@ class RouteChecks:
         - route: "/key/regenerate/82akk800000000jjsk"
         - returns: False, pattern is "/key/{token_id}/regenerate"
         """
+        if not isinstance(route, str) or not isinstance(pattern, str):
+            return False
         pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"

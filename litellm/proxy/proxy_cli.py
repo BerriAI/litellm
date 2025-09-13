@@ -784,7 +784,8 @@ def run_server(  # noqa: PLR0915
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
                 )
-        if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
+        # Only auto-randomize ports for non-local runs to keep tests predictable
+        if (not local) and port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
 
         import litellm

@@ -100,6 +100,13 @@ from litellm.router_utils.handle_error import (
     async_raise_no_deployment_exception,
     send_llm_exception_alert,
 )
+from litellm.experimental_flags import ENABLE_PARALLEL_ACOMPLETIONS
+from litellm.router_utils.parallel_acompletion import (
+    iter_parallel_acompletions as _iter_parallel_acompletions,
+    gather_parallel_acompletions as _gather_parallel_acompletions,
+    RouterParallelRequest,
+    RouterParallelResult,
+)
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
@@ -7262,6 +7269,67 @@ class Router:
             self,
             "async_get_available_deployment",
             CustomRoutingStrategy.async_get_available_deployment,
+        )
+
+    async def parallel_acompletions(
+        self,
+        requests: List[RouterParallelRequest],
+        *,
+        concurrency: Optional[int] = None,
+        return_exceptions: bool = True,
+        preserve_order: bool = False,
+    ) -> List[RouterParallelResult]:
+        """
+        Experimental: run multiple acompletion calls concurrently and collect results.
+
+        Requires env variable: LITELLM_ENABLE_PARALLEL_ACOMPLETIONS=1
+        """
+        if not ENABLE_PARALLEL_ACOMPLETIONS:
+            raise RuntimeError(
+                "parallel_acompletions disabled; set LITELLM_ENABLE_PARALLEL_ACOMPLETIONS=1"
+            )
+        # Concurrency default tie-in
+        _concurrency = (
+            concurrency
+            if concurrency is not None
+            else (self.default_max_parallel_requests or 8)
+        )
+
+        return await _gather_parallel_acompletions(
+            self,
+            requests,
+            concurrency=_concurrency,
+            return_exceptions=return_exceptions,
+            preserve_order=preserve_order,
+        )
+
+    def iter_parallel_acompletions(
+        self,
+        requests: List[RouterParallelRequest],
+        *,
+        concurrency: Optional[int] = None,
+        return_exceptions: bool = True,
+    ):
+        """
+        Experimental: async iterator yielding each result as it finishes (completion order).
+
+        Requires env variable: LITELLM_ENABLE_PARALLEL_ACOMPLETIONS=1
+        """
+        if not ENABLE_PARALLEL_ACOMPLETIONS:
+            raise RuntimeError(
+                "parallel_acompletions disabled; set LITELLM_ENABLE_PARALLEL_ACOMPLETIONS=1"
+            )
+        _concurrency = (
+            concurrency
+            if concurrency is not None
+            else (self.default_max_parallel_requests or 8)
+        )
+
+        return _iter_parallel_acompletions(
+            self,
+            requests,
+            concurrency=_concurrency,
+            return_exceptions=return_exceptions,
         )
 
     def flush_cache(self):

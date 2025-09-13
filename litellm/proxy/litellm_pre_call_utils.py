@@ -917,7 +917,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     _add_otel_traceparent_to_data(data, request=request)
 
     ### END-USER SPECIFIC PARAMS ###
-    if user_api_key_dict.allowed_model_region is not None:
+    if isinstance(getattr(user_api_key_dict, "allowed_model_region", None), str) and user_api_key_dict.allowed_model_region:
         data["allowed_model_region"] = user_api_key_dict.allowed_model_region
     start_time = time.time()
     ## [Enterprise Only]
@@ -1092,7 +1092,8 @@ def _enforced_params_check(
     enforced_params: Optional[list] = _get_enforced_params(
         general_settings=general_settings, user_api_key_dict=user_api_key_dict
     )
-    if enforced_params is None:
+    # Treat an empty list as no enforced params
+    if not enforced_params:
         return True
     if enforced_params is not None and premium_user is not True:
         raise ValueError(
