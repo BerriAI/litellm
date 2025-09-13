@@ -19,6 +19,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
     convert_content_list_to_str,
+    extract_images_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -311,6 +312,7 @@ class OllamaChatConfig(BaseConfig):
                 cast(dict, m)
             )
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
+            images = extract_images_from_message(cast(AllMessageValues, m))
 
             ollama_message = OllamaChatCompletionMessage(
                 role=cast(str, m.get("role")),
@@ -319,6 +321,8 @@ class OllamaChatConfig(BaseConfig):
                 ollama_message["thinking"] = reasoning_content
             if content_str is not None:
                 ollama_message["content"] = content_str
+            if images is not None:
+                ollama_message["images"] = images
 
             new_messages.append(ollama_message)
 

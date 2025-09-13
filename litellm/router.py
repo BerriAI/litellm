@@ -4414,7 +4414,7 @@ class Router:
                 return tpm_key
 
         except Exception as e:
-            verbose_router_logger.exception(
+            verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
                     str(e)
                 )
@@ -4562,8 +4562,10 @@ class Router:
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
         )
-    
-    def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
+
+    def _get_metadata_variable_name_from_kwargs(
+        self, kwargs: dict
+    ) -> Literal["metadata", "litellm_metadata"]:
         """
         Helper to return what the "metadata" field should be called in the request data
 
@@ -5672,11 +5674,11 @@ class Router:
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
-                
+
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
-                
+
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
@@ -6802,7 +6804,9 @@ class Router:
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
-            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(
+                request_kwargs
+            ),
         )
 
         if len(healthy_deployments) == 0:
