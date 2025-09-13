@@ -5,11 +5,11 @@ client = OpenAI(
     api_key="sk-1234",
 )
 
-BEDROCK_BATCH_MODEL = "bedrock-batch-anthropic"
+BEDROCK_BATCH_MODEL = "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0"
 
 # Upload file
 batch_input_file = client.files.create(
-    file=open("./request.jsonl", "rb"),
+    file=open("./bedrock_batch_completions.jsonl", "rb"),
     purpose="batch",
     extra_body={"target_model_names": BEDROCK_BATCH_MODEL}
 )
