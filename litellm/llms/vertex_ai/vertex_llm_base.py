@@ -102,6 +102,12 @@ class VertexBase:
                     project_id = (
                         creds.quota_project_id
                     )  # authorized user credentials don't have a project_id, only quota_project_id
+            # Check if the JSON object contains OAuth2 credentials with access_token and refresh_token (similar to auth.ts)
+            elif "access_token" in json_obj and "refresh_token" in json_obj:
+                creds = self._credentials_from_oauth2_token(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
             else:
                 creds = self._credentials_from_service_account(
                     json_obj,
@@ -153,6 +159,58 @@ class VertexBase:
         return google.oauth2.service_account.Credentials.from_service_account_info(
             json_obj, scopes=scopes
         )
+
+    def _credentials_from_oauth2_token(self, json_obj, scopes):
+        """
+        Create credentials from OAuth2 token data.
+
+        Expected format:
+        {
+            "access_token": string,
+            "refresh_token": string,
+            "scope": "openid https://www.googleapis.com/auth/cloud-platform ...",
+            "token_type": "Bearer",
+            "id_token": string,
+            "expiry_date": 1753710424846
+        }
+        """
+        import google.oauth2.credentials
+        from datetime import datetime, timezone
+
+        # OAuth2 constants from auth.ts
+        OAUTH_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+        OAUTH_CLIENT_SECRET = "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"
+        OAUTH_REFRESH_URL = "https://oauth2.googleapis.com/token"
+
+        # Extract OAuth2 token information
+        access_token = json_obj.get("access_token")
+        refresh_token = json_obj.get("refresh_token")
+        expiry_date = json_obj.get("expiry_date")
+        scope = json_obj.get("scope", "")
+
+        if not access_token or not refresh_token:
+            raise ValueError("OAuth2 credentials must contain both access_token and refresh_token")
+
+        # Convert expiry_date to datetime if provided
+        expiry = None
+        if expiry_date and isinstance(expiry_date, (int, float)):
+            expiry = datetime.fromtimestamp(expiry_date / 1000, tz=timezone.utc)
+
+        # Parse scopes from the scope string
+        token_scopes = scope.split() if scope else scopes
+
+        # Create OAuth2 credentials
+        creds = google.oauth2.credentials.Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri=OAUTH_REFRESH_URL,
+            client_id=OAUTH_CLIENT_ID,
+            client_secret=OAUTH_CLIENT_SECRET,
+            scopes=token_scopes,
+            expiry=expiry
+        )
+
+        return creds
 
     def _credentials_from_default_auth(self, scopes):
         import google.auth as google_auth
