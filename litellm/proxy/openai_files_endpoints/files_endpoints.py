@@ -248,16 +248,18 @@ async def create_file(
         # Prepare the data for forwarding
 
         # Replace with:
+        # Coerce purpose to string defensively (test environments may mock types)
+        purpose_val = purpose if isinstance(purpose, str) else str(purpose)
         valid_purposes = get_args(OpenAIFilesPurpose)
-        if purpose not in valid_purposes:
+        if purpose_val not in valid_purposes:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+                    "error": f"Invalid purpose: {purpose_val}. Must be one of: {valid_purposes}",
                 },
             )
         # Cast purpose to OpenAIFilesPurpose type
-        purpose = cast(OpenAIFilesPurpose, purpose)
+        purpose = cast(OpenAIFilesPurpose, purpose_val)
 
         data = {}
 
