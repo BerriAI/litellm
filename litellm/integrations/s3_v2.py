@@ -276,7 +276,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
-                url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + batch_logging_element.s3_object_key
+                url = (
+                    self.s3_endpoint_url
+                    + "/"
+                    + self.s3_bucket_name
+                    + "/"
+                    + batch_logging_element.s3_object_key
+                )
 
             # Convert JSON to string
             json_string = safe_dumps(batch_logging_element.payload)
@@ -419,7 +425,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
-                url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + batch_logging_element.s3_object_key
+                url = (
+                    self.s3_endpoint_url
+                    + "/"
+                    + self.s3_bucket_name
+                    + "/"
+                    + batch_logging_element.s3_object_key
+                )
 
             # Convert JSON to string
             json_string = safe_dumps(batch_logging_element.payload)
@@ -504,7 +516,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
-                url = self.s3_endpoint_url + "/" + self.s3_bucket_name + "/" + s3_object_key
+                url = (
+                    self.s3_endpoint_url
+                    + "/"
+                    + self.s3_bucket_name
+                    + "/"
+                    + s3_object_key
+                )
 
             # Prepare the request for GET operation
             # For GET requests, we need x-amz-content-sha256 with hash of empty string
