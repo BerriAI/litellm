@@ -1,6 +1,5 @@
 import asyncio
 import json
-import re
 import time
 import traceback
 import uuid
@@ -9,6 +8,9 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+)
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
@@ -272,49 +274,6 @@ def _handle_invalid_parallel_tool_calls(
     except json.JSONDecodeError:
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
-
-
-def _parse_content_for_reasoning(
-    message_text: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse the content for reasoning
-
-    Returns:
-    - reasoning_content: The content of the reasoning
-    - content: The content of the message
-    """
-    if not message_text:
-        return None, message_text
-
-    reasoning_match = re.match(
-        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
-    )
-
-    if reasoning_match:
-        return reasoning_match.group(1), reasoning_match.group(2)
-
-    return None, message_text
-
-
-def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Extract reasoning content and main content from a message.
-
-    Args:
-        message (dict): The message dictionary that may contain reasoning_content
-
-    Returns:
-        tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
-    """
-    message_content = message.get("content")
-    if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
-    elif "reasoning" in message:
-        return message["reasoning"], message["content"]
-    elif isinstance(message_content, str):
-        return _parse_content_for_reasoning(message_content)
-    return None, message_content
 
 
 class LiteLLMResponseObjectHandler:
