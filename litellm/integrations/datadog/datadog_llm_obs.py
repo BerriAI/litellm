@@ -585,29 +585,18 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         # API key max budget
         user_api_key_max_budget = metadata.get("user_api_key_max_budget")
         if user_api_key_max_budget is not None:
-            # type casting to make sure its a float value
-            try:
-                if isinstance(user_api_key_max_budget, (int, float)):
-                    spend_metrics["litellm_api_key_max_budget_metric"] = float(user_api_key_max_budget)
-                elif isinstance(user_api_key_max_budget, str):
-                    spend_metrics["litellm_api_key_max_budget_metric"] = float(user_api_key_max_budget)
-            except (ValueError, TypeError):
-                verbose_logger.debug(f"Invalid user_api_key_max_budget value: {user_api_key_max_budget}")
+            spend_metrics["litellm_api_key_max_budget_metric"] = user_api_key_max_budget
 
         # API key budget remaining hours
         user_api_key_budget_reset_at = metadata.get("user_api_key_budget_reset_at")
         if user_api_key_budget_reset_at is not None:
             try:
                 from datetime import datetime
-                budget_reset_at: datetime
                 if isinstance(user_api_key_budget_reset_at, str):
                     # Parse ISO string if it's a string
                     budget_reset_at = datetime.fromisoformat(user_api_key_budget_reset_at.replace('Z', '+00:00'))
-                elif isinstance(user_api_key_budget_reset_at, datetime):
-                    budget_reset_at = user_api_key_budget_reset_at
                 else:
-                    verbose_logger.debug(f"Invalid user_api_key_budget_reset_at type: {type(user_api_key_budget_reset_at)}")
-                    return spend_metrics
+                    budget_reset_at = user_api_key_budget_reset_at
                 
                 remaining_hours = (
                     budget_reset_at - datetime.now(budget_reset_at.tzinfo)
