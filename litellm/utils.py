@@ -4616,7 +4616,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
     return True
 
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):

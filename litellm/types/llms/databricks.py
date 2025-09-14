@@ -1,11 +1,12 @@
 import json
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import (
     Protocol,
     Required,
     Self,
+    TypedDict,
     TypeGuard,
     get_origin,
     override,

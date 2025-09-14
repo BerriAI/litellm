@@ -1,9 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Required
+from typing_extensions import Required, TypedDict
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
