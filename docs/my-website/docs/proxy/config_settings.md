@@ -627,6 +627,7 @@ router_settings:
 | NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy
 | NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
+| NEATLOGS_API_KEY | API key for Neatlogs services
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
 | OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
