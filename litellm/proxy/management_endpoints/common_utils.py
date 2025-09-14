@@ -93,7 +93,7 @@ async def _upsert_budget_and_membership(
         create_data["tpm_limit"] = tpm_limit
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
-    
+
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},

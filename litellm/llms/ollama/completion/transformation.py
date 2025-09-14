@@ -229,7 +229,7 @@ class OllamaConfig(BaseConfig):
             model = model.split("/", 1)[1]
         api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         api_key = self.get_api_key()
-        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
             response = litellm.module_level_client.post(
@@ -279,7 +279,7 @@ class OllamaConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
             _parse_content_for_reasoning,
         )
 
