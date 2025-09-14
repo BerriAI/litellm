@@ -1,7 +1,7 @@
 ---
-title: "v1.77.2-stable - Bedrock Batches, Qwen Tiered Pricing & Performance Improvements"
+title: "v1.77.2-stable - Bedrock Batches API"
 slug: "v1-77-2"
-date: 2025-01-13T10:00:00
+date: 2025-09-13T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
@@ -52,30 +52,18 @@ pip install litellm==1.77.2
 
 #### New Model Support
 
-| Provider    | Model                           | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
-| ----------- | ------------------------------- | -------------- | ------------------- | -------------------- | -------- |
-| DeepInfra   | `deepinfra/deepseek-ai/DeepSeek-R1` | 164K | $0.70 | $2.40 | Chat completions, tool calling |
-| Heroku      | `heroku/claude-4-sonnet`        | 8K | - | - | Function calling, tool choice |
-| Heroku      | `heroku/claude-3-7-sonnet`      | 8K | - | - | Function calling, tool choice |
-| Heroku      | `heroku/claude-3-5-sonnet-latest` | 8K | - | - | Function calling, tool choice |
-| Heroku      | `heroku/claude-3-5-haiku`       | 4K | - | - | Function calling, tool choice |
-
-#### Updated Models - Qwen API (Dashscope)
-
-Added comprehensive tiered pricing support for multiple Qwen models with context-aware cost calculation:
-
-| Provider    | Model                           | Context Window | Tiered Pricing | Features |
-| ----------- | ------------------------------- | -------------- | -------------- | -------- |
-| Dashscope   | `dashscope/qwen-plus-latest`    | 1M | 0-256K: $0.40/$1.20, 256K-1M: $1.20/$3.60 | Function calling, reasoning |
-| Dashscope   | `dashscope/qwen3-max-preview`   | 262K | 0-32K: $1.20/$6.00, 32K-128K: $2.40/$12.00, 128K-252K: $3.00/$15.00 | Function calling, reasoning |
-| Dashscope   | `dashscope/qwen-flash`          | 1M | 0-256K: $0.05/$0.40, 256K-1M: $0.25/$2.00 | Function calling, reasoning |
-| Dashscope   | `dashscope/qwen3-coder-plus`    | 1M | 0-32K: $1.00/$5.00, 32K-128K: $1.80/$9.00, 128K-256K: $3.00/$15.00, 256K-1M: $6.00/$60.00 | Function calling, reasoning, caching |
-| Dashscope   | `dashscope/qwen3-coder-flash`   | 1M | 0-32K: $0.30/$1.50, 32K-128K: $0.50/$2.50, 128K-256K: $0.80/$4.00, 256K-1M: $1.60/$9.60 | Function calling, reasoning, caching |
-
-#### Model Pricing Updates
-
-- **DeepInfra Models**: Updated pricing for DeepSeek-R1, DeepSeek-V3.1, and cache read token costs
-- **Removed Deprecated Models**: Cleaned up outdated DeepInfra model entries
+| Provider    | Model                           | Context Window | Pricing ($/1M tokens) | Features |
+| ----------- | ------------------------------- | -------------- | --------------------- | -------- |
+| DeepInfra   | `deepinfra/deepseek-ai/DeepSeek-R1` | 164K | **Input:** $0.70<br/>**Output:** $2.40 | Chat completions, tool calling |
+| Heroku      | `heroku/claude-4-sonnet`        | 8K | Contact provider for pricing | Function calling, tool choice |
+| Heroku      | `heroku/claude-3-7-sonnet`      | 8K | Contact provider for pricing | Function calling, tool choice |
+| Heroku      | `heroku/claude-3-5-sonnet-latest` | 8K | Contact provider for pricing | Function calling, tool choice |
+| Heroku      | `heroku/claude-3-5-haiku`       | 4K | Contact provider for pricing | Function calling, tool choice |
+| Dashscope   | `dashscope/qwen-plus-latest`    | 1M | **Tiered Pricing:**<br/>• 0-256K tokens: $0.40 / $1.20<br/>• 256K-1M tokens: $1.20 / $3.60 | Function calling, reasoning |
+| Dashscope   | `dashscope/qwen3-max-preview`   | 262K | **Tiered Pricing:**<br/>• 0-32K tokens: $1.20 / $6.00<br/>• 32K-128K tokens: $2.40 / $12.00<br/>• 128K-252K tokens: $3.00 / $15.00 | Function calling, reasoning |
+| Dashscope   | `dashscope/qwen-flash`          | 1M | **Tiered Pricing:**<br/>• 0-256K tokens: $0.05 / $0.40<br/>• 256K-1M tokens: $0.25 / $2.00 | Function calling, reasoning |
+| Dashscope   | `dashscope/qwen3-coder-plus`    | 1M | **Tiered Pricing:**<br/>• 0-32K tokens: $1.00 / $5.00<br/>• 32K-128K tokens: $1.80 / $9.00<br/>• 128K-256K tokens: $3.00 / $15.00<br/>• 256K-1M tokens: $6.00 / $60.00 | Function calling, reasoning, caching |
+| Dashscope   | `dashscope/qwen3-coder-flash`   | 1M | **Tiered Pricing:**<br/>• 0-32K tokens: $0.30 / $1.50<br/>• 32K-128K tokens: $0.50 / $2.50<br/>• 128K-256K tokens: $0.80 / $4.00<br/>• 256K-1M tokens: $1.60 / $9.60 | Function calling, reasoning, caching |
 
 ---
 
@@ -94,7 +82,7 @@ Added comprehensive tiered pricing support for multiple Qwen models with context
 - **Anthropic Messages API** - Fixed content block sending after message with finish reason + usage block - [PR #14477](https://github.com/BerriAI/litellm/pull/14477)
 - **LM Studio** - Resolved illegal Bearer header value issue - [PR #14512](https://github.com/BerriAI/litellm/pull/14512)
 - **Gemini CLI** - Fixed token count and general CLI errors - [PR #14451](https://github.com/BerriAI/litellm/pull/14451), [PR #14417](https://github.com/BerriAI/litellm/pull/14417)
-
+- **Vertex AI Schema** - Reverted additionalProperties addition that caused issues - [PR #14466](https://github.com/BerriAI/litellm/pull/14466)
 ---
 
 ## Spend Tracking, Budgets and Rate Limiting
@@ -140,18 +128,7 @@ Added comprehensive tiered pricing support for multiple Qwen models with context
 
 ---
 
-## General Proxy Improvements
 
-#### Features
-
-- **Vertex AI File Upload** - Improved file upload handling (reverted due to issues) - [PR #14460](https://github.com/BerriAI/litellm/pull/14460), [PR #14501](https://github.com/BerriAI/litellm/pull/14501)
-
-
-#### Bug Fixes
-
-- **Vertex AI Schema** - Reverted additionalProperties addition that caused issues - [PR #14466](https://github.com/BerriAI/litellm/pull/14466)
-
----
 
 ## New Contributors
 * @Sameerlite made their first contribution in [PR #14460](https://github.com/BerriAI/litellm/pull/14460)
