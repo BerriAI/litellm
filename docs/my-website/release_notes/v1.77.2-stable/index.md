@@ -67,22 +67,35 @@ pip install litellm==1.77.2
 
 ---
 
-## LLM API Endpoints
-
 #### Features
 
-- **[Bedrock Batches API](../../docs/providers/bedrock)** - Complete batch processing support with file upload and request transformation - [PR #14518](https://github.com/BerriAI/litellm/pull/14518), [PR #14522](https://github.com/BerriAI/litellm/pull/14522)
-- **VLLM Transcription** - Added transcription endpoint support for VLLM - [PR #14523](https://github.com/BerriAI/litellm/pull/14523)
-- **Ollama Enhancements** - Improved image handling, thinking mode, and content as list support - [PR #14523](https://github.com/BerriAI/litellm/pull/14523)
-- **Debug Flag** - New `litellm_request_debug=true` flag for emitting raw request/response logs on single requests - [PR #14482](https://github.com/BerriAI/litellm/pull/14482)
+- **[Bedrock](../../docs/providers/bedrock_batches)**
+    - Bedrock Batches API - batch processing support with file upload and request transformation - [PR #14518](https://github.com/BerriAI/litellm/pull/14518), [PR #14522](https://github.com/BerriAI/litellm/pull/14522)
+- **[VLLM](../../docs/providers/vllm)**
+    - Added transcription endpoint support - [PR #14523](https://github.com/BerriAI/litellm/pull/14523)
+- **[Ollama](../../docs/providers/ollama)**
+    - `ollama_chat/` - images, thinking, and content as list handling - [PR #14523](https://github.com/BerriAI/litellm/pull/14523)
+- **General**
+    - New debug flag for detailed request/response logging [PR #14482](https://github.com/BerriAI/litellm/pull/14482)
 
 #### Bug Fixes
 
-- **Azure OpenAI Image Generation** - Fixed extra_body injection causing payload rejection - [PR #14475](https://github.com/BerriAI/litellm/pull/14475)
-- **Anthropic Messages API** - Fixed content block sending after message with finish reason + usage block - [PR #14477](https://github.com/BerriAI/litellm/pull/14477)
-- **LM Studio** - Resolved illegal Bearer header value issue - [PR #14512](https://github.com/BerriAI/litellm/pull/14512)
-- **Gemini CLI** - Fixed token count and general CLI errors - [PR #14451](https://github.com/BerriAI/litellm/pull/14451), [PR #14417](https://github.com/BerriAI/litellm/pull/14417)
-- **Vertex AI Schema** - Reverted additionalProperties addition that caused issues - [PR #14466](https://github.com/BerriAI/litellm/pull/14466)
+- **[Azure OpenAI](../../docs/providers/azure)**
+    - Fixed extra_body injection causing payload rejection in image generation - [PR #14475](https://github.com/BerriAI/litellm/pull/14475)
+- **[LM Studio](../../docs/providers/lm-studio)**
+    - Resolved illegal Bearer header value issue - [PR #14512](https://github.com/BerriAI/litellm/pull/14512)
+
+---
+
+## LLM API Endpoints
+
+#### Bug Fixes
+
+- **[/messages](../../docs/anthropic_unified)**
+    - Don't send content block after message w/ finish reason + usage block - [PR #14477](https://github.com/BerriAI/litellm/pull/14477)
+- **[/generateContent](../../docs/generateContent)**
+    - Gemini CLI Integration - Fixed token count errors - [PR #14451](https://github.com/BerriAI/litellm/pull/14451), [PR #14417](https://github.com/BerriAI/litellm/pull/14417)
+
 ---
 
 ## Spend Tracking, Budgets and Rate Limiting
