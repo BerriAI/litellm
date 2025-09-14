@@ -5,7 +5,7 @@ This is an enterprise feature and requires a premium license.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import (
     APIRouter,
@@ -17,6 +17,7 @@ from fastapi import (
     Request,
     Response,
 )
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
