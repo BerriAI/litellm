@@ -164,6 +164,7 @@ from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
+from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.petals.completion import handler as petals_handler
 from .llms.predibase.chat.handler import PredibaseChatCompletion
 from .llms.replicate.chat.handler import completion as replicate_chat_completion
@@ -259,6 +260,7 @@ sagemaker_chat_completion = SagemakerChatHandler()
 bytez_transformation = BytezChatConfig()
 heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
+ovhcloud_transformation = OVHCloudChatConfig()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -3505,6 +3507,42 @@ def completion(  # type: ignore # noqa: PLR0915
 
             pass
 
+        elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
+            api_key = (
+                api_key
+                or litellm.ovhcloud_key
+                or get_secret_str("OVHCLOUD_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OVHCLOUD_API_BASE")
+                or "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=ovhcloud_transformation,
+            )
+
+            pass
+
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -4572,6 +4610,28 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 headers=headers,
+            )
+        elif custom_llm_provider == "ovhcloud":
+            api_key = api_key or litellm.api_key or get_secret_str("OVHCLOUD_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OVHCLOUD_API_BASE")
+                or "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
             )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
