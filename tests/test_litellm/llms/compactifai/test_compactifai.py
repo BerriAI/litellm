@@ -4,10 +4,6 @@ import sys
 from unittest.mock import AsyncMock, patch
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-
 import httpx
 import pytest
 import respx
@@ -15,23 +11,6 @@ from respx import MockRouter
 
 import litellm
 from litellm import Choices, Message, ModelResponse
-from base_llm_unit_tests import BaseLLMChatTest
-
-
-class TestCompactifAI(BaseLLMChatTest):
-    def get_base_completion_call_args(self):
-        return {
-            "model": "compactifai/llama-2-7b-compressed",
-            "messages": [{"role": "user", "content": "Hello"}]
-        }
-
-    def get_custom_llm_provider(self):
-        return "compactifai"
-
-    # Implement abstract methods to avoid instantiation errors
-    def test_tool_call_no_arguments(self):
-        # CompactifAI inherits OpenAI tool calling behavior
-        pass
 
 
 @pytest.mark.respx(base_url="https://api.compactif.ai")
@@ -41,7 +20,7 @@ def test_compactifai_completion_basic():
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
-        "model": "llama-2-7b-compressed",
+        "model": "cai-llama-3-1-8b-slim",
         "choices": [
             {
                 "index": 0,
@@ -65,13 +44,13 @@ def test_compactifai_completion_basic():
         )
 
         response = litellm.completion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "Hello"}],
             api_key="test-key"
         )
 
         assert response.choices[0].message.content == "Hello! How can I help you today?"
-        assert response.model == "compactifai/llama-2-7b-compressed"
+        assert response.model == "compactifai/cai-llama-3-1-8b-slim"
         assert response.usage.total_tokens == 21
 
 
@@ -83,7 +62,7 @@ def test_compactifai_completion_streaming():
             "id": "chatcmpl-123",
             "object": "chat.completion.chunk",
             "created": 1677652288,
-            "model": "llama-2-7b-compressed",
+            "model": "cai-llama-3-1-8b-slim",
             "choices": [
                 {
                     "index": 0,
@@ -96,7 +75,7 @@ def test_compactifai_completion_streaming():
             "id": "chatcmpl-123",
             "object": "chat.completion.chunk",
             "created": 1677652288,
-            "model": "llama-2-7b-compressed",
+            "model": "cai-llama-3-1-8b-slim",
             "choices": [
                 {
                     "index": 0,
@@ -118,7 +97,7 @@ def test_compactifai_completion_streaming():
         )
 
         response = litellm.completion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "Hello"}],
             api_key="test-key",
             stream=True
@@ -136,7 +115,7 @@ def test_compactifai_models_endpoint():
         "object": "list",
         "data": [
             {
-                "id": "llama-2-7b-compressed",
+                "id": "cai-llama-3-1-8b-slim",
                 "object": "model",
                 "created": 1677610602,
                 "owned_by": "compactifai"
@@ -158,7 +137,7 @@ def test_compactifai_models_endpoint():
         # This would be tested if litellm had a models() function
         # For now, we'll test that the provider is properly configured
         response = litellm.completion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "test"}],
             api_key="test-key"
         )
@@ -183,7 +162,7 @@ def test_compactifai_authentication_error():
 
         with pytest.raises(litellm.AuthenticationError):
             litellm.completion(
-                model="compactifai/llama-2-7b-compressed",
+                model="compactifai/cai-llama-3-1-8b-slim",
                 messages=[{"role": "user", "content": "test"}],
                 api_key="invalid-key"
             )
@@ -195,11 +174,11 @@ def test_compactifai_provider_detection():
     from litellm.utils import get_llm_provider
 
     model, provider, dynamic_api_key, api_base = get_llm_provider(
-        model="compactifai/llama-2-7b-compressed"
+        model="compactifai/cai-llama-3-1-8b-slim"
     )
 
     assert provider == "compactifai"
-    assert model == "llama-2-7b-compressed"
+    assert model == "cai-llama-3-1-8b-slim"
 
 
 @pytest.mark.respx(base_url="https://api.compactif.ai")
@@ -209,7 +188,7 @@ def test_compactifai_with_optional_params():
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
-        "model": "llama-2-7b-compressed",
+        "model": "cai-llama-3-1-8b-slim",
         "choices": [
             {
                 "index": 0,
@@ -233,7 +212,7 @@ def test_compactifai_with_optional_params():
         )
 
         response = litellm.completion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "Hello with params"}],
             api_key="test-key",
             temperature=0.7,
@@ -259,7 +238,7 @@ def test_compactifai_headers_authentication():
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
-        "model": "llama-2-7b-compressed",
+        "model": "cai-llama-3-1-8b-slim",
         "choices": [
             {
                 "index": 0,
@@ -283,7 +262,7 @@ def test_compactifai_headers_authentication():
         )
 
         response = litellm.completion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "Test auth"}],
             api_key="test-api-key-123"
         )
@@ -305,7 +284,7 @@ async def test_compactifai_async_completion():
         "id": "chatcmpl-123",
         "object": "chat.completion",
         "created": 1677652288,
-        "model": "llama-2-7b-compressed",
+        "model": "cai-llama-3-1-8b-slim",
         "choices": [
             {
                 "index": 0,
@@ -329,7 +308,7 @@ async def test_compactifai_async_completion():
         )
 
         response = await litellm.acompletion(
-            model="compactifai/llama-2-7b-compressed",
+            model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "Async test"}],
             api_key="test-key"
         )

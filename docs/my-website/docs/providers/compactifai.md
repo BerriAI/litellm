@@ -9,7 +9,7 @@ CompactifAI offers highly compressed versions of leading language models, delive
 | Property | Details |
 |-------|-------|
 | Description | CompactifAI offers compressed versions of leading language models with up to 70% cost reduction and 4x throughput gains |
-| Provider Route on LiteLLM | `compactifai/` (add this prefix to the model name - e.g. `compactifai/llama-2-7b-compressed`) |
+| Provider Route on LiteLLM | `compactifai/` (add this prefix to the model name - e.g. `compactifai/cai-llama-3-1-8b-slim`) |
 | Provider Doc | [CompactifAI ↗](https://docs.compactif.ai/) |
 | API Endpoint for Provider | https://api.compactif.ai/v1 |
 | Supported Endpoints | `/chat/completions`, `/completions` |
@@ -63,7 +63,7 @@ import os
 os.environ['COMPACTIFAI_API_KEY'] = "your-api-key"
 
 response = completion(
-    model="compactifai/llama-2-7b-compressed",
+    model="compactifai/cai-llama-3-1-8b-slim",
     messages=[
        {"role": "user", "content": "Hello from LiteLLM!"}
    ],
@@ -78,7 +78,7 @@ print(response)
 model_list:
   - model_name: llama-2-compressed
     litellm_params:
-      model: compactifai/llama-2-7b-compressed
+      model: compactifai/cai-llama-3-1-8b-slim
       api_key: os.environ/COMPACTIFAI_API_KEY
 ```
 
@@ -94,7 +94,7 @@ import os
 os.environ['COMPACTIFAI_API_KEY'] = "your-api-key"
 
 response = completion(
-    model="compactifai/llama-2-7b-compressed",
+    model="compactifai/cai-llama-3-1-8b-slim",
     messages=[
        {"role": "user", "content": "Write a short story"}
    ],
@@ -113,7 +113,7 @@ for chunk in response:
 from litellm import completion
 
 response = completion(
-    model="compactifai/llama-2-7b-compressed",
+    model="compactifai/cai-llama-3-1-8b-slim",
     messages=[{"role": "user", "content": "Explain quantum computing"}],
     temperature=0.7,
     max_tokens=500,
@@ -147,7 +147,7 @@ functions = [
 ]
 
 response = completion(
-    model="compactifai/llama-2-7b-compressed",
+    model="compactifai/cai-llama-3-1-8b-slim",
     messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
     tools=[{"type": "function", "function": f} for f in functions],
     tool_choice="auto"
@@ -162,7 +162,7 @@ from litellm import acompletion
 
 async def async_call():
     response = await acompletion(
-        model="compactifai/llama-2-7b-compressed",
+        model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Hello async world!"}]
     )
     return response
@@ -185,7 +185,7 @@ models = response.json()
 ```
 
 Common model formats:
-- `compactifai/llama-2-7b-compressed`
+- `compactifai/cai-llama-3-1-8b-slim`
 - `compactifai/mistral-7b-compressed`
 - `compactifai/codellama-7b-compressed`
 
@@ -207,7 +207,7 @@ from litellm.exceptions import AuthenticationError, RateLimitError
 
 try:
     response = completion(
-        model="compactifai/llama-2-7b-compressed",
+        model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Hello"}]
     )
 except AuthenticationError:
