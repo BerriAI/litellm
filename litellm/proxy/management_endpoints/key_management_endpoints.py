@@ -925,6 +925,15 @@ async def prepare_key_update_data(
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
     non_default_values = {}
+    # ADD METADATA FIELDS
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
     for k, v in data_json.items():
         if (
             k in LiteLLM_ManagementEndpoint_MetadataFields
@@ -1137,6 +1146,9 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
+
+            # Set Management Endpoint Metadata Fields
+
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )

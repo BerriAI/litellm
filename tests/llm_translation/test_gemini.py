@@ -21,7 +21,7 @@ import json
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "gemini/gemini-2.0-flash"}
+        return {"model": "gemini/gemini-2.5-flash"}
 
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash"}

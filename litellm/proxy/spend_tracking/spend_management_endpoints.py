@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -18,6 +17,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1660,6 +1660,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by key alias"
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by end user"
+    ),
 ):
     """
     View spend logs for UI with pagination support
@@ -1727,6 +1733,15 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         if model is not None:
             where_conditions["model"] = model
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
             where_conditions["spend"] = {}

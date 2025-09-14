@@ -43,6 +43,8 @@ if [ $? -eq 0 ]; then
   # Copy the contents of the output directory to the specified destination
   cp -r ./out/* "$destination_dir"
 
+  rm -rf ./out
+
   echo "Deployment completed."
 else
   echo "Build failed. Deployment aborted."
