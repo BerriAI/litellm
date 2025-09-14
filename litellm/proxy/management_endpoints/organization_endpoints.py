@@ -58,6 +58,18 @@ def handle_nested_budget_structure_in_organization_update_request(raw_data: dict
     return transformed_data
 
 
+# Backwards-compatible alias expected by tests and callers
+def transform_organization_update_request(raw_data: dict) -> dict:
+    """
+    Backwards-compatible wrapper that normalizes organization update payloads
+    from the UI by flattening nested budget fields.
+
+    This preserves the older import path used by tests:
+        from ...organization_endpoints import transform_organization_update_request
+    """
+    return handle_nested_budget_structure_in_organization_update_request(raw_data)
+
+
 @router.post(
     "/organization/new",
     tags=["organization management"],
