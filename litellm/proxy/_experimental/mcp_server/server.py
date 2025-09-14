@@ -578,7 +578,7 @@ if MCP_AVAILABLE:
         """
         import re
         mcp_servers_from_path: Optional[List[str]] = None
-        mcp_path_match = re.match(r"^/mcp/([^/]+)(/.*)?$", path)
+        mcp_path_match = re.match(r"^/mcp/([^/]+/[^/]+|[^/]+)(/.*)?$", path)
         if mcp_path_match:
             mcp_servers_str = mcp_path_match.group(1)
             if mcp_servers_str:
