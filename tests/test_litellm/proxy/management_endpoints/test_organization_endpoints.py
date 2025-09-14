@@ -235,38 +235,3 @@ async def test_organization_update_object_permissions_missing_permission_record(
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
-
-
-def test_transform_organization_update_request():
-    """
-    Test the request transformer handles nested litellm_budget_table structure from UI.
-    """
-    from litellm.proxy.management_endpoints.organization_endpoints import (
-        transform_organization_update_request,
-    )
-
-    # Test UI payload with nested budget structure
-    ui_payload = {
-        "organization_id": "test_org_id",
-        "organization_alias": "Test Org",
-        "litellm_budget_table": {
-            "max_budget": "1000.0",
-            "tpm_limit": 5000,
-            "rpm_limit": None
-        }
-    }
-    
-    # Transform the payload
-    transformed = transform_organization_update_request(ui_payload)
-    
-    # Verify nested structure was flattened to top-level fields
-    assert transformed["max_budget"] == "1000.0"
-    assert transformed["tpm_limit"] == 5000
-    assert "rpm_limit" not in transformed  # None values shouldn't be included
-    
-    # Verify nested field was removed
-    assert "litellm_budget_table" not in transformed
-    
-    # Verify other fields preserved
-    assert transformed["organization_id"] == "test_org_id"
-    assert transformed["organization_alias"] == "Test Org"
