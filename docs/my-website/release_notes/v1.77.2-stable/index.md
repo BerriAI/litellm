@@ -135,9 +135,9 @@ pip install litellm==1.77.2
 ## Performance / Loadbalancing / Reliability improvements
 
 #### Performance
-- **Code Quality** - Removed dynamic creation of static values - [PR #14538](https://github.com/BerriAI/litellm/pull/14538)
-- **High-Performance Request Limiter** - Restored _PROXY_MaxParallelRequestsHandler_v3 by default for optimal throughput - [PR #14450](https://github.com/BerriAI/litellm/pull/14450)
-- **Enhanced Logging Context** - Improved execution context propagation into logging tasks - [PR #14455](https://github.com/BerriAI/litellm/pull/14455)
+- Removed dynamic creation of static values - [PR #14538](https://github.com/BerriAI/litellm/pull/14538)
+- Using `_PROXY_MaxParallelRequestsHandler_v3` by default for optimal throughput - [PR #14450](https://github.com/BerriAI/litellm/pull/14450)
+- Improved execution context propagation into logging tasks - [PR #14455](https://github.com/BerriAI/litellm/pull/14455)
 
 ---
 
