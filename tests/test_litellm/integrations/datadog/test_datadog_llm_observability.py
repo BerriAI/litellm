@@ -657,87 +657,6 @@ def test_guardrail_information_in_metadata(mock_env_vars):
         assert guardrail_info["guardrail_response"]["score"] == 0.1
 
 
-def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPayload:
-    """Create a StandardLoggingPayload object with spend metrics for testing"""
-    from datetime import datetime, timezone
-    
-    # Create a budget reset time 24 hours from now
-    budget_reset_at = datetime.now(timezone.utc) + timedelta(hours=24)
-    
-    return {
-        "id": "test-request-id-spend",
-        "trace_id": "test-trace-id-spend",
-        "call_type": "completion",
-        "stream": None,
-        "response_cost": 0.15,
-        "response_cost_failure_debug_info": None,
-        "status": "success",
-        "custom_llm_provider": "openai",
-        "total_tokens": 30,
-        "prompt_tokens": 10,
-        "completion_tokens": 20,
-        "startTime": 1234567890.0,
-        "endTime": 1234567891.0,
-        "completionStartTime": 1234567890.5,
-        "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-4",
-            "model_map_value": None
-        },
-        "model": "gpt-4",
-        "model_id": "model-123",
-        "model_group": "openai-gpt",
-        "api_base": "https://api.openai.com",
-        "metadata": {
-            "user_api_key_hash": "test_hash",
-            "user_api_key_org_id": None,
-            "user_api_key_alias": "test_alias",
-            "user_api_key_team_id": "test_team",
-            "user_api_key_user_id": "test_user",
-            "user_api_key_team_alias": "test_team_alias",
-            "user_api_key_user_email": None,
-            "user_api_key_end_user_id": None,
-            "user_api_key_request_route": None,
-            "user_api_key_max_budget": 10.0,  # $10 max budget
-            "user_api_key_budget_reset_at": budget_reset_at.isoformat(),
-            "spend_logs_metadata": None,
-            "requester_ip_address": "127.0.0.1",
-            "requester_metadata": None,
-            "requester_custom_headers": None,
-            "prompt_management_metadata": None,
-            "mcp_tool_call_metadata": None,
-            "vector_store_request_metadata": None,
-            "applied_guardrails": None,
-            "usage_object": None,
-            "cold_storage_object_key": None,
-        },
-        "cache_hit": False,
-        "cache_key": None,
-        "saved_cache_cost": 0.0,
-        "request_tags": [],
-        "end_user": None,
-        "requester_ip_address": "127.0.0.1",
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "response": {"choices": [{"message": {"content": "Hi there!"}}]},
-        "error_str": None,
-        "error_information": None,
-        "model_parameters": {"stream": False},
-        "hidden_params": {
-            "model_id": "model-123",
-            "cache_key": None,
-            "api_base": "https://api.openai.com",
-            "response_cost": "0.15",
-            "litellm_overhead_time_ms": None,
-            "additional_headers": None,
-            "batch_models": None,
-            "litellm_model_name": None,
-            "usage_object": None,
-        },
-        "guardrail_information": None,
-        "standard_built_in_tools_params": None,
-    }  # type: ignore
-
-
 def create_standard_logging_payload_with_tool_calls() -> StandardLoggingPayload:
     """Create a StandardLoggingPayload object with tool calls for testing"""
     return {
@@ -983,49 +902,253 @@ class TestDataDogLLMObsLoggerToolCalls:
             assert output_function_info.get("name") == "format_response"
 
 
-def test_spend_metrics_in_datadog_payload(mock_env_vars):
+def create_standard_logging_payload() -> StandardLoggingPayload:
+    """Create a standard logging payload for testing"""
+    return {
+        "id": "test_id",
+        "trace_id": "test_trace_id",
+        "call_type": "completion",
+        "stream": False,
+        "response_cost": 0.1,
+        "response_cost_failure_debug_info": None,
+        "status": "success",
+        "custom_llm_provider": None,
+        "total_tokens": 30,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "startTime": 1234567890.0,
+        "endTime": 1234567891.0,
+        "completionStartTime": 1234567890.5,
+        "response_time": 1.0,
+        "model_map_information": {
+            "model_map_key": "gpt-3.5-turbo",
+            "model_map_value": None
+        },
+        "model": "gpt-3.5-turbo",
+        "model_id": "model-123",
+        "model_group": "openai-gpt",
+        "api_base": "https://api.openai.com",
+        "metadata": {
+            "user_api_key_hash": "test_hash",
+            "user_api_key_org_id": None,
+            "user_api_key_alias": "test_alias",
+            "user_api_key_team_id": "test_team",
+            "user_api_key_user_id": "test_user",
+            "user_api_key_team_alias": "test_team_alias",
+            "user_api_key_end_user_id": None,
+            "user_api_key_request_route": None,
+            "user_api_key_max_budget": None,
+            "user_api_key_budget_reset_at": None,
+            "user_api_key_user_email": None,
+            "spend_logs_metadata": None,
+            "requester_ip_address": "127.0.0.1",
+            "requester_metadata": None,
+            "requester_custom_headers": None,
+            "prompt_management_metadata": None,
+            "mcp_tool_call_metadata": None,
+            "vector_store_request_metadata": None,
+            "applied_guardrails": None,
+            "usage_object": None,
+            "cold_storage_object_key": None,
+        },
+        "cache_hit": False,
+        "cache_key": None,
+        "saved_cache_cost": 0.0,
+        "request_tags": [],
+        "end_user": None,
+        "requester_ip_address": "127.0.0.1",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "response": {"choices": [{"message": {"content": "Hi there!"}}]},
+        "error_str": None,
+        "model_parameters": {"stream": True},
+        "hidden_params": {
+            "model_id": "model-123",
+            "cache_key": None,
+            "api_base": "https://api.openai.com",
+            "response_cost": "0.1",
+            "additional_headers": None,
+            "litellm_overhead_time_ms": None,
+            "batch_models": None,
+            "litellm_model_name": None,
+            "usage_object": None,
+        },
+        "error_information": None,
+        "guardrail_information": None,
+        "standard_built_in_tools_params": None,
+    }  # type: ignore
+
+
+def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPayload:
+    """Create a StandardLoggingPayload object with spend metrics for testing"""
+    from datetime import datetime, timezone
+
+    # Create a budget reset time 24 hours from now
+    budget_reset_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+    return {
+        "id": "test-request-id-spend",
+        "trace_id": "test-trace-id-spend",
+        "call_type": "completion",
+        "stream": None,
+        "response_cost": 0.15,
+        "response_cost_failure_debug_info": None,
+        "status": "success",
+        "custom_llm_provider": "openai",
+        "total_tokens": 30,
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "startTime": 1234567890.0,
+        "endTime": 1234567891.0,
+        "completionStartTime": 1234567890.5,
+        "response_time": 1.0,
+        "model_map_information": {
+            "model_map_key": "gpt-4",
+            "model_map_value": None
+        },
+        "model": "gpt-4",
+        "model_id": "model-123",
+        "model_group": "openai-gpt",
+        "api_base": "https://api.openai.com",
+        "metadata": {
+            "user_api_key_hash": "test_hash",
+            "user_api_key_org_id": None,
+            "user_api_key_alias": "test_alias",
+            "user_api_key_team_id": "test_team",
+            "user_api_key_user_id": "test_user",
+            "user_api_key_team_alias": "test_team_alias",
+            "user_api_key_user_email": None,
+            "user_api_key_end_user_id": None,
+            "user_api_key_request_route": None,
+            "user_api_key_max_budget": 10.0,  # $10 max budget
+            "user_api_key_budget_reset_at": budget_reset_at.isoformat(),
+            "spend_logs_metadata": None,
+            "requester_ip_address": "127.0.0.1",
+            "requester_metadata": None,
+            "requester_custom_headers": None,
+            "prompt_management_metadata": None,
+            "mcp_tool_call_metadata": None,
+            "vector_store_request_metadata": None,
+            "applied_guardrails": None,
+            "usage_object": None,
+            "cold_storage_object_key": None,
+        },
+        "cache_hit": False,
+        "cache_key": None,
+        "saved_cache_cost": 0.0,
+        "request_tags": [],
+        "end_user": None,
+        "requester_ip_address": "127.0.0.1",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "response": {"choices": [{"message": {"content": "Hi there!"}}]},
+        "error_str": None,
+        "error_information": None,
+        "model_parameters": {"stream": False},
+        "hidden_params": {
+            "model_id": "model-123",
+            "cache_key": None,
+            "api_base": "https://api.openai.com",
+            "response_cost": "0.15",
+            "litellm_overhead_time_ms": None,
+            "additional_headers": None,
+            "batch_models": None,
+            "litellm_model_name": None,
+            "usage_object": None,
+        },
+        "guardrail_information": None,
+        "standard_built_in_tools_params": None,
+    }  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_datadog_llm_obs_spend_metrics():
+    """Test that budget metrics are properly extracted and logged"""
+    datadog_llm_obs_logger = DataDogLLMObsLogger()
+
+    # Create a standard logging payload with budget metadata
+    payload = create_standard_logging_payload()
+
+    # Add budget information to metadata
+    payload["metadata"]["user_api_key_max_budget"] = 10.0
+    payload["metadata"]["user_api_key_budget_reset_at"] = "2025-09-15T00:00:00+00:00"
+
+    # Test the _get_spend_metrics method
+    spend_metrics = datadog_llm_obs_logger._get_spend_metrics(payload)
+
+    # Verify budget metrics are present
+    assert "litellm_api_key_max_budget_metric" in spend_metrics
+    assert spend_metrics["litellm_api_key_max_budget_metric"] == 10.0
+
+    assert "litellm_api_key_budget_remaining_hours_metric" in spend_metrics
+    # The remaining hours should be calculated based on the reset time
+    assert spend_metrics["litellm_api_key_budget_remaining_hours_metric"] >= 0
+
+    print(f"Spend metrics: {spend_metrics}")
+
+
+@pytest.mark.asyncio
+async def test_datadog_llm_obs_spend_metrics_no_budget():
+    """Test that spend metrics work when no budget is set"""
+    datadog_llm_obs_logger = DataDogLLMObsLogger()
+
+    # Create a standard logging payload without budget metadata
+    payload = create_standard_logging_payload()
+
+    # Test the _get_spend_metrics method
+    spend_metrics = datadog_llm_obs_logger._get_spend_metrics(payload)
+
+    # Verify only response cost is present
+    assert "litellm_spend_metric" in spend_metrics
+    assert spend_metrics["litellm_spend_metric"] == 0.1
+
+    # Budget metrics should not be present
+    assert "litellm_api_key_max_budget_metric" not in spend_metrics
+    assert "litellm_api_key_budget_remaining_hours_metric" not in spend_metrics
+
+    print(f"Spend metrics (no budget): {spend_metrics}")
+
+
+@pytest.mark.asyncio
+async def test_spend_metrics_in_datadog_payload():
     """Test that spend metrics are correctly included in DataDog LLM Observability payloads"""
-    with patch(
-        "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-    ), patch("asyncio.create_task"):
-        logger = DataDogLLMObsLogger()
+    datadog_llm_obs_logger = DataDogLLMObsLogger()
 
-        standard_payload = create_standard_logging_payload_with_spend_metrics()
+    standard_payload = create_standard_logging_payload_with_spend_metrics()
 
-        kwargs = {
-            "standard_logging_object": standard_payload,
-            "litellm_params": {"metadata": {}},
-        }
+    kwargs = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {"metadata": {}},
+    }
 
-        start_time = datetime.now()
-        end_time = datetime.now()
+    start_time = datetime.now()
+    end_time = datetime.now()
 
-        payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
+    payload = datadog_llm_obs_logger.create_llm_obs_payload(kwargs, start_time, end_time)
 
-        # Verify basic payload structure
-        assert payload.get("name") == "litellm_llm_call"
-        assert payload.get("status") == "ok"
+    # Verify basic payload structure
+    assert payload.get("name") == "litellm_llm_call"
+    assert payload.get("status") == "ok"
 
-        # Verify spend metrics are included in metadata
-        meta = payload.get("meta", {})
-        assert meta is not None, "Meta section should exist in payload"
-        
-        metadata = meta.get("metadata", {})
-        assert metadata is not None, "Metadata section should exist in meta"
-        
-        spend_metrics = metadata.get("spend_metrics", {})
-        assert spend_metrics, "Spend metrics should exist in metadata"
+    # Verify spend metrics are included in metadata
+    meta = payload.get("meta", {})
+    assert meta is not None, "Meta section should exist in payload"
 
-        # Check that all three spend metrics are present
-        assert "litellm_spend_metric" in spend_metrics
-        assert "litellm_api_key_max_budget_metric" in spend_metrics
-        assert "litellm_api_key_budget_remaining_hours_metric" in spend_metrics
+    metadata = meta.get("metadata", {})
+    assert metadata is not None, "Metadata section should exist in meta"
 
-        # Verify the values are correct
-        assert spend_metrics["litellm_spend_metric"] == 0.15  # response_cost
-        assert spend_metrics["litellm_api_key_max_budget_metric"] == 10.0  # max budget
+    spend_metrics = metadata.get("spend_metrics", {})
+    assert spend_metrics, "Spend metrics should exist in metadata"
 
-        # Verify remaining hours is a reasonable value (should be close to 24 since we set it to 24 hours from now)
-        remaining_hours = spend_metrics["litellm_api_key_budget_remaining_hours_metric"]
-        assert isinstance(remaining_hours, (int, float))
-        assert 20 <= remaining_hours <= 25  # Should be close to 24 hours
+    # Check that all three spend metrics are present
+    assert "litellm_spend_metric" in spend_metrics
+    assert "litellm_api_key_max_budget_metric" in spend_metrics
+    assert "litellm_api_key_budget_remaining_hours_metric" in spend_metrics
+
+    # Verify the values are correct
+    assert spend_metrics["litellm_spend_metric"] == 0.15  # response_cost
+    assert spend_metrics["litellm_api_key_max_budget_metric"] == 10.0  # max budget
+
+    # Verify remaining hours is a reasonable value (should be close to 24 since we set it to 24 hours from now)
+    remaining_hours = spend_metrics["litellm_api_key_budget_remaining_hours_metric"]
+    assert isinstance(remaining_hours, (int, float))
+    assert 20 <= remaining_hours <= 25  # Should be close to 24 hours
+
