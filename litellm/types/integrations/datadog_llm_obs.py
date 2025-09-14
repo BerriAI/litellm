@@ -85,4 +85,5 @@ class DDLLMObsLatencyMetrics(TypedDict, total=False):
 class DDLLMObsSpendMetrics(TypedDict, total=False):
     litellm_spend_metric: float
     litellm_api_key_max_budget_metric: float
+    litellm_remaining_api_key_budget_metric: float
     litellm_api_key_budget_remaining_hours_metric: float

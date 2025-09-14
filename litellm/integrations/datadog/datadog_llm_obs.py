@@ -148,27 +148,10 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                     ),
                 ),
             }
-            # serialize datetime objects - for budget reset time in spend metrics
-            import json
-            from datetime import datetime, date
-            
-            def custom_json_encoder(obj):
-                if isinstance(obj, (datetime, date)):
-                    return obj.isoformat()
-                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-            
-            # Serialize payload with custom encoder for debugging
-            try:
-                verbose_logger.debug("payload %s", json.dumps(payload, indent=4, default=custom_json_encoder))
-            except Exception as debug_error:
-                verbose_logger.debug("payload serialization failed: %s", str(debug_error))
-            
-            # Convert payload to JSON string with custom encoder for HTTP request
-            json_payload = json.dumps(payload, default=custom_json_encoder)
-            
+            verbose_logger.debug("payload %s", json.dumps(payload, indent=4))
             response = await self.async_client.post(
                 url=self.intake_url,
-                content=json_payload,
+                json=payload,
                 headers={
                     "DD-API-KEY": self.DD_API_KEY,
                     "Content-Type": "application/json",
