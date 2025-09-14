@@ -45,8 +45,8 @@ pip install litellm==1.77.2
 
 ## Key Highlights
 
-- **Bedrock Batches API** - Complete end-to-end support for AWS Bedrock batch processing with proper file upload and request transformation
-- **Qwen API Tiered Pricing** - Added comprehensive tiered cost tracking support for Dashscope/Qwen models with multiple pricing tiers
+- **Bedrock Batches API** - Support for creating Batch Inference Jobs on Bedrock using LiteLLM's unified batch API (OpenAI compatible)
+- **Qwen API Tiered Pricing** - Cost tracking support for Dashscope (Qwen) models with multiple pricing tiers
 
 ## New Models / Updated Models
 
