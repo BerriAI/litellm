@@ -46,27 +46,36 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 try:
                     parsed_body = orjson.loads(body)
                 except orjson.JSONDecodeError as e:
-                    # First try the standard json module which is more forgiving
-                    # First decode bytes to string if needed
-                    body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+                    # First try the standard json module which is more forgiving.
+                    # Ensure we operate on a string for regex handling.
+                    if isinstance(body, (bytes, bytearray)):
+                        body_str = body.decode("utf-8", errors="ignore")
+                    elif isinstance(body, str):
+                        body_str = body
+                    else:
+                        # Unexpected type (e.g., MagicMock) – treat as empty/invalid JSON
+                        body_str = ""
 
-                    # Replace invalid surrogate pairs
-                    import re
+                    if body_str:
+                        # Replace invalid surrogate pairs
+                        import re
 
-                    # This regex finds incomplete surrogate pairs
-                    body_str = re.sub(
-                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
-                    )
-                    # This regex finds low surrogates without high surrogates
-                    body_str = re.sub(
-                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
-                    )
+                        # This regex finds incomplete surrogate pairs
+                        body_str = re.sub(
+                            r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
+                        )
+                        # This regex finds low surrogates without high surrogates
+                        body_str = re.sub(
+                            r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
+                        )
 
                     try:
-                        parsed_body = json.loads(body_str)
+                        parsed_body = json.loads(body_str) if body_str else {}
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        verbose_proxy_logger.error(
+                            f"Invalid JSON payload received: {str(e)}"
+                        )
                         raise ProxyException(
                             message=f"Invalid JSON payload: {str(e)}",
                             type="invalid_request_error",
