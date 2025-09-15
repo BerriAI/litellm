@@ -754,10 +754,12 @@ class Delta(OpenAIObject):
             self.function_call = function_call
         if tool_calls is not None and isinstance(tool_calls, list):
             self.tool_calls = []
+            current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
-                        tool_call["index"] = 0
+                        tool_call["index"] = current_index
+                        current_index += 1
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
