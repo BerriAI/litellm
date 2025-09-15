@@ -254,27 +254,59 @@ class LiteLLM_Proxy_MCP_Handler:
         return False
     
     @staticmethod
-    def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:
-        """Extract tool calls from the response output."""
+    def _extract_tool_calls_from_response(response) -> List[Any]:
+        """Extract tool calls from the response output - supports both ResponsesAPI and Chat Completions formats."""
         tool_calls: List[Any] = []
-        for output_item in response.output:
-            # Check if this is a function call output item
-            if (isinstance(output_item, dict) and 
-                output_item.get("type") == "function_call"):
-                tool_calls.append(output_item)
-            elif hasattr(output_item, 'type') and getattr(output_item, 'type') == "function_call":
-                # Handle pydantic model case
-                tool_calls.append(output_item)
+        
+        # Handle Chat Completions response format
+        if hasattr(response, 'choices') and response.choices:
+            choice = response.choices[0]
+            if hasattr(choice, 'message') and hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
+                tool_calls.extend(choice.message.tool_calls)
+                return tool_calls
+        
+        # Handle ResponsesAPI response format 
+        if hasattr(response, 'output'):
+            for output_item in response.output:
+                # Check if this is a function call output item
+                if (isinstance(output_item, dict) and 
+                    output_item.get("type") == "function_call"):
+                    tool_calls.append(output_item)
+                elif hasattr(output_item, 'type') and getattr(output_item, 'type') == "function_call":
+                    # Handle pydantic model case
+                    tool_calls.append(output_item)
         
         return tool_calls
     
     @staticmethod
     def _extract_tool_call_details(tool_call) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """Extract tool name, arguments, and call_id from a tool call."""
-        if isinstance(tool_call, dict):
-            tool_name = tool_call.get("name")
-            tool_arguments = tool_call.get("arguments")
-            tool_call_id = tool_call.get("call_id") or tool_call.get("id")
+        """Extract tool name, arguments, and call_id from a tool call - supports both ResponsesAPI and Chat Completions formats."""
+        tool_name = None
+        tool_arguments = None
+        tool_call_id = None
+        
+        # Handle Chat Completions format: tool_call.function.name/arguments, tool_call.id
+        if hasattr(tool_call, 'function') and hasattr(tool_call, 'id'):
+            function = tool_call.function
+            tool_name = getattr(function, 'name', None)
+            tool_arguments = getattr(function, 'arguments', None)
+            tool_call_id = getattr(tool_call, 'id', None)
+        
+        # Handle ResponsesAPI dict format
+        elif isinstance(tool_call, dict):
+            # Check for nested function structure (Chat Completions dict format)
+            if "function" in tool_call and tool_call["function"] is not None:
+                function = tool_call["function"]
+                tool_name = function.get("name")
+                tool_arguments = function.get("arguments")
+                tool_call_id = tool_call.get("id")
+            else:
+                # Direct format (ResponsesAPI format)
+                tool_name = tool_call.get("name")
+                tool_arguments = tool_call.get("arguments")
+                tool_call_id = tool_call.get("call_id") or tool_call.get("id")
+        
+        # Handle ResponsesAPI object format
         else:
             tool_name = getattr(tool_call, "name", None)
             tool_arguments = getattr(tool_call, "arguments", None)

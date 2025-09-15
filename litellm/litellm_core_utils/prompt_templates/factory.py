@@ -3798,17 +3798,47 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
-        parameters = tool.get("function", {}).get(
-            "parameters", {"type": "object", "properties": {}}
-        )
-        name = tool.get("function", {}).get("name", "")
-
+        # Extract tool name and parameters from different formats
+        name = ""
+        description = ""
+        parameters = {"type": "object", "properties": {}}
+        
+        # Handle OpenAI function call format: {"type": "function", "function": {"name": "...", ...}}
+        if "function" in tool and tool["function"] is not None:
+            function_spec = tool["function"]
+            name = function_spec.get("name", "")
+            description = function_spec.get("description", "")
+            parameters = function_spec.get("parameters", {"type": "object", "properties": {}})
+        
+        # Handle direct tool format: {"name": "...", "description": "...", "parameters": {...}}
+        elif "name" in tool:
+            name = tool.get("name", "")
+            description = tool.get("description", "")
+            parameters = tool.get("parameters", {"type": "object", "properties": {}})
+            # Also check for inputSchema format
+            if "inputSchema" in tool:
+                parameters = tool["inputSchema"]
+        
+        # Handle MCP/other formats: try to extract what we can
+        elif hasattr(tool, 'name'):
+            name = getattr(tool, 'name', "")
+            description = getattr(tool, 'description', "")
+            if hasattr(tool, 'parameters'):
+                parameters = getattr(tool, 'parameters', {"type": "object", "properties": {}})
+            elif hasattr(tool, 'inputSchema'):
+                parameters = getattr(tool, 'inputSchema', {"type": "object", "properties": {}})
+        
+        # Skip tools with empty names - they'll cause Bedrock validation errors
+        if not name or not name.strip():
+            continue
+            
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
-        description = tool.get("function", {}).get(
-            "description", name
-        )  # converse api requires a description
+        
+        # Ensure description is not empty (Bedrock requires it)
+        if not description or not description.strip():
+            description = f"Tool: {name}"  # Use name as fallback description
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
