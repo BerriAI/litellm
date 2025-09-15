@@ -1211,7 +1211,6 @@ def _check_model_access_helper(
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
-    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> bool:
     ## check if model in allowed model names
     from collections import defaultdict
@@ -1316,7 +1315,6 @@ def _can_object_call_model(
             models=models,
             team_model_aliases=team_model_aliases,
             team_id=team_id,
-            object_type=object_type,
         ):
             return True
 
