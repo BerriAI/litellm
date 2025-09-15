@@ -4,9 +4,10 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache

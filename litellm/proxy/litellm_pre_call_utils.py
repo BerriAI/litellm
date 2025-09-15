@@ -14,10 +14,14 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
+    LitellmUserRoles,
     SpecialHeaders,
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+
+# Cache special headers as a frozenset for O(1) lookup performance
+_SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -53,6 +57,13 @@ def parse_cache_control(cache_control):
     return cache_dict
 
 
+LITELLM_METADATA_ROUTES = (
+    "batches",
+    "/v1/messages",
+    "responses",
+    "files",
+)
+
 def _get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
@@ -64,22 +75,10 @@ def _get_metadata_variable_name(request: Request) -> str:
     if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
 
-    LITELLM_METADATA_ROUTES = [
-        "batches",
-        "/v1/messages",
-        "responses",
-        "files",
-    ]
-
-    if any(
-        [
-            litellm_metadata_route in request.url.path
-            for litellm_metadata_route in LITELLM_METADATA_ROUTES
-        ]
-    ):
+    if any(route in request.url.path for route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
-    else:
-        return "metadata"
+
+    return "metadata"
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
@@ -234,14 +233,13 @@ def clean_headers(
     """
     Removes litellm api key from headers
     """
-    special_headers = [v.value.lower() for v in SpecialHeaders._member_map_.values()]
-    special_headers = special_headers
-    if litellm_key_header_name is not None:
-        special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
-
+    litellm_key_lower = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    
     for header, value in headers.items():
-        if header.lower() not in special_headers:
+        header_lower = header.lower()
+        # Check if header should be excluded: either in special headers cache or matches custom litellm key
+        if (header_lower not in _SPECIAL_HEADERS_CACHE and (litellm_key_lower is None or header_lower != litellm_key_lower)):
             clean_headers[header] = value
     return clean_headers
 
@@ -271,7 +269,7 @@ class LiteLLMProxyRequestSetup:
         if timeout_header is not None:
             return float(timeout_header)
         return None
-    
+
     @staticmethod
     def _get_stream_timeout_from_request(headers: dict) -> Optional[float]:
         """
@@ -291,13 +289,14 @@ class LiteLLMProxyRequestSetup:
         if num_retries_header is not None:
             return int(num_retries_header)
         return None
-    
+
     @staticmethod
     def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
         """
         Get the `spend_logs_metadata` from the request headers.
         """
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
         spend_logs_metadata_header = headers.get("x-litellm-spend-logs-metadata", None)
         if spend_logs_metadata_header is not None:
             return safe_json_loads(spend_logs_metadata_header)
@@ -334,6 +333,30 @@ class LiteLLMProxyRequestSetup:
             if header.lower() == key.lower():
                 return value
         return None
+
+    @staticmethod
+    def add_internal_user_from_user_mapping(
+        general_settings: Optional[Dict],
+        user_api_key_dict: UserAPIKeyAuth,
+        headers: dict,
+    ) -> UserAPIKeyAuth:
+        if general_settings is None:
+            return user_api_key_dict
+        user_header_mapping = general_settings.get("user_header_mappings")
+        if not user_header_mapping:
+            return user_api_key_dict
+        header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+            user_header_mapping
+        )
+        if not header_name:
+            return user_api_key_dict
+        header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, header_name
+        )
+        if header_value:
+            user_api_key_dict.user_id = header_value
+            return user_api_key_dict
+        return user_api_key_dict
 
     @staticmethod
     def get_user_from_headers(
@@ -412,21 +435,51 @@ class LiteLLMProxyRequestSetup:
         """
         Add headers to the LLM call by model group
         """
+        from litellm.proxy.auth.auth_checks import _check_model_access_helper
+        from litellm.proxy.proxy_server import llm_router
+
         data_model = data.get("model")
+
         if (
             data_model is not None
             and litellm.model_group_settings is not None
             and litellm.model_group_settings.forward_client_headers_to_llm_api
             is not None
-            and data_model
-            in litellm.model_group_settings.forward_client_headers_to_llm_api
+            and _check_model_access_helper(
+                model=data_model,
+                llm_router=llm_router,
+                models=litellm.model_group_settings.forward_client_headers_to_llm_api,
+                team_model_aliases=user_api_key_dict.team_model_aliases,
+                team_id=user_api_key_dict.team_id,
+            )  # handles aliases, wildcards, etc.
         ):
+
             _headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
                 headers, user_api_key_dict
             )
             if _headers != {}:
                 data["headers"] = _headers
         return data
+
+    @staticmethod
+    def get_internal_user_header_from_mapping(user_header_mapping) -> Optional[str]:
+        if not user_header_mapping:
+            return None
+        items = (
+            user_header_mapping
+            if isinstance(user_header_mapping, list)
+            else [user_header_mapping]
+        )
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("litellm_user_role")
+            header_name = item.get("header_name")
+            if role is None or not header_name:
+                continue
+            if str(role).lower() == str(LitellmUserRoles.INTERNAL_USER).lower():
+                return header_name
+        return None
 
     @staticmethod
     def add_litellm_data_for_backend_llm_call(
@@ -460,8 +513,10 @@ class LiteLLMProxyRequestSetup:
         timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
-        
-        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+
+        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers
+        )
         if stream_timeout is not None:
             data["stream_timeout"] = stream_timeout
 
@@ -470,7 +525,7 @@ class LiteLLMProxyRequestSetup:
             data["num_retries"] = num_retries
 
         return data
-    
+
     @staticmethod
     def add_litellm_metadata_from_request_headers(
         headers: dict,
@@ -483,11 +538,16 @@ class LiteLLMProxyRequestSetup:
         Relevant issue: https://github.com/BerriAI/litellm/issues/14008
         """
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
+
         metadata_from_headers = LitellmMetadataFromRequestHeaders()
-        spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
+        spend_logs_metadata = (
+            LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(
+                headers
+            )
+        )
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
-        
+
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
@@ -677,7 +737,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-
     _headers = clean_headers(
         request.headers,
         litellm_key_header_name=(
@@ -703,8 +762,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-
-
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
@@ -726,6 +783,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
+    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, _headers
+    )
+
     # Parse user info from headers
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
@@ -733,7 +794,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             user_api_key_dict.end_user_id = user
         if "user" not in data:
             data["user"] = user
-
 
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 

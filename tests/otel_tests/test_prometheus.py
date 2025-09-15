@@ -106,7 +106,7 @@ async def test_proxy_failure_metrics():
         print("/metrics", metrics)
 
         # Check if the failure metric is present and correct
-        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id"} 1.0'
+        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id", user_email="None"} 1.0'
 
         assert (
             expected_metric in metrics
@@ -577,3 +577,74 @@ async def test_user_email_metrics():
         assert (
             user_email in metrics_after_first
         ), "user_email should be tracked correctly"
+
+@pytest.mark.asyncio
+async def test_user_email_in_all_required_metrics():
+    """
+    Test that user_email label is present in all the metrics that were requested to have it:
+    - litellm_proxy_total_requests_metric_total
+    - litellm_proxy_failed_requests_metric_total
+    - litellm_input_tokens_total
+    - litellm_output_tokens_total
+    - litellm_requests_metric_total
+    - litellm_spend_metric_total
+    """
+    async with aiohttp.ClientSession() as session:
+        # Create a user with user_email
+        user_email = f"test-metrics-{uuid.uuid4()}@example.com"
+        user_data = {
+            "user_email": user_email,
+        }
+        user_info = await create_test_user(session, user_data)
+        key = user_info["key"]
+
+        # Initialize OpenAI client with the user's email
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
+
+        # Make successful request to generate metrics
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_text = await get_prometheus_metrics(session)
+        print("Testing user_email in all required metrics")
+
+        # Check that user_email appears in all the required metrics
+        required_metrics_with_user_email = [
+            "litellm_proxy_total_requests_metric_total",
+            "litellm_input_tokens_total",
+            "litellm_output_tokens_total",
+            "litellm_requests_metric_total",
+            "litellm_spend_metric_total"
+        ]
+
+        for metric_name in required_metrics_with_user_email:
+            # Check that the metric exists and contains user_email label
+            import re
+            # Look for the metric with user_email in its labels
+            pattern = rf'{metric_name}{{[^}}]*user_email="{re.escape(user_email)}"[^}}]*}}'
+            matches = re.findall(pattern, metrics_text)
+            assert len(matches) > 0, f"Metric {metric_name} should contain user_email={user_email} but was not found in metrics"
+
+        # Also test failure metric by making a bad request
+        try:
+            await client.chat.completions.create(
+                model="fake-azure-endpoint",  # This should fail
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+        except Exception:
+            pass  # Expected to fail
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get updated metrics
+        metrics_text = await get_prometheus_metrics(session)
+
+        # Check that failure metric also contains user_email
+        failure_pattern = rf'litellm_proxy_failed_requests_metric_total{{[^}}]*user_email="{re.escape(user_email)}"[^}}]*}}'
+        failure_matches = re.findall(failure_pattern, metrics_text)
+        assert len(failure_matches) > 0, f"litellm_proxy_failed_requests_metric_total should contain user_email={user_email}"

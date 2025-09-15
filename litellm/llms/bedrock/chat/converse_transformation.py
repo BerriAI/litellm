@@ -14,7 +14,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -397,7 +397,11 @@ class AmazonConverseConfig(BaseConfig):
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
-                    value=value, model=model, optional_params=optional_params, non_default_params=non_default_params, is_thinking_enabled=is_thinking_enabled
+                    value=value,
+                    model=model,
+                    optional_params=optional_params,
+                    non_default_params=non_default_params,
+                    is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
@@ -446,11 +450,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         return optional_params
-    
+
     def _translate_response_format_param(
-        self, 
-        value: dict, 
-        model: str, 
+        self,
+        value: dict,
+        model: str,
         optional_params: dict,
         non_default_params: dict,
         is_thinking_enabled: bool,
@@ -504,7 +508,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params["json_mode"] = True
         if non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
-        
+
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
