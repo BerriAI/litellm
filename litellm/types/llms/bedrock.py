@@ -1,11 +1,12 @@
 import json
-from typing import Any, List, Literal, Optional, TypedDict, Union
+from typing import Any, List, Literal, Optional, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
     Protocol,
     Required,
     Self,
+    TypedDict,
     TypeGuard,
     get_origin,
     override,

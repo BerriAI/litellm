@@ -85,6 +85,7 @@ async def route_request(
     """
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
+
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
@@ -123,24 +124,20 @@ async def route_request(
             data["model"] in router_model_names
             or data["model"] in llm_router.get_model_ids()
         ):
-
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
             llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
-
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] in llm_router.deployment_names:
-
             return getattr(llm_router, f"{route_type}")(
                 **data, specific_deployment=True
             )
 
         elif data["model"] not in router_model_names:
-
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
@@ -162,7 +159,6 @@ async def route_request(
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)
     elif route_type == "allm_passthrough_route":
-
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request

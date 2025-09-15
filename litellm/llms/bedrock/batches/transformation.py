@@ -124,15 +124,13 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
                 "AWS IAM role ARN is required for Bedrock batch jobs. "
                 "Set 'aws_batch_role_arn' in litellm_params or AWS_BATCH_ROLE_ARN env var"
             )
+
         
-        # Get the actual Bedrock model ID using common utility
-        bedrock_model_id = self.common_utils.extract_model_from_s3_file_path(input_file_id, optional_params)
-        
-        if not bedrock_model_id:
-            raise ValueError("Could not determine Bedrock model ID. Ensure the model is specified in the input file or passed as a parameter.")
+        if not model:
+            raise ValueError("Could not determine Bedrock model ID. Please pass `model` in your request body.")
         
         # Generate job name with the correct model ID using common utility
-        job_name = self.common_utils.generate_unique_job_name(bedrock_model_id, prefix="litellm")
+        job_name = self.common_utils.generate_unique_job_name(model, prefix="litellm")
         output_key = f"litellm-batch-outputs/{job_name}/"
         
         # Build input data config
@@ -151,7 +149,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         
         # Create Bedrock batch request with proper typing
         bedrock_request: BedrockCreateBatchRequest = {
-            "modelId": bedrock_model_id,
+            "modelId": model,
             "jobName": job_name,
             "inputDataConfig": input_data_config,
             "outputDataConfig": output_data_config,

@@ -31,7 +31,7 @@ class SoftBudgetAlert(BaseBudgetAlertType):
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
-        return "default_id"
+        return user_info.token or "default_id"
 
 
 class UserBudgetAlert(BaseBudgetAlertType):
