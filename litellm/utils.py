@@ -566,7 +566,11 @@ def function_setup(  # noqa: PLR0915
                 cb_id = id(callback)
                 with _coroutine_cache_lock:
                     if cb_id not in _coroutine_status_cache:
-                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                        # For bound methods, we need to check the underlying function
+                        if hasattr(callback, '__func__'):
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback.__func__)
+                        else:
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
                     is_coro = _coroutine_status_cache[cb_id]
                 if callback not in litellm.input_callback:
                     litellm.input_callback.append(callback)  # type: ignore
@@ -604,7 +608,11 @@ def function_setup(  # noqa: PLR0915
                 cb_id = id(callback)
                 with _coroutine_cache_lock:
                     if cb_id not in _coroutine_status_cache:
-                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                        # For bound methods, we need to check the underlying function
+                        if hasattr(callback, '__func__'):
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback.__func__)
+                        else:
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
                     is_coro = _coroutine_status_cache[cb_id]
                 if is_coro:
                     litellm._async_input_callback.append(callback)
@@ -619,7 +627,11 @@ def function_setup(  # noqa: PLR0915
                 cb_id = id(callback)
                 with _coroutine_cache_lock:
                     if cb_id not in _coroutine_status_cache:
-                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                        # For bound methods, we need to check the underlying function
+                        if hasattr(callback, '__func__'):
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback.__func__)
+                        else:
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
                     is_coro = _coroutine_status_cache[cb_id]
                 if is_coro:
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
@@ -649,7 +661,11 @@ def function_setup(  # noqa: PLR0915
                 cb_id = id(callback)
                 with _coroutine_cache_lock:
                     if cb_id not in _coroutine_status_cache:
-                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                        # For bound methods, we need to check the underlying function
+                        if hasattr(callback, '__func__'):
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback.__func__)
+                        else:
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
                     is_coro = _coroutine_status_cache[cb_id]
                 if is_coro:
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
@@ -686,7 +702,11 @@ def function_setup(  # noqa: PLR0915
                 cb_id = id(callback)
                 with _coroutine_cache_lock:
                     if cb_id not in _coroutine_status_cache:
-                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                        # For bound methods, we need to check the underlying function
+                        if hasattr(callback, '__func__'):
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback.__func__)
+                        else:
+                            _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
                     is_coro = _coroutine_status_cache[cb_id]
                 if (
                     is_coro
