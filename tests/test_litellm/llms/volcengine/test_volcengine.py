@@ -95,6 +95,15 @@ class TestVolcEngineConfig:
         )
         assert result_no_thinking == {}
 
+        # Test 6: invalid thinking type - should NOT appear in extra_body (invalid type)
+        result_no_thinking = config.map_openai_params(
+            non_default_params={"thinking": {"type": "invalid_type"}},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=False,
+        )
+        assert result_no_thinking == {}
+
     def test_e2e_completion(self):
         from openai import OpenAI
 
