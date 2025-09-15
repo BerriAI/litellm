@@ -359,9 +359,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -403,9 +403,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
-            {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[
+            str, PatternMatchRouter
+        ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
@@ -587,9 +587,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -782,6 +782,9 @@ class Router:
         self.aget_responses = self.factory_function(
             litellm.aget_responses, call_type="aget_responses"
         )
+        self.acancel_responses = self.factory_function(
+            litellm.acancel_responses, call_type="acancel_responses"
+        )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
         )
@@ -873,7 +876,6 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
-
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
                 _callback: Optional[CustomLogger] = None
@@ -1209,10 +1211,7 @@ class Router:
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[
-        ModelResponse,
-        CustomStreamWrapper,
-    ]:
+    ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -2713,7 +2712,6 @@ class Router:
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
         try:
-
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
                 deployment = await self.async_get_available_deployment(
@@ -3046,7 +3044,7 @@ class Router:
             from litellm.router_utils.common_utils import add_model_file_id_mappings
 
             verbose_router_logger.debug(
-                f"Inside _acreate_file()- model: {model}; kwargs: {kwargs}"
+                f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             healthy_deployments = await self.async_get_healthy_deployments(
@@ -3157,9 +3155,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = (
-                model_file_id_mapping
-            )
+            returned_response._hidden_params[
+                "model_file_id_mapping"
+            ] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -3485,6 +3483,7 @@ class Router:
             "moderation",
             "anthropic_messages",
             "aresponses",
+            "acancel_responses",
             "responses",
             "aget_responses",
             "adelete_responses",
@@ -3578,6 +3577,7 @@ class Router:
                 )
             elif call_type in (
                 "aget_responses",
+                "acancel_responses",
                 "adelete_responses",
                 "alist_input_items",
             ):
@@ -3625,7 +3625,7 @@ class Router:
         """
         Initialize the Responses API endpoints on the router.
 
-        GET, DELETE Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        GET, DELETE, CANCEL Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -3720,11 +3720,11 @@ class Router:
 
             if isinstance(e, litellm.ContextWindowExceededError):
                 if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
-                        )
+                    context_window_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=context_window_fallbacks,
+                        model_group=model_group,
                     )
                     if context_window_fallback_model_group is None:
                         raise original_exception
@@ -3756,11 +3756,11 @@ class Router:
                     e.message += "\n{}".format(error_message)
             elif isinstance(e, litellm.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
-                    content_policy_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
-                        )
+                    content_policy_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
                     )
                     if content_policy_fallback_model_group is None:
                         raise original_exception
@@ -4414,7 +4414,7 @@ class Router:
                 return tpm_key
 
         except Exception as e:
-            verbose_router_logger.debug(
+            verbose_router_logger.exception(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
                     str(e)
                 )
@@ -4992,26 +4992,26 @@ class Router:
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-        auto_router_config_path: Optional[str] = (
-            deployment.litellm_params.auto_router_config_path
-        )
+        auto_router_config_path: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_config_path
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
                 "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        default_model: Optional[str] = (
-            deployment.litellm_params.auto_router_default_model
-        )
+        default_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_default_model
         if default_model is None:
             raise ValueError(
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[str] = (
-            deployment.litellm_params.auto_router_embedding_model
-        )
+        embedding_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_embedding_model
         if embedding_model is None:
             raise ValueError(
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
