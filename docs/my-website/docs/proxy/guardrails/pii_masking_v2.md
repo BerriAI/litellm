@@ -543,7 +543,7 @@ guardrails:
       output_parse_pii: True
 ```
 
-**Expected Flow: **
+**Expected Flow:**
 
 1. User Input: "hello world, my name is Jane Doe. My number is: 034453334"
 
