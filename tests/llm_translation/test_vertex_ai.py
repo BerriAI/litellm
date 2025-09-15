@@ -11,6 +11,9 @@ sys.path.insert(
 
 import litellm
 from litellm import completion
+from vertex_ai_test_utils import get_vertex_ai_creds_json, load_vertex_ai_credentials
+
+
 
 
 
@@ -33,6 +36,7 @@ async def test_async_file_upload_with_chat_completion_vertex_ai():
     1. Create File for GCS
     2. Create Chat Completion with a file PDF
     """
+    load_vertex_ai_credentials()
     #litellm._turn_on_debug()
     ###############################
     # Create File
