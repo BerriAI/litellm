@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -194,3 +196,51 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             params["order"] = order
         verbose_logger.debug(f"list input items url={url}")
         return url, params
+
+    #########################################################
+    ########## CANCEL RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    def transform_cancel_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the cancel response API request into a URL and data
+
+        Azure OpenAI API expects the following request:
+        - POST /openai/responses/{response_id}/cancel?api-version=xxx
+
+        This function handles URLs with query parameters by inserting the response_id
+        at the correct location (before any query parameters).
+        """
+        cancel_url = (
+            self._construct_url_for_response_id_in_path(
+                api_base=api_base, response_id=response_id
+            )
+            + "/cancel"
+        )
+
+        data: Dict = {}
+        verbose_logger.debug(f"cancel response url={cancel_url}")
+        return cancel_url, data
+
+    def transform_cancel_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Transform the cancel response API response into a ResponsesAPIResponse
+        """
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
+
+            raise AzureOpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return ResponsesAPIResponse(**raw_response_json)
