@@ -24,7 +24,7 @@ class TestVolcEngineConfig:
             drop_params=False,
         )
 
-        # Fixed: thinking disabled should be omitted from extra_body
+        # Fixed: thinking disabled should appear in extra_body
         assert mapped_params == {
             "extra_body": {"thinking": {"type": "disabled"}}
         }
