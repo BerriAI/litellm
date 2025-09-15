@@ -19895,7 +19895,10 @@
         "max_output_tokens": 66536,
         "max_input_tokens": 262144,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true
     },
     "vercel_ai_gateway/mistral/codestral-embed": {
         "max_tokens": 0,
