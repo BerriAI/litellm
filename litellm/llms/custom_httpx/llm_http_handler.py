@@ -2238,27 +2238,20 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
-            # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
+            # Handle traditional file uploads using shared helper
+            data, content = self._prepare_file_upload_data(transformed_request=transformed_request)
+            
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
-            if http_method == "PUT":
-                upload_response = sync_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-            else:  # Default to POST
-                upload_response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+            upload_response = self._make_file_upload_request(
+                client=sync_httpx_client, 
+                method=http_method, 
+                url=api_base, 
+                headers=headers, 
+                data=data, 
+                content=content, 
+                timeout=timeout
+            )
         else:
             try:
                 # Step 1: Initial request to get upload URL
@@ -2349,27 +2342,20 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
-            # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
+            # Handle traditional file uploads using shared helper
+            data, content = self._prepare_file_upload_data(transformed_request=transformed_request)
+            
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
-            if http_method == "PUT":
-                upload_response = await async_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-            else:  # Default to POST
-                upload_response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
+            upload_response = await self._make_file_upload_request_async(
+                client=async_httpx_client, 
+                method=http_method, 
+                url=api_base, 
+                headers=headers, 
+                data=data, 
+                content=content, 
+                timeout=timeout
+            )
         else:
             try:
                 # Step 1: Initial request to get upload URL
@@ -2409,6 +2395,113 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+    
+    def _prepare_file_upload_data(self, transformed_request: Union[str, bytes]) -> Tuple[Union[str, None], Union[bytes, None]]:
+        """
+        Helper function to prepare file upload data for httpx compatibility.
+        
+        For text files, returns (string_data, None).
+        For binary files (PDFs, images, etc.), returns (None, bytes_content).
+        
+        Args:
+            transformed_request: The file content as string or bytes
+            
+        Returns:
+            Tuple of (data, content) where:
+            - data: string data for httpx 'data' parameter (for text files)
+            - content: bytes content for httpx 'content' parameter (for binary files)
+        """
+        if isinstance(transformed_request, bytes):
+            try:
+                # Try to decode as UTF-8 for text files
+                decoded_data = transformed_request.decode("utf-8")
+                return decoded_data, None
+            except UnicodeDecodeError:
+                # Keep as bytes for binary files (PDFs, images, etc.)
+                # Use 'content' parameter for binary data
+                return None, transformed_request
+        return transformed_request, None
+
+    def _make_file_upload_request(
+        self, 
+        client, 
+        method: str, 
+        url: str, 
+        headers: dict, 
+        data: Union[str, None], 
+        content: Union[bytes, None], 
+        timeout
+    ):
+        """
+        Helper method to make file upload request with proper data/content parameters.
+        
+        Args:
+            client: httpx client (sync)
+            method: HTTP method ('PUT' or 'POST')
+            url: Request URL
+            headers: Request headers
+            data: String data for text files
+            content: Bytes content for binary files
+            timeout: Request timeout
+            
+        Returns:
+            httpx.Response: The response from the HTTP request
+        """
+        if method.upper() == "PUT":
+            if content is not None:
+                # Binary data - use content parameter
+                return client.put(url=url, headers=headers, content=content, timeout=timeout)
+            else:
+                # Text data - use data parameter
+                return client.put(url=url, headers=headers, data=data, timeout=timeout)
+        else:  # POST
+            if content is not None:
+                # Binary data - use content parameter
+                return client.post(url=url, headers=headers, content=content, timeout=timeout)
+            else:
+                # Text data - use data parameter
+                return client.post(url=url, headers=headers, data=data, timeout=timeout)
+
+    async def _make_file_upload_request_async(
+        self, 
+        client, 
+        method: str, 
+        url: str, 
+        headers: dict, 
+        data: Union[str, None], 
+        content: Union[bytes, None], 
+        timeout
+    ):
+        """
+        Async version of _make_file_upload_request.
+        
+        Args:
+            client: httpx client (async)
+            method: HTTP method ('PUT' or 'POST')
+            url: Request URL
+            headers: Request headers
+            data: String data for text files
+            content: Bytes content for binary files
+            timeout: Request timeout
+            
+        Returns:
+            httpx.Response: The response from the HTTP request
+        """
+        if method.upper() == "PUT":
+            if content is not None:
+                # Binary data - use content parameter
+                return await client.put(url=url, headers=headers, content=content, timeout=timeout)
+            else:
+                # Text data - use data parameter
+                return await client.put(url=url, headers=headers, data=data, timeout=timeout)
+        else:  # POST
+            if content is not None:
+                # Binary data - use content parameter
+                return await client.post(url=url, headers=headers, content=content, timeout=timeout)
+            else:
+                # Text data - use data parameter
+                return await client.post(url=url, headers=headers, data=data, timeout=timeout)
+
 
     def create_batch(
         self,
