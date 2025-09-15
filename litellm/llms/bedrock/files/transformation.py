@@ -8,6 +8,7 @@ from httpx import Headers, Response
 
 from litellm._logging import verbose_logger
 from litellm.files.utils import FilesAPIUtils
+from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -160,6 +161,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Dict,
         litellm_params: Dict,
         data: CreateFileRequest,
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
     ) -> str:
         """
         Get the complete S3 URL for the file upload request
@@ -355,6 +357,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
             data=create_file_data,
+            standard_callback_dynamic_params={},
         )
         
         # Sign the request and return a pre-signed request object

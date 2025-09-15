@@ -11,7 +11,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse, StandardCallbackDynamicParams
 
 from ..chat.transformation import BaseConfig
 
@@ -59,6 +59,7 @@ class BaseFilesConfig(BaseConfig):
         optional_params: dict,
         litellm_params: dict,
         data: CreateFileRequest,
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
     ):
         return self.get_complete_url(
             api_base=api_base,
