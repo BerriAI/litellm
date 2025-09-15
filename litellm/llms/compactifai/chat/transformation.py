@@ -2,12 +2,14 @@
 CompactifAI chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -83,3 +85,16 @@ class CompactifAIChatConfig(OpenAIGPTConfig):
         returned_response.model = f"compactifai/{model}"
 
         return returned_response
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        """
+        Get the appropriate error class for CompactifAI errors.
+        Since CompactifAI is OpenAI-compatible, we use OpenAI error handling.
+        """
+        return OpenAIError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
