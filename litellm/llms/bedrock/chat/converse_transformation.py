@@ -762,34 +762,8 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-    def _transform_request_helper(
-        self,
-        model: str,
-        system_content_blocks: List[SystemContentBlock],
-        optional_params: dict,
-        messages: Optional[List[AllMessageValues]] = None,
-        headers: Optional[dict] = None,
-    ) -> CommonRequestObject:
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in optional_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(
-                    custom_llm_provider="bedrock_converse"
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
-
+    def _prepare_request_params(self, optional_params: dict, model: str) -> tuple[dict, dict, dict]:
+        """Prepare and separate request parameters."""
         inference_params = copy.deepcopy(optional_params)
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
@@ -821,9 +795,10 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
-        original_tools = inference_params.pop("tools", [])
+        return inference_params, additional_request_params, request_metadata
 
-        # Initialize bedrock_tools
+    def _process_tools_and_beta(self, original_tools: list, model: str, headers: Optional[dict], additional_request_params: dict) -> tuple[List[ToolBlock], list]:
+        """Process tools and collect anthropic_beta values."""
         bedrock_tools: List[ToolBlock] = []
 
         # Collect anthropic_beta values from user headers
@@ -864,6 +839,44 @@ class AmazonConverseConfig(BaseConfig):
                     unique_betas.append(beta)
                     seen.add(beta)
             additional_request_params["anthropic_beta"] = unique_betas
+
+        return bedrock_tools, anthropic_beta_list
+
+    def _transform_request_helper(
+        self,
+        model: str,
+        system_content_blocks: List[SystemContentBlock],
+        optional_params: dict,
+        messages: Optional[List[AllMessageValues]] = None,
+        headers: Optional[dict] = None,
+    ) -> CommonRequestObject:
+        ## VALIDATE REQUEST
+        """
+        Bedrock doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
+
+        # Prepare and separate parameters
+        inference_params, additional_request_params, request_metadata = self._prepare_request_params(optional_params, model)
+
+        original_tools = inference_params.pop("tools", [])
+
+        # Process tools and collect beta values
+        bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(original_tools, model, headers, additional_request_params)
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
