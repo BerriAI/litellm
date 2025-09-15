@@ -41,7 +41,12 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
 
     async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
         pass
-    
+
+    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode=False):
+        pass
+
+    async def test_cancel_responses_invalid_response_id(self, sync_mode=False):
+        pass
 
 
 
