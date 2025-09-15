@@ -478,24 +478,31 @@ def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
+_default_guardrails: List[str] = []
+_initialized = False
+
 def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
-    """
-    - Add 'default_on' guardrails to the list
-    - Add request guardrails to the list
-    """
+    global _default_guardrails, _initialized
+    if not _initialized:
+        _default_guardrails = [
+            cb.guardrail_name
+            for cb in litellm.callbacks
+            if isinstance(cb, CustomGuardrail) and cb.default_on and cb.guardrail_name
+        ]
+        _initialized = True
 
     request_guardrails = get_request_guardrails(kwargs)
-    applied_guardrails = []
-    for callback in litellm.callbacks:
-        if callback is not None and isinstance(callback, CustomGuardrail):
-            if callback.guardrail_name is not None:
-                if callback.default_on is True:
-                    applied_guardrails.append(callback.guardrail_name)
-                elif callback.guardrail_name in request_guardrails:
-                    applied_guardrails.append(callback.guardrail_name)
+    applied_guardrails = _default_guardrails.copy()
+
+    for cb in litellm.callbacks:
+        if (
+            isinstance(cb, CustomGuardrail)
+            and cb.guardrail_name
+            and cb.guardrail_name in request_guardrails
+        ):
+            applied_guardrails.append(cb.guardrail_name)
 
     return applied_guardrails
-
 
 def load_credentials_from_list(kwargs: dict):
     """
@@ -525,13 +532,14 @@ def function_setup(  # noqa: PLR0915
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
 
+    global callback_list, add_breadcrumb, user_logger_fn, Logging
+
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
         )
-    try:
-        global callback_list, add_breadcrumb, user_logger_fn, Logging
 
+    try:
         ## CUSTOM LLM SETUP ##
         custom_llm_setup()
 
