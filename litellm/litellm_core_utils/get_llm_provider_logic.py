@@ -365,11 +365,15 @@ def get_llm_provider(  # noqa: PLR0915
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("heroku/"):
+            custom_llm_provider = "heroku"
         # cometapi models
         elif model.startswith("cometapi/"):
             custom_llm_provider = "cometapi"
         elif model.startswith("oci/"):
             custom_llm_provider = "oci"
+        elif model.startswith("ovhcloud/"):
+            custom_llm_provider = "ovhcloud"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -703,6 +707,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             dynamic_api_key,
         ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
+        )
+    elif custom_llm_provider == "heroku":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
         )
     elif custom_llm_provider == "dashscope":
         (

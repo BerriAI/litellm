@@ -84,6 +84,15 @@ def test_get_optional_params_image_gen_vertex_ai_size():
     assert optional_params["sampleCount"] == 1
 
 
+def test_get_optional_params_image_gen_filters_empty_values():
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        extra_body={},
+    )
+    assert optional_params == {}
+
+
 def test_all_model_configs():
     from litellm.llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config,
@@ -170,7 +179,9 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm.llms.volcengine import VolcEngineConfig
+    from litellm.llms.volcengine.chat.transformation import (
+        VolcEngineChatConfig as VolcEngineConfig,
+    )
 
     assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
         model="llama3"
@@ -641,6 +652,26 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     },
                 },
                 "supports_native_streaming": {"type": "boolean"},
+                "tiered_pricing": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "range": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 2,
+                                "maxItems": 2
+                            },
+                            "input_cost_per_token": {"type": "number"},
+                            "output_cost_per_token": {"type": "number"},
+                            "cache_read_input_token_cost": {"type": "number"},
+                            "output_cost_per_reasoning_token": {"type": "number"}
+                        },
+                        "required": ["range"],
+                        "additionalProperties": False
+                    }
+                },
             },
             "additionalProperties": False,
         },
@@ -688,6 +719,7 @@ def test_get_model_info_gemini():
             and not "gemma" in model
             and not "learnlm" in model
             and not "imagen" in model
+            and not "veo" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"

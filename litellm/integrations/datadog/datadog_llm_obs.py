@@ -19,6 +19,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
 )
@@ -63,7 +64,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
-            
+
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
             #########################################################
@@ -82,22 +83,25 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         """
         dict_datadog_llm_obs_params: Dict = {}
         if litellm.datadog_llm_observability_params is not None:
-            if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
-                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
+            if isinstance(
+                litellm.datadog_llm_observability_params, DatadogLLMObsInitParams
+            ):
+                dict_datadog_llm_obs_params = (
+                    litellm.datadog_llm_observability_params.model_dump()
+                )
             elif isinstance(litellm.datadog_llm_observability_params, Dict):
                 # only allow params that are of DatadogLLMObsInitParams
-                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(**litellm.datadog_llm_observability_params).model_dump()
+                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(
+                    **litellm.datadog_llm_observability_params
+                ).model_dump()
         return dict_datadog_llm_obs_params
-            
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
             )
-            payload = self.create_llm_obs_payload(
-                kwargs, start_time, end_time
-            )
+            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
 
@@ -107,15 +111,13 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging success event - {str(e)}"
             )
-    
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
                 f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
             )
-            payload = self.create_llm_obs_payload(
-                kwargs, start_time, end_time
-            )
+            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
 
@@ -183,7 +185,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         messages = standard_logging_payload["messages"]
         messages = self._ensure_string_content(messages=messages)
-        response_obj = standard_logging_payload.get("response")
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
@@ -192,10 +193,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 messages
             )
         )
-        output_meta = OutputMeta(messages=self._get_response_messages(
-            response_obj=response_obj,
-            call_type=standard_logging_payload.get("call_type")
-        ))
+        output_meta = OutputMeta(
+            messages=self._get_response_messages(
+                standard_logging_payload=standard_logging_payload,
+                call_type=standard_logging_payload.get("call_type"),
+            )
+        )
 
         error_info = self._assemble_error_info(standard_logging_payload)
 
@@ -213,10 +216,12 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
             total_cost=float(standard_logging_payload.get("response_cost", 0)),
-            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
+            time_to_first_token=self._get_time_to_first_token_seconds(
+                standard_logging_payload
+            ),
         )
 
-        return LLMObsPayload(
+        payload: LLMObsPayload = LLMObsPayload(
             parent_id=metadata.get("parent_id", "undefined"),
             trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
@@ -230,27 +235,55 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
-    
-    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+
+        apm_trace_id = self._get_apm_trace_id()
+        if apm_trace_id is not None:
+            payload["apm_id"] = apm_trace_id
+
+        return payload
+
+    def _get_apm_trace_id(self) -> Optional[str]:
+        """Retrieve the current APM trace ID if available."""
+        try:
+            current_span_fn = getattr(tracer, "current_span", None)
+            if callable(current_span_fn):
+                current_span = current_span_fn()
+                if current_span is not None:
+                    trace_id = getattr(current_span, "trace_id", None)
+                    if trace_id is not None:
+                        return str(trace_id)
+        except Exception:
+            pass
+        return None
+
+    def _assemble_error_info(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> Optional[DDLLMObsError]:
         """
         Assemble error information for failure cases according to DD LLM Obs API spec
         """
         # Handle error information for failure cases according to DD LLM Obs API spec
         error_info: Optional[DDLLMObsError] = None
-        
+
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get("error_information")
-            
+            error_information: Optional[
+                StandardLoggingPayloadErrorInformation
+            ] = standard_logging_payload.get("error_information")
+
             if error_information:
                 error_info = DDLLMObsError(
-                    message=error_information.get("error_message") or standard_logging_payload.get("error_str") or "Unknown error",
+                    message=error_information.get("error_message")
+                    or standard_logging_payload.get("error_str")
+                    or "Unknown error",
                     type=error_information.get("error_class"),
-                    stack=error_information.get("traceback")
+                    stack=error_information.get("traceback"),
                 )
         return error_info
 
-    def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
+    def _get_time_to_first_token_seconds(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> float:
         """
         Get the time to first token in seconds
 
@@ -259,7 +292,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         For non streaming calls, CompletionStartTime is time we get the response back
         """
         start_time: Optional[float] = standard_logging_payload.get("startTime")
-        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
+        completion_start_time: Optional[float] = standard_logging_payload.get(
+            "completionStartTime"
+        )
         end_time: Optional[float] = standard_logging_payload.get("endTime")
 
         if completion_start_time is not None and start_time is not None:
@@ -269,19 +304,43 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         else:
             return 0.0
 
-
     def _get_response_messages(
-        self, response_obj: Any, call_type: Optional[str]
+        self, standard_logging_payload: StandardLoggingPayload, call_type: Optional[str]
     ) -> List[Any]:
         """
         Get the messages from the response object
 
         for now this handles logging /chat/completions responses
         """
+
+        response_obj = standard_logging_payload.get("response")
         if response_obj is None:
             return []
-        
-        if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
+
+        # edge case: handle response_obj is a string representation of a dict
+        if isinstance(response_obj, str):
+            try:
+                import ast
+
+                response_obj = ast.literal_eval(response_obj)
+            except (ValueError, SyntaxError):
+                try:
+                    # fallback to json parsing
+                    response_obj = json.loads(str(response_obj))
+                except json.JSONDecodeError:
+                    return []
+
+        if call_type in [
+            CallTypes.completion.value,
+            CallTypes.acompletion.value,
+            CallTypes.text_completion.value,
+            CallTypes.atext_completion.value,
+            CallTypes.generate_content.value,
+            CallTypes.agenerate_content.value,
+            CallTypes.generate_content_stream.value,
+            CallTypes.agenerate_content_stream.value,
+            CallTypes.anthropic_messages.value,
+        ]:
             try:
                 # Safely extract message from response_obj, handle failure cases
                 if isinstance(response_obj, dict) and "choices" in response_obj:
@@ -294,102 +353,104 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 return []
         return []
 
-    def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
+    def _get_datadog_span_kind(
+        self, call_type: Optional[str]
+    ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
-        
+
         Available DataDog span kinds: "llm", "tool", "task", "embedding", "retrieval"
         """
         if call_type is None:
             return "llm"
-        
+
         # Embedding operations
         if call_type in [CallTypes.embedding.value, CallTypes.aembedding.value]:
             return "embedding"
-        
-        # LLM completion operations  
+
+        # LLM completion operations
         if call_type in [
-            CallTypes.completion.value, 
+            CallTypes.completion.value,
             CallTypes.acompletion.value,
-            CallTypes.text_completion.value, 
+            CallTypes.text_completion.value,
             CallTypes.atext_completion.value,
-            CallTypes.generate_content.value, 
+            CallTypes.generate_content.value,
             CallTypes.agenerate_content.value,
-            CallTypes.generate_content_stream.value, 
+            CallTypes.generate_content_stream.value,
             CallTypes.agenerate_content_stream.value,
-            CallTypes.anthropic_messages.value
+            CallTypes.anthropic_messages.value,
         ]:
             return "llm"
-        
+
         # Tool operations
         if call_type in [CallTypes.call_mcp_tool.value]:
             return "tool"
-            
+
         # Retrieval operations
         if call_type in [
-            CallTypes.get_assistants.value, 
+            CallTypes.get_assistants.value,
             CallTypes.aget_assistants.value,
-            CallTypes.get_thread.value, 
+            CallTypes.get_thread.value,
             CallTypes.aget_thread.value,
-            CallTypes.get_messages.value, 
+            CallTypes.get_messages.value,
             CallTypes.aget_messages.value,
-            CallTypes.afile_retrieve.value, 
+            CallTypes.afile_retrieve.value,
             CallTypes.file_retrieve.value,
-            CallTypes.afile_list.value, 
+            CallTypes.afile_list.value,
             CallTypes.file_list.value,
-            CallTypes.afile_content.value, 
+            CallTypes.afile_content.value,
             CallTypes.file_content.value,
-            CallTypes.retrieve_batch.value, 
+            CallTypes.retrieve_batch.value,
             CallTypes.aretrieve_batch.value,
-            CallTypes.retrieve_fine_tuning_job.value, 
+            CallTypes.retrieve_fine_tuning_job.value,
             CallTypes.aretrieve_fine_tuning_job.value,
-            CallTypes.responses.value, 
+            CallTypes.responses.value,
             CallTypes.aresponses.value,
-            CallTypes.alist_input_items.value
+            CallTypes.alist_input_items.value,
         ]:
             return "retrieval"
-            
+
         # Task operations (batch, fine-tuning, file operations, etc.)
         if call_type in [
-            CallTypes.create_batch.value, 
+            CallTypes.create_batch.value,
             CallTypes.acreate_batch.value,
-            CallTypes.create_fine_tuning_job.value, 
+            CallTypes.create_fine_tuning_job.value,
             CallTypes.acreate_fine_tuning_job.value,
-            CallTypes.cancel_fine_tuning_job.value, 
+            CallTypes.cancel_fine_tuning_job.value,
             CallTypes.acancel_fine_tuning_job.value,
-            CallTypes.list_fine_tuning_jobs.value, 
+            CallTypes.list_fine_tuning_jobs.value,
             CallTypes.alist_fine_tuning_jobs.value,
-            CallTypes.create_assistants.value, 
+            CallTypes.create_assistants.value,
             CallTypes.acreate_assistants.value,
-            CallTypes.delete_assistant.value, 
+            CallTypes.delete_assistant.value,
             CallTypes.adelete_assistant.value,
-            CallTypes.create_thread.value, 
+            CallTypes.create_thread.value,
             CallTypes.acreate_thread.value,
-            CallTypes.add_message.value, 
+            CallTypes.add_message.value,
             CallTypes.a_add_message.value,
-            CallTypes.run_thread.value, 
+            CallTypes.run_thread.value,
             CallTypes.arun_thread.value,
-            CallTypes.run_thread_stream.value, 
+            CallTypes.run_thread_stream.value,
             CallTypes.arun_thread_stream.value,
-            CallTypes.file_delete.value, 
+            CallTypes.file_delete.value,
             CallTypes.afile_delete.value,
-            CallTypes.create_file.value, 
+            CallTypes.create_file.value,
             CallTypes.acreate_file.value,
-            CallTypes.image_generation.value, 
+            CallTypes.image_generation.value,
             CallTypes.aimage_generation.value,
-            CallTypes.image_edit.value, 
+            CallTypes.image_edit.value,
             CallTypes.aimage_edit.value,
-            CallTypes.moderation.value, 
+            CallTypes.moderation.value,
             CallTypes.amoderation.value,
-            CallTypes.transcription.value, 
+            CallTypes.transcription.value,
             CallTypes.atranscription.value,
-            CallTypes.speech.value, 
+            CallTypes.speech.value,
             CallTypes.aspeech.value,
-            CallTypes.rerank.value, 
-            CallTypes.arerank.value
+            CallTypes.rerank.value,
+            CallTypes.arerank.value,
         ]:
             return "task"
-            
+
         # Default fallback for unknown or passthrough operations
         return "llm"
 
@@ -422,7 +483,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
-            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
+            "guardrail_information": standard_logging_payload.get(
+                "guardrail_information", None
+            ),
         }
 
         #########################################################
@@ -431,22 +494,32 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         latency_metrics = self._get_latency_metrics(standard_logging_payload)
         _metadata.update({"latency_metrics": dict(latency_metrics)})
 
+        ## extract tool calls and add to metadata
+        tool_call_metadata = self._extract_tool_call_metadata(standard_logging_payload)
+        _metadata.update(tool_call_metadata)
+
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
         )
         _metadata.update(_standard_logging_metadata)
         return _metadata
 
-    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
+    def _get_latency_metrics(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> DDLLMObsLatencyMetrics:
         """
         Get the latency metrics from the standard logging payload
         """
         latency_metrics: DDLLMObsLatencyMetrics = DDLLMObsLatencyMetrics()
         # Add latency metrics to metadata
         # Time to first token (convert from seconds to milliseconds for consistency)
-        time_to_first_token_seconds = self._get_time_to_first_token_seconds(standard_logging_payload)
+        time_to_first_token_seconds = self._get_time_to_first_token_seconds(
+            standard_logging_payload
+        )
         if time_to_first_token_seconds > 0:
-            latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
+            latency_metrics["time_to_first_token_ms"] = (
+                time_to_first_token_seconds * 1000
+            )
 
         # LiteLLM overhead time
         hidden_params = standard_logging_payload.get("hidden_params", {})
@@ -455,11 +528,143 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[StandardLoggingGuardrailInformation] = standard_logging_payload.get("guardrail_information")
+        guardrail_info: Optional[
+            StandardLoggingGuardrailInformation
+        ] = standard_logging_payload.get("guardrail_information")
         if guardrail_info is not None:
-            _guardrail_duration_seconds: Optional[float] = guardrail_info.get("duration")
+            _guardrail_duration_seconds: Optional[float] = guardrail_info.get(
+                "duration"
+            )
             if _guardrail_duration_seconds is not None:
                 # Convert from seconds to milliseconds for consistency
-                latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
-            
+                latency_metrics["guardrail_overhead_time_ms"] = (
+                    _guardrail_duration_seconds * 1000
+                )
+
         return latency_metrics
+
+    def _process_input_messages_preserving_tool_calls(
+        self, messages: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Process input messages while preserving tool_calls and tool message types.
+
+        This bypasses the lossy string conversion when tool calls are present,
+        allowing complex nested tool_calls objects to be preserved for Datadog.
+        """
+        processed = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                # Preserve messages with tool_calls or tool role as-is
+                if "tool_calls" in msg or msg.get("role") == "tool":
+                    processed.append(msg)
+                else:
+                    # For regular messages, still apply string conversion
+                    converted = (
+                        handle_any_messages_to_chat_completion_str_messages_conversion(
+                            [msg]
+                        )
+                    )
+                    processed.extend(converted)
+            else:
+                # For non-dict messages, apply string conversion
+                converted = (
+                    handle_any_messages_to_chat_completion_str_messages_conversion(
+                        [msg]
+                    )
+                )
+                processed.extend(converted)
+        return processed
+
+    @staticmethod
+    def _tool_calls_kv_pair(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Extract tool call information into key-value pairs for Datadog metadata.
+
+        Similar to OpenTelemetry's implementation but adapted for Datadog's format.
+        """
+        kv_pairs: Dict[str, Any] = {}
+        for idx, tool_call in enumerate(tool_calls):
+            try:
+                # Extract tool call ID
+                tool_id = tool_call.get("id")
+                if tool_id:
+                    kv_pairs[f"tool_calls.{idx}.id"] = tool_id
+
+                # Extract tool call type
+                tool_type = tool_call.get("type")
+                if tool_type:
+                    kv_pairs[f"tool_calls.{idx}.type"] = tool_type
+
+                # Extract function information
+                function = tool_call.get("function")
+                if function:
+                    function_name = function.get("name")
+                    if function_name:
+                        kv_pairs[f"tool_calls.{idx}.function.name"] = function_name
+
+                    function_arguments = function.get("arguments")
+                    if function_arguments:
+                        # Store arguments as JSON string for Datadog
+                        if isinstance(function_arguments, str):
+                            kv_pairs[
+                                f"tool_calls.{idx}.function.arguments"
+                            ] = function_arguments
+                        else:
+                            import json
+
+                            kv_pairs[
+                                f"tool_calls.{idx}.function.arguments"
+                            ] = json.dumps(function_arguments)
+            except (KeyError, TypeError, ValueError) as e:
+                verbose_logger.debug(
+                    f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}"
+                )
+                continue
+
+        return kv_pairs
+
+    def _extract_tool_call_metadata(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> Dict[str, Any]:
+        """
+        Extract tool call information from both input messages and response for Datadog metadata.
+        """
+        tool_call_metadata: Dict[str, Any] = {}
+
+        try:
+            # Extract tool calls from input messages
+            messages = standard_logging_payload.get("messages", [])
+            if messages and isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and "tool_calls" in message:
+                        tool_calls = message.get("tool_calls")
+                        if tool_calls:
+                            input_tool_calls_kv = self._tool_calls_kv_pair(tool_calls)
+                            # Prefix with "input_" to distinguish from response tool calls
+                            for key, value in input_tool_calls_kv.items():
+                                tool_call_metadata[f"input_{key}"] = value
+
+            # Extract tool calls from response
+            response_obj = standard_logging_payload.get("response")
+            if response_obj and isinstance(response_obj, dict):
+                choices = response_obj.get("choices", [])
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        message = choice.get("message")
+                        if message and isinstance(message, dict):
+                            tool_calls = message.get("tool_calls")
+                            if tool_calls:
+                                response_tool_calls_kv = self._tool_calls_kv_pair(
+                                    tool_calls
+                                )
+                                # Prefix with "output_" to distinguish from input tool calls
+                                for key, value in response_tool_calls_kv.items():
+                                    tool_call_metadata[f"output_{key}"] = value
+
+        except Exception as e:
+            verbose_logger.debug(
+                f"DataDogLLMObs: Error extracting tool call metadata: {str(e)}"
+            )
+
+        return tool_call_metadata

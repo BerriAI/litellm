@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import traceback
+from unittest.mock import AsyncMock, patch
 
 
 sys.path.insert(
@@ -147,13 +148,13 @@ class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
-                "model": "bedrock/amazon.nova-canvas-v1:0",
-                "n": 1,
-                "size": "320x320",
-                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
-                "taskType": "COLOR_GUIDED_GENERATION",
-                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]},
-                "aws_region_name": "us-east-1",
+            "model": "bedrock/amazon.nova-canvas-v1:0",
+            "n": 1,
+            "size": "320x320",
+            "imageGenerationConfig": {"cfgScale": 6.5, "seed": 12},
+            "taskType": "COLOR_GUIDED_GENERATION",
+            "colorGuidedGenerationParams": {"colors": ["#FFFFFF"]},
+            "aws_region_name": "us-east-1",
         }
 
 
@@ -161,21 +162,26 @@ class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
 
+
 class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
+
 
 class TestRecraftImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "recraft/recraftv3"}
 
+
 class TestAimlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "aiml/flux-pro/v1.1"}
 
+
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
+
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
@@ -191,19 +197,7 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
                 }
             },
         }
-    
 
-
-class TestAzureFoundryFlux(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        litellm.set_verbose = True
-        return {
-            "model": "azure_ai/FLUX.1-Kontext-pro",
-            "api_base": os.getenv("AZURE_FLUX_API_BASE"),
-            "api_key": os.getenv("AZURE_GPT5_API_KEY"),
-            "n": 1,
-            "quality": "standard",
-        }
 
 
 @pytest.mark.flaky(retries=3, delay=1)
@@ -269,116 +263,49 @@ async def test_aimage_generation_bedrock_with_optional_params():
 
 
 @pytest.mark.asyncio
-async def test_gpt_image_1_with_input_fidelity():
-    """Test gpt-image-1 with input_fidelity parameter (mocked)"""
-    from unittest.mock import AsyncMock, patch
-    
-    # Mock OpenAI response
-    mock_openai_response = {
-        "created": 1703658209,
-        "data": [
-            {
-                "url": "https://example.com/generated_image.png"
-            }
-        ]
-    }
-    
-    # Create a proper mock response object
-    class MockResponse:
-        def model_dump(self):
-            return mock_openai_response
-    
-    # Create a mock client with the images.generate method
-    mock_client = AsyncMock()
-    mock_client.images.generate = AsyncMock(return_value=MockResponse())
-    
-    # Capture the actual arguments sent to OpenAI client
-    captured_args = None
-    captured_kwargs = None
-    
-    async def capture_generate_call(*args, **kwargs):
-        nonlocal captured_args, captured_kwargs
-        captured_args = args
-        captured_kwargs = kwargs
-        return MockResponse()
-    
-    mock_client.images.generate.side_effect = capture_generate_call
-    
-    # Mock the _get_openai_client method to return our mock client
-    with patch.object(litellm.main.openai_chat_completions, '_get_openai_client', return_value=mock_client):
-        response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter",
-            model="gpt-image-1",
-            input_fidelity="high",
-            quality="medium",
-            size="1024x1024",
-        )
-        
-        # Validate the response
-        assert response is not None
-        assert response.created == 1703658209
-        assert response.data is not None
-        assert len(response.data) == 1
-        assert response.data[0].url == "https://example.com/generated_image.png"
-        
-        # Validate that the OpenAI client was called with correct parameters
-        mock_client.images.generate.assert_called_once()
-        assert captured_kwargs is not None
-        assert captured_kwargs["model"] == "gpt-image-1"
-        assert captured_kwargs["prompt"] == "A cute baby sea otter"
-        assert captured_kwargs["input_fidelity"] == "high"
-        assert captured_kwargs["quality"] == "medium"
-        assert captured_kwargs["size"] == "1024x1024"
-
-
-@pytest.mark.asyncio
 async def test_aiml_image_generation_with_dynamic_api_key():
     """
     Test that when api_key is passed as a dynamic parameter to aimage_generation,
     it gets properly used for AIML provider authentication instead of falling back
     to environment variables.
-    
+
     This test validates the fix for ensuring dynamic API keys are respected
     when making image generation requests to the AIML provider.
     """
     from unittest.mock import AsyncMock, patch, MagicMock
     import httpx
-    
+
     # Mock AIML response
     mock_aiml_response = {
         "created": 1703658209,
-        "data": [
-            {
-                "url": "https://example.com/generated_image.png"
-            }
-        ]
+        "data": [{"url": "https://example.com/generated_image.png"}],
     }
-    
+
     # Track captured arguments
     captured_headers = None
     captured_url = None
     captured_json_data = None
-    
+
     def capture_post_call(*args, **kwargs):
         nonlocal captured_headers, captured_url, captured_json_data
-        captured_url = kwargs.get('url') or (args[0] if args else None)
-        captured_headers = kwargs.get('headers', {})
-        captured_json_data = kwargs.get('json', {})
-        
+        captured_url = kwargs.get("url") or (args[0] if args else None)
+        captured_headers = kwargs.get("headers", {})
+        captured_json_data = kwargs.get("json", {})
+
         # Create a mock response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_aiml_response
         mock_response.text = json.dumps(mock_aiml_response)
         return mock_response
-    
+
     # Mock the HTTP client that actually makes the request (sync version for image generation)
-    with patch('litellm.llms.custom_httpx.http_handler.HTTPHandler.post') as mock_post:
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_post.side_effect = capture_post_call
-        
+
         # Test with dynamic api_key
         test_api_key = "test-dynamic-api-key-12345"
-        
+
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
             model="aiml/flux-pro/v1.1",
@@ -387,7 +314,7 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
         # Validate the response (mocked response processing might not populate data correctly)
         assert response is not None
-        
+
         # The most important validations: API key and endpoint usage
         # These prove that the dynamic API key was properly used
         assert captured_headers is not None
@@ -398,10 +325,38 @@ async def test_aiml_image_generation_with_dynamic_api_key():
         assert captured_url is not None
         assert "api.aimlapi.com" in captured_url
         assert "/v1/images/generations" in captured_url
-        
+
         # Validate the request data
         assert captured_json_data is not None
         assert captured_json_data["prompt"] == "A cute baby sea otter"
         assert captured_json_data["model"] == "flux-pro/v1.1"
 
+@pytest.mark.asyncio
+async def test_azure_image_generation_request_body():
+    from litellm import aimage_generation
+    test_dir = os.path.dirname(__file__)
+    expected_path = os.path.join(
+        test_dir, "request_payloads", "azure_gpt_image_1.json"
+    )
+    with open(expected_path, "r") as f:
+        expected_body = json.load(f)
 
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.side_effect = Exception("test")
+
+        with pytest.raises(Exception):
+            await aimage_generation(
+                    model="azure/gpt-image-1",
+                    prompt="test prompt",
+                    api_base="https://example.azure.com",
+                    api_key="test-key",
+                    api_version="2025-04-01-preview",
+                )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        request_json = call_args.kwargs.get("json", {})
+        assert request_json == expected_body

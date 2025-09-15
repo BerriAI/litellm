@@ -49,6 +49,7 @@ const sidebars = {
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
+          "proxy/guardrails/tool_permission",
         ].sort(),
       ],
     },
@@ -141,6 +142,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/forward_client_headers",
             "proxy/model_discovery",
           ],
         },
@@ -261,6 +263,7 @@ const sidebars = {
             "completion/input",
             "completion/output",
             "completion/usage",
+            "completion/http_handler_config",
           ],
         },
         "response_api",
@@ -409,6 +412,7 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_agents",
+            "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
         },
@@ -482,8 +486,10 @@ const sidebars = {
         "providers/nebius",
         "providers/dashscope",
         "providers/bytez",
+        "providers/heroku",
         "providers/oci",
-        "providers/datarobot",  
+        "providers/datarobot",
+        "providers/ovhcloud",  
       ],
     },
     {

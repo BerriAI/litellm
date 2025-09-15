@@ -16,9 +16,18 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+    convert_content_list_to_str,
+    extract_images_from_message,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
+from litellm.types.llms.ollama import (
+    OllamaChatCompletionMessage,
+    OllamaToolCall,
+    OllamaToolCallFunction,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
@@ -232,6 +241,8 @@ class OllamaChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        if api_key is not None and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(
@@ -297,7 +308,23 @@ class OllamaChatConfig(BaseConfig):
                         )
                         new_tools.append(ollama_tool_call)
                 cast(dict, m)["tool_calls"] = new_tools
-            new_messages.append(m)
+            reasoning_content, parsed_content = _extract_reasoning_content(
+                cast(dict, m)
+            )
+            content_str = convert_content_list_to_str(cast(AllMessageValues, m))
+            images = extract_images_from_message(cast(AllMessageValues, m))
+
+            ollama_message = OllamaChatCompletionMessage(
+                role=cast(str, m.get("role")),
+            )
+            if reasoning_content is not None:
+                ollama_message["thinking"] = reasoning_content
+            if content_str is not None:
+                ollama_message["content"] = content_str
+            if images is not None:
+                ollama_message["images"] = images
+
+            new_messages.append(ollama_message)
 
         # Load Config
         config = self.get_config()
@@ -359,7 +386,7 @@ class OllamaChatConfig(BaseConfig):
                 del response_json_message["thinking"]
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
-                from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     _parse_content_for_reasoning,
                 )
 

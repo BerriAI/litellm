@@ -30,6 +30,10 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -47,6 +51,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
+    ImageURLListItem,
     ImageURLObject,
     OpenAIChatCompletionFinishReason,
 )
@@ -422,8 +427,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
+        model: Optional[str] = None,
     ) -> GeminiThinkingConfig:
-        if reasoning_effort == "low":
+        if reasoning_effort == "minimal":
+            # Use model-specific minimum thinking budget or fallback
+            # Check for exact matches first, then partial matches
+            if model and "gemini-2.5-flash-lite" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE
+            elif model and "gemini-2.5-pro" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO
+            elif model and "gemini-2.5-flash" in model.lower():
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH
+            else:
+                budget = DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+
+            return {
+                "thinkingBudget": budget,
+                "includeThoughts": True,
+            }
+        elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
                 "includeThoughts": True,
@@ -600,7 +622,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["seed"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
+                    VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                        value, model
+                    )
                 )
             elif param == "thinking":
                 optional_params["thinkingConfig"] = (
@@ -814,8 +838,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _extract_image_response_from_parts(
         self, parts: List[HttpxPartType]
-    ) -> Optional[ImageURLObject]:
+    ) -> Optional[List[ImageURLListItem]]:
         """Extract image response from parts if present"""
+        images: List[ImageURLListItem] = []
         for part in parts:
             if "inlineData" in part:
                 mime_type = part["inlineData"]["mimeType"]
@@ -823,8 +848,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if mime_type.startswith("image/"):
                     # Convert base64 data to data URI format
                     data_uri = f"data:{mime_type};base64,{data}"
-                    return ImageURLObject(url=data_uri, detail="auto")
-        return None
+                    images.append(
+                        ImageURLListItem(
+                            image_url=ImageURLObject(url=data_uri, detail="auto"),
+                            index=0,
+                            type="image_url",
+                        )
+                    )
+        return images
 
     def _extract_audio_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -1152,7 +1183,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         tools: Optional[List[ChatCompletionToolCallChunk]],
         functions: Optional[ChatCompletionToolCallFunctionChunk],
         chat_completion_logprobs: Optional[ChoiceLogprobs],
-        image_response: Optional[ImageURLObject],
+        image_response: Optional[List[ImageURLListItem]],
     ) -> StreamingChoices:
         """
         Helper method to create a streaming choice object for Vertex AI
@@ -1169,7 +1200,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 content=chat_completion_message.get("content"),
                 reasoning_content=chat_completion_message.get("reasoning_content"),
                 tool_calls=tools,
-                image=image_response,
+                images=image_response,
                 function_call=functions,
             ),
             logprobs=chat_completion_logprobs,
@@ -1240,7 +1271,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: List[dict] = []
         url_context_metadata: List[dict] = []
-        image_response: Optional[ImageURLObject] = None
+        image_response: Optional[List[ImageURLListItem]] = None
         safety_ratings: List = []
         citation_metadata: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
@@ -1300,7 +1331,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if image_response is not None:
                     # Handle image response - combine with text content into structured format
                     cast(Dict[str, Any], chat_completion_message)[
-                        "image"
+                        "images"
                     ] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
