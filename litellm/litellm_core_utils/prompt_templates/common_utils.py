@@ -461,6 +461,9 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
         content_type = file_data.content_type
     else:
         file_content = file_data
+        # Try to get filename from file-like objects that have a name attribute
+        if hasattr(file_content, 'name') and hasattr(file_content, 'read'):
+            filename = getattr(file_content, 'name', None)
     # Convert content to bytes
     if isinstance(file_content, (str, PathLike)):
         # If it's a path, open and read the file
