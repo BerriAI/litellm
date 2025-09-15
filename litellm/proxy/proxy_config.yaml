@@ -11,11 +11,9 @@ model_list:
       aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
     model_info: 
       mode: batch
-  - model_name: vertex_ai/gemini-2.5-flash-exp
+  - model_name: vertex_ai/gemini-2.5-flash
     litellm_params:
-      model: vertex_ai/gemini-2.5-flash-exp
+      model: vertex_ai/gemini-2.5-flash
       #########################################################
-      ######### batch specific params ########################
-      gcs_bucket_name: litellm-proxy
-    model_info: 
-      mode: batch
+      ######### file specific params ########################
+      gcs_bucket_name: litellm-local
