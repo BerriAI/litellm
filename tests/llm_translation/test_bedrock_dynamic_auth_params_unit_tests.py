@@ -207,6 +207,7 @@ class DummyCredentials:
         ("aws_role_name", "dummy_role_name"),
         ("aws_web_identity_token", "dummy_web_identity_token"),
         ("aws_sts_endpoint", "dummy_sts_endpoint"),
+        ("aws_external_id", "dummy_external_id"),
     ],
 )
 def test_dynamic_aws_params_propagation(model, param_name, param_value):
