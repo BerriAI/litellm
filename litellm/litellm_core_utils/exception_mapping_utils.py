@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
     APIConnectionError,
@@ -1168,9 +1169,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             exception_status_code=original_exception.status_code,
                         )
             elif (
-                custom_llm_provider == "vertex_ai"
-                or custom_llm_provider == "vertex_ai_beta"
-                or custom_llm_provider == "gemini"
+                custom_llm_provider == LlmProviders.VERTEX_AI
+                or custom_llm_provider == LlmProviders.VERTEX_AI_BETA
             ):
                 if (
                     "Vertex AI API has not been used in project" in error_str
@@ -1360,7 +1360,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
-            elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
+            elif custom_llm_provider == "palm" or custom_llm_provider == LlmProviders.GEMINI:
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
                     # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
@@ -1415,6 +1415,62 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"GeminiException - {error_str}",
                             model=model,
                             llm_provider="palm",
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"GeminiException - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 403:
+                        exception_mapping_worked = True
+                        raise PermissionDeniedError(
+                            message=f"GeminiException - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"GeminiException - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"GeminiException - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            exception_status_code=original_exception.status_code,
+                        )
+                    if original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"GeminiException - {error_str}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"GeminiException - {error_str}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    if original_exception.status_code >= 500:
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"GeminiException - {error_str}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                         )
                 # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
