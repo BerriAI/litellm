@@ -590,3 +590,60 @@ class BaseResponsesAPITest(ABC):
         assert function_call_item["status"] == "completed", "status value should be preserved"
 
         print("✅ OpenAI Responses API dict input filtering test passed")
+
+    @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.flaky(retries=3, delay=2)
+    @pytest.mark.asyncio
+    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode):
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        if sync_mode:
+            response = litellm.responses(
+                input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+            )
+
+            # cancel the response
+            if isinstance(response, ResponsesAPIResponse):
+                cancel_result = litellm.cancel_responses(
+                    response_id=response.id, **base_completion_call_args
+                )
+                assert cancel_result is not None
+                assert hasattr(cancel_result, "id")
+                # The actual response structure depends on the provider implementation
+                assert isinstance(cancel_result, ResponsesAPIResponse)
+            else:
+                raise ValueError("response is not a ResponsesAPIResponse")
+        else:
+            response = await litellm.aresponses(
+                input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+            )
+
+            # async cancel the response
+            if isinstance(response, ResponsesAPIResponse):
+                cancel_result = await litellm.acancel_responses(
+                    response_id=response.id, **base_completion_call_args
+                )
+                assert cancel_result is not None
+                assert hasattr(cancel_result, "id")
+                # The actual response structure depends on the provider implementation
+                assert isinstance(cancel_result, ResponsesAPIResponse)
+            else:
+                raise ValueError("response is not a ResponsesAPIResponse")
+
+    @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.asyncio
+    async def test_cancel_responses_invalid_response_id(self, sync_mode):
+        """Test cancel_responses with invalid response ID should raise appropriate error"""
+        base_completion_call_args = self.get_base_completion_call_args()
+        
+        if sync_mode:
+            with pytest.raises(Exception):
+                litellm.cancel_responses(
+                    response_id="invalid_response_id_12345", **base_completion_call_args
+                )
+        else:
+            with pytest.raises(Exception):
+                await litellm.acancel_responses(
+                    response_id="invalid_response_id_12345", **base_completion_call_args
+                )

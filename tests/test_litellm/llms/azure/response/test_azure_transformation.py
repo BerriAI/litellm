@@ -293,3 +293,55 @@ class TestAzureResponsesAPIConfig:
             litellm_params={"api_version": None},
         )
         assert result_none_version == expected_url
+
+    def test_azure_cancel_response_api_request(self):
+        """Test Azure cancel response API request transformation"""
+        from litellm.types.router import GenericLiteLLMParams
+        
+        response_id = "resp_test123"
+        api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        litellm_params = GenericLiteLLMParams(api_version="2024-05-01-preview")
+        headers = {"Authorization": "Bearer test-key"}
+        
+        url, data = self.config.transform_cancel_response_api_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        
+        expected_url = "https://test.openai.azure.com/openai/responses/resp_test123/cancel?api-version=2024-05-01-preview"
+        assert url == expected_url
+        assert data == {}
+
+    def test_azure_cancel_response_api_response(self):
+        """Test Azure cancel response API response transformation"""
+        from unittest.mock import Mock
+        from litellm.types.llms.openai import ResponsesAPIResponse
+        
+        # Mock response
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "id": "resp_test123",
+            "object": "response",
+            "created_at": 1234567890,
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": 1.0,
+            "status": "cancelled"
+        }
+        mock_response.text = "test response"
+        mock_response.status_code = 200
+        
+        # Mock logging object
+        mock_logging_obj = Mock()
+        
+        result = self.config.transform_cancel_response_api_response(
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+        )
+        
+        assert isinstance(result, ResponsesAPIResponse)
+        assert result.id == "resp_test123"
