@@ -80,6 +80,28 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
     """
     Asserts 'create_file' is called with the correct arguments
     """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    
+    # Set up proper dependencies to avoid MagicMock issues
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_object = setup_proxy_logging_object(monkeypatch, llm_router)
+    
+    # Mock user_api_key_auth to return a proper UserAPIKeyAuth object instead of MagicMock
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        parent_otel_span=None,
+    )
+    
+    # Mock the auth dependency function
+    async def mock_user_api_key_auth(*args, **kwargs):
+        return mock_user_api_key_dict
+    
+    mocker.patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", side_effect=mock_user_api_key_auth)
+    
     # Create a simple test file content
     test_file_content = b"test audio content"
     test_file = ("test.wav", test_file_content, "audio/wav")
