@@ -216,11 +216,26 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         This function handles URLs with query parameters by inserting the response_id
         at the correct location (before any query parameters).
         """
-        cancel_url = (
-            self._construct_url_for_response_id_in_path(
-                api_base=api_base, response_id=response_id
+        from urllib.parse import urlparse, urlunparse
+        
+        # Parse the URL to separate its components
+        parsed_url = urlparse(api_base)
+        
+        # Insert the response_id and /cancel at the end of the path component
+        # Remove trailing slash if present to avoid double slashes
+        path = parsed_url.path.rstrip("/")
+        new_path = f"{path}/{response_id}/cancel"
+        
+        # Reconstruct the URL with all original components but with the modified path
+        cancel_url = urlunparse(
+            (
+                parsed_url.scheme,  # http, https
+                parsed_url.netloc,  # domain name, port
+                new_path,  # path with response_id and /cancel added
+                parsed_url.params,  # parameters
+                parsed_url.query,  # query string
+                parsed_url.fragment,  # fragment
             )
-            + "/cancel"
         )
 
         data: Dict = {}
