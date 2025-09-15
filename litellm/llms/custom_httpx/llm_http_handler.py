@@ -118,7 +118,6 @@ class BaseLLMHTTPHandler:
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
-
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -2201,7 +2200,6 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
-
         if _is_async:
             return self.async_create_file(
                 transformed_request=transformed_request,
@@ -2218,10 +2216,13 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client()
         else:
             sync_httpx_client = client
+        
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
+            upload_response = getattr(
+                sync_httpx_client, transformed_request["method"].lower()
+            )(
                 url=transformed_request["url"],
                 headers=transformed_request["headers"],
                 data=transformed_request["data"],
@@ -2233,8 +2234,8 @@ class BaseLLMHTTPHandler:
             # Handle traditional file uploads
             # Ensure transformed_request is a string for httpx compatibility
             if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode('utf-8')
-            
+                transformed_request = transformed_request.decode("utf-8")
+
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
@@ -2283,11 +2284,15 @@ class BaseLLMHTTPHandler:
                     provider_config=provider_config,
                 )
 
+        # Store the upload URL in litellm_params for the transformation method
+        litellm_params_with_url = dict(litellm_params)
+        litellm_params_with_url["upload_url"] = api_base
+        
         return provider_config.transform_create_file_response(
             model=None,
             raw_response=upload_response,
             logging_obj=logging_obj,
-            litellm_params=litellm_params,
+            litellm_params=litellm_params_with_url,
         )
 
     async def async_create_file(
@@ -2310,7 +2315,7 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
-        
+
         #########################################################
         # Debug Logging
         #########################################################
@@ -2326,7 +2331,9 @@ class BaseLLMHTTPHandler:
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
+            upload_response = await getattr(
+                async_httpx_client, transformed_request["method"].lower()
+            )(
                 url=transformed_request["url"],
                 headers=transformed_request["headers"],
                 data=transformed_request["data"],
@@ -2338,8 +2345,8 @@ class BaseLLMHTTPHandler:
             # Handle traditional file uploads
             # Ensure transformed_request is a string for httpx compatibility
             if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode('utf-8')
-            
+                transformed_request = transformed_request.decode("utf-8")
+
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
@@ -2408,15 +2415,19 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
+        model: Optional[str] = None,
     ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
         """
         Creates a batch using provider-specific batch creation process
         """
         # get config from model, custom llm provider
+        if model is None:
+            raise ValueError("model is required for create_batch")
+            
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
-            model="",
+            model=model,
             messages=[],
             optional_params={},
             litellm_params=litellm_params,
@@ -2425,7 +2436,7 @@ class BaseLLMHTTPHandler:
         api_base = provider_config.get_complete_batch_url(
             api_base=api_base,
             api_key=api_key,
-            model="",
+            model=model,
             optional_params={},
             litellm_params=litellm_params,
             data=create_batch_data,
@@ -2435,7 +2446,7 @@ class BaseLLMHTTPHandler:
 
         # Get the transformed request data
         transformed_request = provider_config.transform_create_batch_request(
-            model="",
+            model=model,
             create_batch_data=create_batch_data,
             litellm_params=litellm_params,
             optional_params={},
@@ -2460,9 +2471,14 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         try:
-            if isinstance(transformed_request, dict) and "method" in transformed_request:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = getattr(sync_httpx_client, transformed_request["method"].lower())(
+                batch_response = getattr(
+                    sync_httpx_client, transformed_request["method"].lower()
+                )(
                     url=transformed_request["url"],
                     headers=transformed_request["headers"],
                     data=transformed_request["data"],
@@ -2492,10 +2508,13 @@ class BaseLLMHTTPHandler:
             )
 
         # Store original request for response transformation
-        litellm_params_with_request = {**litellm_params, "original_batch_request": create_batch_data}
-        
+        litellm_params_with_request = {
+            **litellm_params,
+            "original_batch_request": create_batch_data,
+        }
+
         return provider_config.transform_create_batch_response(
-            model=None,
+            model=model,
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_request,
@@ -2512,6 +2531,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         create_batch_data: Optional["CreateBatchRequest"] = None,
+        model: Optional[str] = None,
     ):
         """
         Async version of create_batch
@@ -2522,7 +2542,7 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
-        
+
         #########################################################
         # Debug Logging
         #########################################################
@@ -2537,9 +2557,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if isinstance(transformed_request, dict) and "method" in transformed_request:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
                 # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
-                batch_response = await getattr(async_httpx_client, transformed_request["method"].lower())(
+                batch_response = await getattr(
+                    async_httpx_client, transformed_request["method"].lower()
+                )(
                     url=transformed_request["url"],
                     headers=transformed_request["headers"],
                     data=transformed_request["data"],
@@ -2569,10 +2594,13 @@ class BaseLLMHTTPHandler:
             )
 
         # Store original request for response transformation (for async version)
-        litellm_params_with_request = {**litellm_params, "original_batch_request": create_batch_data or {}}
-        
+        litellm_params_with_request = {
+            **litellm_params,
+            "original_batch_request": create_batch_data or {},
+        }
+
         return provider_config.transform_create_batch_response(
-            model=None,
+            model=model,
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_request,

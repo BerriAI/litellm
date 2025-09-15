@@ -107,7 +107,6 @@ from litellm.litellm_core_utils.llm_request_utils import _ensure_extra_body_is_s
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     LiteLLMResponseObjectHandler,
     _handle_invalid_parallel_tool_calls,
-    _parse_content_for_reasoning,
     convert_to_model_response_object,
     convert_to_streaming_response,
     convert_to_streaming_response_async,
@@ -121,6 +120,9 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.redact_messages import (
     LiteLLMLoggingObject,
@@ -2426,6 +2428,8 @@ def get_optional_params_transcription(
 
     # retrieve all parameters passed to the function
     passed_params = locals()
+
+    passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = passed_params.pop("drop_params")
     special_params = passed_params.pop("kwargs")
@@ -2437,7 +2441,7 @@ def get_optional_params_transcription(
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
-        "timestamp_granularities": None
+        "timestamp_granularities": None,
     }
 
     non_default_params = {
@@ -2490,6 +2494,7 @@ def get_optional_params_transcription(
             model=model,
             drop_params=drop_params if drop_params is not None else False,
         )
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
@@ -2499,6 +2504,25 @@ def get_optional_params_transcription(
     )
 
     return optional_params
+
+
+def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
+    """Map OpenAI size parameter to Vertex AI aspectRatio."""
+    if size is None:
+        return "1:1"
+
+    # Map OpenAI size strings to Vertex AI aspect ratio strings
+    # Vertex AI accepts: "1:1", "9:16", "16:9", "4:3", "3:4"
+    size_to_aspect_ratio = {
+        "256x256": "1:1",  # Square
+        "512x512": "1:1",  # Square
+        "1024x1024": "1:1",  # Square (default)
+        "1792x1024": "16:9",  # Landscape
+        "1024x1792": "9:16",  # Portrait
+    }
+    return size_to_aspect_ratio.get(
+        size, "1:1"
+    )  # Default to square if size not recognized
 
 
 def get_optional_params_image_gen(
@@ -2614,19 +2638,9 @@ def get_optional_params_image_gen(
 
         # Map OpenAI size parameter to Vertex AI aspectRatio
         if size is not None:
-            # Map OpenAI size strings to Vertex AI aspect ratio strings
-            # Vertex AI accepts: "1:1", "9:16", "16:9", "4:3", "3:4"
-            size_to_aspect_ratio = {
-                "256x256": "1:1",  # Square
-                "512x512": "1:1",  # Square
-                "1024x1024": "1:1",  # Square (default)
-                "1792x1024": "16:9",  # Landscape
-                "1024x1792": "9:16",  # Portrait
-            }
-            aspect_ratio = size_to_aspect_ratio.get(
-                size, "1:1"
-            )  # Default to square if size not recognized
-            optional_params["aspectRatio"] = aspect_ratio
+            optional_params["aspectRatio"] = _map_openai_size_to_vertex_ai_aspect_ratio(
+                size
+            )
 
     openai_params: list[str] = list(default_params.keys())
     if provider_config is not None:
@@ -2642,6 +2656,12 @@ def get_optional_params_image_gen(
         openai_params=openai_params,
         additional_drop_params=additional_drop_params,
     )
+    # remove keys with None or empty dict/list values to avoid sending empty payloads
+    optional_params = {
+        k: v
+        for k, v in optional_params.items()
+        if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0)
+    }
     return optional_params
 
 
@@ -2883,6 +2903,19 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.SambaNovaEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
+    elif custom_llm_provider == "ovhcloud":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="ovhcloud",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.OVHCloudEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model=model,
@@ -4084,6 +4117,7 @@ def add_provider_specific_params_to_optional_params(
     """
     Add provider specific params to optional_params
     """
+
     if (
         custom_llm_provider
         in ["openai", "azure", "text-completion-openai"]
@@ -4597,7 +4631,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
     return True
 
 
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
@@ -4917,6 +4951,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
                 ),
+                tiered_pricing=_model_info.get("tiered_pricing", None),
                 litellm_provider=_model_info.get(
                     "litellm_provider", custom_llm_provider
                 ),
@@ -7110,6 +7145,8 @@ class ProviderConfigManager:
             return litellm.OCIChatConfig()
         elif litellm.LlmProviders.HYPERBOLIC == provider:
             return litellm.HyperbolicChatConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            return litellm.OVHCloudChatConfig()
         return None
 
     @staticmethod
@@ -7153,6 +7190,8 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.OVHCLOUD == provider:
+            return litellm.OVHCloudEmbeddingConfig()
         return None
 
     @staticmethod
@@ -7224,6 +7263,12 @@ class ProviderConfigManager:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
             else:
                 return litellm.OpenAIWhisperAudioTranscriptionConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.transcriptions.transformation import (
+                HostedVLLMAudioTranscriptionConfig,
+            )
+
+            return HostedVLLMAudioTranscriptionConfig()
         return None
 
     @staticmethod
