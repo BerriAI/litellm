@@ -2172,6 +2172,8 @@ class BaseLLMHTTPHandler:
         """
         Creates a file using Gemini's two-step upload process
         """
+        from litellm.types.utils import StandardCallbackDynamicParams
+
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -2182,6 +2184,10 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
+        # get standard callback dynamic params from logging_obj
+        # for files create we re-use params from logging integrations .e.g gcs_bucket_name, s3_bucket_name, etc.
+        standard_callback_dynamic_params: StandardCallbackDynamicParams = logging_obj.standard_callback_dynamic_params
+
         api_base = provider_config.get_complete_file_url(
             api_base=api_base,
             api_key=api_key,
@@ -2189,6 +2195,7 @@ class BaseLLMHTTPHandler:
             optional_params={},
             litellm_params=litellm_params,
             data=create_file_data,
+            standard_callback_dynamic_params=standard_callback_dynamic_params,
         )
         if api_base is None:
             raise ValueError("api_base is required for create_file")
