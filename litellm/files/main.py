@@ -47,7 +47,7 @@ azure_files_instance = AzureOpenAIFilesAPI()
 @client
 async def acreate_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "user_data"],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -91,7 +91,7 @@ async def acreate_file(
 @client
 def create_file(
     file: FileTypes,
-    purpose: Literal["assistants", "batch", "fine-tune"],
+    purpose: Literal["assistants", "batch", "fine-tune", "user_data"],
     custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
