@@ -479,21 +479,24 @@ def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
 
 
 _default_guardrails: List[str] = []
-_initialized = False
+_last_callbacks_count = 0
 
 def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
-    global _default_guardrails, _initialized
-    if not _initialized:
+    global _default_guardrails, _last_callbacks_count
+
+    # Recompute default guardrails if callbacks have changed
+    if len(litellm.callbacks) != _last_callbacks_count:
         _default_guardrails = [
             cb.guardrail_name
             for cb in litellm.callbacks
             if isinstance(cb, CustomGuardrail) and cb.default_on and cb.guardrail_name
         ]
-        _initialized = True
+        _last_callbacks_count = len(litellm.callbacks)
 
     request_guardrails = get_request_guardrails(kwargs)
     applied_guardrails = _default_guardrails.copy()
 
+    # Append request-specific guardrails if not already included
     for cb in litellm.callbacks:
         if (
             isinstance(cb, CustomGuardrail)
