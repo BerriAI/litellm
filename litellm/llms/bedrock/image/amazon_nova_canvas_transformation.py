@@ -67,6 +67,10 @@ class AmazonNovaCanvasConfig:
         """
         task_type = optional_params.pop("taskType", "TEXT_IMAGE")
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
+
+        # Filter out model_id parameter to prevent "extraneous key" error from Bedrock API
+        optional_params.pop("model_id", None)
+
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
             text_to_image_params: Dict[str, Any] = image_generation_config.pop(
