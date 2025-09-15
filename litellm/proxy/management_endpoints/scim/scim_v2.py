@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     NewUserRequest,
+    NewUserResponse,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
@@ -105,7 +106,7 @@ class ScimUserData(TypedDict):
 class GroupMemberExtractionResult(BaseModel):
     """Result of extracting and processing group members."""
     existing_member_ids: List[str]
-    created_users: List[LiteLLM_UserTable]
+    created_users: List[NewUserResponse]
     all_member_ids: List[str]  # existing + newly created
 
 
@@ -273,7 +274,7 @@ async def _handle_team_membership_changes(user_id: str, existing_teams: List[str
         )
 
 
-async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_group") -> Optional[LiteLLM_UserTable]:
+async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_group") -> Optional[NewUserResponse]:
     """
     Helper function to create a user if they don't exist.
     
