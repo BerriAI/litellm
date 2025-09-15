@@ -2,7 +2,6 @@ import requests
 import pytest
 import os
 import sys
-import pytest
 
 
 sys.path.insert(
@@ -11,7 +10,7 @@ sys.path.insert(
 
 import litellm
 from litellm import completion
-sys.path.insert(0, os.path.abspath(".."))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from vertex_ai_test_utils import get_vertex_ai_creds_json, load_vertex_ai_credentials
 
 
