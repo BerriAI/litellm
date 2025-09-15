@@ -16,8 +16,8 @@ from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
-from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.bedrock import CachePointBlock
+from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
@@ -1067,10 +1067,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[VertexFunctionCall] = (
-                        _gemini_tool_call_invoke_helper(
-                            function_call_params=tool["function"]
-                        )
+                    gemini_function_call: Optional[
+                        VertexFunctionCall
+                    ] = _gemini_tool_call_invoke_helper(
+                        function_call_params=tool["function"]
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1589,9 +1589,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element["cache_control"] = (
-                                    _content_element["cache_control"]
-                                )
+                                _anthropic_content_element[
+                                    "cache_control"
+                                ] = _content_element["cache_control"]
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1629,9 +1629,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element["cache_control"] = (
-                            _content_element["cache_control"]
-                        )
+                        _anthropic_content_text_element[
+                            "cache_control"
+                        ] = _content_element["cache_control"]
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2482,8 +2482,7 @@ class BedrockImageProcessor:
 
         if is_document:
             return BedrockImageProcessor._get_document_format(
-                mime_type=mime_type,
-                supported_doc_formats=supported_doc_formats
+                mime_type=mime_type, supported_doc_formats=supported_doc_formats
             )
 
         else:
@@ -2495,12 +2494,9 @@ class BedrockImageProcessor:
                     f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
-    
+
     @staticmethod
-    def _get_document_format(
-        mime_type: str,
-        supported_doc_formats: List[str]
-        ) -> str:
+    def _get_document_format(mime_type: str, supported_doc_formats: List[str]) -> str:
         """
         Get the document format from the mime type
 
@@ -2519,13 +2515,9 @@ class BedrockImageProcessor:
             The document format
         """
         valid_extensions: Optional[List[str]] = None
-        potential_extensions = mimetypes.guess_all_extensions(
-            mime_type, strict=False
-        )
+        potential_extensions = mimetypes.guess_all_extensions(mime_type, strict=False)
         valid_extensions = [
-            ext[1:]
-            for ext in potential_extensions
-            if ext[1:] in supported_doc_formats
+            ext[1:] for ext in potential_extensions if ext[1:] in supported_doc_formats
         ]
 
         # Fallback to types/files.py if mimetypes doesn't return valid extensions
@@ -2686,10 +2678,12 @@ def _convert_to_bedrock_tool_call_invoke(
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
-                
+
                 # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                    cache_point_block = BedrockContentBlock(
+                        cachePoint=CachePointBlock(type="default")
+                    )
                     _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
@@ -2751,7 +2745,7 @@ def _convert_to_bedrock_tool_call_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
-    
+
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
@@ -2760,7 +2754,7 @@ def _convert_to_bedrock_tool_call_result(
         content=[tool_result_content_block],
         toolUseId=id,
     )
-    
+
     content_block = BedrockContentBlock(toolResult=tool_result)
 
     return content_block
@@ -3091,6 +3085,7 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: Optional[
             Union[str, ChatCompletionAssistantMessage]
         ] = None,
+        guard_last_turn_only: bool = False,
     ) -> List[BedrockMessageBlock]:
         contents: List[BedrockMessageBlock] = []
         msg_i = 0
@@ -3167,6 +3162,42 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             if user_content:
+                # Apply guardrail wrapping if guard_last_turn_only is True and this is the last user message
+                if guard_last_turn_only:
+                    # Check if this is the last user message by looking ahead
+                    is_last_user_message = True
+                    temp_msg_i = msg_i
+                    while temp_msg_i < len(messages):
+                        if messages[temp_msg_i]["role"] == "user":
+                            is_last_user_message = False
+                            break
+                        temp_msg_i += 1
+
+                    if is_last_user_message:
+                        # Wrap only the last text block in GuardrailConverseContent
+                        wrapped_content = []
+                        text_blocks = [
+                            block for block in user_content if "text" in block
+                        ]
+
+                        for content_block in user_content:
+                            if "text" in content_block:
+                                # Only wrap the last text block
+                                if content_block == text_blocks[-1]:
+                                    guardrail_block = BedrockContentBlock(
+                                        guardrailConverseContent={
+                                            "text": content_block["text"]
+                                        }
+                                    )
+                                    wrapped_content.append(guardrail_block)
+                                else:
+                                    # Keep other text blocks as-is
+                                    wrapped_content.append(content_block)
+                            else:
+                                # Keep non-text content blocks as-is
+                                wrapped_content.append(content_block)
+                        user_content = wrapped_content
+
                 if len(contents) > 0 and contents[-1]["role"] == "user":
                     if (
                         assistant_continue_message is not None
@@ -3196,26 +3227,29 @@ class BedrockConverseMessagesProcessor:
                 current_message = messages[msg_i]
                 tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
                 tool_content.append(tool_call_result)
-                            
+
                 # Check if we need to add a separate cachePoint block
                 has_cache_control = False
-                
+
                 # Check for message-level cache_control
                 if current_message.get("cache_control", None) is not None:
                     has_cache_control = True
                 # Check for content-level cache_control in list content
                 elif isinstance(current_message.get("content"), list):
                     for content_element in current_message["content"]:
-                        if (isinstance(content_element, dict) and 
-                            content_element.get("cache_control", None) is not None):
+                        if (
+                            isinstance(content_element, dict)
+                            and content_element.get("cache_control", None) is not None
+                        ):
                             has_cache_control = True
                             break
-                
+
                 # Add a separate cachePoint block if cache_control is present
                 if has_cache_control:
-                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                    cache_point_block = BedrockContentBlock(
+                        cachePoint=CachePointBlock(type="default")
+                    )
                     tool_content.append(cache_point_block)
-            
 
                 msg_i += 1
             if tool_content:
@@ -3296,7 +3330,7 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url
                                 )
                                 assistants_parts.append(assistants_part)
-                                                        # Add cache point block for assistant content elements
+                                # Add cache point block for assistant content elements
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -3308,8 +3342,12 @@ class BedrockConverseMessagesProcessor:
                         if _cache_point_block is not None:
                             assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
-                elif _assistant_content is not None and isinstance(_assistant_content, str):
-                    assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                elif _assistant_content is not None and isinstance(
+                    _assistant_content, str
+                ):
+                    assistant_content.append(
+                        BedrockContentBlock(text=_assistant_content)
+                    )
                     # Add cache point block for assistant string content
                     _cache_point_block = (
                         litellm.AmazonConverseConfig()._get_cache_point_block(
@@ -3442,6 +3480,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
     assistant_continue_message: Optional[
         Union[str, ChatCompletionAssistantMessage]
     ] = None,
+    guard_last_turn_only: bool = False,
 ) -> List[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -3536,6 +3575,40 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
         if user_content:
+            # Apply guardrail wrapping if guard_last_turn_only is True and this is the last user message
+            if guard_last_turn_only:
+                # Check if this is the last user message by looking ahead
+                is_last_user_message = True
+                temp_msg_i = msg_i
+                while temp_msg_i < len(messages):
+                    if messages[temp_msg_i]["role"] == "user":
+                        is_last_user_message = False
+                        break
+                    temp_msg_i += 1
+
+                if is_last_user_message:
+                    # Wrap only the last text block in GuardrailConverseContent
+                    wrapped_content = []
+                    text_blocks = [block for block in user_content if "text" in block]
+
+                    for content_block in user_content:
+                        if "text" in content_block:
+                            # Only wrap the last text block
+                            if content_block == text_blocks[-1]:
+                                guardrail_block = BedrockContentBlock(
+                                    guardrailConverseContent={
+                                        "text": content_block["text"]
+                                    }
+                                )
+                                wrapped_content.append(guardrail_block)
+                            else:
+                                # Keep other text blocks as-is
+                                wrapped_content.append(content_block)
+                        else:
+                            # Keep non-text content blocks as-is
+                            wrapped_content.append(content_block)
+                    user_content = wrapped_content
+
             if len(contents) > 0 and contents[-1]["role"] == "user":
                 if (
                     assistant_continue_message is not None
@@ -3562,29 +3635,33 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
             current_message = messages[msg_i]
-            
+
             # Add the tool result first
             tool_content.append(tool_call_result)
-            
+
             # Check if we need to add a separate cachePoint block
             has_cache_control = False
-            
+
             # Check for message-level cache_control
             if current_message.get("cache_control", None) is not None:
                 has_cache_control = True
             # Check for content-level cache_control in list content
             elif isinstance(current_message.get("content"), list):
                 for content_element in current_message["content"]:
-                    if (isinstance(content_element, dict) and 
-                        content_element.get("cache_control", None) is not None):
+                    if (
+                        isinstance(content_element, dict)
+                        and content_element.get("cache_control", None) is not None
+                    ):
                         has_cache_control = True
                         break
-            
+
             # Add a separate cachePoint block if cache_control is present
             if has_cache_control:
-                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                cache_point_block = BedrockContentBlock(
+                    cachePoint=CachePointBlock(type="default")
+                )
                 tool_content.append(cache_point_block)
-            
+
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3849,10 +3926,9 @@ def function_call_prompt(messages: list, functions: list):
             if isinstance(message["content"], str):
                 message["content"] += f""" {function_prompt}"""
             else:
-                message["content"].append({
-                    "type": "text",
-                    "text": f""" {function_prompt}"""
-                })
+                message["content"].append(
+                    {"type": "text", "text": f""" {function_prompt}"""}
+                )
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:

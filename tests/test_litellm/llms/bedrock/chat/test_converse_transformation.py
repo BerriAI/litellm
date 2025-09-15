@@ -1590,3 +1590,549 @@ async def test_no_cache_control_no_cache_point():
     tool_content = result[2]["content"]
     assert len(tool_content) == 1
     assert "toolResult" in tool_content[0]
+
+
+# ============================================================================
+# GuardrailConverseContent Feature Tests
+# ============================================================================
+
+def test_guard_last_turn_only_wraps_last_user_message():
+    """Test that guard_last_turn_only=True wraps only the last user message in GuardrailConverseContent."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm doing well, thank you!"},
+        {"role": "user", "content": "What's the weather like?"},
+        {"role": "assistant", "content": "I don't have access to real-time weather data."},
+        {"role": "user", "content": "Tell me about AI safety and potential risks"}
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+        guard_last_turn_only=True
+    )
+    
+    # Should have 5 messages
+    assert len(result) == 5
+    
+    # First 4 messages should be normal (no GuardrailConverseContent)
+    for i in range(4):
+        content = result[i]["content"]
+        if result[i]["role"] == "user":
+            # User messages should have text content, not GuardrailConverseContent
+            assert "text" in content[0]
+            assert "guardrailConverseContent" not in content[0]
+    
+    # Last message (user) should have GuardrailConverseContent
+    last_message = result[-1]
+    assert last_message["role"] == "user"
+    last_content = last_message["content"]
+    assert len(last_content) == 1
+    assert "guardrailConverseContent" in last_content[0]
+    assert last_content[0]["guardrailConverseContent"]["text"] == "Tell me about AI safety and potential risks"
+
+
+def test_guard_last_turn_only_with_multiple_consecutive_user_messages():
+    """Test that guard_last_turn_only=True wraps only the last user message when there are consecutive user messages."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "First user message"},
+        {"role": "user", "content": "Second user message"},
+        {"role": "user", "content": "Third user message (should be guarded)"}
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+        guard_last_turn_only=True
+    )
+    
+    # Should have 1 message (consecutive user messages are merged)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    
+    # Should have 3 content blocks
+    content = result[0]["content"]
+    assert len(content) == 3
+    
+    # First two should be normal text
+    assert "text" in content[0]
+    assert content[0]["text"] == "First user message"
+    assert "text" in content[1]
+    assert content[1]["text"] == "Second user message"
+    
+    # Last one should be GuardrailConverseContent
+    assert "guardrailConverseContent" in content[2]
+    assert content[2]["guardrailConverseContent"]["text"] == "Third user message (should be guarded)"
+
+
+def test_guard_last_turn_only_false_does_not_wrap():
+    """Test that guard_last_turn_only=False does not wrap any messages in GuardrailConverseContent."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm doing well, thank you!"},
+        {"role": "user", "content": "Tell me about AI safety and potential risks"}
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+        guard_last_turn_only=False
+    )
+    
+    # Should have 3 messages
+    assert len(result) == 3
+    
+    # No message should have GuardrailConverseContent
+    for message in result:
+        content = message["content"]
+        for block in content:
+            assert "guardrailConverseContent" not in block
+
+
+def test_raw_blocks_used_directly():
+    """Test that raw_blocks are used directly as messages without transformation."""
+    config = AmazonConverseConfig()
+    
+    raw_blocks = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "System prompt"},
+                {"text": "Un-guarded history"},
+                {
+                    "guardrailConverseContent": {
+                        "text": "Only this gets moderated"
+                    }
+                }
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "raw_blocks": raw_blocks,
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=[],  # Empty messages
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Messages should be exactly the raw_blocks
+    assert "messages" in result
+    assert result["messages"] == raw_blocks
+    
+    # additionalModelRequestFields should not contain raw_blocks
+    assert "additionalModelRequestFields" in result
+    assert "raw_blocks" not in result["additionalModelRequestFields"]
+    
+    # GuardrailConfig should be present
+    assert "guardrailConfig" in result
+    assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+
+
+def test_raw_blocks_with_complex_structure():
+    """Test raw_blocks with complex message structure."""
+    config = AmazonConverseConfig()
+    
+    raw_blocks = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "System: You are a helpful AI assistant."},
+                {"text": "Previous conversation context..."},
+                {
+                    "guardrailConverseContent": {
+                        "text": "Please help me with this sensitive topic"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"text": "I'd be happy to help you with that topic."}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "raw_blocks": raw_blocks,
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=[],  # Empty messages
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Messages should be exactly the raw_blocks
+    assert "messages" in result
+    assert result["messages"] == raw_blocks
+    
+    # Verify GuardrailConverseContent is preserved
+    user_message = result["messages"][0]
+    assert user_message["role"] == "user"
+    content = user_message["content"]
+    assert len(content) == 3
+    assert "guardrailConverseContent" in content[2]
+    assert content[2]["guardrailConverseContent"]["text"] == "Please help me with this sensitive topic"
+
+
+def test_empty_messages_with_guard_last_turn_only_raises_error():
+    """Test that empty messages with guard_last_turn_only=True raises appropriate error."""
+    config = AmazonConverseConfig()
+    
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        },
+        "guard_last_turn_only": True
+    }
+    
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config._transform_request(
+            model="us.amazon.nova-pro-v1:0",
+            messages=[],  # Empty messages
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+    
+    assert "bedrock requires at least one non-system message when not using raw_blocks" in str(exc_info.value)
+
+
+def test_empty_messages_with_raw_blocks_works():
+    """Test that empty messages with raw_blocks works correctly."""
+    config = AmazonConverseConfig()
+    
+    raw_blocks = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "Hello from raw_blocks!"}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "raw_blocks": raw_blocks,
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    # Should not raise an error
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=[],  # Empty messages
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    assert "messages" in result
+    assert result["messages"] == raw_blocks
+
+
+def test_guard_last_turn_only_with_system_messages():
+    """Test guard_last_turn_only with system messages using the full transformation."""
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "Tell me about AI safety"}
+    ]
+    
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        },
+        "guard_last_turn_only": True
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Should have 3 messages (system message is extracted to system blocks)
+    assert "messages" in result
+    assert len(result["messages"]) == 3
+    
+    # Last user message should have GuardrailConverseContent
+    last_message = result["messages"][-1]
+    assert last_message["role"] == "user"
+    content = last_message["content"]
+    assert len(content) == 1
+    assert "guardrailConverseContent" in content[0]
+    assert content[0]["guardrailConverseContent"]["text"] == "Tell me about AI safety"
+    
+    # System content should be in system blocks
+    assert "system" in result
+    assert len(result["system"]) == 1
+    assert result["system"][0]["text"] == "You are a helpful assistant."
+
+
+def test_guard_last_turn_only_with_mixed_content_types():
+    """Test guard_last_turn_only with user messages containing mixed content types."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": "Hi there!"},
+        {
+            "role": "user", 
+            "content": [
+                {"type": "text", "text": "Regular text"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,test"}},
+                {"type": "text", "text": "This should be guarded"}
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+        guard_last_turn_only=True
+    )
+    
+    # Should have 3 messages
+    assert len(result) == 3
+    
+    # Last user message should have GuardrailConverseContent for text content only
+    last_message = result[-1]
+    assert last_message["role"] == "user"
+    content = last_message["content"]
+    assert len(content) == 3
+    
+    # First two should be normal content
+    assert "text" in content[0]
+    assert content[0]["text"] == "Regular text"
+    assert "image" in content[1]  # image_url gets transformed to image
+    
+    # Last one should be GuardrailConverseContent
+    assert "guardrailConverseContent" in content[2]
+    assert content[2]["guardrailConverseContent"]["text"] == "This should be guarded"
+
+
+def test_async_guard_last_turn_only():
+    """Test async version of guard_last_turn_only."""
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "Tell me about AI safety"}
+    ]
+    
+    async def run_test():
+        result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="us.amazon.nova-pro-v1:0",
+            llm_provider="bedrock_converse",
+            guard_last_turn_only=True
+        )
+        
+        # Should have 3 messages
+        assert len(result) == 3
+        
+        # Last user message should have GuardrailConverseContent
+        last_message = result[-1]
+        assert last_message["role"] == "user"
+        content = last_message["content"]
+        assert len(content) == 1
+        assert "guardrailConverseContent" in content[0]
+        assert content[0]["guardrailConverseContent"]["text"] == "Tell me about AI safety"
+    
+    # Run the async test
+    import asyncio
+    asyncio.run(run_test())
+
+
+def test_async_raw_blocks():
+    """Test async version of raw_blocks."""
+    config = AmazonConverseConfig()
+    
+    raw_blocks = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "Hello from async raw_blocks!"}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "raw_blocks": raw_blocks,
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    async def run_test():
+        result = await config._async_transform_request(
+            model="us.amazon.nova-pro-v1:0",
+            messages=[],  # Empty messages
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+        
+        assert "messages" in result
+        assert result["messages"] == raw_blocks
+    
+    # Run the async test
+    import asyncio
+    asyncio.run(run_test())
+
+
+def test_guard_last_turn_only_with_tool_calls():
+    """Test guard_last_turn_only with tool calls in the conversation."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "It's sunny and 25°C"
+        },
+        {"role": "user", "content": "Tell me about AI safety"}
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse",
+        guard_last_turn_only=True
+    )
+    
+    # Should have 3 messages (tool message is merged with user message)
+    assert len(result) == 3
+    
+    # Last user message should have GuardrailConverseContent
+    last_message = result[-1]
+    assert last_message["role"] == "user"
+    content = last_message["content"]
+    # Should have tool result and guardrail content
+    assert len(content) == 2
+    assert "toolResult" in content[0]
+    assert "guardrailConverseContent" in content[1]
+    assert content[1]["guardrailConverseContent"]["text"] == "Tell me about AI safety"
+
+
+def test_guardrail_config_preserved_in_request():
+    """Test that guardrailConfig is properly preserved in the request."""
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {"role": "user", "content": "Tell me about AI safety"}
+    ]
+    
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        },
+        "guard_last_turn_only": True
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # GuardrailConfig should be present at top level
+    assert "guardrailConfig" in result
+    assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+    assert result["guardrailConfig"]["guardrailVersion"] == "DRAFT"
+    
+    # GuardrailConfig should also be in inferenceConfig
+    assert "inferenceConfig" in result
+    assert "guardrailConfig" in result["inferenceConfig"]
+    assert result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+
+
+def test_raw_blocks_guardrail_config_preserved():
+    """Test that guardrailConfig is preserved when using raw_blocks."""
+    config = AmazonConverseConfig()
+    
+    raw_blocks = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "Hello from raw_blocks!"}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "raw_blocks": raw_blocks,
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=[],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # GuardrailConfig should be present at top level
+    assert "guardrailConfig" in result
+    assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+    
+    # GuardrailConfig should also be in inferenceConfig
+    assert "inferenceConfig" in result
+    assert "guardrailConfig" in result["inferenceConfig"]
+    assert result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"

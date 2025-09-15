@@ -501,7 +501,6 @@ class AmazonConverseConfig(BaseConfig):
             )
             and not is_thinking_enabled
         ):
-
             optional_params["tool_choice"] = ToolChoiceValuesBlock(
                 tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
             )
@@ -632,7 +631,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-    def _transform_request_helper(
+    def _transform_request_helper(  # noqa: PLR0915
         self,
         model: str,
         system_content_blocks: List[SystemContentBlock],
@@ -672,6 +671,10 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
+
+        # Remove raw_blocks and guard_last_turn_only from inference_params as they are handled in transformation
+        inference_params.pop("raw_blocks", None)
+        inference_params.pop("guard_last_turn_only", None)
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -780,14 +783,30 @@ class AmazonConverseConfig(BaseConfig):
             headers=headers,
         )
 
-        bedrock_messages = (
-            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        # Check for raw_blocks parameter (advanced control)
+        raw_blocks = optional_params.pop("raw_blocks", None)
+        if raw_blocks is not None:
+            # Use raw blocks directly if provided
+            bedrock_messages: List[MessageBlock] = raw_blocks
+        else:
+            # Use standard transformation with guard_last_turn_only support
+            guard_last_turn_only = optional_params.pop("guard_last_turn_only", False)
+
+            # Validate that we have messages when not using raw_blocks
+            if not messages:
+                raise litellm.BadRequestError(
+                    message="Invalid Message: bedrock requires at least one non-system message when not using raw_blocks",
+                    model=model,
+                    llm_provider="bedrock_converse",
+                )
+
+            bedrock_messages = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
                 messages=messages,
                 model=model,
                 llm_provider="bedrock_converse",
                 user_continue_message=litellm_params.pop("user_continue_message", None),
+                guard_last_turn_only=guard_last_turn_only,
             )
-        )
 
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
@@ -831,12 +850,30 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
-        )
+        # Check for raw_blocks parameter (advanced control)
+        raw_blocks = optional_params.pop("raw_blocks", None)
+        if raw_blocks is not None:
+            # Use raw blocks directly if provided
+            bedrock_messages: List[MessageBlock] = raw_blocks
+        else:
+            # Use standard transformation with guard_last_turn_only support
+            guard_last_turn_only = optional_params.pop("guard_last_turn_only", False)
+
+            # Validate that we have messages when not using raw_blocks
+            if not messages:
+                raise litellm.BadRequestError(
+                    message="Invalid Message: bedrock requires at least one non-system message when not using raw_blocks",
+                    model=model,
+                    llm_provider="bedrock_converse",
+                )
+
+            bedrock_messages = _bedrock_converse_messages_pt(
+                messages=messages,
+                model=model,
+                llm_provider="bedrock_converse",
+                user_continue_message=litellm_params.pop("user_continue_message", None),
+                guard_last_turn_only=guard_last_turn_only,
+            )
 
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
@@ -995,7 +1032,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1010,9 +1049,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1133,9 +1172,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
 
         if message is not None:
             (
@@ -1148,12 +1187,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if (
             json_mode is True
@@ -1171,7 +1210,6 @@ class AmazonConverseConfig(BaseConfig):
                 # Bedrock returns the response wrapped in a "properties" object
                 # We need to extract the actual content from this wrapper
                 try:
-
                     response_data = json.loads(json_mode_content_str)
 
                     # If Bedrock wrapped the response in "properties", extract the content
