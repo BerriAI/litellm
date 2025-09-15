@@ -11,6 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm import completion
+sys.path.insert(0, os.path.abspath(".."))
 from vertex_ai_test_utils import get_vertex_ai_creds_json, load_vertex_ai_credentials
 
 
@@ -58,6 +59,44 @@ async def test_async_file_upload_with_chat_completion_vertex_ai():
     #########################################################
     response = await litellm.acompletion(
         model="vertex_ai/gemini-1.5-flash",
+        max_tokens=10,
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "What is in this file?"}]},
+            {"role": "user", "content": [{"type": "file", "file": {"file_id": file_obj.id}}]},
+        ],
+    )
+    print("RESPONSE=", response)
+
+
+
+@pytest.mark.asyncio()
+async def test_async_file_upload_with_chat_completion_openai():
+    """
+    Test File creation and chat completion with a file PDF
+
+    1. Create File for GCS
+    2. Create Chat Completion with a file PDF
+    """
+    litellm._turn_on_debug()
+    ###############################
+    # Create File
+    ###############################
+    file_obj = await litellm.acreate_file(
+        file=open("2403.05530.pdf", "rb"),
+        purpose="user_data",
+
+        ###############################
+        # OpenAI Specific Parameters
+        ###############################
+        custom_llm_provider="openai",
+    )
+    print("CREATED FILE RESPONSE=", file_obj)
+
+    #########################################################
+    # create chat completion with a file PDF
+    #########################################################
+    response = await litellm.acompletion(
+        model="gpt-4o",
         max_tokens=10,
         messages=[
             {"role": "user", "content": [{"type": "text", "text": "What is in this file?"}]},
