@@ -95,7 +95,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             if (
                 thinking_value is not None
                 and isinstance(thinking_value, dict)
-                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"],  # legal values, see docs
+                and thinking_value.get("type", None) in ["enabled", "disabled", "auto"]  # legal values, see docs
             ):
                 # Add thinking parameter to extra_body for all legal cases
                 optional_params.setdefault("extra_body", {})["thinking"] = thinking_value
