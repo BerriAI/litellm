@@ -54,6 +54,7 @@ async def test_async_file_upload_with_chat_completion_vertex_ai():
     #########################################################
     response = await litellm.acompletion(
         model="vertex_ai/gemini-1.5-flash",
+        max_tokens=10,
         messages=[
             {"role": "user", "content": [{"type": "text", "text": "What is in this file?"}]},
             {"role": "user", "content": [{"type": "file", "file": {"file_id": file_obj.id}}]},

@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from httpx import Headers, Response
 
 from litellm.files.utils import FilesAPIUtils
-from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -30,7 +29,11 @@ from litellm.types.llms.openai import (
     PathLike,
 )
 from litellm.types.llms.vertex_ai import GcsBucketResponse
-from litellm.types.utils import ExtractedFileData, LlmProviders
+from litellm.types.utils import (
+    ExtractedFileData,
+    LlmProviders,
+    StandardCallbackDynamicParams,
+)
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
@@ -160,8 +163,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the GCS bucket name from the litellm_params
         """
-        print("standard_callback_dynamic_params=", json.dumps(standard_callback_dynamic_params, indent=4, default=str))
-        print("litellm_params=", json.dumps(litellm_params, indent=4, default=str))
         gcs_bucket_name = (
             standard_callback_dynamic_params.get("gcs_bucket_name") or 
             #########################################################
