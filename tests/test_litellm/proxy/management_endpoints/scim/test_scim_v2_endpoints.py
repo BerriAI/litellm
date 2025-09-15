@@ -965,17 +965,20 @@ async def test_create_group_with_nonexistent_users_creates_users(mocker):
     
     # Mock new_user function to track user creation
     mock_new_user = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
         AsyncMock()
     )
     
     # Mock created users return values
     def mock_new_user_side_effect(data):
-        mock_user = mocker.MagicMock()
-        mock_user.user_id = data.user_id
-        mock_user.user_email = data.user_email
-        mock_user.metadata = data.metadata
-        return mock_user
+        from litellm.proxy._types import LiteLLM_UserTable
+        return LiteLLM_UserTable(
+            user_id=data.user_id,
+            user_email=data.user_email,
+            metadata=data.metadata,
+            teams=data.teams,
+            user_role=data.user_role
+        )
     
     mock_new_user.side_effect = mock_new_user_side_effect
     
@@ -1112,17 +1115,20 @@ async def test_update_group_with_nonexistent_users_creates_users(mocker):
     
     # Mock new_user function to track user creation
     mock_new_user = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
         AsyncMock()
     )
     
     # Mock created users return values
     def mock_new_user_side_effect(data):
-        mock_user = mocker.MagicMock()
-        mock_user.user_id = data.user_id
-        mock_user.user_email = data.user_email
-        mock_user.metadata = data.metadata
-        return mock_user
+        from litellm.proxy._types import LiteLLM_UserTable
+        return LiteLLM_UserTable(
+            user_id=data.user_id,
+            user_email=data.user_email,
+            metadata=data.metadata,
+            teams=data.teams,
+            user_role=data.user_role
+        )
     
     mock_new_user.side_effect = mock_new_user_side_effect
     
