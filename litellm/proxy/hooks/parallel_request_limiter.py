@@ -1,10 +1,11 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 import litellm
 from litellm import DualCache, ModelResponse

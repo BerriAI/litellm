@@ -28,7 +28,6 @@ export async function fetchAvailableMCPTools(
     return data.tools || [];
   } catch (error) {
     console.error("Error fetching MCP tools:", error);
-    NotificationManager.fromBackend("Failed to fetch MCP tools");
     return [];
   }
 } 

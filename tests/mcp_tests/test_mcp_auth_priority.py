@@ -42,3 +42,26 @@ def test_mcp_server_works_without_config_auth_value():
     # Verify header token is used
     assert client._mcp_auth_value == "Bearer token_from_header_only"
     assert client.auth_type == MCPAuth.authorization
+
+
+@pytest.mark.parametrize("token_key", ["authentication_token", "auth_value"])
+def test_mcp_server_config_auth_value_header_used(token_key):
+    """Ensure auth header is sent when auth token configured in config"""
+    config = {
+        "test_server": {
+            "url": "https://api.example.com/mcp",
+            "transport": "http",
+            "auth_type": "bearer_token",
+            token_key: "example_token",
+        }
+    }
+
+    manager = MCPServerManager()
+    manager.load_servers_from_config(config)
+
+    server = next(iter(manager.config_mcp_servers.values()))
+    client = manager._create_mcp_client(server)
+    headers = client._get_auth_headers()
+
+    assert headers["Authorization"] == "Bearer example_token"
+    assert client.auth_type == MCPAuth.bearer_token
