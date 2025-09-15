@@ -357,6 +357,9 @@ def print_verbose(
     except Exception:
         pass
 
+# Persistent cache for coroutine status of callbacks (module-level)
+_coroutine_status_cache = {}
+_coroutine_cache_lock = threading.Lock()
 
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
@@ -521,6 +524,7 @@ def get_dynamic_callbacks(
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+    global _coroutine_status_cache
     ### NOTICES ###
     from litellm import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -559,15 +563,20 @@ def function_setup(  # noqa: PLR0915
                         for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
+                cb_id = id(callback)
+                with _coroutine_cache_lock:
+                    if cb_id not in _coroutine_status_cache:
+                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                    is_coro = _coroutine_status_cache[cb_id]
                 if callback not in litellm.input_callback:
                     litellm.input_callback.append(callback)  # type: ignore
                 if callback not in litellm.success_callback:
                     litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
                 if callback not in litellm.failure_callback:
                     litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
-                if callback not in litellm._async_success_callback:
+                if callback not in litellm._async_success_callback and is_coro:
                     litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
-                if callback not in litellm._async_failure_callback:
+                if callback not in litellm._async_failure_callback and is_coro:
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
@@ -592,7 +601,12 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                cb_id = id(callback)
+                with _coroutine_cache_lock:
+                    if cb_id not in _coroutine_status_cache:
+                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                    is_coro = _coroutine_status_cache[cb_id]
+                if is_coro:
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -602,7 +616,12 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                cb_id = id(callback)
+                with _coroutine_cache_lock:
+                    if cb_id not in _coroutine_status_cache:
+                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                    is_coro = _coroutine_status_cache[cb_id]
+                if is_coro:
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -627,7 +646,12 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                cb_id = id(callback)
+                with _coroutine_cache_lock:
+                    if cb_id not in _coroutine_status_cache:
+                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                    is_coro = _coroutine_status_cache[cb_id]
+                if is_coro:
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -659,8 +683,13 @@ def function_setup(  # noqa: PLR0915
         ):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
+                cb_id = id(callback)
+                with _coroutine_cache_lock:
+                    if cb_id not in _coroutine_status_cache:
+                        _coroutine_status_cache[cb_id] = inspect.iscoroutinefunction(callback)
+                    is_coro = _coroutine_status_cache[cb_id]
                 if (
-                    inspect.iscoroutinefunction(callback)
+                    is_coro
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
