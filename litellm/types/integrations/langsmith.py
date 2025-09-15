@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, NamedTuple, Optional, TypedDict
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 class LangsmithInputs(BaseModel):

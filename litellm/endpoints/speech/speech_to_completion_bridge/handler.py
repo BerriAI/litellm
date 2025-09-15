@@ -2,7 +2,9 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Optional, Union
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm import LiteLLMLoggingObj

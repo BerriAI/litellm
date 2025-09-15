@@ -1,10 +1,13 @@
-from typing import List, Optional
+from typing import List, Optional, cast
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    convert_url_to_base64,
+)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
@@ -99,7 +102,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         self, messages: List[AllMessageValues]
     ) -> List[ContentType]:
         """
-        Google AI Studio Gemini does not support image urls in messages.
+        Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
+        Convert them to base64 data instead.
         """
         for message in messages:
             _message_content = message.get("content")
@@ -124,4 +128,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                                     image_obj
                                 )
                             )
+                    elif element.get("type") == "file":
+                        file_element = cast(ChatCompletionFileObject, element)
+                        file_id = file_element["file"].get("file_id")
+                        if file_id and ("http://" in file_id or "https://" in file_id):
+                            # Convert HTTP/HTTPS file URL to base64 data
+                            try:
+                                base64_data = convert_url_to_base64(file_id)
+                                file_element["file"]["file_data"] = base64_data  # type: ignore
+                                file_element["file"].pop("file_id", None)  # type: ignore
+                            except Exception:
+                                # If conversion fails, leave as is and let the API handle it
+                                pass
         return _gemini_convert_messages_with_history(messages=messages)

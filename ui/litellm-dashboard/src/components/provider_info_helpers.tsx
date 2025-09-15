@@ -11,8 +11,9 @@ export enum Providers {
   Azure = "Azure",                     
   Azure_AI_Studio = "Azure AI Foundry (Studio)", 
   Cerebras = "Cerebras",                
-  Cohere = "Cohere",                    
-  Databricks = "Databricks",            
+  Cohere = "Cohere",         
+  Dashscope = "Dashscope",
+  Databricks = "Databricks (Qwen API)",            
   DeepInfra = "DeepInfra",             
   Deepgram = "Deepgram",                
   Deepseek = "Deepseek",               
@@ -37,7 +38,7 @@ export enum Providers {
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
   VolcEngine = "VolcEngine",           
   Voyage = "Voyage AI",                
-  xAI = "xAI",                          
+  xAI = "xAI",                      
 }
 
 export const provider_map: Record<string, string> = {
@@ -56,6 +57,7 @@ export const provider_map: Record<string, string> = {
     OpenAI_Text_Compatible: "text-completion-openai",
     Vertex_AI: "vertex_ai",
     Databricks: "databricks",
+    Dashscope: "dashscope",
     xAI: "xai",
     Deepseek: "deepseek",
     Ollama: "ollama",
@@ -91,6 +93,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
     [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
     [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
+    [Providers.Dashscope]: `${asset_logos_folder}dashscope.svg`,
     [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
     [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
     [Providers.Groq]: `${asset_logos_folder}groq.svg`,

@@ -162,6 +162,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
+    tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -1995,7 +1996,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure","blocked"]
+    guardrail_status: Literal["success", "failure", "blocked"]
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
@@ -2123,6 +2124,7 @@ all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "litellm_request_debug",
     "guardrails",
     "tags",
     "acompletion",
@@ -2357,6 +2359,7 @@ class LlmProviders(str, Enum):
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
     WANDB = "wandb"
+    OVHCLOUD = "ovhcloud"
 
 
 # Create a set of all provider values for quick lookup
