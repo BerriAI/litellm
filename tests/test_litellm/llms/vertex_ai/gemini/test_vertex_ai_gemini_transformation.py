@@ -1,7 +1,6 @@
 from litellm.llms.vertex_ai.gemini.transformation import (
     check_if_part_exists_in_parts,
     _transform_request_body,
-    _is_google_genai_endpoint,
 )
 
 
@@ -81,7 +80,7 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
 
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
-    """Test that Google GenAI endpoints exclude labels even when explicitly provided"""
+    """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
@@ -93,16 +92,15 @@ def test_google_genai_excludes_labels():
         custom_llm_provider="gemini",
         litellm_params=litellm_params,
         cached_content=None,
-        api_base="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
     )
 
-    # Google GenAI should NOT include labels
+    # Google GenAI/AI Studio should NOT include labels
     assert "labels" not in result
     assert "contents" in result
 
 
 def test_vertex_ai_includes_labels():
-    """Test that Vertex AI endpoints include labels when explicitly provided"""
+    """Test that Vertex AI endpoints include labels when custom_llm_provider='vertex_ai'"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
@@ -114,27 +112,12 @@ def test_vertex_ai_includes_labels():
         custom_llm_provider="vertex_ai",
         litellm_params=litellm_params,
         cached_content=None,
-        api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
     )
 
     # Vertex AI SHOULD include labels
     assert "labels" in result
     assert result["labels"] == {"project": "test", "team": "ai"}
 
-
-def test_provider_detection():
-    """Test the provider detection helper function"""
-    # Google GenAI endpoints
-    assert _is_google_genai_endpoint("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent") == True
-    assert _is_google_genai_endpoint("https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent") == True
-
-    # Vertex AI endpoints
-    assert _is_google_genai_endpoint("https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent") == False
-    assert _is_google_genai_endpoint("https://europe-west1-aiplatform.googleapis.com/v1beta1/projects/test/locations/europe-west1/publishers/google/models/gemini-pro:generateContent") == False
-
-    # Edge cases
-    assert _is_google_genai_endpoint(None) == False
-    assert _is_google_genai_endpoint("") == False
 
 
 def test_metadata_to_labels_vertex_only():
@@ -150,7 +133,7 @@ def test_metadata_to_labels_vertex_only():
         }
     }
 
-    # Google GenAI should not include labels from metadata
+    # Google GenAI/AI Studio should not include labels from metadata
     result = _transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
@@ -158,7 +141,6 @@ def test_metadata_to_labels_vertex_only():
         custom_llm_provider="gemini",
         litellm_params=litellm_params.copy(),
         cached_content=None,
-        api_base="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
     )
     assert "labels" not in result
 
@@ -170,7 +152,6 @@ def test_metadata_to_labels_vertex_only():
         custom_llm_provider="vertex_ai",
         litellm_params=litellm_params.copy(),
         cached_content=None,
-        api_base="https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
     )
     assert "labels" in result
     assert result["labels"] == {"user": "john_doe", "project": "test-project"}

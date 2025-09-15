@@ -405,18 +405,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         raise e
 
 
-def _is_google_genai_endpoint(api_base: Optional[str]) -> bool:
-    """
-    Check if API base is Google GenAI (not Vertex AI).
-
-    Google GenAI endpoints use generativelanguage.googleapis.com
-    Vertex AI endpoints use aiplatform.googleapis.com
-    """
-    if not api_base:
-        return False
-    return "generativelanguage.googleapis.com" in api_base
-
-
 def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
@@ -424,7 +412,6 @@ def _transform_request_body(
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
     cached_content: Optional[str],
-    api_base: Optional[str] = None,
 ) -> RequestBody:
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
@@ -505,8 +492,8 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
-        # Only add labels for Vertex AI endpoints (not Google GenAI) and only if non-empty
-        if labels and not _is_google_genai_endpoint(api_base):
+        # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
+        if labels and custom_llm_provider != "gemini":
             data["labels"] = labels
     except Exception as e:
         raise e
@@ -558,7 +545,6 @@ def sync_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
-        api_base=api_base,
     )
 
 
@@ -606,7 +592,6 @@ async def async_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
-        api_base=api_base,
     )
 
 
