@@ -72,7 +72,7 @@ def _save_stats(profile_file: PathLib) -> None:
             # Make sure profiler is re-enabled even if there's an error
             try:
                 _profiler.enable()
-            except:
+            except Exception:
                 pass
 
 
@@ -101,7 +101,7 @@ def profile_endpoint(sampling_rate: float = 1.0):
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
-                except Exception as e:
+                except Exception:
                     if is_sampling:
                         _save_stats(file_path_obj)
                     raise
@@ -117,7 +117,7 @@ def profile_endpoint(sampling_rate: float = 1.0):
                     if is_sampling:
                         _save_stats(file_path_obj)
                     return result
-                except Exception as e:
+                except Exception:
                     if is_sampling:
                         _save_stats(file_path_obj)
                     raise
