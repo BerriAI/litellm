@@ -128,9 +128,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             message["cache_control"] = control  # type: ignore
         # 2. list of objects
         elif isinstance(message_content, list):
-            for content_item in message_content:
-                if isinstance(content_item, dict):
-                    content_item["cache_control"] = control  # type: ignore
+            if (message_content and isinstance(message_content[-1], dict)):
+                message_content[-1]["cache_control"] = control  # type: ignore
         return message
 
     @property
