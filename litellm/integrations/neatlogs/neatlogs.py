@@ -5,7 +5,7 @@ import datetime
 import json
 import os
 import traceback
-from typing import Any, List, Optional, Union
+from typing import Any, Optional, Union
 import uuid
 
 import httpx
@@ -21,10 +21,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 
+
 class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
     def __init__(self, neatlogs_api_key: Optional[str] = None, **kwargs):
         try:
-            print("🔧 Neatlogs: Initializing Neatlogs logger...")
 
             # Get API key from parameter or environment variable
             self.api_key = neatlogs_api_key or os.getenv("NEATLOGS_API_KEY")
@@ -44,10 +44,8 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 **kwargs, flush_lock=self.flush_lock, batch_size=litellm.DEFAULT_BATCH_SIZE
             )
 
-            print("🎉 Neatlogs: Logger initialized successfully!")
 
         except Exception as e:
-            print(f"❌ Neatlogs: Failed to initialize - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs: Got exception on init Neatlogs client {str(e)}"
             )
@@ -74,7 +72,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             await self._log_async_event(kwargs, response_obj, start_time, end_time, status="SUCCESS")
 
         except Exception as e:
-            print(f"❌ Neatlogs: Error in success logging - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs Layer Error - {str(e)}\\{traceback.format_exc()}"
             )
@@ -82,7 +79,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            print(f"⚠️ Neatlogs: Logging FAILURE event for model: {kwargs.get('model', 'unknown')}")
             verbose_logger.debug(
                 "Neatlogs: Logging - Enters logging function for model %s", kwargs
             )
@@ -90,7 +86,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             await self._log_async_event(kwargs, response_obj, start_time, end_time, status="FAILURE")
 
         except Exception as e:
-            print(f"❌ Neatlogs: Error in failure logging - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs Layer Error - {str(e)}\\{traceback.format_exc()}"
             )
@@ -125,7 +120,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
 
             response = await self.async_client.post(
                 url=self.endpoint,
-                content=json.dumps(formatted_batch),
+                json=formatted_batch,  # type: ignore[arg-type]  # httpx accepts both dict and list for json=; stubs may show warning, but this is correct for batch API.
                 headers=headers,
             )
 
@@ -135,7 +130,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                     f"Response from Neatlogs API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            print(f"✅ Neatlogs: Successfully sent {len(self.log_queue)} events (status: {response.status_code}) - Data saved successfully!")
             verbose_logger.debug(
                 "Neatlogs: Response from Neatlogs API status_code: %s, text: %s",
                 response.status_code,
@@ -143,7 +137,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             )
             self.log_queue.clear()
         except Exception as e:
-            print(f"❌ Neatlogs: Failed to send batch - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs Error sending batch API - {str(e)}\\{traceback.format_exc()}"
             )
@@ -163,7 +156,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
         )
 
         if len(self.log_queue) >= self.batch_size:
-            print(f"🔄 Neatlogs: Queue full, sending batch immediately")
             await self.async_send_batch()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -204,7 +196,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                     f"Response from Neatlogs API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            print(f"✅ Neatlogs: SYNC Successfully sent SUCCESS event (status: {response.status_code}) - Data saved successfully!")
             verbose_logger.debug(
                 "Neatlogs: Response from Neatlogs API status_code: %s, text: %s",
                 response.status_code,
@@ -212,7 +203,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             )
 
         except Exception as e:
-            print(f"❌ Neatlogs: SYNC Error in success logging - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs Layer Error - {str(e)}\n{traceback.format_exc()}"
             )
@@ -256,7 +246,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                     f"Response from Neatlogs API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            print(f"✅ Neatlogs: SYNC Successfully sent FAILURE event (status: {response.status_code}) - Data saved successfully!")
             verbose_logger.debug(
                 "Neatlogs: Response from Neatlogs API status_code: %s, text: %s",
                 response.status_code,
@@ -264,7 +253,6 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             )
 
         except Exception as e:
-            print(f"❌ Neatlogs: SYNC Error in failure logging - {str(e)}")
             verbose_logger.exception(
                 f"Neatlogs Layer Error - {str(e)}\n{traceback.format_exc()}"
             )
@@ -305,8 +293,8 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             "node_type": "llm_call",
             "node_name": kwargs.get("model"),
             "model": kwargs.get("model"),
-            "provider": litellm.get_llm_provider(kwargs.get("model", ""))[0],
-            "framework": "litellm",
+            "provider": "litellm",
+            "framework": None,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
@@ -340,7 +328,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 # No event loop, create new one
                 asyncio.run(self.async_send_batch())
         else:
-            print("ℹ️ Neatlogs: No events to flush")
+            pass
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """
