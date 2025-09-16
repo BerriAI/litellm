@@ -889,6 +889,19 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
 
+### Selective Content Moderation with `guarded_text`
+
+LiteLLM supports selective content moderation using the `guarded_text` content type. This allows you to wrap only specific content that should be moderated by Bedrock Guardrails, rather than evaluating the entire conversation.
+
+**How it works:**
+- Content with `type: "guarded_text"` gets automatically wrapped in `guardrailConverseContent` blocks
+- Only the wrapped content is evaluated by Bedrock Guardrails
+- Regular content with `type: "text"` bypasses guardrail evaluation
+
+:::note
+If `guarded_text` is not used, the entire conversation history will be sent to the guardrail for evaluation, which can increase latency and costs.
+:::
+
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
 
@@ -914,6 +927,24 @@ response = completion(
         "guardrailVersion": "DRAFT",           # The version of the guardrail.
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
     },
+)
+
+# Selective guardrail usage with guarded_text - only specific content is evaluated
+response_guard = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This      document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+        }
+    ],
+    guardrailConfig={
+        "guardrailIdentifier": "gr-abc123",
+        "guardrailVersion": "DRAFT"
+    }
 )
 ```
 </TabItem>
@@ -993,7 +1024,20 @@ response = client.chat.completions.create(model="bedrock-claude-v1", messages = 
 temperature=0.7
 )
 
-print(response)
+# For adding selective guardrail usage with guarded_text
+response_guard = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+   {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+  }
+],
+temperature=0.7
+) 
+
+print(response_guard)
 ```
 </TabItem>
 </Tabs>
