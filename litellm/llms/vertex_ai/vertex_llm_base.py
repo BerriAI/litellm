@@ -293,7 +293,7 @@ class VertexBase:
         stream: Optional[bool],
         auth_header: Optional[str],
         url: str,
-        model: str,
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
@@ -304,6 +304,10 @@ class VertexBase:
         if api_base:
             if custom_llm_provider == "gemini":
                 # For Gemini (Google AI Studio), construct the full path like other providers
+                if model is None:
+                    raise ValueError(
+                        "Model parameter is required for Gemini custom API base URLs"
+                    )
                 url = "{}/models/{}:{}".format(api_base, model, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
