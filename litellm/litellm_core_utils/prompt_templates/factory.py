@@ -3076,53 +3076,6 @@ class BedrockConverseMessagesProcessor:
                 messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
-    @staticmethod
-    def _apply_guardrail_wrapping(
-        user_content: List[BedrockContentBlock], messages: List[dict], msg_i: int
-    ) -> List[BedrockContentBlock]:
-        """
-        Apply guardrail wrapping to the last text block in user content if this is the last user message.
-
-        Args:
-            user_content: List of content blocks for the current user message
-            messages: Full list of messages
-            msg_i: Current message index
-
-        Returns:
-            Modified user_content with guardrail wrapping applied if needed
-        """
-        # Check if this is the last user message by looking ahead
-        is_last_user_message = True
-        temp_msg_i = msg_i
-        while temp_msg_i < len(messages):
-            if messages[temp_msg_i]["role"] == "user":
-                is_last_user_message = False
-                break
-            temp_msg_i += 1
-
-        if not is_last_user_message:
-            return user_content
-
-        # Wrap only the last text block in GuardrailConverseContent
-        wrapped_content = []
-        text_blocks = [block for block in user_content if "text" in block]
-
-        for content_block in user_content:
-            if "text" in content_block:
-                # Only wrap the last text block
-                if content_block == text_blocks[-1]:
-                    guardrail_block = BedrockContentBlock(
-                        guardrailConverseContent={"text": content_block["text"]}
-                    )
-                    wrapped_content.append(guardrail_block)
-                else:
-                    # Keep other text blocks as-is
-                    wrapped_content.append(content_block)
-            else:
-                # Keep non-text content blocks as-is
-                wrapped_content.append(content_block)
-
-        return wrapped_content
 
     @staticmethod
     async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
@@ -3133,7 +3086,6 @@ class BedrockConverseMessagesProcessor:
         assistant_continue_message: Optional[
             Union[str, ChatCompletionAssistantMessage]
         ] = None,
-        guard_last_turn_only: bool = False,
     ) -> List[BedrockMessageBlock]:
         contents: List[BedrockMessageBlock] = []
         msg_i = 0
@@ -3167,6 +3119,12 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "text":
                                 _part = BedrockContentBlock(text=element["text"])
+                                _parts.append(_part)
+                            elif element["type"] == "guarded_text":
+                                # Wrap guarded_text in guardrailConverseContent block
+                                _part = BedrockContentBlock(
+                                    guardrailConverseContent={"text": element["text"]}
+                                )
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
                                 format: Optional[str] = None
@@ -3210,13 +3168,6 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             if user_content:
-                # Apply guardrail wrapping if guard_last_turn_only is True and this is the last user message
-                if guard_last_turn_only:
-                    user_content = (
-                        BedrockConverseMessagesProcessor._apply_guardrail_wrapping(
-                            user_content=user_content, messages=messages, msg_i=msg_i
-                        )
-                    )
 
                 if len(contents) > 0 and contents[-1]["role"] == "user":
                     if (
@@ -3500,7 +3451,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
     assistant_continue_message: Optional[
         Union[str, ChatCompletionAssistantMessage]
     ] = None,
-    guard_last_turn_only: bool = False,
 ) -> List[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -3552,6 +3502,12 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                         if element["type"] == "text":
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
+                        elif element["type"] == "guarded_text":
+                            # Wrap guarded_text in guardrailConverseContent block
+                            _part = BedrockContentBlock(
+                                guardrailConverseContent={"text": element["text"]}
+                            )
+                            _parts.append(_part)
                         elif element["type"] == "image_url":
                             format: Optional[str] = None
                             if isinstance(element["image_url"], dict):
@@ -3595,13 +3551,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
         if user_content:
-            # Apply guardrail wrapping if guard_last_turn_only is True and this is the last user message
-            if guard_last_turn_only:
-                user_content = (
-                    BedrockConverseMessagesProcessor._apply_guardrail_wrapping(
-                        user_content=user_content, messages=messages, msg_i=msg_i
-                    )
-                )
 
             if len(contents) > 0 and contents[-1]["role"] == "user":
                 if (

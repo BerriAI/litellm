@@ -631,7 +631,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-    def _transform_request_helper(  # noqa: PLR0915
+    def _transform_request_helper(
         self,
         model: str,
         system_content_blocks: List[SystemContentBlock],
@@ -671,10 +671,6 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
-
-        # Remove raw_blocks and guard_last_turn_only from inference_params as they are handled in transformation
-        inference_params.pop("raw_blocks", None)
-        inference_params.pop("guard_last_turn_only", None)
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -783,30 +779,14 @@ class AmazonConverseConfig(BaseConfig):
             headers=headers,
         )
 
-        # Check for raw_blocks parameter (advanced control)
-        raw_blocks = optional_params.pop("raw_blocks", None)
-        if raw_blocks is not None:
-            # Use raw blocks directly if provided
-            bedrock_messages: List[MessageBlock] = raw_blocks
-        else:
-            # Use standard transformation with guard_last_turn_only support
-            guard_last_turn_only = optional_params.pop("guard_last_turn_only", False)
-
-            # Validate that we have messages when not using raw_blocks
-            if not messages:
-                raise litellm.BadRequestError(
-                    message="Invalid Message: bedrock requires at least one non-system message when not using raw_blocks",
-                    model=model,
-                    llm_provider="bedrock_converse",
-                )
-
-            bedrock_messages = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        bedrock_messages = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
                 messages=messages,
                 model=model,
                 llm_provider="bedrock_converse",
                 user_continue_message=litellm_params.pop("user_continue_message", None),
-                guard_last_turn_only=guard_last_turn_only,
             )
+        )
 
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
@@ -850,30 +830,12 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        # Check for raw_blocks parameter (advanced control)
-        raw_blocks = optional_params.pop("raw_blocks", None)
-        if raw_blocks is not None:
-            # Use raw blocks directly if provided
-            bedrock_messages: List[MessageBlock] = raw_blocks
-        else:
-            # Use standard transformation with guard_last_turn_only support
-            guard_last_turn_only = optional_params.pop("guard_last_turn_only", False)
-
-            # Validate that we have messages when not using raw_blocks
-            if not messages:
-                raise litellm.BadRequestError(
-                    message="Invalid Message: bedrock requires at least one non-system message when not using raw_blocks",
-                    model=model,
-                    llm_provider="bedrock_converse",
-                )
-
-            bedrock_messages = _bedrock_converse_messages_pt(
-                messages=messages,
-                model=model,
-                llm_provider="bedrock_converse",
-                user_continue_message=litellm_params.pop("user_continue_message", None),
-                guard_last_turn_only=guard_last_turn_only,
-            )
+        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
 
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
