@@ -275,6 +275,10 @@ class RouteChecks:
         eg.
         route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
         """
+        # Defensive: route may be a mock in tests; ensure it's a string
+        if not isinstance(route, str):
+            return False
+
         # Add support for deployment and engine model paths
         deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
         engine_pattern = r"^/engines/[^/]+/chat/completions$"
@@ -298,6 +302,10 @@ class RouteChecks:
         - route: "/key/regenerate/82akk800000000jjsk"
         - returns: False, pattern is "/key/{token_id}/regenerate"
         """
+        # Defensive: route may be a mock in tests; ensure it's a string
+        if not isinstance(route, str):
+            return False
+
         pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
@@ -333,6 +341,10 @@ class RouteChecks:
         - returns: True
 
         """
+        # Defensive: route may be a mock in tests; ensure it's a string
+        if not isinstance(route, str):
+            return False
+
         if pattern.endswith("*"):
             # Get the prefix (everything before the wildcard)
             prefix = pattern[:-1]
