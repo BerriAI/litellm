@@ -11,6 +11,7 @@ import EditLoggingSettings from "../team/EditLoggingSettings"
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils"
 import { fetchMCPAccessGroups } from "../networking"
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
+import GuardrailSelector from "@/components/guardrails/GuardrailSelector"
 
 interface KeyEditViewProps {
   keyData: KeyResponse
@@ -220,20 +221,9 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">
-        <Tooltip title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""} placement="top">
-          <Select
-            mode="tags"
-            style={{ width: "100%" }}
-            disabled={!premiumUser}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set guardrails by key"
-                : Array.isArray(keyData.metadata?.guardrails) && keyData.metadata.guardrails.length > 0
-                  ? `Current: ${keyData.metadata.guardrails.join(", ")}`
-                  : "Select or enter guardrails"
-            }
-          />
-        </Tooltip>
+        { accessToken &&
+          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} />
+        }
       </Form.Item>
 
       <Form.Item label="Prompts" name="prompts">
