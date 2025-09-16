@@ -224,6 +224,9 @@ async def agenerate_content(
         loop = asyncio.get_event_loop()
         kwargs["agenerate_content"] = True
 
+        # Handle generationConfig parameter from kwargs for backward compatibility
+        if "generationConfig" in kwargs and config is None:
+            config = kwargs.pop("generationConfig")
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -288,6 +291,9 @@ def generate_content(
     try:
         _is_async = kwargs.pop("agenerate_content", False) is True
 
+        # Handle generationConfig parameter from kwargs for backward compatibility
+        if "generationConfig" in kwargs and config is None:
+            config = kwargs.pop("generationConfig")
         # Check for mock response first
         litellm_params = GenericLiteLLMParams(**kwargs)
         if litellm_params.mock_response and isinstance(
@@ -374,6 +380,9 @@ async def agenerate_content_stream(
     try:
         kwargs["agenerate_content_stream"] = True
 
+        # Handle generationConfig parameter from kwargs for backward compatibility
+        if "generationConfig" in kwargs and config is None:
+            config = kwargs.pop("generationConfig")
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -461,6 +470,9 @@ def generate_content_stream(
         # Remove any async-related flags since this is the sync function
         _is_async = kwargs.pop("agenerate_content_stream", False)
 
+        # Handle generationConfig parameter from kwargs for backward compatibility
+        if "generationConfig" in kwargs and config is None:
+            config = kwargs.pop("generationConfig")
         # Setup the call
         setup_result = GenerateContentHelper.setup_generate_content_call(
             model=model,

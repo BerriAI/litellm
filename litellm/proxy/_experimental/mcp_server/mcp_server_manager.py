@@ -241,6 +241,9 @@ class MCPServerManager:
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
+                authentication_token=server_config.get(
+                    "authentication_token", server_config.get("auth_value", None)
+                ),
                 mcp_info=mcp_info,
                 access_groups=server_config.get("access_groups", None),
             )
@@ -295,6 +298,7 @@ class MCPServerManager:
                 command=getattr(mcp_server, "command", None),
                 args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
+                access_groups=getattr(mcp_server, "mcp_access_groups", None),
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
@@ -715,8 +719,8 @@ class MCPServerManager:
             tasks = []
             if proxy_logging_obj:
                 # Create synthetic LLM data for during hook processing
-                from litellm.types.mcp import MCPDuringCallRequestObject
                 from litellm.types.llms.base import HiddenParams
+                from litellm.types.mcp import MCPDuringCallRequestObject
                 
                 request_obj = MCPDuringCallRequestObject(
                     tool_name=name,
@@ -1050,7 +1054,9 @@ class MCPServerManager:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
+                        description=_server_config.mcp_info.get("description") if _server_config.mcp_info else None,
                         mcp_info=_server_config.mcp_info,
+                        mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields
                         command=getattr(_server_config, "command", None),
                         args=getattr(_server_config, "args", None) or [],

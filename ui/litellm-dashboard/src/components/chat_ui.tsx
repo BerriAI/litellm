@@ -45,6 +45,14 @@ import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
+import ResponsesImageUpload from "./chat_ui/ResponsesImageUpload";
+import ResponsesImageRenderer from "./chat_ui/ResponsesImageRenderer";
+import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./chat_ui/ResponsesImageUtils";
+import ChatImageUpload from "./chat_ui/ChatImageUpload";
+import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
+import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
+import SessionManagement from "./chat_ui/SessionManagement";
+import MCPEventsDisplay, { MCPEvent } from "./chat_ui/MCPEventsDisplay";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -61,8 +69,11 @@ import {
   UploadOutlined,
   PictureOutlined,
   CodeOutlined,
-  ToolOutlined
+  ToolOutlined,
+  FilePdfOutlined,
+  ArrowUpOutlined
 } from "@ant-design/icons";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -84,15 +95,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
 }) => {
   const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
   const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
-  const [selectedMCPTools, setSelectedMCPTools] = useState<string>(() => {
+  const [selectedMCPTools, setSelectedMCPTools] = useState<string[]>(() => {
     const saved = sessionStorage.getItem('selectedMCPTools');
     try {
       const parsed = saved ? JSON.parse(saved) : [];
-      // Convert from array to single string if needed
-      return Array.isArray(parsed) ? (parsed[0] || '') : parsed;
+      // Convert from single string to array if needed for backward compatibility
+      return Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
     } catch (error) {
       console.error("Error parsing selectedMCPTools from sessionStorage", error);
-      return '';
+      return [];
     }
   });
   const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
@@ -155,11 +166,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   });
   const [messageTraceId, setMessageTraceId] = useState<string | null>(() => sessionStorage.getItem('messageTraceId') || null);
-  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(() => sessionStorage.getItem('responsesSessionId') || null);
+  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
+    const saved = sessionStorage.getItem('useApiSessionManagement');
+    return saved ? JSON.parse(saved) : true; // Default to API session management
+  });
+  const [uploadedImages, setUploadedImages] = useState<File[]>([]);
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
+  const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
+  const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
+  const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
+  const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
+  const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -196,13 +217,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
         selectedTags,
         selectedVectorStores,
         selectedGuardrails,
+        selectedMCPTools,
         endpointType,
         selectedModel,
         selectedSdk,
       });
       setGeneratedCode(code);
     }
-  }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, endpointType, selectedModel]);
+  }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, selectedMCPTools, endpointType, selectedModel]);
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -233,7 +255,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } else {
       sessionStorage.removeItem('messageTraceId');
     }
-  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, selectedMCPTools]);
+    if (responsesSessionId) {
+      sessionStorage.setItem('responsesSessionId', responsesSessionId);
+    } else {
+      sessionStorage.removeItem('responsesSessionId');
+    }
+    sessionStorage.setItem('useApiSessionManagement', JSON.stringify(useApiSessionManagement));
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, responsesSessionId, useApiSessionManagement, selectedMCPTools]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -403,11 +431,79 @@ const ChatUI: React.FC<ChatUIProps> = ({
     });
   };
 
+  const handleResponseId = (responseId: string) => {
+    console.log("Received response ID for session management:", responseId);
+    if (useApiSessionManagement) {
+      setResponsesSessionId(responseId);
+    }
+  };
+
+  const handleToggleSessionManagement = (useApi: boolean) => {
+    setUseApiSessionManagement(useApi);
+    if (!useApi) {
+      // Clear API session when switching to UI mode
+      setResponsesSessionId(null);
+    }
+  };
+
+  const handleMCPEvent = (event: MCPEvent) => {
+    console.log("ChatUI: Received MCP event:", event);
+    setMCPEvents(prev => {
+      // Check if this is a duplicate event (same item_id and type)
+      const isDuplicate = prev.some(existingEvent => 
+        existingEvent.item_id === event.item_id && 
+        existingEvent.type === event.type &&
+        existingEvent.sequence_number === event.sequence_number
+      );
+      
+      if (isDuplicate) {
+        console.log("ChatUI: Duplicate MCP event, skipping");
+        return prev;
+      }
+      
+      const newEvents = [...prev, event];
+      console.log("ChatUI: Updated MCP events:", newEvents);
+      return newEvents;
+    });
+  };
+
   const updateImageUI = (imageUrl: string, model: string) => {
     setChatHistory((prevHistory) => [
       ...prevHistory,
       { role: "assistant", content: imageUrl, model, isImage: true }
     ]);
+  };
+
+  const updateChatImageUI = (imageUrl: string, model?: string) => {
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // If the last message is from assistant and has content, add image to it
+      if (last && last.role === "assistant" && !last.isImage) {
+        const updated = {
+          ...last,
+          image: {
+            url: imageUrl,
+            detail: "auto"
+          },
+          model: last.model ?? model
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // Otherwise create a new assistant message with just the image
+        return [
+          ...prev,
+          {
+            role: "assistant",
+            content: "",
+            model,
+            image: {
+              url: imageUrl,
+              detail: "auto"
+            }
+          }
+        ];
+      }
+    });
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -423,31 +519,69 @@ const ChatUI: React.FC<ChatUIProps> = ({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsLoading(false);
-      message.info("Request cancelled");
+      NotificationsManager.info("Request cancelled");
     }
   };
 
   const handleImageUpload = (file: File) => {
-    setUploadedImage(file);
+    setUploadedImages(prev => [...prev, file]);
     const previewUrl = URL.createObjectURL(file);
-    setImagePreviewUrl(previewUrl);
+    setImagePreviewUrls(prev => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
 
-  const handleRemoveImage = () => {
-    if (imagePreviewUrl) {
-      URL.revokeObjectURL(imagePreviewUrl);
+  const handleRemoveImage = (index: number) => {
+    if (imagePreviewUrls[index]) {
+      URL.revokeObjectURL(imagePreviewUrls[index]);
     }
-    setUploadedImage(null);
-    setImagePreviewUrl(null);
+    setUploadedImages(prev => prev.filter((_, i) => i !== index));
+    setImagePreviewUrls(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRemoveAllImages = () => {
+    imagePreviewUrls.forEach(url => {
+      URL.revokeObjectURL(url);
+    });
+    setUploadedImages([]);
+    setImagePreviewUrls([]);
+  };
+
+  const handleResponsesImageUpload = (file: File): false => {
+    setResponsesUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setResponsesImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveResponsesImage = () => {
+    if (responsesImagePreviewUrl) {
+      URL.revokeObjectURL(responsesImagePreviewUrl);
+    }
+    setResponsesUploadedImage(null);
+    setResponsesImagePreviewUrl(null);
+  };
+
+  const handleChatImageUpload = (file: File): false => {
+    setChatUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setChatImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveChatImage = () => {
+    if (chatImagePreviewUrl) {
+      URL.revokeObjectURL(chatImagePreviewUrl);
+    }
+    setChatUploadedImage(null);
+    setChatImagePreviewUrl(null);
   };
 
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
     // For image edits, require both image and prompt
-    if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
-      message.error("Please upload an image for editing");
+    if (endpointType === EndpointType.IMAGE_EDITS && uploadedImages.length === 0) {
+      NotificationsManager.fromBackend("Please upload at least one image for editing");
       return;
     }
 
@@ -458,7 +592,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      message.error("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -467,7 +601,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const signal = abortControllerRef.current.signal;
 
     // Create message object without model field for API call
-    const newUserMessage = { role: "user", content: inputMessage };
+    let newUserMessage: { role: string; content: string | any[] };
+    
+    // Handle image for responses API
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      try {
+        newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
+      } catch (error) {
+        NotificationsManager.fromBackend("Failed to process image. Please try again.");
+        return;
+      }
+    } 
+    // Handle image for chat completions API
+    else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      try {
+        newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
+      } catch (error) {
+        NotificationsManager.fromBackend("Failed to process image. Please try again.");
+        return;
+      }
+    } else {
+      newUserMessage = { role: "user", content: inputMessage };
+    }
     
     // Generate new trace ID for a new conversation or use existing one
     const traceId = messageTraceId || uuidv4();
@@ -475,8 +630,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setMessageTraceId(traceId);
     }
     
-    // Update UI with full message object
-    setChatHistory([...chatHistory, newUserMessage]);
+    // Update UI with full message object (always display as text for UI)
+    let displayMessage: MessageType;
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      displayMessage = createDisplayMessage(inputMessage, true, responsesImagePreviewUrl || undefined, responsesUploadedImage.name);
+    } else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      displayMessage = createChatDisplayMessage(inputMessage, true, chatImagePreviewUrl || undefined, chatUploadedImage.name);
+    } else {
+      displayMessage = createDisplayMessage(inputMessage, false);
+    }
+    
+    setChatHistory([...chatHistory, displayMessage]);
+    setMCPEvents([]); // Clear previous MCP events for new conversation turn
     setIsLoading(true);
 
     try {
@@ -484,7 +649,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          // For chat completions, we preserve the multimodal content structure
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ 
+            role, 
+            content: typeof content === 'string' ? content : '' 
+          })), newUserMessage];
           
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -499,7 +668,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tools array
+            updateChatImageUI // Pass the image callback
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -513,9 +683,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
-          if (uploadedImage) {
+          if (uploadedImages.length > 0) {
             await makeOpenAIImageEditsRequest(
-              uploadedImage,
+              uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages,
               inputMessage,
               (imageUrl, model) => updateImageUI(imageUrl, model),
               selectedModel,
@@ -526,7 +696,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
           }
         } else if (endpointType === EndpointType.RESPONSES) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          let apiChatHistory;
+          
+          if (useApiSessionManagement && responsesSessionId) {
+            // When using API session management with existing session, only send the new message
+            apiChatHistory = [newUserMessage];
+          } else {
+            // When using UI session management or starting new API session, send full history
+            apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          }
           
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -541,7 +719,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tools array
+            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+            handleResponseId, // Pass callback to capture new response ID
+            handleMCPEvent // Pass MCP event handler
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -559,7 +740,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools // Pass the selected tools array
           );
         }
       }
@@ -575,7 +756,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
       abortControllerRef.current = null;
       // Clear image after successful request for image edits
       if (endpointType === EndpointType.IMAGE_EDITS) {
-        handleRemoveImage();
+        handleRemoveAllImages();
+      }
+      // Clear image after successful request for responses API
+      if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+        handleRemoveResponsesImage();
+      }
+      // Clear image after successful request for chat completions API
+      if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+        handleRemoveChatImage();
       }
     }
 
@@ -585,10 +774,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
-    handleRemoveImage(); // Clear any uploaded images
+    setResponsesSessionId(null); // Clear responses session ID
+    setMCPEvents([]); // Clear MCP events
+    handleRemoveAllImages(); // Clear any uploaded images for image edits
+    handleRemoveResponsesImage(); // Clear any uploaded images for responses
+    handleRemoveChatImage(); // Clear any uploaded images for chat completions
     sessionStorage.removeItem('chatHistory');
     sessionStorage.removeItem('messageTraceId');
-    message.success("Chat history cleared.");
+    sessionStorage.removeItem('responsesSessionId');
+    NotificationsManager.success("Chat history cleared.");
   };
 
   if (userRole && userRole === "Admin Viewer") {
@@ -630,8 +824,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   style={{ width: "100%" }}
                   onChange={(value) => {
                     setApiKeySource(value as "session" | "custom");
-                    // Clear MCP tool selection when switching API key source
-                    setSelectedMCPTools('');
                   }}
                   options={[
                     { value: 'session', label: 'Current UI Session' },
@@ -698,13 +890,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   endpointType={endpointType}
                   onEndpointChange={(value) => {
                     setEndpointType(value);
-                    // Clear MCP tools if switching away from responses endpoint
-                    if (value !== EndpointType.RESPONSES) {
-                      setSelectedMCPTools('');
-                    }
                   }}
                   className="mb-4"
-                />  
+                />
+                
+                {/* Session Management Component */}
+                <SessionManagement
+                  endpointType={endpointType}
+                  responsesSessionId={responsesSessionId}
+                  useApiSessionManagement={useApiSessionManagement}
+                  onToggleSessionManagement={handleToggleSessionManagement}
+                />
               </div>
 
               <div>
@@ -725,20 +921,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <ToolOutlined className="mr-2" /> MCP Tool
                   <Tooltip 
                     className="ml-1"
-                    title="Select an MCP tool to use in your conversation, only available for virtual keys and /v1/responses endpoint">
+                    title="Select MCP tools to use in your conversation, only available for /v1/responses endpoint">
                     <InfoCircleOutlined />
                   </Tooltip>
                 </Text>
                 <Select
+                  mode="multiple"
                   style={{ width: '100%' }}
-                  placeholder="Select MCP tool"
+                  placeholder="Select MCP tools"
                   value={selectedMCPTools}
                   onChange={(value) => setSelectedMCPTools(value)}
                   loading={isLoadingMCPTools}
                   className="mb-4"
                   allowClear
                   optionLabelProp="label"
-                  disabled={!(apiKeySource === 'custom' && endpointType === EndpointType.RESPONSES)}
+                  disabled={!(endpointType === EndpointType.RESPONSES)}
+                  maxTagCount="responsive"
                 >
                   {Array.isArray(mcpTools) && mcpTools.map((tool) => (
                     <Select.Option 
@@ -798,16 +996,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
-              
-              <div className="space-y-2 mt-4">
-                <TremorButton
-                  onClick={clearChatHistory}
-                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-                  icon={ClearOutlined}
-                >
-                  Clear Chat
-                </TremorButton>
-              </div>
             </div>
         </div>
         
@@ -816,6 +1004,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
           <div className="p-4 border-b border-gray-200 flex justify-between items-center">
             <Title className="text-xl font-semibold mb-0">Test Key</Title>
             <div className="flex gap-2">
+              <TremorButton
+                onClick={clearChatHistory}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={ClearOutlined}
+              >
+                Clear Chat
+              </TremorButton>
               <TremorButton
                 onClick={() => setIsGetCodeModalVisible(true)}
                 className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
@@ -834,94 +1029,152 @@ const ChatUI: React.FC<ChatUIProps> = ({
             )}
             
             {chatHistory.map((message, index) => (
-              <div 
-                key={index} 
-                className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}
-              >
+              <div key={index}>
+                <div 
+                  className={`mb-4 ${message.role === "user" ? "text-right" : "text-left"}`}
+                >
+                  <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4" style={{
+                    backgroundColor: message.role === "user" ? '#f0f8ff' : '#ffffff',
+                    border: message.role === "user" ? '1px solid #e6f0fa' : '1px solid #f0f0f0',
+                    textAlign: 'left'
+                  }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-full mr-1" style={{
+                        backgroundColor: message.role === "user" ? '#e6f0fa' : '#f5f5f5',
+                      }}>
+                        {message.role === "user" ? 
+                          <UserOutlined style={{ fontSize: '12px', color: '#2563eb' }} /> : 
+                          <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
+                        }
+                      </div>
+                      <strong className="text-sm capitalize">{message.role}</strong>
+                      {message.role === "assistant" && message.model && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
+                          {message.model}
+                        </span>
+                      )}
+                    </div>
+                    {message.reasoningContent && (
+                      <ReasoningContent reasoningContent={message.reasoningContent} />
+                    )}
+                    
+                    {/* Show MCP events at the start of assistant messages */}
+                    {message.role === "assistant" && 
+                     index === chatHistory.length - 1 && 
+                     mcpEvents.length > 0 && 
+                     endpointType === EndpointType.RESPONSES && (
+                      <div className="mb-3">
+                        <MCPEventsDisplay events={mcpEvents} />
+                      </div>
+                    )}
+                    
+                    <div className="whitespace-pre-wrap break-words max-w-full message-content" 
+                         style={{ 
+                           wordWrap: 'break-word', 
+                           overflowWrap: 'break-word',
+                           wordBreak: 'break-word',
+                           hyphens: 'auto'
+                         }}>
+                      {message.isImage ? (
+                        <img 
+                          src={typeof message.content === "string" ? message.content : ""} 
+                          alt="Generated image" 
+                          className="max-w-full rounded-md border border-gray-200 shadow-sm" 
+                          style={{ maxHeight: '500px' }} 
+                        />
+                      ) : (
+                        <>
+                          {/* Show attached image for user messages based on current endpoint */}
+                          {endpointType === EndpointType.RESPONSES && (
+                            <ResponsesImageRenderer message={message} />
+                          )}
+                          {endpointType === EndpointType.CHAT && (
+                            <ChatImageRenderer message={message} />
+                          )}
+                          
+                          <ReactMarkdown
+                            components={{
+                              code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                                inline?: boolean;
+                                node?: any;
+                              }) {
+                                const match = /language-(\w+)/.exec(className || '');
+                                return !inline && match ? (
+                                  <SyntaxHighlighter
+                                    style={coy as any}
+                                    language={match[1]}
+                                    PreTag="div"
+                                    className="rounded-md my-2"
+                                    wrapLines={true}
+                                    wrapLongLines={true}
+                                    {...props}
+                                  >
+                                    {String(children).replace(/\n$/, '')}
+                                  </SyntaxHighlighter>
+                                ) : (
+                                  <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              },
+                              pre: ({ node, ...props }) => (
+                                <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                              )
+                            }}
+                          >
+                            {typeof message.content === "string" ? message.content : ""}
+                          </ReactMarkdown>
+                          
+                          {/* Show generated image from chat completions */}
+                          {message.image && (
+                            <div className="mt-3">
+                              <img 
+                                src={message.image.url} 
+                                alt="Generated image" 
+                                className="max-w-full rounded-md border border-gray-200 shadow-sm" 
+                                style={{ maxHeight: '500px' }} 
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                                          
+                      {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
+                        <ResponseMetrics 
+                          timeToFirstToken={message.timeToFirstToken}
+                          usage={message.usage}
+                          toolName={message.toolName}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                
+              </div>
+            ))}
+            
+            {/* Show MCP events during loading if no assistant message exists yet */}
+            {isLoading && mcpEvents.length > 0 && endpointType === EndpointType.RESPONSES && 
+             chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === "user" && (
+              <div className="text-left mb-4">
                 <div className="inline-block max-w-[80%] rounded-lg shadow-sm p-3.5 px-4" style={{
-                  backgroundColor: message.role === "user" ? '#f0f8ff' : '#ffffff',
-                  border: message.role === "user" ? '1px solid #e6f0fa' : '1px solid #f0f0f0',
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #f0f0f0',
                   textAlign: 'left'
                 }}>
                   <div className="flex items-center gap-2 mb-1.5">
                     <div className="flex items-center justify-center w-6 h-6 rounded-full mr-1" style={{
-                      backgroundColor: message.role === "user" ? '#e6f0fa' : '#f5f5f5',
+                      backgroundColor: '#f5f5f5',
                     }}>
-                      {message.role === "user" ? 
-                        <UserOutlined style={{ fontSize: '12px', color: '#2563eb' }} /> : 
-                        <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
-                      }
+                      <RobotOutlined style={{ fontSize: '12px', color: '#4b5563' }} />
                     </div>
-                    <strong className="text-sm capitalize">{message.role}</strong>
-                    {message.role === "assistant" && message.model && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-normal">
-                        {message.model}
-                      </span>
-                    )}
+                    <strong className="text-sm capitalize">Assistant</strong>
                   </div>
-                  {message.reasoningContent && (
-                    <ReasoningContent reasoningContent={message.reasoningContent} />
-                  )}
-                  <div className="whitespace-pre-wrap break-words max-w-full message-content" 
-                       style={{ 
-                         wordWrap: 'break-word', 
-                         overflowWrap: 'break-word',
-                         wordBreak: 'break-word',
-                         hyphens: 'auto'
-                       }}>
-                    {message.isImage ? (
-                      <img 
-                        src={message.content} 
-                        alt="Generated image" 
-                        className="max-w-full rounded-md border border-gray-200 shadow-sm" 
-                        style={{ maxHeight: '500px' }} 
-                      />
-                    ) : (
-                      <ReactMarkdown
-                        components={{
-                          code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                            inline?: boolean;
-                            node?: any;
-                          }) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <SyntaxHighlighter
-                                style={coy as any}
-                                language={match[1]}
-                                PreTag="div"
-                                className="rounded-md my-2"
-                                wrapLines={true}
-                                wrapLongLines={true}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
-                            ) : (
-                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
-                                {children}
-                              </code>
-                            );
-                          },
-                          pre: ({ node, ...props }) => (
-                            <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
-                          )
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
-                    )}
-                                        
-                    {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
-                      <ResponseMetrics 
-                        timeToFirstToken={message.timeToFirstToken}
-                        usage={message.usage}
-                        toolName={message.toolName}
-                      />
-                    )}
-                  </div>
+                  <MCPEventsDisplay events={mcpEvents} />
                 </div>
               </div>
-            ))}
+            )}
+            
             {isLoading && (
               <div className="flex justify-center items-center my-4">
                 <Spin indicator={antIcon} />
@@ -934,7 +1187,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             {/* Image Upload Section for Image Edits */}
             {endpointType === EndpointType.IMAGE_EDITS && (
               <div className="mb-4">
-                {!uploadedImage ? (
+                {uploadedImages.length === 0 ? (
                   <Dragger
                     beforeUpload={handleImageUpload}
                     accept="image/*"
@@ -944,75 +1197,187 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <p className="ant-upload-drag-icon">
                       <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
                     </p>
-                    <p className="ant-upload-text text-sm">Click or drag image to upload</p>
+                    <p className="ant-upload-text text-sm">Click or drag images to upload</p>
                     <p className="ant-upload-hint text-xs text-gray-500">
-                      Support for PNG, JPG, JPEG formats
+                      Support for PNG, JPG, JPEG formats. Multiple images supported.
                     </p>
                   </Dragger>
                 ) : (
-                  <div className="relative inline-block">
-                    <img 
-                      src={imagePreviewUrl || ''} 
-                      alt="Upload preview" 
-                      className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
-                    />
-                    <button
-                      className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
-                      onClick={handleRemoveImage}
-                    >
-                      <DeleteOutlined />
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    {uploadedImages.map((file, index) => (
+                      <div key={index} className="relative inline-block">
+                        <img 
+                          src={imagePreviewUrls[index] || ''} 
+                          alt={`Upload preview ${index + 1}`} 
+                          className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
+                        />
+                        <button
+                          className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
+                          onClick={() => handleRemoveImage(index)}
+                        >
+                          <DeleteOutlined />
+                        </button>
+                      </div>
+                    ))}
+                    {/* Add more images button */}
+                    <div className="flex items-center justify-center w-32 h-32 border-2 border-dashed border-gray-300 rounded-md hover:border-gray-400 cursor-pointer" 
+                         onClick={() => document.getElementById('additional-image-upload')?.click()}>
+                      <div className="text-center">
+                        <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
+                        <p className="text-xs text-gray-500 mt-1">Add more</p>
+                      </div>
+                      <input
+                        id="additional-image-upload"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files || []);
+                          files.forEach(file => handleImageUpload(file));
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
             )}
+            {/* Show file previews above input when files are uploaded */}
+            {(endpointType === EndpointType.RESPONSES && responsesUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="relative inline-block">
+                    {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={responsesImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {responsesUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveResponsesImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+              </div>
+            )}
             
-            <div className="flex items-center">
-              <TextArea
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Type your message... (Shift+Enter for new line)"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Describe how you want to edit the image..."
-                    : "Describe the image you want to generate..."
-                }
-                disabled={isLoading}
-                className="flex-1"
-                autoSize={{ minRows: 1, maxRows: 6 }}
-                style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
-              />
-              {isLoading ? (
-                <TremorButton
-                  onClick={handleCancelRequest}
-                  className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
-                  icon={DeleteOutlined}
-                >
-                  Cancel
-                </TremorButton>
-              ) : (
-                <TremorButton
-                  onClick={handleSendMessage}
-                  className="ml-2 text-white"
-                  icon={
+            {(endpointType === EndpointType.CHAT && chatUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="relative inline-block">
+                    {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={chatImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {chatUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveChatImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex items-center gap-2">
+              <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
+                {/* Left: paperclip icon */}
+                <div className="flex-shrink-0 mr-2">
+                  {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
+                    <ResponsesImageUpload
+                      responsesUploadedImage={responsesUploadedImage}
+                      responsesImagePreviewUrl={responsesImagePreviewUrl}
+                      onImageUpload={handleResponsesImageUpload}
+                      onRemoveImage={handleRemoveResponsesImage}
+                    />
+                  )}
+                  {endpointType === EndpointType.CHAT && !chatUploadedImage && (
+                    <ChatImageUpload
+                      chatUploadedImage={chatUploadedImage}
+                      chatImagePreviewUrl={chatImagePreviewUrl}
+                      onImageUpload={handleChatImageUpload}
+                      onRemoveImage={handleRemoveChatImage}
+                    />
+                  )}
+                </div>
+
+                {/* Middle: input field */}
+                <TextArea
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
                     endpointType === EndpointType.CHAT ||
                     endpointType === EndpointType.RESPONSES ||
                     endpointType === EndpointType.ANTHROPIC_MESSAGES
-                      ? SendOutlined
-                      : RobotOutlined
+                      ? "Type your message... (Shift+Enter for new line)"
+                      : endpointType === EndpointType.IMAGE_EDITS
+                      ? "Describe how you want to edit the image..."
+                      : "Describe the image you want to generate..."
                   }
+                  disabled={isLoading}
+                  className="flex-1"
+                  autoSize={{ minRows: 1, maxRows: 4 }}
+                  style={{ 
+                    resize: 'none', 
+                    border: 'none', 
+                    boxShadow: 'none',
+                    background: 'transparent',
+                    padding: '4px 0',
+                    fontSize: '14px',
+                    lineHeight: '20px'
+                  }}
+                />
+
+                {/* Right: send button - matching blue theme */}
+                <TremorButton
+                  onClick={handleSendMessage}
+                  disabled={isLoading || !inputMessage.trim()}
+                  className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
                 >
-                  {endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Send"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Edit"
-                    : "Generate"}
+                  <ArrowUpOutlined style={{ fontSize: '14px' }} />
+                </TremorButton>
+              </div>
+
+              {isLoading && (
+                <TremorButton
+                  onClick={handleCancelRequest}
+                  className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
+                  icon={DeleteOutlined}
+                >
+                  Cancel
                 </TremorButton>
               )}
             </div>
@@ -1043,7 +1408,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         <Button 
           onClick={() => {
             navigator.clipboard.writeText(generatedCode);
-            message.success("Copied to clipboard!");
+            NotificationsManager.success("Copied to clipboard!");
           }}
         >
           Copy to Clipboard
@@ -1070,7 +1435,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         onCancel={() => setIsMCPToolsModalVisible(false)}
         onOk={() => {
           setIsMCPToolsModalVisible(false);
-          message.success('MCP tool selection updated');
+          NotificationsManager.success('MCP tool selection updated');
         }}
         width={800}
       >
@@ -1081,15 +1446,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ) : (
           <div className="space-y-4">
             <Text className="text-gray-600 block mb-4">
-              Select the MCP tool you want to use in your conversation.
+              Select the MCP tools you want to use in your conversation.
             </Text>
             <Select
+              mode="multiple"
               style={{ width: '100%' }}
-              placeholder="Select MCP tool"
+              placeholder="Select MCP tools"
               value={selectedMCPTools}
               onChange={(value) => setSelectedMCPTools(value)}
               optionLabelProp="label"
               allowClear
+              maxTagCount="responsive"
             >
               {mcpTools.map((tool) => (
                 <Select.Option 

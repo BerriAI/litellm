@@ -1,6 +1,5 @@
 import json
 import time
-import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +13,7 @@ from typing import (
     Union,
 )
 
+import fastuuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
@@ -51,6 +51,7 @@ from .llms.openai import (
     ChatCompletionUsageBlock,
     FileSearchTool,
     FineTuningJob,
+    ImageURLListItem,
     OpenAIChatCompletionChunk,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
@@ -161,6 +162,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
+    tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -572,6 +574,7 @@ class Message(OpenAIObject):
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
+    images: Optional[List[ImageURLListItem]] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -588,6 +591,7 @@ class Message(OpenAIObject):
         function_call=None,
         tool_calls: Optional[list] = None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         provider_specific_fields: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
@@ -621,6 +625,9 @@ class Message(OpenAIObject):
         if audio is not None:
             init_values["audio"] = audio
 
+        if images is not None:
+            init_values["images"] = images
+
         if thinking_blocks is not None:
             init_values["thinking_blocks"] = thinking_blocks
 
@@ -640,6 +647,10 @@ class Message(OpenAIObject):
             # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
             if hasattr(self, "audio"):
                 del self.audio
+
+        if images is None:
+            if hasattr(self, "images"):
+                del self.images
 
         if annotations is None:
             # ensure default response matches OpenAI spec
@@ -693,6 +704,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        images: Optional[List[ImageURLListItem]] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[
@@ -710,6 +722,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.images: Optional[List[ImageURLListItem]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
@@ -729,6 +742,11 @@ class Delta(OpenAIObject):
             self.annotations = annotations
         else:
             del self.annotations
+
+        if images is not None and len(images) > 0:
+            self.images = images
+        else:
+            del self.images
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
@@ -1618,7 +1636,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     usage: Optional[ImageUsage] = None  # type: ignore
     """
-    Users might use litellm with older python versions, we don't want this to break for them. 
+    Users might use litellm with older python versions, we don't want this to break for them.
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
@@ -1910,7 +1928,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     applied_guardrails: Optional[List[str]]
     usage_object: Optional[dict]
-    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
+    cold_storage_object_key: Optional[
+        str
+    ]  # S3/GCS object key for cold storage retrieval
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -1976,7 +1996,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure"]
+    guardrail_status: Literal["success", "failure", "blocked"]
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
@@ -2104,6 +2124,7 @@ all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "litellm_request_debug",
     "guardrails",
     "tags",
     "acompletion",
@@ -2307,6 +2328,7 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    COMPACTIFAI = "compactifai"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
@@ -2325,14 +2347,20 @@ class LlmProviders(str, Enum):
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
+    GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    HEROKU = "heroku"
+    AIML = "aiml"
+    COMETAPI = "cometapi"
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
+    VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    OVHCLOUD = "ovhcloud"
 
 
 # Create a set of all provider values for quick lookup
@@ -2353,6 +2381,17 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class TokenCountResponse(LiteLLMPydanticObjectBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    original_response: Optional[dict] = None
+    """
+    Original Response from upstream API call - if an API call was made for token counting
+    """
 
 
 class CustomHuggingfaceTokenizer(TypedDict):

@@ -471,11 +471,13 @@ def test_completion_azure_stream():
 
 
 # test_completion_azure_stream()
+@pytest.mark.skip("Skipping predibase streaming test - ran out of credits")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_predibase_streaming(sync_mode):
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         if sync_mode:
             response = completion(
                 model="predibase/llama-3-8b-instruct",
@@ -701,7 +703,12 @@ async def test_completion_gemini_stream(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
+        messages = [
+            {
+                "role": "user",
+                "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response.",
+            }
+        ]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
@@ -817,7 +824,12 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
+        messages = [
+            {
+                "role": "user",
+                "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response.",
+            }
+        ]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
@@ -1305,7 +1317,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["anthropic.claude-3-sonnet-20240229-v1:0", None],
-        # ["anthropic.claude-instant-v1", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
@@ -1410,8 +1421,6 @@ def test_bedrock_claude_3_streaming():
         "claude-3-opus-20240229",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
-        # "databricks/databricks-dbrx-instruct",  # databricks
-        "predibase/llama-3-8b-instruct",  # predibase
     ],
 )
 @pytest.mark.asyncio
@@ -1534,50 +1543,6 @@ def test_completion_replicate_stream_bad_key():
 
 
 # test_completion_replicate_stream_bad_key()
-
-
-def test_completion_bedrock_claude_stream():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?",
-                }
-            ],
-            temperature=1,
-            max_tokens=20,
-            stream=True,
-        )
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        first_chunk_id = None
-        for idx, chunk in enumerate(response):
-            # print
-            if idx == 0:
-                first_chunk_id = chunk.id
-            else:
-                assert (
-                    chunk.id == first_chunk_id
-                ), f"chunk ids do not match: {chunk.id} != first chunk id{first_chunk_id}"
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 # test_completion_bedrock_claude_stream()
 
@@ -3990,3 +3955,48 @@ def test_streaming_with_cost_calculation():
     assert usage_object.prompt_tokens > 0
     assert usage_object.cost is not None
     assert usage_object.cost > 0
+
+
+def test_streaming_finish_reason():
+    litellm.set_verbose = False
+
+    openai_finish_reason_idx: Optional[int] = None
+    openai_last_chunk_idx: Optional[int] = None
+    anthropic_finish_reason_idx: Optional[int] = None
+    anthropic_last_chunk_idx: Optional[int] = None
+
+    ## OpenAI
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    for idx, chunk in enumerate(response):
+        print(f"OPENAI CHUNK: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            openai_finish_reason_idx = idx
+        openai_last_chunk_idx = idx
+
+    assert openai_finish_reason_idx is not None
+    assert openai_finish_reason_idx > 0
+
+    ## Anthropic
+    response = litellm.completion(
+        model="anthropic/claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    for idx, chunk in enumerate(response):
+        print(f"ANTHROPIC CHUNK: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            anthropic_finish_reason_idx = idx
+        anthropic_last_chunk_idx = idx
+
+    assert anthropic_finish_reason_idx is not None
+    assert anthropic_finish_reason_idx > 0
+
+    relative_anthropic_idx = anthropic_finish_reason_idx - anthropic_last_chunk_idx
+    relative_openai_idx = openai_finish_reason_idx - openai_last_chunk_idx
+    assert relative_anthropic_idx == relative_openai_idx

@@ -475,6 +475,239 @@ def test_transform_response_with_bash_tool():
     assert args["command"] == "ls -la *.py"
 
 
+def test_transform_response_with_structured_response_being_called():
+    """Test response transformation with structured response."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with a bash tool call
+    response_json = {
+        "additionalModelResponseFields": {},
+        "metrics": {"latencyMs": 100.0},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_456",
+                            "name": "json_tool_call",
+                            "input": {
+                                "Current_Temperature": 62, 
+                                "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."},
+                        }
+                    }
+                ]
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 8,
+            "outputTokens": 3,
+            "totalTokens": 11,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'get_weather', 
+                    'description': 'Get the current weather in a given location', 
+                    'parameters': {
+                        'type': 'object', 
+                        'properties': {
+                            'location': {
+                                'type': 'string', 
+                                'description': 'The city and state, e.g. San Francisco, CA'
+                            }, 
+                            'unit': {
+                                'type': 'string', 
+                                'enum': ['celsius', 'fahrenheit']
+                            }
+                        }, 
+                        'required': ['location']
+                    }
+                }
+            }, 
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'json_tool_call', 
+                    'parameters': {
+                        '$schema': 'http://json-schema.org/draft-07/schema#', 
+                        'type': 'object', 
+                        'required': ['Weather_Explanation', 'Current_Temperature'], 
+                        'properties': {
+                            'Weather_Explanation': {
+                                'type': ['string', 'null'], 
+                                'description': '1-2 sentences explaining the weather in the location'
+                            }, 
+                            'Current_Temperature': {
+                                'type': ['number', 'null'], 
+                                'description': 'Current temperature in the location'
+                            }
+                        }, 
+                        'additionalProperties': False
+                    }
+                }
+            }
+        ]
+    }
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    # Check that the tool call is present in the returned message
+    assert result.choices[0].message.tool_calls is None
+
+    assert result.choices[0].message.content is not None
+    assert result.choices[0].message.content ==  '{"Current_Temperature": 62, "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."}'
+
+def test_transform_response_with_structured_response_calling_tool():
+    """Test response transformation with structured response."""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with a bash tool call
+    response_json = {
+        "metrics": {
+            "latencyMs": 1148
+        }, 
+        "output": {
+            "message": 
+            {
+                "content": [
+                    {
+                        "text": "I\'ll check the current weather in San Francisco for you."
+                    }, 
+                    {
+                        "toolUse": {
+                            "input": {
+                                "location": "San Francisco, CA",
+                                "unit": "celsius"
+                            }, 
+                            "name": "get_weather", 
+                            "toolUseId": "tooluse_oKk__QrqSUmufMw3Q7vGaQ"
+                        }
+                    }
+                ], 
+                "role": "assistant"
+            }
+        }, 
+        "stopReason": "tool_use", 
+        "usage": {
+            "cacheReadInputTokenCount": 0, 
+            "cacheReadInputTokens": 0, 
+            "cacheWriteInputTokenCount": 0, 
+            "cacheWriteInputTokens": 0, 
+            "inputTokens": 534, 
+            "outputTokens": 69, 
+            "totalTokens": 603
+        }
+    }
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'get_weather', 
+                    'description': 'Get the current weather in a given location', 
+                    'parameters': {
+                        'type': 'object', 
+                        'properties': {
+                            'location': {
+                                'type': 'string', 
+                                'description': 'The city and state, e.g. San Francisco, CA'
+                            }, 
+                            'unit': {
+                                'type': 'string', 
+                                'enum': ['celsius', 'fahrenheit']
+                            }
+                        }, 
+                        'required': ['location']
+                    }
+                }
+            }, 
+            {
+                'type': 'function', 
+                'function': {
+                    'name': 'json_tool_call', 
+                    'parameters': {
+                        '$schema': 'http://json-schema.org/draft-07/schema#', 
+                        'type': 'object', 
+                        'required': ['Weather_Explanation', 'Current_Temperature'], 
+                        'properties': {
+                            'Weather_Explanation': {
+                                'type': ['string', 'null'], 
+                                'description': '1-2 sentences explaining the weather in the location'
+                            }, 
+                            'Current_Temperature': {
+                                'type': ['number', 'null'], 
+                                'description': 'Current temperature in the location'
+                            }
+                        }, 
+                        'additionalProperties': False
+                    }
+                }
+            }
+        ]
+    }
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    # Check that the tool call is present in the returned message
+    assert result.choices[0].message.tool_calls is not None
+    assert len(result.choices[0].message.tool_calls) == 1
+    assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco, CA", "unit": "celsius"}'
+
+
 @pytest.mark.asyncio
 async def test_bedrock_bash_tool_acompletion():
     """Test Bedrock with bash tool for ls command using acompletion."""
@@ -936,3 +1169,424 @@ def test_transform_request_with_function_tool():
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
     assert request_data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+
+
+def test_map_openai_params_with_response_format():
+    """Test map_openai_params with response_format."""
+    config = AmazonConverseConfig()
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        }
+    ]
+
+    json_schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "WeatherResult",
+            "schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "required": ["Weather_Explanation", "Current_Temperature"],
+                "properties": {
+                    "Weather_Explanation": {
+                        "type": ["string", "null"],
+                        "description": "1-2 sentences explaining the weather in the location",
+                    },
+                    "Current_Temperature": {
+                        "type": ["number", "null"],
+                        "description": "Current temperature in the location",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "strict": False,
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": json_schema},
+        optional_params={"tools": tools},
+        model="eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False
+    )
+
+    assert "tools" in optional_params
+    assert len(optional_params["tools"]) == 2
+    assert optional_params["tools"][1]["type"] == "function"
+    assert optional_params["tools"][1]["function"]["name"] == "json_tool_call"
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_cache_control():
+    """Test that assistant messages with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    # Test assistant message with string content and cache_control
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": "Hi there!",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Should have user message and assistant message
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    
+    # Assistant message should have text content and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    assert assistant_content[0]["text"] == "Hi there!"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_list_content_cache_control():
+    """Test assistant messages with list content and cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "This should be cached",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Assistant message should have text content and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    assert assistant_content[0]["text"] == "This should be cached"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_tool_message_cache_control():
+    """Test that tool messages with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Weather data: sunny, 25°C",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Should have user, assistant, and user (tool results) messages
+    assert len(result) == 3
+    
+    # Last message should contain tool result and cachePoint
+    tool_message_content = result[2]["content"]
+    assert len(tool_message_content) == 2
+    
+    # First should be tool result
+    assert "toolResult" in tool_message_content[0]
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather data: sunny, 25°C"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in tool_message_content[1]
+    assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_tool_message_string_content_cache_control():
+    """Test tool messages with string content and message-level cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function", 
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "Weather: sunny, 25°C",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Last message should contain tool result and cachePoint
+    tool_message_content = result[2]["content"]
+    assert len(tool_message_content) == 2
+    
+    # First should be tool result
+    assert "toolResult" in tool_message_content[0]
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather: sunny, 25°C"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in tool_message_content[1]
+    assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_assistant_tool_calls_cache_control():
+    """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "Calculate 2+2"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_proxy_123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Assistant message should have tool use and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    
+    # First should be tool use
+    assert "toolUse" in assistant_content[0]
+    assert assistant_content[0]["toolUse"]["name"] == "calc"
+    assert assistant_content[0]["toolUse"]["toolUseId"] == "call_proxy_123"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_multiple_tool_calls_with_mixed_cache_control():
+    """Test multiple tool calls where only some have cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "Do multiple calculations"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": '{"expr": "2+2"}'},
+                    "cache_control": {"type": "ephemeral"}
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": '{"expr": "3+3"}'}
+                    # No cache_control
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Assistant message should have: toolUse1, cachePoint, toolUse2
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 3
+    
+    # First tool use with cache
+    assert "toolUse" in assistant_content[0]
+    assert assistant_content[0]["toolUse"]["toolUseId"] == "call_1"
+    
+    # Cache point for first tool
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+    
+    # Second tool use without cache
+    assert "toolUse" in assistant_content[2]
+    assert assistant_content[2]["toolUse"]["toolUseId"] == "call_2"
+
+
+@pytest.mark.asyncio
+async def test_no_cache_control_no_cache_point():
+    """Test that messages without cache_control don't generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},  # No cache_control
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "Tool result"  # No cache_control
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+    
+    # Assistant message should only have text content, no cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["text"] == "Hi there!"
+    
+    # Tool message should only have tool result, no cachePoint
+    tool_content = result[2]["content"]
+    assert len(tool_content) == 1
+    assert "toolResult" in tool_content[0]

@@ -119,7 +119,7 @@ async def test_router_provider_wildcard_routing():
     print("response 2 = ", response2)
 
     response3 = await router.acompletion(
-        model="groq/llama3-8b-8192",
+        model="groq/llama-3.1-8b-instant",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -1136,7 +1136,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            }
+            },
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
@@ -1306,41 +1306,6 @@ def test_azure_embedding_on_router():
 
 
 # test_azure_embedding_on_router()
-
-
-def test_bedrock_on_router():
-    litellm.set_verbose = True
-    print("\n Testing bedrock on router\n")
-    try:
-        model_list = [
-            {
-                "model_name": "claude-v1",
-                "litellm_params": {
-                    "model": "bedrock/anthropic.claude-instant-v1",
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-        ]
-
-        async def test():
-            router = Router(model_list=model_list)
-            response = await router.acompletion(
-                model="claude-v1",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "hello from litellm test",
-                    }
-                ],
-            )
-            print(response)
-            router.reset()
-
-        asyncio.run(test())
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_bedrock_on_router()
@@ -2023,14 +1988,13 @@ def test_router_get_model_info(model, base_model, llm_provider):
             deployment=deployment.to_json(), received_model_name=model
         )
     else:
-        try:
-            router.get_router_model_info(
-                deployment=deployment.to_json(), received_model_name=model
-            )
-            pytest.fail("Expected this to raise model not mapped error")
-        except Exception as e:
-            if "This model isn't mapped yet" in str(e):
-                pass
+        # Azure models without base_model now fallback to using the original model name
+        # instead of raising an exception. This should succeed but log a warning.
+        model_info = router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
+        # Verify that model_info is returned (even if it may have default values)
+        assert model_info is not None
 
 
 @pytest.mark.parametrize(
@@ -2329,7 +2293,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
             except litellm.RateLimitError:
                 pass
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
         if sync_mode:
             cooldown_deployments = _get_cooldown_deployments(

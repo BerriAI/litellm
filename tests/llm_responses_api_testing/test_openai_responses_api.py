@@ -18,7 +18,6 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
-    ResponseTextConfig,
     ResponseAPIUsage,
     IncompleteDetails,
 )
@@ -29,6 +28,10 @@ class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         return {
             "model": "openai/gpt-4o",
+        }
+    def get_base_completion_reasoning_call_args(self):
+        return {
+            "model": "openai/gpt-5-mini",
         }
 
 
@@ -1394,4 +1397,114 @@ async def test_aresponses_service_tier_and_safety_identifier():
         print("Response:", json.dumps(response, indent=4, default=str))
 
 
+@pytest.mark.asyncio
+async def test_openai_gpt5_reasoning_effort_parameter():
+    """Test that reasoning_effort parameter is properly sent in the HTTP request for GPT-5 models."""
+    
+    # Mock response for GPT-5 responses API (correct format)
+    mock_response = {
+        "id": "resp_01ABC123",
+        "object": "response", 
+        "created_at": 1729621667,
+        "status": "completed",
+        "model": "gpt-5-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed", 
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "The capital of France is Paris.", "annotations": []}
+                ],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 8,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 23,
+        },
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": "low", "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
 
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call aresponses with reasoning_effort parameter
+        response = await litellm.aresponses(
+            model="openai/gpt-5-mini",
+            input="What is the capital of France?",
+            reasoning={"effort": "minimal"},
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
+        print("reasoning=", request_body["reasoning"])
+        # Validate that reasoning_effort is present in the request body
+        assert "reasoning" in request_body, "reasoning should be present in request body"
+        assert request_body["reasoning"]["effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
+        assert request_body["model"] == "gpt-5-mini"
+        assert request_body["input"] == "What is the capital of France?"
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+async def test_basic_openai_responses_with_websearch(stream):
+    litellm._turn_on_debug()
+    request_model = "gpt-4o"
+    response = await litellm.aresponses(
+        model=request_model,
+        stream=stream,
+        input="hi",
+        tools=[
+            {
+                "type": "web_search",
+                "search_context_size": "low"
+            }
+        ]
+    )
+    if stream:
+        async for chunk in response:
+            print("chunk=", json.dumps(chunk, indent=4, default=str))
+    else:
+        print("response=", json.dumps(response, indent=4, default=str))

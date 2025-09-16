@@ -2844,7 +2844,12 @@ async def test_update_user_role(prisma_client):
     await user_update(
         data=UpdateUserRequest(
             user_id=key.user_id, user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
     )
 
     # await asyncio.sleep(3)
@@ -2882,7 +2887,12 @@ async def test_update_user_unit_test(prisma_client):
             tpm_limit=100,
             rpm_limit=100,
             metadata={"very-new-metadata": "something"},
-        )
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
     )
 
     print("user_info", user_info)

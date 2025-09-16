@@ -19,6 +19,7 @@ import VectorStoreForm from "./VectorStoreForm";
 import DeleteModal from "./DeleteModal";
 import VectorStoreInfoView from "./vector_store_info";
 import { isAdminRole } from "@/utils/roles";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -48,7 +49,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
-      message.error("Error fetching vector stores: " + error);
+      NotificationsManager.fromBackend("Error fetching vector stores: " + error);
     }
   };
 
@@ -60,7 +61,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
-      message.error("Error fetching credentials: " + error);
+      NotificationsManager.fromBackend("Error fetching credentials: " + error);
     }
   };
 
@@ -96,11 +97,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     if (!accessToken || !vectorStoreToDelete) return;
     try {
       await vectorStoreDeleteCall(accessToken, vectorStoreToDelete);
-      message.success("Vector store deleted successfully");
+      NotificationsManager.success("Vector store deleted successfully");
       fetchVectorStores();
     } catch (error) {
       console.error("Error deleting vector store:", error);
-      message.error("Error deleting vector store: " + error);
+      NotificationsManager.fromBackend("Error deleting vector store: " + error);
     }
     setIsDeleteModalOpen(false);
     setVectorStoreToDelete(null);

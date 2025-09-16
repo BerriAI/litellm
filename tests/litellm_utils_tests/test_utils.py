@@ -339,10 +339,10 @@ def test_aget_valid_models():
 
     # list of openai supported llms on litellm
     expected_models = (
-        litellm.open_ai_chat_completion_models + litellm.open_ai_text_completion_models
+        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
     )
 
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -355,7 +355,7 @@ def test_aget_valid_models():
     valid_models = get_valid_models()
 
     print(valid_models)
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -376,7 +376,7 @@ def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
     )
     print(valid_models)
     assert len(valid_models) > 0
-    assert provider_config.get_models() == valid_models
+    assert set(provider_config.get_models()) == set(valid_models)
 
 
 # test_get_valid_models()
@@ -406,6 +406,18 @@ def test_validate_environment_empty_model():
 
 def test_validate_environment_api_key():
     response_obj = validate_environment(model="gpt-3.5-turbo", api_key="sk-my-test-key")
+    assert (
+        response_obj["keys_in_environment"] is True
+    ), f"Missing keys={response_obj['missing_keys']}"
+
+
+def test_validate_environment_api_version():
+    response_obj = validate_environment(
+        model="azure/openai-deployment",
+        api_key="sk-my-test-key",
+        api_base="https://fake.openai.azure.com/",
+        api_version="2024-02-15",
+    )
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
@@ -508,7 +520,6 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("anthropic.claude-instant-v1", False),
         ("gemini/gemini-1.5-flash", True),
     ],
 )
@@ -1049,7 +1060,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama3-70b-8192", True),
+        ("groq/llama-3.3-70b-versatile", True),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
@@ -1683,15 +1694,6 @@ def test_pick_cheapest_chat_model_from_llm_provider():
     assert len(pick_cheapest_chat_models_from_llm_provider("openai", n=3)) == 3
 
     assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
-
-
-def test_get_potential_model_names():
-    from litellm.utils import _get_potential_model_names
-
-    assert _get_potential_model_names(
-        model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
-        custom_llm_provider="bedrock",
-    )
 
 
 @pytest.mark.parametrize("num_retries", [0, 1, 5])

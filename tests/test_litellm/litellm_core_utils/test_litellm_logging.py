@@ -411,7 +411,7 @@ async def test_e2e_generate_cold_storage_object_key_successful():
     response_id = "chatcmpl-test-12345"
     team_alias = "test-team"
     
-    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value="s3"), \
+    with patch("litellm.configured_cold_storage_logger", return_value="s3"), \
          patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
         
         # Mock the S3 object key generation to return a predictable result
@@ -446,21 +446,24 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     from datetime import datetime, timezone
     from unittest.mock import patch
 
+    import litellm
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     # Create test data
     start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
     response_id = "chatcmpl-test-67890"
     team_alias = "another-team"
-    
-    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value=None):
-        
+
+    # Use patch to ensure test isolation
+    with patch.object(litellm, 'configured_cold_storage_logger', None):
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
             start_time=start_time,
             response_id=response_id,
             team_alias=team_alias
         )
-        
-        # Verify the result is None when cold storage is not configured
-        assert result is None
+    
+    # Verify the result is None when cold storage is not configured
+    assert result is None
+
+

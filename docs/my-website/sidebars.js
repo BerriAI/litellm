@@ -40,6 +40,7 @@ const sidebars = {
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
+          "proxy/guardrails/noma_security",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -48,6 +49,7 @@ const sidebars = {
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
+          "proxy/guardrails/tool_permission",
         ].sort(),
       ],
     },
@@ -65,6 +67,7 @@ const sidebars = {
       label: "[Beta] Prompt Management",
       items: [
         "proxy/prompt_management",
+        "proxy/native_litellm_prompt",
         "proxy/custom_prompt_management"
       ].sort()
     },
@@ -81,12 +84,12 @@ const sidebars = {
         "tutorials/cost_tracking_coding",
       ]
     },
-    
+
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    
+
     {
       type: "category",
       label: "LiteLLM Proxy Server",
@@ -107,6 +110,7 @@ const sidebars = {
           type: "category",
           label: "Setup & Deployment",
           items: [
+            "proxy/quick_start",
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
@@ -138,6 +142,7 @@ const sidebars = {
             "proxy/clientside_auth",
             "proxy/request_headers",
             "proxy/response_headers",
+            "proxy/forward_client_headers",
             "proxy/model_discovery",
           ],
         },
@@ -213,7 +218,7 @@ const sidebars = {
             "proxy/dynamic_logging"
           ],
         },
-        
+
         {
           type: "category",
           label: "Secret Managers",
@@ -258,6 +263,7 @@ const sidebars = {
             "completion/input",
             "completion/output",
             "completion/usage",
+            "completion/http_handler_config",
           ],
         },
         "response_api",
@@ -371,7 +377,14 @@ const sidebars = {
             "providers/azure/azure_embedding",
           ]
         },
-        "providers/azure_ai",
+        {
+          type: "category",
+          label: "Azure AI",
+          items: [
+            "providers/azure_ai",
+            "providers/azure_ai_img",
+          ]
+        },
         {
           type: "category",
           label: "Vertex AI",
@@ -399,6 +412,7 @@ const sidebars = {
           items: [
             "providers/bedrock",
             "providers/bedrock_agents",
+            "providers/bedrock_batches",
             "providers/bedrock_vector_store",
           ]
         },
@@ -439,6 +453,7 @@ const sidebars = {
         "providers/elevenlabs",
         "providers/fireworks_ai",
         "providers/clarifai",
+        "providers/compactifai",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
@@ -454,6 +469,7 @@ const sidebars = {
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/vercel_ai_gateway",
         "providers/morph",
         "providers/lambda_ai",
         "providers/novita",
@@ -466,11 +482,15 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
+        "providers/gradient_ai",
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
         "providers/bytez",
+        "providers/heroku",
         "providers/oci",
+        "providers/datarobot",
+        "providers/ovhcloud",  
       ],
     },
     {
@@ -482,6 +502,7 @@ const sidebars = {
         "guides/finetuned_models",
         "guides/security_settings",
         "completion/audio",
+        "completion/image_generation_chat",
         "completion/web_search",
         "completion/document_understanding",
         "completion/vision",
@@ -504,7 +525,7 @@ const sidebars = {
 
       ]
     },
-    
+
     {
       type: "category",
       label: "Routing, Loadbalancing & Fallbacks",
@@ -535,7 +556,7 @@ const sidebars = {
         },
       ],
     },
-    
+
     {
       type: "category",
       label: "Load Testing",

@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
+import NotificationManager from "@/components/molecules/notifications_manager";
 
 export async function makeAnthropicMessagesRequest(
   messages: MessageType[],
@@ -17,7 +18,7 @@ export async function makeAnthropicMessagesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string
+  selectedMCPTools?: string[]
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -47,12 +48,13 @@ export async function makeAnthropicMessagesRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
 
-    // Format MCP tool if selected
-    const tools = selectedMCPTool ? [{
+    // Format MCP tools if selected
+    const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
       type: "mcp",
       server_label: "litellm",
       server_url: `${proxyBaseUrl}/mcp`,
       require_approval: "never",
+      allowed_tools: selectedMCPTools,
       headers: {
         "x-litellm-api-key": `Bearer ${accessToken}`
       }
@@ -122,9 +124,8 @@ export async function makeAnthropicMessagesRequest(
     if (signal?.aborted) {
       console.log("Anthropic messages request was cancelled");
     } else {
-      message.error(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-        20,
+      NotificationManager.fromBackend(
+        `Error occurred while generating model response. Please try again. Error: ${error}`
       );
     }
     throw error;

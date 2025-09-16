@@ -12,6 +12,8 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 else:
@@ -308,8 +310,8 @@ class ProxyInitializationHelpers:
 @click.option("--port", default=4000, help="Port to bind the server to.", envvar="PORT")
 @click.option(
     "--num_workers",
-    default=1,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, 1 uvicorn is used.",
+    default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -465,10 +467,10 @@ class ProxyInitializationHelpers:
     help="Ciphers to use for the SSL setup.",
 )
 @click.option(
-    "--use_prisma_migrate",
+    "--use_prisma_db_push",
     is_flag=True,
-    default=True,
-    help="Use prisma migrate instead of prisma db push for database schema updates",
+    default=False,
+    help="Use prisma db push instead of prisma migrate for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 @click.option(
@@ -519,7 +521,7 @@ def run_server(  # noqa: PLR0915
     ssl_certfile_path,
     ciphers,
     log_config,
-    use_prisma_migrate,
+    use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
 ):
@@ -777,7 +779,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
