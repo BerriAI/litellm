@@ -1335,3 +1335,11 @@ global_disable_no_log_param: bool = False
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+
+# Experimental: Codex CLI Agent provider (env-gated)
+if os.getenv("LITELLM_ENABLE_CODEX_AGENT", "").strip() in {"1", "true", "True", "yes", "on"}:
+    try:
+        from .providers.codex_cli_agent import (register as _register_codex_cli_agent,)  # noqa: F401
+        _register_codex_cli_agent()
+    except Exception as _e:
+        verbose_logger.debug(f"Codex CLI Agent provider not registered: {_e}")
