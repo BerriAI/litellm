@@ -21,7 +21,8 @@ sys.path.insert(
 import pytest
 
 import litellm
-from litellm.caching.caching import DualCache, Router
+from litellm.caching.caching import DualCache
+from litellm.router import Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.dynamic_rate_limiter import (
     _PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
