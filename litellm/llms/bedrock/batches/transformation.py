@@ -200,19 +200,23 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         
         # Extract information from typed Bedrock response
         job_arn = response_data.get("jobArn", "")
-        status: BedrockBatchJobStatus = response_data.get("status", "Submitted")
+        status_str: str = str(response_data.get("status", "Submitted"))
         
         # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Dict[BedrockBatchJobStatus, str] = {
+        status_mapping: Dict[str, str] = {
             "Submitted": "validating",
+            "Validating": "validating",
+            "Scheduled": "in_progress",
             "InProgress": "in_progress", 
+            "PartiallyCompleted": "completed",
             "Completed": "completed",
             "Failed": "failed",
             "Stopping": "cancelling",
-            "Stopped": "cancelled"
+            "Stopped": "cancelled",
+            "Expired": "expired",
         }
         
-        openai_status = cast(Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"], status_mapping.get(status, "validating"))
+        openai_status = cast(Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"], status_mapping.get(status_str, "validating"))
         
         # Get original request data from litellm_params if available
         original_request = litellm_params.get("original_batch_request", {})
@@ -229,7 +233,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             output_file_id=None,  # Will be populated when job completes
             error_file_id=None,
             created_at=int(time.time()),
-            in_progress_at=int(time.time()) if status == "InProgress" else None,
+            in_progress_at=int(time.time()) if status_str == "InProgress" else None,
             expires_at=None,
             finalizing_at=None,
             completed_at=None,
@@ -239,6 +243,198 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             cancelled_at=None,
             request_counts=None,
             metadata=original_request.get("metadata", {}),
+        )
+
+    def transform_retrieve_batch_request(
+        self,
+        batch_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> Dict[str, Any]:
+        """
+        Transform batch retrieval request for Bedrock.
+        
+        Args:
+            batch_id: Bedrock job ARN
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            Transformed request data for Bedrock GetModelInvocationJob API
+        """
+        # For Bedrock, batch_id should be the full job ARN
+        # The GetModelInvocationJob API expects the full ARN as the identifier
+        if not batch_id.startswith("arn:aws:bedrock:"):
+            raise ValueError(f"Invalid batch_id format. Expected ARN, got: {batch_id}")
+        
+        # Extract the job identifier from the ARN - use the full ARN path part
+        # ARN format: arn:aws:bedrock:region:account:model-invocation-job/job-name
+        arn_parts = batch_id.split(":")
+        if len(arn_parts) < 6:
+            raise ValueError(f"Invalid ARN format: {batch_id}")
+        
+        region = arn_parts[3]
+        # arn_parts[5] contains "model-invocation-job/{jobId}"
+        
+        # Build the endpoint URL for GetModelInvocationJob
+        # AWS API format: GET /model-invocation-job/{jobIdentifier}
+        # Use the FULL ARN as jobIdentifier and URL-encode it (includes ':' and '/')
+        import urllib.parse as _ul
+        encoded_arn = _ul.quote(batch_id, safe="")
+        endpoint_url = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
+        
+        # Use common utility for AWS signing
+        signed_headers, _ = self.common_utils.sign_aws_request(
+            service_name="bedrock",
+            data={},  # GET request has no body
+            endpoint_url=endpoint_url,
+            optional_params=optional_params,
+            method="GET"
+        )
+        
+        # Return pre-signed request format
+        return {
+            "method": "GET",
+            "url": endpoint_url,
+            "headers": signed_headers,
+            "data": None
+        }
+
+    def transform_retrieve_batch_response(
+        self,
+        model: Optional[str],
+        raw_response: Response,
+        logging_obj: Any,
+        litellm_params: dict,
+    ) -> LiteLLMBatch:
+        """
+        Transform Bedrock batch retrieval response to LiteLLM format.
+        """
+        import json
+
+        from litellm.types.llms.bedrock import BedrockGetBatchResponse
+        try:
+            response_data: BedrockGetBatchResponse = raw_response.json()
+        except Exception as e:
+            raise ValueError(f"Failed to parse Bedrock batch response: {e}")
+        
+
+        # Extract information from typed Bedrock response
+        job_arn = response_data.get("jobArn", "")
+        status_str: str = str(response_data.get("status", "Submitted"))
+        
+        # Map Bedrock status to OpenAI-compatible status
+        status_mapping: Dict[str, str] = {
+            "Submitted": "validating",
+            "Validating": "validating",
+            "Scheduled": "in_progress",
+            "InProgress": "in_progress", 
+            "PartiallyCompleted": "completed",
+            "Completed": "completed",
+            "Failed": "failed",
+            "Stopping": "cancelling",
+            "Stopped": "cancelled",
+            "Expired": "expired"
+        }
+        
+        openai_status = cast(Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"], status_mapping.get(status_str, "validating"))
+        
+        # Parse timestamps
+        import datetime
+        def parse_timestamp(ts_str: Optional[str]) -> Optional[int]:
+            if not ts_str:
+                return None
+            try:
+                # Bedrock returns ISO format timestamps
+                dt = datetime.datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                return int(dt.timestamp())
+            except Exception:
+                return None
+        
+        created_at = parse_timestamp(response_data.get("submitTime"))
+        # Track progress time for common active states
+        in_progress_states = {"InProgress", "Validating", "Scheduled"}
+        in_progress_at = (
+            parse_timestamp(response_data.get("lastModifiedTime"))
+            if status_str in in_progress_states
+            else None
+        )
+        completed_at = parse_timestamp(response_data.get("endTime")) if status_str in {"Completed", "PartiallyCompleted"} else None
+        failed_at = parse_timestamp(response_data.get("endTime")) if status_str == "Failed" else None
+        cancelled_at = parse_timestamp(response_data.get("endTime")) if status_str == "Stopped" else None
+        expires_at = parse_timestamp(response_data.get("jobExpirationTime"))
+        
+        # Extract input file ID from input data config
+        input_file_id = ""
+        input_data_config = response_data.get("inputDataConfig", {})
+        if isinstance(input_data_config, dict):
+            s3_input_config = input_data_config.get("s3InputDataConfig", {})
+            if isinstance(s3_input_config, dict):
+                input_file_id = s3_input_config.get("s3Uri", "")
+        
+        # Extract output file ID from output data config  
+        output_file_id = None
+        output_data_config = response_data.get("outputDataConfig", {})
+        if isinstance(output_data_config, dict):
+            s3_output_config = output_data_config.get("s3OutputDataConfig", {})
+            if isinstance(s3_output_config, dict):
+                # Populate the configured output location (S3 prefix). Consumers can check status
+                # to know when results are actually present.
+                output_file_id = s3_output_config.get("s3Uri", "")
+        
+        # Extract errors
+        message = response_data.get("message")
+        errors = None
+        if message:
+            from openai.types.batch import Errors
+            from openai.types.batch_error import BatchError
+            errors = Errors(
+                data=[BatchError(message=message, code=str(raw_response.status_code))],
+                object="list"
+            )
+        
+        # Enrich metadata with useful Bedrock fields (metadata requires string values)
+        enriched_metadata_raw: Dict[str, Any] = {
+            "jobName": response_data.get("jobName"),
+            "clientRequestToken": response_data.get("clientRequestToken"),
+            "modelId": response_data.get("modelId"),
+            "roleArn": response_data.get("roleArn"),
+            "timeoutDurationInHours": response_data.get("timeoutDurationInHours"),
+            "vpcConfig": response_data.get("vpcConfig"),
+        }
+        import json as _json
+        enriched_metadata: Dict[str, str] = {}
+        for _k, _v in enriched_metadata_raw.items():
+            if _v is None:
+                continue
+            if isinstance(_v, (dict, list)):
+                try:
+                    enriched_metadata[_k] = _json.dumps(_v)
+                except Exception:
+                    enriched_metadata[_k] = str(_v)
+            else:
+                enriched_metadata[_k] = str(_v)
+        return LiteLLMBatch(
+            id=job_arn,  # Use ARN as the batch ID
+            object="batch",
+            endpoint="/v1/chat/completions",  # Default endpoint
+            errors=errors,
+            input_file_id=input_file_id,
+            completion_window="24h",  # Default
+            status=openai_status,
+            output_file_id=output_file_id,
+            error_file_id=None,
+            created_at=created_at or int(time.time()),
+            in_progress_at=in_progress_at,
+            expires_at=expires_at,
+            finalizing_at=None,
+            completed_at=completed_at,
+            failed_at=failed_at,
+            expired_at=None,
+            cancelling_at=None,
+            cancelled_at=cancelled_at,
+            request_counts=None,
+            metadata=enriched_metadata,
         )
 
     def get_error_class(

@@ -340,7 +340,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -382,7 +382,7 @@ async def aretrieve_batch(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -430,6 +430,45 @@ def retrieve_batch(
         )
 
         _is_async = kwargs.pop("aretrieve_batch", False) is True
+        client = kwargs.get("client", None)
+        
+        # Try to use provider config first (for providers like bedrock)
+        model: Optional[str] = kwargs.get("model", None)
+        if model is not None:
+            provider_config = ProviderConfigManager.get_provider_batches_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+            )
+        else:
+            provider_config = None
+            
+        if provider_config is not None:
+            response = base_llm_http_handler.retrieve_batch(
+                batch_id=batch_id,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=extra_headers or {},
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                logging_obj=litellm_logging_obj or LiteLLMLoggingObj(
+                    model=model or "bedrock/unknown",
+                    messages=[],
+                    stream=False,
+                    call_type="batch_retrieve",
+                    start_time=None,
+                    litellm_call_id="batch_retrieve_" + batch_id,
+                    function_id="batch_retrieve",
+                ),
+                _is_async=_is_async,
+                client=client
+                if client is not None
+                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                else None,
+                timeout=timeout,
+                model=model,
+            )
+            return response
+            
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
