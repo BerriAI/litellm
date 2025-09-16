@@ -225,6 +225,7 @@ response = completion(
 ```
 
 </TabItem>
+
 <TabItem value="vercel" label="Vercel AI Gateway">
 
 ```python
