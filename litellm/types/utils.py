@@ -2327,6 +2327,7 @@ class LlmProviders(str, Enum):
     DATABRICKS = "databricks"
     EMPOWER = "empower"
     GITHUB = "github"
+    COMPACTIFAI = "compactifai"
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"

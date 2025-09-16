@@ -167,13 +167,17 @@ async def aresponses_api_with_mcp(
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     user_api_key_auth = kwargs.get("user_api_key_auth")
-    
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
-    original_mcp_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-        user_api_key_auth=user_api_key_auth,
-        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+    original_mcp_tools = (
+        await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            user_api_key_auth=user_api_key_auth,
+            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        )
     )
-    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
+    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
+        original_mcp_tools
+    )
 
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -212,15 +216,15 @@ async def aresponses_api_with_mcp(
         from litellm.responses.mcp.mcp_streaming_iterator import (
             create_mcp_list_tools_events,
         )
-        
+
         base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
         mcp_discovery_events = await create_mcp_list_tools_events(
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=user_api_key_auth,
             base_item_id=base_item_id,
-            pre_processed_mcp_tools=original_mcp_tools
+            pre_processed_mcp_tools=original_mcp_tools,
         )
-        
+
         return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
@@ -229,23 +233,21 @@ async def aresponses_api_with_mcp(
             mcp_discovery_events=mcp_discovery_events,
             call_params=call_params,
             previous_response_id=previous_response_id,
-            **kwargs
+            **kwargs,
         )
-    
+
     # Determine if we should auto-execute tools
-    should_auto_execute = (
-        bool(mcp_tools_with_litellm_proxy)
-        and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-        )
+    should_auto_execute = bool(
+        mcp_tools_with_litellm_proxy
+    ) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
     )
-    
+
     # Prepare parameters for the initial call
     initial_call_params = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
-        call_params=call_params,
-        should_auto_execute=should_auto_execute
+        call_params=call_params, should_auto_execute=should_auto_execute
     )
-    
+
     #########################################################
     # Make initial response API call
     #########################################################
@@ -263,9 +265,8 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if (
-        should_auto_execute
-        and isinstance(response, ResponsesAPIResponse)
+    if should_auto_execute and isinstance(
+        response, ResponsesAPIResponse
     ):  # type: ignore
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
             response=response
@@ -285,19 +286,21 @@ async def aresponses_api_with_mcp(
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
-                follow_up_call_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
-                    call_params=call_params,
-                    original_stream_setting=stream or False
+                follow_up_call_params = (
+                    LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                        call_params=call_params, original_stream_setting=stream or False
+                    )
                 )
-                
+
                 # Create tool execution events for streaming if needed
                 tool_execution_events = []
                 if stream:
-                    tool_execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
-                        tool_calls=tool_calls, 
-                        tool_results=tool_results
+                    tool_execution_events = (
+                        LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+                            tool_calls=tool_calls, tool_results=tool_results
+                        )
                     )
-                
+
                 final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
                     follow_up_input=follow_up_input,
                     model=model,
@@ -307,13 +310,20 @@ async def aresponses_api_with_mcp(
                 )
 
                 # If streaming and we have tool execution events, wrap the response
-                if stream and tool_execution_events and (hasattr(final_response, '__aiter__') or hasattr(final_response, '__iter__')):
+                if (
+                    stream
+                    and tool_execution_events
+                    and (
+                        hasattr(final_response, "__aiter__")
+                        or hasattr(final_response, "__iter__")
+                    )
+                ):
                     from litellm.responses.mcp.mcp_streaming_iterator import (
                         MCPEnhancedStreamingIterator,
                     )
+
                     final_response = MCPEnhancedStreamingIterator(
-                        base_iterator=final_response,
-                        mcp_events=tool_execution_events
+                        base_iterator=final_response, mcp_events=tool_execution_events
                     )
 
                 # Add custom output elements to the final response (for non-streaming)
@@ -321,7 +331,7 @@ async def aresponses_api_with_mcp(
                     # Fetch MCP tools again for output elements (without OpenAI transformation)
                     mcp_tools_for_output = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
-                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
+                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                     )
                     final_response = (
                         LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
@@ -1137,6 +1147,165 @@ def list_input_items(
             limit=limit,
             order=order,
             extra_headers=extra_headers,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+        )
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+async def acancel_responses(
+    response_id: str,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> ResponsesAPIResponse:
+    """
+    Async version of the POST Cancel Responses API
+
+    POST /v1/responses/{response_id}/cancel endpoint in the responses API
+
+    """
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["acancel_responses"] = True
+
+        # get custom llm provider from response_id
+        decoded_response_id: DecodedResponseId = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                response_id=response_id,
+            )
+        )
+        response_id = decoded_response_id.get("response_id") or response_id
+        custom_llm_provider = (
+            decoded_response_id.get("custom_llm_provider") or custom_llm_provider
+        )
+
+        func = partial(
+            cancel_responses,
+            response_id=response_id,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=None,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+@client
+def cancel_responses(
+    response_id: str,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+    """
+    Synchronous version of the POST Responses API
+
+    POST /v1/responses/{response_id}/cancel endpoint in the responses API
+
+    """
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("acancel_responses", False) is True
+
+        # get llm provider logic
+        litellm_params = GenericLiteLLMParams(**kwargs)
+
+        # get custom llm provider from response_id
+        decoded_response_id: DecodedResponseId = (
+            ResponsesAPIRequestUtils._decode_responses_api_response_id(
+                response_id=response_id,
+            )
+        )
+        response_id = decoded_response_id.get("response_id") or response_id
+        custom_llm_provider = (
+            decoded_response_id.get("custom_llm_provider") or custom_llm_provider
+        )
+
+        if custom_llm_provider is None:
+            raise ValueError("custom_llm_provider is required but passed as None")
+
+        # get provider config
+        responses_api_provider_config: Optional[
+            BaseResponsesAPIConfig
+        ] = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
+
+        if responses_api_provider_config is None:
+            raise ValueError(
+                f"CANCEL responses is not supported for {custom_llm_provider}"
+            )
+
+        local_vars.update(kwargs)
+
+        # Pre Call logging
+        litellm_logging_obj.update_environment_variables(
+            model=None,
+            optional_params={
+                "response_id": response_id,
+            },
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # Call the handler with _is_async flag instead of directly calling the async handler
+        response = base_llm_http_handler.cancel_response_api_handler(
+            response_id=response_id,
+            custom_llm_provider=custom_llm_provider,
+            responses_api_provider_config=responses_api_provider_config,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),

@@ -13477,6 +13477,23 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "max_tokens": 8192,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4e-06,
+        "cache_creation_input_token_cost": 1e-06,
+        "cache_read_input_token_cost": 8e-08,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "us.anthropic.claude-3-opus-20240229-v1:0": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
