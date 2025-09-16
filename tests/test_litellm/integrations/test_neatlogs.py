@@ -336,7 +336,7 @@ def test_health_check_method():
         assert callable(getattr(logger, 'async_health_check'))
 
 
-def test_get_request_response_payload_method():
+async def test_get_request_response_payload_method():
     """Test the get_request_response_payload method exists"""
     with patch.dict(os.environ, {"NEATLOGS_API_KEY": "test_key"}):
         logger = NeatlogsLogger()
@@ -346,5 +346,5 @@ def test_get_request_response_payload_method():
         assert callable(getattr(logger, 'get_request_response_payload'))
 
         # Test calling the method
-        result = logger.get_request_response_payload("test_id", None, None)
+        result = await logger.get_request_response_payload("test_id", None, None)
         assert result is None  # Method returns None as per implementation
