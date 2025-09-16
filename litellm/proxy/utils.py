@@ -1283,7 +1283,8 @@ class ProxyLogging:
         #       would log temporary keys/auth info
         #       from management endpoints
         #########################################################
-        if route is None:
+        # Guard against non-string routes (e.g., MagicMock in tests)
+        if route is None or not isinstance(route, str):
             return False
         if RouteChecks.is_llm_api_route(route) is not True:
             return False

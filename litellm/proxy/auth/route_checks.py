@@ -225,6 +225,10 @@ class RouteChecks:
             - False: if route is not an OpenAI route
         """
 
+        # Be defensive: tests may pass non-strings (e.g., MagicMock). Treat as not LLM route.
+        if not isinstance(route, str):
+            return False
+
         if route in LiteLLMRoutes.openai_routes.value:
             return True
 
