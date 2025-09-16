@@ -3,14 +3,9 @@ from typing import Any, List, Literal, Optional, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
-    Protocol,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
     override,
-    runtime_checkable,
 )
 
 from .openai import ChatCompletionToolCallChunk
@@ -93,6 +88,12 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     text: str
 
 
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -102,6 +103,7 @@ class ContentBlock(TypedDict, total=False):
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
+    guardrailConverseContent: GuardrailConverseContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -581,30 +583,35 @@ class AmazonDeepSeekR1StreamingResponse(TypedDict):
 
 class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
+
     s3Uri: str
 
 
 class BedrockInputDataConfig(TypedDict):
     """Input data configuration for Bedrock batch jobs."""
+
     s3InputDataConfig: BedrockS3InputDataConfig
 
 
 class BedrockS3OutputDataConfig(TypedDict):
     """S3 output data configuration for Bedrock batch jobs."""
+
     s3Uri: str
 
 
 class BedrockOutputDataConfig(TypedDict):
     """Output data configuration for Bedrock batch jobs."""
+
     s3OutputDataConfig: BedrockS3OutputDataConfig
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
     """
     Request structure for creating a Bedrock batch inference job.
-    
+
     Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
     """
+
     jobName: str
     roleArn: str
     modelId: str
@@ -616,21 +623,17 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
 
 
 BedrockBatchJobStatus = Literal[
-    "Submitted",
-    "InProgress", 
-    "Completed",
-    "Failed",
-    "Stopping",
-    "Stopped"
+    "Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"
 ]
 
 
 class BedrockCreateBatchResponse(TypedDict):
     """
     Response structure from creating a Bedrock batch inference job.
-    
+
     Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_CreateModelInvocationJob.html
     """
+
     jobArn: str
     jobName: str
     status: BedrockBatchJobStatus
@@ -639,9 +642,10 @@ class BedrockCreateBatchResponse(TypedDict):
 class BedrockGetBatchResponse(TypedDict, total=False):
     """
     Response structure from getting a Bedrock batch inference job.
-    
+
     Reference: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetModelInvocationJob.html
     """
+
     jobArn: str
     jobName: str
     modelId: str
