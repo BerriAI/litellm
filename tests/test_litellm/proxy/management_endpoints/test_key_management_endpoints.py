@@ -63,6 +63,153 @@ async def test_list_keys():
 
 
 @pytest.mark.asyncio
+async def test_list_keys_include_created_by_keys():
+    """
+    Test that include_created_by_keys parameter correctly includes keys created by the user
+    and applies specific filtering to both user's own keys and created_by keys.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(return_value=[])
+    mock_count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count
+
+    test_user_id = "user-123"
+    test_org_id = "org-456"
+    test_key_alias = "test-alias"
+    test_key_hash = "hashed-token-789"
+
+    # Test Case 1: include_created_by_keys=True with specific filters
+    args = {
+        "prisma_client": mock_prisma_client,
+        "page": 1,
+        "size": 50,
+        "user_id": test_user_id,
+        "team_id": None,
+        "organization_id": test_org_id,
+        "key_alias": test_key_alias,
+        "key_hash": test_key_hash,
+        "exclude_team_id": None,
+        "return_full_object": True,
+        "admin_team_ids": None,
+        "include_created_by_keys": True,
+    }
+
+    try:
+        result = await _list_key_helper(**args)
+    except Exception as e:
+        print(f"error: {e}")
+
+    mock_find_many.assert_called_once()
+    mock_count.assert_called_once()
+
+    where_condition = mock_find_many.call_args.kwargs["where"]
+    print(f"where_condition with include_created_by_keys=True: {where_condition}")
+
+    # Verify the structure contains AND with OR conditions
+    assert "AND" in where_condition
+    assert "OR" in where_condition["AND"][1]
+
+    or_conditions = where_condition["AND"][1]["OR"]
+
+    # Should have 2 OR conditions: user's own keys and created_by keys
+    assert len(or_conditions) == 2
+
+    # First condition should be user's own keys with all filters applied
+    user_condition = None
+    created_by_condition = None
+
+    for condition in or_conditions:
+        if "user_id" in condition:
+            user_condition = condition
+        elif "created_by" in condition:
+            created_by_condition = condition
+
+    assert user_condition is not None, "User condition should be present"
+    assert created_by_condition is not None, "Created by condition should be present"
+
+    # Verify user condition has all the filters
+    assert user_condition["user_id"] == test_user_id
+    assert user_condition["organization_id"] == test_org_id
+    assert user_condition["key_alias"] == test_key_alias
+    assert user_condition["token"] == test_key_hash
+
+    # Verify created_by condition only has the created_by filter (no other filters applied)
+    # This is the current behavior - created_by keys don't inherit other filters
+    assert created_by_condition["created_by"] == test_user_id
+    assert (
+        len(created_by_condition) == 1
+    ), "Created by condition should only have created_by field"
+
+    # Reset mocks for Test Case 2
+    mock_find_many.reset_mock()
+    mock_count.reset_mock()
+
+    # Test Case 2: include_created_by_keys=False should not include created_by condition
+    args["include_created_by_keys"] = False
+
+    try:
+        result = await _list_key_helper(**args)
+    except Exception as e:
+        print(f"error: {e}")
+
+    where_condition_no_created_by = mock_find_many.call_args.kwargs["where"]
+    print(
+        f"where_condition with include_created_by_keys=False: {where_condition_no_created_by}"
+    )
+
+    # Should not have OR conditions when include_created_by_keys=False and no admin_team_ids
+    # The user condition should be merged directly into the where clause
+    assert "created_by" not in json.dumps(where_condition_no_created_by)
+
+    # Reset mocks for Test Case 3
+    mock_find_many.reset_mock()
+    mock_count.reset_mock()
+
+    # Test Case 3: include_created_by_keys=True with exclude_team_id
+    args.update(
+        {
+            "include_created_by_keys": True,
+            "exclude_team_id": "excluded-team-123",
+            "team_id": None,  # Make sure no specific team is set
+        }
+    )
+
+    try:
+        result = await _list_key_helper(**args)
+    except Exception as e:
+        print(f"error: {e}")
+
+    where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
+    print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
+
+    or_conditions_with_exclude = where_condition_with_exclude["AND"][1]["OR"]
+
+    # Find the user condition and created_by condition
+    user_condition_with_exclude = None
+    created_by_condition_with_exclude = None
+
+    for condition in or_conditions_with_exclude:
+        if "user_id" in condition:
+            user_condition_with_exclude = condition
+        elif "created_by" in condition:
+            created_by_condition_with_exclude = condition
+
+    # Verify exclude_team_id is applied to user condition
+    assert (
+        user_condition_with_exclude is not None
+    ), "User condition with exclude should be present"
+    assert user_condition_with_exclude["team_id"] == {"not": "excluded-team-123"}
+
+    # Verify created_by condition still only has created_by filter
+    assert (
+        created_by_condition_with_exclude is not None
+    ), "Created by condition with exclude should be present"
+    assert created_by_condition_with_exclude["created_by"] == test_user_id
+    assert len(created_by_condition_with_exclude) == 1
+
+
+@pytest.mark.asyncio
 async def test_key_token_handling(monkeypatch):
     """
     Test that token handling in key generation follows the expected behavior:
