@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
+import functools
 import warnings
 from datetime import datetime, timedelta
 from typing import (
@@ -26,7 +26,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
-
+import yappi
 from litellm.constants import (
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -414,7 +414,6 @@ from fastapi import (
     applications,
     status,
 )
-from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -684,6 +683,22 @@ app = FastAPI(
     lifespan=proxy_startup_event,
 )
 
+def profile_route(func):
+    @functools.wraps(func)   # <- preserve FastAPI’s view of the function
+    async def wrapper(*args, **kwargs):
+        yappi.set_clock_type("cpu")   # use CPU time instead of wall time
+        yappi.start()
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            yappi.stop()
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            fname = f"yappi_{func.__name__}_{ts}.callgrind"
+            stats = yappi.get_func_stats()
+            stats.save(fname, type="callgrind")
+            stats.print_all()
+            yappi.clear_stats()
+    return wrapper
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
@@ -4059,6 +4074,7 @@ async def model_info(
     tags=["chat/completions"],
     responses={200: {"description": "Successful response"}, **ERROR_RESPONSES},
 )  # azure compatible endpoint
+# @profile_route
 async def chat_completion(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
@@ -4090,6 +4106,8 @@ async def chat_completion(  # noqa: PLR0915
     """
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    # When you need to stub out for performance testing of the framework.
+    # return JSONResponse({"choices": [{"message": {"role": "assistant", "content": ""}}]})
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:

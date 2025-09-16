@@ -3,6 +3,7 @@
 .env
 .newenv
 newenv/*
+.vscode/
 litellm/proxy/myenv/*
 litellm_uuid.txt
 __pycache__/
@@ -10,7 +11,11 @@ __pycache__/
 bun.lockb
 **/.DS_Store
 .aider*
+error.txt
 litellm_results.jsonl
+profile.*
+*.prof
+*.callgrind
 secrets.toml
 .gitignore
 litellm/proxy/litellm_secrets.toml
