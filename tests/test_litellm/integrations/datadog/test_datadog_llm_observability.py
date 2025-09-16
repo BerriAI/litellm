@@ -1060,7 +1060,7 @@ def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPaylo
 
 
 @pytest.mark.asyncio
-async def test_datadog_llm_obs_spend_metrics():
+async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     """Test that budget metrics are properly extracted and logged"""
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
@@ -1086,7 +1086,7 @@ async def test_datadog_llm_obs_spend_metrics():
 
 
 @pytest.mark.asyncio
-async def test_datadog_llm_obs_spend_metrics_no_budget():
+async def test_datadog_llm_obs_spend_metrics_no_budget(mock_env_vars):
     """Test that spend metrics work when no budget is set"""
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
@@ -1108,7 +1108,7 @@ async def test_datadog_llm_obs_spend_metrics_no_budget():
 
 
 @pytest.mark.asyncio
-async def test_spend_metrics_in_datadog_payload():
+async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     """Test that spend metrics are correctly included in DataDog LLM Observability payloads"""
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
