@@ -105,9 +105,12 @@ async def google_login(
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
-        microsoft_client_id is not None
-        or google_client_id is not None
-        or generic_client_id is not None
+        os.getenv("ENTERPRISE_LICENSE_CHECK") == "true"
+        and (
+            microsoft_client_id is not None
+            or google_client_id is not None
+            or generic_client_id is not None
+        )
     ):
         if premium_user is not True:
             # Check if under 'free SSO user' limit
@@ -225,7 +228,7 @@ async def sso_redirect(
         return HTMLResponse(content=error_html, status_code=400)
     
     # Premium user check (same as main endpoint)
-    if premium_user is not True:
+    if os.getenv("ENTERPRISE_LICENSE_CHECK") == "true" and premium_user is not True:
         from litellm.proxy.proxy_server import prisma_client
         if prisma_client is not None:
             total_users = await prisma_client.db.litellm_usertable.count()
