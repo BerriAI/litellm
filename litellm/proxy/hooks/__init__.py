@@ -4,6 +4,7 @@ from typing import Literal, Union
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .max_budget_limiter import _PROXY_MaxBudgetLimiter
+from .mcp_tool_preprocessor import _PROXY_MCPToolPreprocessor
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 
@@ -17,7 +18,8 @@ except ImportError:
 # List of all available hooks that can be enabled
 PROXY_HOOKS = {
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
-    "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
+    "mcp_tool_preprocessor": _PROXY_MCPToolPreprocessor,
+    "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler,
     "cache_control_check": _PROXY_CacheControlCheck,
 }
 
@@ -36,6 +38,7 @@ def get_proxy_hook(
         Literal[
             "max_budget_limiter",
             "managed_files",
+            "mcp_tool_preprocessor",
             "parallel_request_limiter",
             "cache_control_check",
         ],

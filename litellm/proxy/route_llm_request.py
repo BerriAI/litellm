@@ -86,36 +86,6 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
-    # Process MCP tools for completion requests
-    if route_type == "acompletion" and "tools" in data:
-        from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
-        
-        tools = data.get("tools")
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
-            # Parse MCP tools and separate from other tools
-            (
-                mcp_tools_with_litellm_proxy,
-                other_tools,
-            ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
-            
-            # Get user API key auth from data (passed through metadata)
-            user_api_key_auth = data.get("user_api_key_auth")
-            
-            # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
-            openai_tools = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-                user_api_key_auth=user_api_key_auth,
-                mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-            )
-            
-            # Combine with other tools
-            all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
-            
-            # Update the data with processed tools
-            if all_tools:
-                data["tools"] = all_tools
-            else:
-                data.pop("tools", None)  # Remove tools if none are available
-
     if "api_key" in data or "api_base" in data:
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
