@@ -46,6 +46,7 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     SpecialModelNames,
     UserAPIKeyAuth,
+    NewTeamRequest,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
@@ -889,10 +890,17 @@ async def _get_team_db_check(
     )
 
     if response is None and team_id_upsert:
-        response = await prisma_client.db.litellm_teamtable.create(
-            data={"team_id": team_id}
-        )
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
 
+        new_team_data = NewTeamRequest(team_id=team_id)
+
+        mock_request = Request(scope={"type": "http"})
+        system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        created_team_dict = await new_team(
+            data=new_team_data, http_request=mock_request, user_api_key_dict=system_admin_user
+        )
+        response = LiteLLM_TeamTable(**created_team_dict)
     return response
 
 
