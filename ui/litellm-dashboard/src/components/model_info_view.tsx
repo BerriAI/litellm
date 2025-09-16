@@ -379,7 +379,7 @@ export default function ModelInfoView({
     )
   }
 
-  const curlCommand = `curl -X POST "${getProxyBaseUrl()}/chat/completions" \\
+  const curlCommand = `curl -X POST "${getProxyBaseUrl()}/v1/chat/completions" \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer $YOUR_API_KEY" \\
   -d '{
