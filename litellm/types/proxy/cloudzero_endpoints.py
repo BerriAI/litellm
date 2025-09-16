@@ -2,7 +2,8 @@
 CloudZero endpoint types for LiteLLM Proxy
 """
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,8 @@ class CloudZeroExportRequest(BaseModel):
     
     limit: Optional[int] = Field(None, description="Optional limit on number of records to export")
     operation: str = Field(default="replace_hourly", description="CloudZero operation type (replace_hourly or sum)")
+    start_time_utc: Optional[datetime] = Field(None, description="Start time for data export in UTC")
+    end_time_utc: Optional[datetime] = Field(None, description="End time for data export in UTC")
 
 
 class CloudZeroExportResponse(BaseModel):
@@ -35,6 +38,8 @@ class CloudZeroExportResponse(BaseModel):
     message: str
     status: str
     records_exported: Optional[int] = None
+    dry_run_data: Optional[Dict[str, Any]] = Field(None, description="Dry run data including usage data and CBF transformed data")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics for dry run")
 
 
 class CloudZeroSettingsView(BaseModel):

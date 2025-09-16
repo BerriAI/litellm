@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     cast,
 )
 
+import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
@@ -245,6 +245,7 @@ class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
     stream_options = None
+    litellm_request_debug: bool = False
 
     def __init__(
         self,
@@ -470,6 +471,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         verbose_logger.debug(f"self.optional_params: {self.optional_params}")
 
@@ -907,13 +909,19 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Prints the RAW curl command sent from LiteLLM
         """
-        if _is_debugging_on():
+        if _is_debugging_on() or self.litellm_request_debug:
             if json_logs:
                 masked_headers = self._get_masked_headers(headers)
-                verbose_logger.debug(
-                    "POST Request Sent from LiteLLM",
-                    extra={"api_base": {api_base}, **masked_headers},
-                )
+                if self.litellm_request_debug:
+                    verbose_logger.warning(  # .warning ensures this shows up in all environments
+                        "POST Request Sent from LiteLLM",
+                        extra={"api_base": {api_base}, **masked_headers},
+                    )
+                else:
+                    verbose_logger.debug(
+                        "POST Request Sent from LiteLLM",
+                        extra={"api_base": {api_base}, **masked_headers},
+                    )
             else:
                 headers = additional_args.get("headers", {})
                 if headers is None:
@@ -926,7 +934,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     additional_args=additional_args,
                     data=data,
                 )
-                verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
+                if self.litellm_request_debug:
+                    verbose_logger.warning(
+                        f"\033[92m{curl_command}\033[0m\n"
+                    )  # .warning ensures this shows up in all environments
+                else:
+                    verbose_logger.debug(f"\033[92m{curl_command}\033[0m\n")
 
     def _get_request_body(self, data: dict) -> str:
         return str(data)
@@ -983,8 +996,14 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["additional_args"] = additional_args
             self.model_call_details["log_event_type"] = "post_api_call"
 
+            if self.litellm_request_debug:
+                attr = "warning"
+            else:
+                attr = "debug"
+
             if json_logs:
-                verbose_logger.debug(
+                callattr = getattr(verbose_logger, attr)
+                callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get(
                             "original_response", self.model_call_details
@@ -992,7 +1011,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                 )
             else:
-                print_verbose(
+                callattr = getattr(verbose_logger, attr)
+                callattr(
                     "RAW RESPONSE:\n{}\n\n".format(
                         self.model_call_details.get(
                             "original_response", self.model_call_details
@@ -1164,7 +1184,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         used for consistent cost calculation across response headers + logging integrations.
         """
-
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
@@ -1715,8 +1734,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
-                            litellm_call_id=litellm_params.get(
-                                "litellm_call_id", str(uuid.uuid4())
+                            litellm_call_id=(
+                                current_call_id
+                                if (
+                                    current_call_id := litellm_params.get(
+                                        "litellm_call_id"
+                                    )
+                                )
+                                is not None
+                                else str(uuid.uuid4())
                             ),
                             print_verbose=print_verbose,
                         )
@@ -2775,6 +2801,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Any,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        cache_hit: Optional[Any] = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -2789,6 +2816,7 @@ class Logging(LiteLLMLoggingBaseClass):
             result,
             start_time,
             end_time,
+            cache_hit,
         )
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
@@ -3361,7 +3389,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             galileo_logger = GalileoObserve()
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
+                    return callback  # type: ignore
+            cloudzero_logger = CloudZeroLogger()
+            _in_memory_loggers.append(cloudzero_logger)
+            return cloudzero_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -3580,6 +3616,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "galileo":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GalileoObserve):
+                    return callback
+        elif logging_integration == "cloudzero":
+            from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, CloudZeroLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
@@ -4488,7 +4530,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        verbose_logger.info(json.dumps(payload, indent=4))
+        print(json.dumps(payload, indent=4))  # noqa
 
 
 def get_standard_logging_metadata(

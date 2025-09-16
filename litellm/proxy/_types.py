@@ -2,7 +2,16 @@ import enum
 import json
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+)
 
 import httpx
 from pydantic import (
@@ -303,6 +312,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        "/responses/{response_id}/cancel",
+        "/v1/responses/{response_id}/cancel",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -325,6 +336,12 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
     ]
+
+    #########################################################
+    # e.g /vllm/*, anthropic/*, etc.
+    # allows using /anthropic/v1/messages, /vllm/v1/chat/completions, etc.
+    #########################################################
+    passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
     anthropic_routes = [
         "/v1/messages",
@@ -356,6 +373,7 @@ class LiteLLMRoutes(enum.Enum):
         openai_routes
         + anthropic_routes
         + mapped_pass_through_routes
+        + passthrough_routes_wildcard
         + apply_guardrail_routes
         + mcp_routes
     )
@@ -381,7 +399,11 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
-    master_key_only_routes = ["/global/spend/reset"]
+    master_key_only_routes = [
+        "/global/spend/reset",
+        "/memory-usage-in-mem-cache",
+        "/memory-usage-in-mem-cache-items",
+    ]
 
     key_management_routes = [
         KeyManagementRoutes.KEY_GENERATE,
@@ -766,7 +788,6 @@ class GenerateKeyRequest(KeyRequestBase):
         default=LiteLLMKeyType.DEFAULT,
         description="Type of key that determines default allowed routes.",
     )
-
 
 class GenerateKeyResponse(KeyRequestBase):
     key: str  # type: ignore
@@ -1598,6 +1619,20 @@ class ConfigList(LiteLLMPydanticObjectBase):
     )
 
 
+class UserHeaderMapping(LiteLLMPydanticObjectBase):
+    """
+    Map an incoming HTTP header to a LiteLLM user role.
+    """
+    header_name: str
+    litellm_user_role: Literal[
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.CUSTOMER,
+    ]
+
+    model_config = {
+        "extra": "forbid",
+    }
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -1702,6 +1737,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
     )
+    user_header_name: Optional[str] = Field(
+        None,
+        description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
+    )
+    user_header_mappings: Optional[List[UserHeaderMapping]] = None
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -1911,7 +1951,7 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
+class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
     organization_id: Optional[str] = None
@@ -2897,8 +2937,15 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str
     timeout: Optional[float]
+    stream_timeout: Optional[float]
     user: Optional[str]
     num_retries: Optional[int]
+
+class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
+    """
+    Headers a user can pass that will get added to litellm metadata for the request
+    """
+    spend_logs_metadata: Optional[dict]
 
 
 class JWTKeyItem(TypedDict, total=False):

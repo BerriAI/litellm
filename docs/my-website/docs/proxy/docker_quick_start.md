@@ -13,7 +13,7 @@ End-to-End tutorial for LiteLLM Proxy to:
 
 ## Pre-Requisites 
 
-- Install LiteLLM Docker Image ** OR ** LiteLLM CLI (pip package)
+- Install LiteLLM Docker Image **OR** LiteLLM CLI (pip package)
 
 <Tabs>
 
@@ -35,6 +35,30 @@ $ pip install 'litellm[proxy]'
 
 </TabItem>
 
+<TabItem value="docker-compose" label="Docker Compose (Proxy + DB)">
+
+Use this docker compose to spin up the proxy with a postgres database running locally. 
+
+```bash
+# Get the docker compose file
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+
+# Add the master key - you can change this after setup
+echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
+
+# Add the litellm salt key - you cannot change this after adding a model
+# It is used to encrypt / decrypt your LLM API Key credentials
+# We recommend - https://1password.com/password-generator/ 
+# password generator to get a random hash for litellm salt key
+echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
+
+source .env
+
+# Start
+docker-compose up
+```
+
+</TabItem>
 </Tabs>
 
 ## 1. Add a model 
@@ -42,6 +66,8 @@ $ pip install 'litellm[proxy]'
 Control LiteLLM Proxy with a config.yaml file.
 
 Setup your config.yaml with your azure model.
+
+Note: When using the proxy with a database, you can also **just add models via UI** (UI is available on `/ui` route).
 
 ```yaml
 model_list:
@@ -252,15 +278,15 @@ See All General Settings [here](http://localhost:3000/docs/proxy/configs#all-set
    - **Description**: 
      - Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
    - **Usage**: 
-     - ** Set on config.yaml** set your master key under `general_settings:master_key`, example - 
+     - **Set on config.yaml** set your master key under `general_settings:master_key`, example - 
         `master_key: sk-1234`
-     - ** Set env variable** set `LITELLM_MASTER_KEY`
+     - **Set env variable** set `LITELLM_MASTER_KEY`
 
 2. **`database_url`** (str)
    - **Description**: 
      - Set a `database_url`, this is the connection to your Postgres DB, which is used by litellm for generating keys, users, teams.
    - **Usage**: 
-     - ** Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
+     - **Set on config.yaml** set your `database_url` under `general_settings:database_url`, example - 
         `database_url: "postgresql://..."`
      - Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
 

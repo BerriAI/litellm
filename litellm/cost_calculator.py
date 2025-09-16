@@ -57,6 +57,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_token as google_cost_per_token,
 )
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
+from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -341,6 +342,13 @@ def cost_per_token(  # noqa: PLR0915
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
         return perplexity_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "xai":
+        return xai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "dashscope":
+        from litellm.llms.dashscope.cost_calculator import (
+            cost_per_token as dashscope_cost_per_token,
+        )
+        return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -675,9 +683,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1279,7 +1287,9 @@ class BaseTokenUsageProcessor:
                     not hasattr(combined, "completion_tokens_details")
                     or not combined.completion_tokens_details
                 ):
-                    combined.completion_tokens_details = CompletionTokensDetailsWrapper()
+                    combined.completion_tokens_details = (
+                        CompletionTokensDetailsWrapper()
+                    )
 
                 # Check what keys exist in the model's completion_tokens_details
                 for attr in usage.completion_tokens_details.model_fields:

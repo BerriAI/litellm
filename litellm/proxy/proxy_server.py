@@ -3548,7 +3548,7 @@ def giveup(e):
         return True  # giveup if queuing max parallel request limits is disabled
 
     if result:
-        verbose_proxy_logger.info(json.dumps({"event": "giveup", "exception": str(e)}))
+        verbose_proxy_logger.debug(json.dumps({"event": "giveup", "exception": str(e)}))
     return result
 
 
@@ -3811,13 +3811,11 @@ class ProxyStartupEvent:
         ########################################################
         # CloudZero Background Job
         ########################################################
-        from litellm.proxy.spend_tracking.cloudzero_endpoints import (
-            init_cloudzero_background_job,
-            is_cloudzero_setup_in_db,
-        )
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+        from litellm.proxy.spend_tracking.cloudzero_endpoints import is_cloudzero_setup
 
-        if await is_cloudzero_setup_in_db():
-            await init_cloudzero_background_job()
+        if await is_cloudzero_setup():
+            await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
@@ -7652,7 +7650,10 @@ async def login(request: Request):  # noqa: PLR0915
             data=UpdateUserRequest(
                 user_id=key_user_id,
                 user_role=user_role,
-            )
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
         )
         if os.getenv("DATABASE_URL") is not None:
             response = await generate_key_helper_fn(

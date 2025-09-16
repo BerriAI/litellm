@@ -2680,7 +2680,10 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments) if arguments else {}
+                if not arguments or not arguments.strip():
+                    arguments_dict = {}
+                else:
+                    arguments_dict = json.loads(arguments)
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )
@@ -3846,7 +3849,13 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f""" {function_prompt}"""
+            if isinstance(message["content"], str):
+                message["content"] += f""" {function_prompt}"""
+            else:
+                message["content"].append({
+                    "type": "text",
+                    "text": f""" {function_prompt}"""
+                })
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:

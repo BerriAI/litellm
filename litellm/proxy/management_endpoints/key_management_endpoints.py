@@ -347,6 +347,37 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     return data_json
 
 
+async def validate_team_id_used_in_service_account_request(
+    team_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Validate team_id is used in the request body for generating a service account key
+    """
+    if team_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="prisma_client is required for service account keys. Please specify `prisma_client` in the request body.",
+        )
+
+    # check if team_id exists in the database
+    team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id},
+    )
+    if team is None:
+        raise HTTPException(
+            status_code=400,
+            detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
+        )
+    return True
+
+
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -372,9 +403,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         and data.metadata.get("service_account_id") is not None
         and data.team_id is None
     ):
-        raise HTTPException(
-            status_code=400,
-            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        await validate_team_id_used_in_service_account_request(
+            team_id=data.team_id,
+            prisma_client=prisma_client,
         )
 
     # check if user set default key/generate params on config.yaml
@@ -444,7 +475,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
                 str(e)
             )
@@ -521,6 +552,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Validate user-provided key format
+    if data.key is not None and not data.key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+            },
+        )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
@@ -756,6 +796,11 @@ async def generate_service_account_key_fn(
         user_custom_key_generate,
     )
 
+    await validate_team_id_used_in_service_account_request(
+        team_id=data.team_id,
+        prisma_client=prisma_client,
+    )
+
     verbose_proxy_logger.debug("entered /key/generate")
 
     if user_custom_key_generate is not None:
@@ -880,6 +925,15 @@ async def prepare_key_update_data(
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
     non_default_values = {}
+    # ADD METADATA FIELDS
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
     for k, v in data_json.items():
         if (
             k in LiteLLM_ManagementEndpoint_MetadataFields
@@ -1092,6 +1146,9 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
+
+            # Set Management Endpoint Metadata Fields
+
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -1566,14 +1623,12 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        duration_s = duration_in_seconds(duration=duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        expires = get_budget_reset_time(budget_duration=duration)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
     else:
-        duration_s = duration_in_seconds(duration=key_budget_duration)
-        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        key_reset_at = get_budget_reset_time(budget_duration=key_budget_duration)
 
     if budget_duration is None:  # one-time budget
         reset_at = None
@@ -1972,7 +2027,7 @@ async def _rotate_master_key(
     # 2. process model table
     if models:
         decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
         )
         new_models = []
@@ -1986,9 +2041,9 @@ async def _rotate_master_key(
             )
             if new_model:
                 new_models.append(jsonify_object(new_model.model_dump()))
-        verbose_proxy_logger.info("Resetting proxy model table")
+        verbose_proxy_logger.debug("Resetting proxy model table")
         await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.info("Creating %s models", len(new_models))
+        verbose_proxy_logger.debug("Creating %s models", len(new_models))
         await prisma_client.db.litellm_proxymodeltable.create_many(
             data=new_models,
         )
@@ -2844,7 +2899,10 @@ async def unblock_key(
             param="key",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    hashed_token = hash_token(token=data.key)
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

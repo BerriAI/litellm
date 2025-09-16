@@ -17,7 +17,6 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import inspect
-import threading
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -301,10 +300,12 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    threading.Thread(
-                        target=logging_obj.success_handler,
-                        args=(cached_result, start_time, end_time, cache_hit),
-                    ).start()
+                    logging_obj.handle_sync_success_callbacks_for_async_calls(
+                        result=cached_result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        cache_hit=cache_hit
+                    )
                     cache_key = litellm.cache._get_preset_cache_key_from_kwargs(
                         **kwargs
                     )
@@ -530,15 +531,17 @@ class LLMCachingHandler:
             end_time (datetime): The end time of the operation.
             cache_hit (bool): Whether it was a cache hit.
         """
-        asyncio.create_task(
-            logging_obj.async_success_handler(
-                cached_result, start_time, end_time, cache_hit
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=logging_obj.async_success_handler(
+                result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
             )
         )
-        threading.Thread(
-            target=logging_obj.success_handler,
-            args=(cached_result, start_time, end_time, cache_hit),
-        ).start()
+
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+        )
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: Dict[str, Any], args: Tuple[Any, ...]

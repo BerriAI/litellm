@@ -1,7 +1,8 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 class LiteLLMCacheType(str, Enum):

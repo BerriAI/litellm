@@ -215,9 +215,9 @@ if MCP_AVAILABLE:
         """
         from fastapi import Request
 
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
-        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
         # Validate arguments
         user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
@@ -279,33 +279,15 @@ if MCP_AVAILABLE:
     ############ Helper Functions ##########################
     ########################################################
 
-    async def _get_tools_from_mcp_servers(
-        user_api_key_auth: Optional[UserAPIKeyAuth],
-        mcp_auth_header: Optional[str],
+    async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: Optional[List[str]],
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
-        mcp_protocol_version: Optional[str] = None,
-    ) -> List[MCPTool]:
+        allowed_mcp_servers: List[str],
+    ) -> List[str]:
         """
-        Helper method to fetch tools from MCP servers based on server filtering criteria.
-
-        Args:
-            user_api_key_auth: User authentication info for access control
-            mcp_auth_header: Optional auth header for MCP server (deprecated)
-            mcp_servers: Optional list of server names/aliases to filter by
-            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-
-        Returns:
-            List[MCPTool]: Combined list of tools from filtered servers
+        Get the filtered MCP servers from the MCP server names
         """
-        if not MCP_AVAILABLE:
-            return []
-
-        # Get allowed MCP servers based on user permissions
-        allowed_mcp_servers = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
-
-        filtered_server_ids = set()
-
+        from typing import Set
+        filtered_server_ids: Set[str] = set()
         # Filter servers based on mcp_servers parameter if provided
         if mcp_servers is not None:
             for server_or_group in mcp_servers:
@@ -336,6 +318,40 @@ if MCP_AVAILABLE:
 
         if filtered_server_ids:
             allowed_mcp_servers = list(filtered_server_ids)
+        
+        return allowed_mcp_servers
+
+    async def _get_tools_from_mcp_servers(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_servers: Optional[List[str]],
+        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_protocol_version: Optional[str] = None,
+    ) -> List[MCPTool]:
+        """
+        Helper method to fetch tools from MCP servers based on server filtering criteria.
+
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_auth_header: Optional auth header for MCP server (deprecated)
+            mcp_servers: Optional list of server names/aliases to filter by
+            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+
+        Returns:
+            List[MCPTool]: Combined list of tools from filtered servers
+        """
+        if not MCP_AVAILABLE:
+            return []
+
+        # Get allowed MCP servers based on user permissions
+        allowed_mcp_servers = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        if mcp_servers is not None:
+            allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=mcp_servers,
+                allowed_mcp_servers=allowed_mcp_servers,
+            )
+
 
         # Get tools from each allowed server
         all_tools = []
@@ -556,20 +572,25 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
+    def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
+        """
+        Get the MCP servers from the path
+        """
+        import re
+        mcp_servers_from_path: Optional[List[str]] = None
+        mcp_path_match = re.match(r"^/mcp/([^/]+/[^/]+|[^/]+)(/.*)?$", path)
+        if mcp_path_match:
+            mcp_servers_str = mcp_path_match.group(1)
+            if mcp_servers_str:
+                mcp_servers_from_path = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
+        return mcp_servers_from_path
+
     async def extract_mcp_auth_context(scope, path):
         """
         Extracts mcp_servers from the path and processes the MCP request for auth context.
         Returns: (user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers)
         """
-        import re
-
-        mcp_servers_from_path = None
-        mcp_path_match = re.match(r"^/mcp/([^/]+)(/.*)?$", path)
-        if mcp_path_match:
-            mcp_servers_str = mcp_path_match.group(1)
-            if mcp_servers_str:
-                mcp_servers_from_path = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
-
+        mcp_servers_from_path = _get_mcp_servers_in_path(path)
         if mcp_servers_from_path is not None:
             (
                 user_api_key_auth,

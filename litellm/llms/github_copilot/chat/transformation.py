@@ -81,6 +81,30 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return validated_headers
 
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Get supported OpenAI parameters for GitHub Copilot.
+
+        For Claude models that support extended thinking (Claude 4 family and Claude 3-7), includes thinking and reasoning_effort parameters.
+        For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
+        """
+        from litellm.utils import supports_reasoning
+        
+        # Get base OpenAI parameters
+        base_params = super().get_supported_openai_params(model)
+
+        # Add Claude-specific parameters for models that support extended thinking
+        if "claude" in model.lower() and supports_reasoning(
+            model=model.lower(),
+        ):
+            if "thinking" not in base_params:
+                base_params.append("thinking")
+            # reasoning_effort is not included by parent for Claude models, so add it
+            if "reasoning_effort" not in base_params:
+                base_params.append("reasoning_effort")
+
+        return base_params
+
     def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
         """
         Determine if request is user or agent initiated based on message roles.

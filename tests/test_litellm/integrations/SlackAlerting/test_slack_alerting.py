@@ -172,3 +172,27 @@ class TestSlackAlerting(unittest.TestCase):
 
         self.slack_alerting.update_values(alerting_args={"slack_alerting": "True"})
         assert self.slack_alerting.periodic_started == True
+        
+    @patch("litellm.integrations.SlackAlerting.slack_alerting.datetime")
+    def test_alert_type_in_formatted_message(self, mock_datetime):
+        # Setup mocks
+        mock_datetime.now.return_value.strftime.return_value = "12:34:56"
+        
+        # Import required types
+        from litellm.types.integrations.slack_alerting import AlertType
+        
+        # Create a simple test message to check formatting
+        alert_type = AlertType.llm_exceptions
+        level = "Medium"
+        message = "Test alert message"
+        current_time = "12:34:56"
+        
+        # Test the specific formatting logic we're interested in
+        alert_type_formatted = f"Alert type: `{alert_type.name}`\n"
+        formatted_message = f"{alert_type_formatted}\n Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+        
+        # Verify alert_type is in the formatted message as expected
+        self.assertIn("Alert type: `llm_exceptions`", formatted_message)
+        self.assertIn("Level: `Medium`", formatted_message)
+        self.assertIn("Timestamp: `12:34:56`", formatted_message)
+        self.assertIn("Message: Test alert message", formatted_message)

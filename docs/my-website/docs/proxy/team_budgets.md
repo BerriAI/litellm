@@ -10,7 +10,29 @@ import TabItem from '@theme/TabItem';
 - You must set up a Postgres database (e.g. Supabase, Neon, etc.)
 - To enable team member rate limits, set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` **before starting the proxy server**. Without this, team member rate limits will not be enforced.
 
+
+## Default Budget for Auto-Generated JWT Teams
+
+When using JWT authentication with `team_id_upsert: true`, you can automatically assign a default budget to any newly created team.
+
+This is configured in `default_team_settings` in your `config.yaml`.
+
+**Example:**
+```yaml
+# in your config.yaml
+
+litellm_jwtauth:
+  team_id_upsert: true
+  team_id_jwt_field: "team_id"
+  # ... other jwt settings
+
+litellm_settings:
+  default_team_settings: 
+    - team_id: "default-settings"
+      max_budget: 100.0
+```
 Track spend, set budgets for your Internal Team
+
 
 ## Setting Monthly Team Budgets
 

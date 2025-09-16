@@ -1,6 +1,15 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Optional,
+    Union,
+    cast,
+    get_type_hints,
+)
 
 import httpx
+from openai.types.responses import ResponseReasoningItem
 from pydantic import BaseModel
 
 import litellm
@@ -92,11 +101,66 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
                     validated_input.append(item.model_dump(exclude_none=True))
+                elif isinstance(item, dict):
+                    # Handle reasoning items specifically to filter out status=None
+                    verbose_logger.debug(f"Handling reasoning item: {item}")
+                    if item.get("type") == "reasoning":
+                        # Type assertion since we know it's a dict at this point
+                        dict_item = cast(Dict[str, Any], item)
+                        filtered_item = self._handle_reasoning_item(dict_item)
+                    else:
+                        # For other dict items, just pass through
+                        filtered_item = cast(Dict[str, Any], item)
+                    validated_input.append(filtered_item)
                 else:
                     validated_input.append(item)
-            return validated_input
+            return validated_input  # type: ignore
         # Input is expected to be either str or List, no single BaseModel expected
         return input
+
+    def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle reasoning items specifically to filter out status=None using OpenAI's model.
+        Issue: https://github.com/BerriAI/litellm/issues/13484
+        OpenAI API does not accept ReasoningItem(status=None), so we need to:
+        1. Check if the item is a reasoning type
+        2. Create a ResponseReasoningItem object with the item data
+        3. Convert it back to dict with exclude_none=True to filter None values
+        """
+        verbose_logger.debug(f"Handling reasoning item: {item}")
+        if item.get("type") == "reasoning":
+            try:
+                # Ensure required fields are present for ResponseReasoningItem
+                item_data = dict(item)
+                if "id" not in item_data:
+                    item_data["id"] = f"reasoning_{hash(str(item_data))}"
+                if "summary" not in item_data:
+                    item_data["summary"] = (
+                        item_data.get("reasoning_content", "")[:100] + "..."
+                        if len(item_data.get("reasoning_content", "")) > 100
+                        else item_data.get("reasoning_content", "")
+                    )
+
+                # Create ResponseReasoningItem object from the item data
+                reasoning_item = ResponseReasoningItem(**item_data)
+
+                # Convert back to dict with exclude_none=True to exclude None fields
+                dict_reasoning_item = reasoning_item.model_dump(exclude_none=True)
+
+                return dict_reasoning_item
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}"
+                )
+                # Fallback: manually filter out known None fields
+                filtered_item = {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None
+                    or k not in {"status", "content", "encrypted_content"}
+                }
+                return filtered_item
+        return item
 
     def transform_response_api_response(
         self,
@@ -208,6 +272,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS: WebSearchCallInProgressEvent,
             ResponsesAPIStreamEvents.WEB_SEARCH_CALL_SEARCHING: WebSearchCallSearchingEvent,
             ResponsesAPIStreamEvents.WEB_SEARCH_CALL_COMPLETED: WebSearchCallCompletedEvent,
+            ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS: MCPListToolsInProgressEvent,
+            ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED: MCPListToolsCompletedEvent,
+            ResponsesAPIStreamEvents.MCP_LIST_TOOLS_FAILED: MCPListToolsFailedEvent,
+            ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS: MCPCallInProgressEvent,
+            ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA: MCPCallArgumentsDeltaEvent,
+            ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE: MCPCallArgumentsDoneEvent,
+            ResponsesAPIStreamEvents.MCP_CALL_COMPLETED: MCPCallCompletedEvent,
+            ResponsesAPIStreamEvents.MCP_CALL_FAILED: MCPCallFailedEvent,
             ResponsesAPIStreamEvents.ERROR: ErrorEvent,
         }
 
@@ -353,3 +425,39 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             raise OpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
+
+    #########################################################
+    ########## CANCEL RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    def transform_cancel_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the cancel response API request into a URL and data
+
+        OpenAI API expects the following request
+        - POST /v1/responses/{response_id}/cancel
+        """
+        url = f"{api_base}/{response_id}/cancel"
+        data: Dict = {}
+        return url, data
+
+    def transform_cancel_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Transform the cancel response API response into a ResponsesAPIResponse
+        """
+        try:
+            raw_response_json = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        return ResponsesAPIResponse(**raw_response_json)

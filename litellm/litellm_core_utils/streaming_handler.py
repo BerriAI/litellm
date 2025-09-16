@@ -20,9 +20,7 @@ from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import ChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import (
-    Delta,
-)
+from litellm.types.utils import Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -39,7 +37,7 @@ from .rules import Rules
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE = "audio"
-IMAGE_ATTRIBUTE = "image"
+IMAGE_ATTRIBUTE = "images"
 TOOL_CALLS_ATTRIBUTE = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE = "function_call"
 
@@ -780,24 +778,35 @@ class CustomStreamWrapper:
         """
         if len(model_response.choices) == 0:
             return False
-            
+
         delta = model_response.choices[0].delta
-        
+
         # Check for tool_calls or function_call
-        if getattr(delta, TOOL_CALLS_ATTRIBUTE, None) is not None or getattr(delta, FUNCTION_CALL_ATTRIBUTE, None) is not None:
+        if (
+            getattr(delta, TOOL_CALLS_ATTRIBUTE, None) is not None
+            or getattr(delta, FUNCTION_CALL_ATTRIBUTE, None) is not None
+        ):
             return True
-            
+
         # Check for audio
-        if hasattr(delta, AUDIO_ATTRIBUTE) and getattr(delta, AUDIO_ATTRIBUTE, None) is not None:
+        if (
+            hasattr(delta, AUDIO_ATTRIBUTE)
+            and getattr(delta, AUDIO_ATTRIBUTE, None) is not None
+        ):
             return True
-            
+
         # Check for image
-        if hasattr(delta, IMAGE_ATTRIBUTE) and getattr(delta, IMAGE_ATTRIBUTE, None) is not None:
+        if (
+            hasattr(delta, IMAGE_ATTRIBUTE)
+            and getattr(delta, IMAGE_ATTRIBUTE, None) is not None
+        ):
             return True
-            
+
         return False
 
-    def _handle_special_delta_content(self, model_response: ModelResponseStream) -> ModelResponseStream:
+    def _handle_special_delta_content(
+        self, model_response: ModelResponseStream
+    ) -> ModelResponseStream:
         """
         Handle special delta content types by stripping role and returning the response.
         """
@@ -809,7 +818,9 @@ class CustomStreamWrapper:
         """
         return delta is not None and getattr(delta, attribute_name, None) is not None
 
-    def _copy_delta_attribute(self, source_delta, target_delta, attribute_name: str) -> None:
+    def _copy_delta_attribute(
+        self, source_delta, target_delta, attribute_name: str
+    ) -> None:
         """
         Copy a specific attribute from source delta to target delta.
         """
@@ -825,14 +836,18 @@ class CustomStreamWrapper:
                 return True
         return False
 
-    def _handle_special_delta_attributes(self, delta, model_response: "ModelResponseStream") -> None:
+    def _handle_special_delta_attributes(
+        self, delta, model_response: "ModelResponseStream"
+    ) -> None:
         """
         Handle special delta attributes (audio, image) by copying them to model_response.
         """
         special_attributes = [AUDIO_ATTRIBUTE, IMAGE_ATTRIBUTE]
         for attribute in special_attributes:
             if self._has_special_delta_attribute(delta, attribute):
-                self._copy_delta_attribute(delta, model_response.choices[0].delta, attribute)
+                self._copy_delta_attribute(
+                    delta, model_response.choices[0].delta, attribute
+                )
 
     def return_processed_chunk_logic(  # noqa
         self,
@@ -1009,6 +1024,8 @@ class CustomStreamWrapper:
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
+        if hasattr(chunk, 'id'):
+            self.response_id = chunk.id
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
         try:
@@ -1922,7 +1939,7 @@ class CustomStreamWrapper:
                 )
             ## Map to OpenAI Exception
             try:
-                exception_type(
+                raise exception_type(
                     model=self.model,
                     custom_llm_provider=self.custom_llm_provider,
                     original_exception=e,
