@@ -93,6 +93,8 @@ callback_settings:
 
 general_settings:
   completion_model: string
+  store_prompts_in_spend_logs: boolean
+  forward_client_headers_to_llm_api: boolean
   disable_spend_logs: boolean  # turn off writing each transaction to the db
   disable_master_key_return: boolean  # turn off returning master key on UI (checked on '/user/info' endpoint)
   disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
@@ -121,6 +123,35 @@ general_settings:
   alerting: ["slack", "email"]
   alerting_threshold: 0
   use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
+
+router_settings:
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
+  redis_host: <your-redis-host>           # string
+  redis_password: <your-redis-password>   # string
+  redis_port: <your-redis-port>           # string
+  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window 
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
+  retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
+    "AuthenticationErrorRetries": 3,
+    "TimeoutErrorRetries": 3,
+    "RateLimitErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4,
+    "InternalServerErrorRetries": 4
+  }
+  allowed_fails_policy: {
+    "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
+    "AuthenticationErrorAllowedFails": 10, # int 
+    "TimeoutErrorAllowedFails": 12, # int 
+    "RateLimitErrorAllowedFails": 10000, # int 
+    "ContentPolicyViolationErrorAllowedFails": 15, # int 
+    "InternalServerErrorAllowedFails": 20, # int 
+  }
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
+  fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
+
 ```
 
 ### litellm_settings - Reference
