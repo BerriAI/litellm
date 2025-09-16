@@ -73,13 +73,13 @@ const Sidebar: React.FC<SidebarProps> = ({
     { 
       key: "1", 
       page: "api-keys", 
-      label: "Virtual Keys", 
+      label: "API Keys", 
       icon: <KeyOutlined style={{ fontSize: '18px' }} />
     },
     { 
       key: "3", 
       page: "llm-playground", 
-      label: "Test Key", 
+      label: "Test Run", 
       icon: <PlayCircleOutlined style={{ fontSize: '18px' }} />, 
       roles: rolesWithWriteAccess 
     },
