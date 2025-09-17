@@ -5,20 +5,7 @@ Test view internal user page
 import { test, expect } from "@playwright/test";
 
 test("view internal user page", async ({ page }) => {
-  // Go to the specified URL
-  await page.goto("http://localhost:4000/ui");
-
-  // Enter "admin" in the username input field
-  await page.fill('input[name="username"]', "admin");
-
-  // Enter "gm" in the password input field
-  await page.fill('input[name="password"]', "gm");
-
-  // Click the login button
-  const loginButton = page.locator('input[type="submit"]');
-  await expect(loginButton).toBeEnabled();
-  await loginButton.click();
-
+  await page.goto("/ui");
   // Wait for the Internal User tab and click it
   const tabElement = page.locator("span.ant-menu-title-content", {
     hasText: "Internal User",

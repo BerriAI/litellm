@@ -1,6 +1,8 @@
 // tests/auth.spec.ts
 import { test, expect } from "@playwright/test";
 
+test.use({ storageState: {cookies: [], origins: []} });
+
 test.describe("Authentication Checks", () => {
   test("should redirect unauthenticated user from a protected page", async ({ page }) => {
     test.setTimeout(30000);

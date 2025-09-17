@@ -18,31 +18,7 @@ test("user search test", async ({ page }) => {
 
   // Enable console logging
   page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
-
-  // Login first
-  await page.goto("http://localhost:4000/ui");
-  console.log("Navigated to login page");
-
-  // Wait for login form to be visible
-  await page.waitForSelector('input[name="username"]', { timeout: 10000 });
-  console.log("Login form is visible");
-
-  await page.fill('input[name="username"]', "admin");
-  await page.fill('input[name="password"]', "gm");
-  console.log("Filled login credentials");
-
-  const loginButton = page.locator('input[type="submit"]');
-  await expect(loginButton).toBeEnabled();
-  await loginButton.click();
-  console.log("Clicked login button");
-
-  // Wait for navigation to complete and dashboard to load
-  await page.waitForLoadState("networkidle");
-  console.log("Page loaded after login");
-
-  // Take a screenshot for debugging
-  await page.screenshot({ path: "after-login.png" });
-  console.log("Took screenshot after login");
+  await page.goto("/ui")
 
   // Try to find the Internal User tab with more debugging
   console.log("Looking for Internal User tab...");
@@ -125,27 +101,7 @@ test("user filter test", async ({ page }) => {
 
   // Enable console logging
   page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
-
-  // Login first
-  await page.goto("http://localhost:4000/ui");
-  console.log("Navigated to login page");
-
-  // Wait for login form to be visible
-  await page.waitForSelector('input[name="username"]', { timeout: 10000 });
-  console.log("Login form is visible");
-
-  await page.fill('input[name="username"]', "admin");
-  await page.fill('input[name="password"]', "gm");
-  console.log("Filled login credentials");
-
-  const loginButton = page.locator('input[type="submit"]');
-  await expect(loginButton).toBeEnabled();
-  await loginButton.click();
-  console.log("Clicked login button");
-
-  // Wait for navigation to complete and dashboard to load
-  await page.waitForLoadState("networkidle");
-  console.log("Page loaded after login");
+  await page.goto("/ui")
 
   // Navigate to Internal Users tab
   const internalUserTab = page.locator("span.ant-menu-title-content", {

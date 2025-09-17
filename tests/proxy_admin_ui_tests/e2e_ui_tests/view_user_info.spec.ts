@@ -3,8 +3,6 @@ import { loginToUI } from "../utils/login";
 
 test.describe("User Info View", () => {
   test.beforeEach(async ({ page }) => {
-    await loginToUI(page);
-    // Navigate to users page
     await page.goto("http://localhost:4000/ui?page=users");
   });
 
