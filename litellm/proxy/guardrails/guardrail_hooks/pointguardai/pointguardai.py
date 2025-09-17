@@ -112,11 +112,6 @@ class PointGuardAIGuardrail(CustomGuardrail):
         # store kwargs as optional_params
         self.optional_params = kwargs
 
-        # Set guardrail name
-        self.guardrail_name = guardrail_name or GUARDRAIL_NAME
-        self.event_hook = event_hook
-        self.default_on = default_on
-
         # Debug logging for configuration
         verbose_proxy_logger.debug(
             "PointGuardAI: Configured with api_base: %s", self.pointguardai_api_base
@@ -136,7 +131,12 @@ class PointGuardAIGuardrail(CustomGuardrail):
             "***" if self.pointguardai_api_key else "None",
         )
 
-        super().__init__(**kwargs)
+        super().__init__(
+            guardrail_name=guardrail_name or GUARDRAIL_NAME,
+            event_hook=event_hook,
+            default_on=default_on,
+            **kwargs
+        )
 
     def transform_messages(self, messages: List[dict]) -> List[dict]:
         """Transform messages to the format expected by PointGuard AI"""
@@ -171,9 +171,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 return None
 
             data: dict[str, Any] = {
-                "policyConfigName": self.pointguardai_policy_config_name,
-                "input": [],
-                "output": [],
+                "configName": self.pointguardai_policy_config_name,
             }
 
             # Add model_provider_name and model_name to the request data only if provided
@@ -189,8 +187,11 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 )
                 return None
 
+            # Only add input field if there are input messages
             if new_messages:
                 data["input"] = new_messages
+            
+            # Only add output field if there's a response string
             if response_string:
                 data["output"] = [{"role": "assistant", "content": response_string}]
 
@@ -260,15 +261,22 @@ class PointGuardAIGuardrail(CustomGuardrail):
                     )
 
                 # Check if input or output sections are present
+                # Only check sections that we actually sent data for
                 input_section_present = False
                 output_section_present = False
+                
+                # Only consider input section if we sent input messages
                 if (
+                    new_messages and len(new_messages) > 0 and
                     response_data.get("input") is not None
                     and response_data.get("input") != []
                     and response_data.get("input") != {}
                 ):
                     input_section_present = True
+                
+                # Only consider output section if we sent response string
                 if (
+                    response_string and 
                     response_data.get("output") is not None
                     and response_data.get("output") != []
                     and response_data.get("output") != {}
@@ -314,14 +322,29 @@ class PointGuardAIGuardrail(CustomGuardrail):
                                 if isinstance(item, dict):
                                     violations.extend(item.get("violations", []))
 
+                    # Create a cleaner error message for blocked requests
+                    violation_details = []
+                    for violation in violations:
+                        if isinstance(violation, dict):
+                            violation_details.append({
+                                "severity": violation.get("severity", "UNKNOWN"),
+                                "scanner": violation.get("scanner", "unknown"),
+                                "categories": violation.get("categories", [])
+                            })
+                    
                     raise HTTPException(
                         status_code=403,
-                        detail={
-                            "error": "Request blocked by PointGuardAI due to detected violations",
-                            "violations": violations,
-                            "pointguardai_response": response_data,
-                        },
-                    )
+                        detail="Content blocked by PointGuardAI policy")
+                    
+                    # TODO
+                    # raise HTTPException(
+                    #     status_code=403,
+                    #     detail={
+                    #         "error": "Request blocked by PointGuardAI due to detected violations",
+                    #         "violations": violations,
+                    #         "pointguardai_response": response_data,
+                    #     },
+                    # )
 
                 # Check for modifications
                 input_modified = (

@@ -394,14 +394,14 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
 class PointGuardAIGuardrailConfigModel(BaseModel):
     """Configuration parameters for the PointGuardAI guardrail"""
 
-    api_email: str = Field(
-        description="API email for the PointGuardAI service"
+    api_email: Optional[str] = Field(
+        default=None, description="API email for the PointGuardAI service"
     )
-    org_id: str = Field(
-        description="Organization ID for PointGuardAI"
+    org_id: Optional[str] = Field(
+        default=None, description="Organization ID for PointGuardAI"
     )
-    policy_config_name: str = Field(
-        description="Policy configuration name for PointGuardAI"
+    policy_config_name: Optional[str] = Field(
+        default=None, description="Policy configuration name for PointGuardAI"
     )
     model_provider_name: Optional[str] = Field(
         default=None, description="Model provider identifier"
