@@ -1,5 +1,5 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Button, Badge, Icon } from "@tremor/react";
+import { Button, Badge, Icon, Switch } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
@@ -19,6 +19,7 @@ export const columns = (
   setEditModel: (edit: boolean) => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
+  handleToggleStatus?: (modelId: string) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: () => <span className="text-sm font-semibold">Model ID</span>,
@@ -303,13 +304,48 @@ export const columns = (
     },
   },
   {
+    header: () => <span className="text-sm font-semibold">Active</span>,
+    accessorKey: "is_active",
+    cell: ({ row }) => {
+      const model = row.original;
+      const isActive = model.is_active ?? true;
+      return (
+        <div className={`
+          inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+          ${isActive 
+            ? 'bg-green-50 text-green-600' 
+            : 'bg-gray-100 text-gray-600'}
+        `}>
+          {isActive ? "Active" : "Inactive"}
+        </div>
+      );
+    },
+  },
+  {
     id: "actions",
     header: "",
     cell: ({ row }) => {
       const model = row.original;
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
+      const isDbModel = model.model_info?.db_model === true;
+      const isActive = model.is_active ?? true;
+      
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
+          {/* Only show toggle for DB models */}
+          {isDbModel && handleToggleStatus && (
+            <Switch
+              checked={isActive}
+              onCheckedChange={() => {
+                if (canEditModel) {
+                  handleToggleStatus(model.model_info.id);
+                }
+              }}
+              disabled={!canEditModel}
+              color="green"
+              className="scale-75"
+            />
+          )}
           <Icon
             icon={TrashIcon}
             size="sm"

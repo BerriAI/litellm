@@ -47,6 +47,7 @@ model LiteLLM_ProxyModelTable {
   model_name String 
   litellm_params Json
   model_info Json? 
+  is_active     Boolean @default(true)  // New field for enable/disable functionality
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

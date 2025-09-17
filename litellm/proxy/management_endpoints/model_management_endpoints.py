@@ -139,7 +139,124 @@ def update_db_model(
                 model_info[key] = value.isoformat()
         prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
 
+    # Handle is_active field
+    if updated_patch.is_active is not None:
+        prisma_compatible_model_dict["is_active"] = updated_patch.is_active
+
     return prisma_compatible_model_dict
+
+
+@router.patch(
+    "/model/{model_id}/toggle-status",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def toggle_model_status(
+    model_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Toggle the is_active status of a model.
+    
+    Args:
+        model_id: The ID of the model to toggle
+        user_api_key_dict: User authentication information
+    
+    Returns:
+        Updated model with new is_active status
+    """
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        premium_user,
+        prisma_client,
+        store_model_in_db,
+    )
+    
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        
+        if not store_model_in_db:
+            raise ProxyException(
+                message="Model toggle only supported for DB-stored models",
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=None,
+            )
+        
+        # Fetch existing model
+        db_model = await get_db_model(model_id=model_id, prisma_client=prisma_client)
+        
+        if db_model is None:
+            raise ProxyException(
+                message=f"Model {model_id} not found",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
+        
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=db_model,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
+        
+        # Toggle the is_active status
+        current_status = getattr(db_model, 'is_active', True)
+        new_status = not current_status
+        
+        # Update the model
+        updated_model = await prisma_client.db.litellm_proxymodeltable.update(
+            where={"model_id": model_id},
+            data={
+                "is_active": new_status,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_at": cast(str, get_utc_datetime()),
+            },
+        )
+        
+        # Clear cache 
+        await clear_cache()
+        
+        ## CREATE AUDIT LOG ##
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=model_id,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=json.dumps({"is_active": current_status}),
+                after_value=json.dumps({"is_active": new_status}),
+                litellm_changed_by=user_api_key_dict.user_id,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+        )
+        
+        return {
+            "model_id": model_id,
+            "model_name": updated_model.model_name,
+            "is_active": new_status,
+            "message": f"Model {'enabled' if new_status else 'disabled'} successfully"
+        }
+    
+    except ProxyException as e:
+        raise e
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"litellm.proxy.management_endpoints.model_management_endpoints.toggle_model_status(): Exception occurred - {e}"
+        )
+        raise ProxyException(
+            message="Failed to toggle model status. " + str(e),
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
 
 
 @router.patch(

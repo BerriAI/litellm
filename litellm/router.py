@@ -6067,6 +6067,11 @@ class Router:
         """
         returned_models: List[DeploymentTypedDict] = []
         for model in self.model_list:
+            # Filter out inactive models (is_active=False)
+            if model.get("is_active", True) is False:
+                verbose_router_logger.debug(f"Skipping inactive model: {model.get('model_name')}")
+                continue
+                
             if self.should_include_deployment(
                 model_name=model_name, model=model, team_id=team_id
             ):
@@ -6623,7 +6628,10 @@ class Router:
         """
         Get the deployment by litellm model.
         """
-        return [m for m in self.model_list if m["litellm_params"]["model"] == model]
+        return [
+            m for m in self.model_list 
+            if m["litellm_params"]["model"] == model and m.get("is_active", True) is not False
+        ]
 
     def _common_checks_available_deployment(
         self,

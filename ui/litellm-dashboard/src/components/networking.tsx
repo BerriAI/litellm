@@ -73,6 +73,7 @@ const HTTP_REQUEST = {
   POST: "POST",
   PUT: "PUT",
   DELETE: "DELETE",
+  PATCH: "PATCH",
 };
 
 export const DEFAULT_ORGANIZATION = "default_organization";
@@ -81,6 +82,7 @@ export interface Model {
   model_name: string;
   litellm_params: Object;
   model_info: Object | null;
+  is_active?: boolean;  // New field for enable/disable functionality
 }
 
 interface PromptInfo {
@@ -3876,6 +3878,36 @@ export const teamUpdateCall = async (
  * @param formValues
  * @returns
  */
+export const modelToggleStatusCall = async (
+  accessToken: string,
+  modelId: string
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model/${modelId}/toggle-status`
+      : `/model/${modelId}/toggle-status`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error toggling model status:", errorData);
+      throw new Error("Network response was not ok");
+    }
+    const data = await response.json();
+    console.log("Toggle model status Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to toggle model status:", error);
+    throw error;
+  }
+};
+
 export const modelPatchUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object

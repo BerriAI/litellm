@@ -6854,6 +6854,10 @@ def _get_proxy_model_info(model: dict) -> dict:
         if k not in model_info:
             model_info[k] = v
     model["model_info"] = model_info
+    
+    # Include is_active field if present (defaults to True if not specified)
+    model["is_active"] = model.get("is_active", True)
+    
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(deployment_dict=model)
 
