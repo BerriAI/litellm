@@ -123,6 +123,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
@@ -162,7 +163,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
-    tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
+    tiered_pricing: Optional[
+        List[Dict[str, Any]]
+    ]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
         Literal[
