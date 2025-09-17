@@ -162,7 +162,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
-    tiered_pricing: Optional[List[Dict[str, Any]]]  # Tiered pricing structure for models like Dashscope
+    tiered_pricing: Optional[
+        List[Dict[str, Any]]
+    ]  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
         Literal[
@@ -1808,8 +1810,8 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_hash: Optional[str]  # hash of the litellm virtual key used
     user_api_key_alias: Optional[str]
     user_api_key_spend: Optional[float]
-    user_api_key_max_budget: Optional[float] = None
-    user_api_key_budget_reset_at: Optional[str] = None
+    user_api_key_max_budget: Optional[float]
+    user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
     user_api_key_user_id: Optional[str]
@@ -1999,7 +2001,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure","blocked"]
+    guardrail_status: Literal["success", "failure", "blocked"]
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
