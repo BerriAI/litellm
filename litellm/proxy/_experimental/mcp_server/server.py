@@ -578,15 +578,11 @@ if MCP_AVAILABLE:
         """
         import re
         mcp_servers_from_path: Optional[List[str]] = None
-        # Only capture the first segment after "/mcp/" so trailing path pieces
-        # (e.g., /tools) do not get appended to the last server name.
-        mcp_path_match = re.match(r"^/mcp/([^/]+)(/.*)?$", path)
+        mcp_path_match = re.match(r"^/mcp/([^/]+/[^/]+|[^/]+)(/.*)?$", path)
         if mcp_path_match:
             mcp_servers_str = mcp_path_match.group(1)
             if mcp_servers_str:
-                mcp_servers_from_path = [
-                    s.strip() for s in mcp_servers_str.split(",") if s.strip()
-                ]
+                mcp_servers_from_path = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):
