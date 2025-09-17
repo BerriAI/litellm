@@ -138,6 +138,7 @@ from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
+from ..integrations.posthog import PostHogLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
@@ -193,7 +194,6 @@ _in_memory_loggers: List[Any] = []
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
-posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
@@ -3068,7 +3068,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -3107,19 +3107,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
-            elif callback == "posthog":
-                try:
-                    from posthog import Posthog
-                except ImportError:
-                    print_verbose("Package 'posthog' is missing. Installing it...")
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "posthog"]
-                    )
-                    from posthog import Posthog
-                posthog = Posthog(
-                    project_api_key=os.environ.get("POSTHOG_API_KEY"),
-                    host=os.environ.get("POSTHOG_API_URL"),
-                )
             elif callback == "slack":
                 try:
                     from slack_bolt import App
@@ -3214,6 +3201,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _openmeter_logger = OpenMeterLogger()
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
+        elif logging_integration == "posthog":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PostHogLogger):
+                    return callback  # type: ignore
+
+            _posthog_logger = PostHogLogger()
+            _in_memory_loggers.append(_posthog_logger)
+            return _posthog_logger  # type: ignore
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
 
