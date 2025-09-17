@@ -898,7 +898,9 @@ async def _get_team_db_check(
         system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         created_team_dict = await new_team(
-            data=new_team_data, http_request=mock_request, user_api_key_dict=system_admin_user
+            data=new_team_data,
+            http_request=mock_request,
+            user_api_key_dict=system_admin_user,
         )
         response = LiteLLM_TeamTable(**created_team_dict)
     return response

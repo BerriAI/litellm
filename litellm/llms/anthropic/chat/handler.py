@@ -434,9 +434,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(
-                        params={"timeout": timeout}
-                    )
+                    client = _get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 

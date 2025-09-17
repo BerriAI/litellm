@@ -26,7 +26,7 @@ else:
 class BaseBatchesConfig(ABC):
     """
     Abstract base class for batch processing configurations across different LLM providers.
-    
+
     This class defines the interface that all provider-specific batch configurations
     must implement to work with LiteLLM's unified batch processing system.
     """
@@ -73,7 +73,7 @@ class BaseBatchesConfig(ABC):
     ) -> dict:
         """
         Validate and prepare environment-specific headers and parameters.
-        
+
         Args:
             headers: HTTP headers dictionary
             model: Model name
@@ -82,7 +82,7 @@ class BaseBatchesConfig(ABC):
             litellm_params: LiteLLM parameters
             api_key: API key
             api_base: API base URL
-            
+
         Returns:
             Updated headers dictionary
         """
@@ -100,7 +100,7 @@ class BaseBatchesConfig(ABC):
     ) -> str:
         """
         Get the complete URL for batch creation request.
-        
+
         Args:
             api_base: Base API URL
             api_key: API key
@@ -108,7 +108,7 @@ class BaseBatchesConfig(ABC):
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
             data: Batch creation request data
-            
+
         Returns:
             Complete URL for the batch request
         """
@@ -124,13 +124,13 @@ class BaseBatchesConfig(ABC):
     ) -> Union[bytes, str, Dict[str, Any]]:
         """
         Transform the batch creation request to provider-specific format.
-        
+
         Args:
             model: Model name
             create_batch_data: Batch creation request data
             optional_params: Optional parameters
             litellm_params: LiteLLM parameters
-            
+
         Returns:
             Transformed request data
         """
@@ -146,13 +146,13 @@ class BaseBatchesConfig(ABC):
     ) -> LiteLLMBatch:
         """
         Transform provider-specific batch response to LiteLLM format.
-        
+
         Args:
             model: Model name
             raw_response: Raw HTTP response
             logging_obj: Logging object
             litellm_params: LiteLLM parameters
-            
+
         Returns:
             LiteLLM batch object
         """
@@ -164,12 +164,12 @@ class BaseBatchesConfig(ABC):
     ) -> "BaseLLMException":
         """
         Get the appropriate error class for this provider.
-        
+
         Args:
             error_message: Error message
             status_code: HTTP status code
             headers: Response headers
-            
+
         Returns:
             Provider-specific exception class
         """

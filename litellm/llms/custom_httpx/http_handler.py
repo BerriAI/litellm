@@ -260,7 +260,6 @@ class AsyncHTTPHandler:
         files: Optional[RequestFiles] = None,
         content: Any = None,
     ):
-
         start_time = time.time()
         try:
             if timeout is None:

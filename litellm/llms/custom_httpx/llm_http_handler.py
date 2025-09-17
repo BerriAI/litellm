@@ -2283,7 +2283,7 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
-        
+
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
         litellm_params_with_url["upload_url"] = api_base

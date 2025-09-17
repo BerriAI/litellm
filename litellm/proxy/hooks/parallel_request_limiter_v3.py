@@ -829,9 +829,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 

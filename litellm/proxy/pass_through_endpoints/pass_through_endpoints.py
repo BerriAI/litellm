@@ -1003,7 +1003,7 @@ class InitPassThroughEndpointHelpers:
     ):
         """Add exact path route for pass-through endpoint"""
         route_key = f"{endpoint_id}:exact:{path}"
-        
+
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
@@ -1011,7 +1011,7 @@ class InitPassThroughEndpointHelpers:
                 path,
             )
             return
-            
+
         verbose_proxy_logger.debug(
             "adding exact pass through endpoint: %s, dependencies: %s",
             path,
@@ -1032,12 +1032,12 @@ class InitPassThroughEndpointHelpers:
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
-        
+
         # Register the route to prevent duplicates
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
-            "type": "exact"
+            "type": "exact",
         }
 
     @staticmethod
@@ -1055,7 +1055,7 @@ class InitPassThroughEndpointHelpers:
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
         route_key = f"{endpoint_id}:subpath:{path}"
-        
+
         # Check if this subpath route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
@@ -1063,7 +1063,7 @@ class InitPassThroughEndpointHelpers:
                 wildcard_path,
             )
             return
-            
+
         verbose_proxy_logger.debug(
             "adding wildcard pass through endpoint: %s, dependencies: %s",
             wildcard_path,
@@ -1085,19 +1085,20 @@ class InitPassThroughEndpointHelpers:
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
-        
+
         # Register the route to prevent duplicates
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
-            "type": "subpath"
+            "type": "subpath",
         }
 
     @staticmethod
     def remove_endpoint_routes(endpoint_id: str):
         """Remove all routes for a specific endpoint ID from the registry"""
         keys_to_remove = [
-            key for key, value in _registered_pass_through_routes.items()
+            key
+            for key, value in _registered_pass_through_routes.items()
             if value["endpoint_id"] == endpoint_id
         ]
         for key in keys_to_remove:
@@ -1480,7 +1481,7 @@ async def delete_pass_through_endpoints(
     pass_through_endpoint_data.pop(endpoint_index)
     response_obj = found_endpoint
 
-    # Remove routes from registry  
+    # Remove routes from registry
     InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
 
     ## Update db

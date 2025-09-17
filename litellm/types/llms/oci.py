@@ -129,7 +129,7 @@ class OCIPromptTokensDetails(BaseModel):
 
 class OCIResponseUsage(BaseModel):
     """Token usage in the OCI response."""
-    
+
     promptTokens: int
     completionTokens: int
     totalTokens: int

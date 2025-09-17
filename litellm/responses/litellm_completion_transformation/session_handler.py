@@ -27,6 +27,7 @@ else:
 COLD_STORAGE_HANDLER = ColdStorageHandler()
 ########################################################
 
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -78,7 +79,7 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
         )
-    
+
     @staticmethod
     async def extend_chat_completion_message_with_spend_log_payload(
         spend_log: SpendLogsPayload,
@@ -90,7 +91,7 @@ class ResponsesSessionHandler:
                 ChatCompletionResponseMessage,
                 Message,
             ]
-        ]
+        ],
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -99,8 +100,10 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
-            spend_log=spend_log,
+        proxy_server_request_dict = (
+            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
+                spend_log=spend_log,
+            )
         )
         response_input_param: Optional[Union[str, ResponseInputParam]] = None
         _messages: Optional[Union[str, ResponseInputParam]] = None
@@ -114,9 +117,7 @@ class ResponsesSessionHandler:
             if isinstance(_response_input_param, str):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
-                response_input_param = cast(
-                    ResponseInputParam, _response_input_param
-                )
+                response_input_param = cast(ResponseInputParam, _response_input_param)
 
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -146,11 +147,9 @@ class ResponsesSessionHandler:
             model_response = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(
-                        getattr(choice, "message")
-                    )
+                    chat_completion_message_history.append(getattr(choice, "message"))
         return chat_completion_message_history
-    
+
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
         spend_log: SpendLogsPayload,
@@ -166,15 +165,20 @@ class ResponsesSessionHandler:
             proxy_server_request_dict = proxy_server_request
         else:
             proxy_server_request_dict = json.loads(proxy_server_request)
-        
 
         ############################################################
         # Check if user has setup cold storage for session handling
         ############################################################
-        if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
+        if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
+            proxy_server_request_dict
+        ):
             # Try to get cold storage object key from spend log metadata
             _proxy_server_request_dict: Optional[dict] = None
-            cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
+            cold_storage_object_key = (
+                ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(
+                    spend_log
+                )
+            )
             if cold_storage_object_key:
                 # Use the object key directly from metadata
                 _proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
@@ -182,17 +186,19 @@ class ResponsesSessionHandler:
                 )
             if _proxy_server_request_dict:
                 proxy_server_request_dict = _proxy_server_request_dict
-        
+
         return proxy_server_request_dict
-        
+
     @staticmethod
-    def _get_cold_storage_object_key_from_spend_log(spend_log: SpendLogsPayload) -> Optional[str]:
+    def _get_cold_storage_object_key_from_spend_log(
+        spend_log: SpendLogsPayload,
+    ) -> Optional[str]:
         """
         Extract the cold storage object key from spend log metadata.
-        
+
         Args:
             spend_log: The spend log payload containing metadata
-            
+
         Returns:
             Optional[str]: The cold storage object key if found, None otherwise
         """
@@ -205,7 +211,9 @@ class ResponsesSessionHandler:
                 return metadata_str.get("cold_storage_object_key")
             return None
         except (json.JSONDecodeError, TypeError, AttributeError):
-            verbose_proxy_logger.debug("Failed to parse metadata from spend log to extract cold storage object key")
+            verbose_proxy_logger.debug(
+                "Failed to parse metadata from spend log to extract cold storage object key"
+            )
             return None
 
     @staticmethod
@@ -214,14 +222,16 @@ class ResponsesSessionHandler:
     ) -> Optional[dict]:
         """
         Get the proxy server request from cold storage using the object key directly.
-        
+
         Args:
             object_key: The S3/GCS object key to retrieve
-            
+
         Returns:
             Optional[dict]: The proxy server request dict or None if not found
         """
-        verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage_with_object_key...")
+        verbose_proxy_logger.debug(
+            "inside get_proxy_server_request_from_cold_storage_with_object_key..."
+        )
 
         proxy_server_request_dict = await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
             object_key=object_key,
@@ -234,11 +244,12 @@ class ResponsesSessionHandler:
         proxy_server_request_dict: Optional[dict],
     ) -> bool:
         """
-        Only check cold storage when both are true 
+        Only check cold storage when both are true
         1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
         2. `litellm.configured_cold_storage_logger` is not None
         """
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+
         configured_cold_storage_custom_logger = litellm.configured_cold_storage_logger
         if configured_cold_storage_custom_logger is None:
             return False
@@ -249,8 +260,6 @@ class ResponsesSessionHandler:
         if LITELLM_TRUNCATED_PAYLOAD_FIELD in str(proxy_server_request_dict):
             return True
         return False
-
-
 
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(

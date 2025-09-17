@@ -34,7 +34,6 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
-
             raw_response = (
                 await openai_aclient.audio.transcriptions.with_raw_response.create(
                     **data, timeout=timeout

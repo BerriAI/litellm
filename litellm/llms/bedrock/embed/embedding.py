@@ -164,16 +164,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -248,16 +248,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key,
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -336,7 +336,7 @@ class BedrockEmbedding(BaseAWSLLM):
         ### TRANSFORMATION ###
         unencoded_model_id = (
             optional_params.pop("model_id", None) or model
-        ) # default to model if not passed
+        )  # default to model if not passed
         modelId = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params,
@@ -445,7 +445,7 @@ class BedrockEmbedding(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,

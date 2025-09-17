@@ -162,7 +162,9 @@ class PassThroughEndpointLogging:
                 cohere_passthrough_logging_handler_result["result"]
             )
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(
+            url_route
+        ):
             from .llm_provider_handlers.openai_passthrough_logging_handler import (
                 OpenAIPassthroughLoggingHandler,
             )
@@ -324,11 +326,13 @@ class PassThroughEndpointLogging:
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
-        
+
         return (
-            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route) or
-            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route) or
-            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
+                url_route
+            )
+            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
 
     def _set_cost_per_request(

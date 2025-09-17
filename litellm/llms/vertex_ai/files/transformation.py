@@ -261,10 +261,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
-        
+
         if extracted_file_data_content is None:
             raise ValueError("file content is required")
-            
+
         if FilesAPIUtils.is_batch_jsonl_file(
             create_file_data=create_file_data,
             extracted_file_data=extracted_file_data,

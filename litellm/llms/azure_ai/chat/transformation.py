@@ -53,9 +53,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        headers["Content-Type"] = (
-            "application/json"  # tell Azure AI Studio to expect JSON
-        )
+        headers[
+            "Content-Type"
+        ] = "application/json"  # tell Azure AI Studio to expect JSON
 
         return headers
 

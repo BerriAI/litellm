@@ -229,7 +229,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
         try:
             response_cost = 0.0
-            litellm_model_response: Optional[Union[ModelResponse, TextCompletionResponse, ImageResponse]] = None
+            litellm_model_response: Optional[
+                Union[ModelResponse, TextCompletionResponse, ImageResponse]
+            ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
             if is_chat_completions:
