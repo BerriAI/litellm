@@ -7,7 +7,6 @@ from httpx import Headers, Response
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.bedrock import (
-    BedrockBatchJobStatus,
     BedrockCreateBatchRequest,
     BedrockCreateBatchResponse,
     BedrockInputDataConfig,
@@ -310,7 +309,6 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """
         Transform Bedrock batch retrieval response to LiteLLM format.
         """
-        import json
 
         from litellm.types.llms.bedrock import BedrockGetBatchResponse
         try:
