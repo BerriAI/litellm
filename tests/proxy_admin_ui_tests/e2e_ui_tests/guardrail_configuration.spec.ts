@@ -19,6 +19,7 @@ test("create a guardrail", async ({ page }) => {
     await page.getByRole('button', { name: 'Next' }).click();
     await page.getByRole('button', { name: 'Create Guardrail' }).click();
     await page.getByRole('cell', { name: 'test-guardrail'}).isVisible();
+    await page.waitForTimeout(4000);
 });
 
 test("create a virtual key with a guardrail", async ({page}) => {
@@ -44,7 +45,7 @@ test("create a virtual key with a guardrail", async ({page}) => {
     await page.getByRole("button", { name: 'Create Key'}).click();
 })
 
-test("open the virtual key settings and validate guardrail", async ({page}) => {
+test("validate guardrail configuration ability on virtual key view page", async ({page}) => {
     await page.goto(`/ui`);
 
     const loading = page.getByText("Loading keys")
@@ -56,4 +57,14 @@ test("open the virtual key settings and validate guardrail", async ({page}) => {
     await firstCell.getByRole("button").click();
 
     await page.getByRole("tab", {name: "Settings"}).click();
+    await expect(page.getByText("test-guardrail")).toBeVisible();
+
+    // test remove guardrail
+    await page.getByRole("button", {name: "Edit Settings"}).click();
+    const chip = page.locator('span.ant-select-selection-item[title="test-guardrail"]');
+    await chip.hover(); // AntD shows the remove icon on hover
+    await chip.locator('span.ant-select-selection-item-remove').click();
+
+    await page.getByRole("button", {name: "Save Changes"}).click();
+    await expect(page.getByText("test-guardrail")).toBeHidden();
 })

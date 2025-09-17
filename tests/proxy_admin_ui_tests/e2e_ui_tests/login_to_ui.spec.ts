@@ -8,6 +8,9 @@ Click on all the tabs ensure nothing is broken
 
 import { test, expect } from '@playwright/test';
 
+test.use({ storageState: {cookies: [], origins: []} });
+
+
 test('admin login test', async ({ page }) => {
   // Go to the specified URL
   await page.goto('http://localhost:4000/ui');
