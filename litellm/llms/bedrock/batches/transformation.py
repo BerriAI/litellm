@@ -299,58 +299,19 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None
         }
 
-    def transform_retrieve_batch_response(
-        self,
-        model: Optional[str],
-        raw_response: Response,
-        logging_obj: Any,
-        litellm_params: dict,
-    ) -> LiteLLMBatch:
-        """
-        Transform Bedrock batch retrieval response to LiteLLM format.
-        """
-
-        from litellm.types.llms.bedrock import BedrockGetBatchResponse
-        try:
-            response_data: BedrockGetBatchResponse = raw_response.json()
-        except Exception as e:
-            raise ValueError(f"Failed to parse Bedrock batch response: {e}")
-        
-
-        # Extract information from typed Bedrock response
-        job_arn = response_data.get("jobArn", "")
-        status_str: str = str(response_data.get("status", "Submitted"))
-        
-        # Map Bedrock status to OpenAI-compatible status
-        status_mapping: Dict[str, str] = {
-            "Submitted": "validating",
-            "Validating": "validating",
-            "Scheduled": "in_progress",
-            "InProgress": "in_progress", 
-            "PartiallyCompleted": "completed",
-            "Completed": "completed",
-            "Failed": "failed",
-            "Stopping": "cancelling",
-            "Stopped": "cancelled",
-            "Expired": "expired"
-        }
-        
-        openai_status = cast(Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"], status_mapping.get(status_str, "validating"))
-        
-        # Parse timestamps
+    def _parse_timestamps_and_status(self, response_data, status_str: str):
+        """Helper to parse timestamps based on status."""
         import datetime
         def parse_timestamp(ts_str: Optional[str]) -> Optional[int]:
             if not ts_str:
                 return None
             try:
-                # Bedrock returns ISO format timestamps
                 dt = datetime.datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                 return int(dt.timestamp())
             except Exception:
                 return None
         
         created_at = parse_timestamp(response_data.get("submitTime"))
-        # Track progress time for common active states
         in_progress_states = {"InProgress", "Validating", "Scheduled"}
         in_progress_at = (
             parse_timestamp(response_data.get("lastModifiedTime"))
@@ -362,7 +323,11 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         cancelled_at = parse_timestamp(response_data.get("endTime")) if status_str == "Stopped" else None
         expires_at = parse_timestamp(response_data.get("jobExpirationTime"))
         
-        # Extract input file ID from input data config
+        return created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+    
+    def _extract_file_configs(self, response_data):
+        """Helper to extract input and output file configurations."""
+        # Extract input file ID
         input_file_id = ""
         input_data_config = response_data.get("inputDataConfig", {})
         if isinstance(input_data_config, dict):
@@ -370,16 +335,18 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             if isinstance(s3_input_config, dict):
                 input_file_id = s3_input_config.get("s3Uri", "")
         
-        # Extract output file ID from output data config  
+        # Extract output file ID
         output_file_id = None
         output_data_config = response_data.get("outputDataConfig", {})
         if isinstance(output_data_config, dict):
             s3_output_config = output_data_config.get("s3OutputDataConfig", {})
             if isinstance(s3_output_config, dict):
-                # Populate the configured output location (S3 prefix). Consumers can check status
-                # to know when results are actually present.
                 output_file_id = s3_output_config.get("s3Uri", "")
         
+        return input_file_id, output_file_id
+    
+    def _extract_errors_and_metadata(self, response_data, raw_response):
+        """Helper to extract errors and enriched metadata."""
         # Extract errors
         message = response_data.get("message")
         errors = None
@@ -391,7 +358,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
                 object="list"
             )
         
-        # Enrich metadata with useful Bedrock fields (metadata requires string values)
+        # Enrich metadata with useful Bedrock fields
         enriched_metadata_raw: Dict[str, Any] = {
             "jobName": response_data.get("jobName"),
             "clientRequestToken": response_data.get("clientRequestToken"),
@@ -412,13 +379,52 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
                     enriched_metadata[_k] = str(_v)
             else:
                 enriched_metadata[_k] = str(_v)
+        
+        return errors, enriched_metadata
+
+    def transform_retrieve_batch_response(
+        self,
+        model: Optional[str],
+        raw_response: Response,
+        logging_obj: Any,
+        litellm_params: dict,
+    ) -> LiteLLMBatch:
+        """
+        Transform Bedrock batch retrieval response to LiteLLM format.
+        """
+        from litellm.types.llms.bedrock import BedrockGetBatchResponse
+        try:
+            response_data: BedrockGetBatchResponse = raw_response.json()
+        except Exception as e:
+            raise ValueError(f"Failed to parse Bedrock batch response: {e}")
+        
+        job_arn = response_data.get("jobArn", "")
+        status_str: str = str(response_data.get("status", "Submitted"))
+        
+        # Map Bedrock status to OpenAI-compatible status
+        status_mapping: Dict[str, str] = {
+            "Submitted": "validating", "Validating": "validating", "Scheduled": "in_progress",
+            "InProgress": "in_progress", "PartiallyCompleted": "completed", "Completed": "completed",
+            "Failed": "failed", "Stopping": "cancelling", "Stopped": "cancelled", "Expired": "expired"
+        }
+        openai_status = cast(Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"], status_mapping.get(status_str, "validating"))
+        
+        # Parse timestamps
+        created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at = self._parse_timestamps_and_status(response_data, status_str)
+        
+        # Extract file configurations
+        input_file_id, output_file_id = self._extract_file_configs(response_data)
+        
+        # Extract errors and metadata
+        errors, enriched_metadata = self._extract_errors_and_metadata(response_data, raw_response)
+                
         return LiteLLMBatch(
-            id=job_arn,  # Use ARN as the batch ID
+            id=job_arn,
             object="batch",
-            endpoint="/v1/chat/completions",  # Default endpoint
+            endpoint="/v1/chat/completions",
             errors=errors,
             input_file_id=input_file_id,
-            completion_window="24h",  # Default
+            completion_window="24h",
             status=openai_status,
             output_file_id=output_file_id,
             error_file_id=None,
