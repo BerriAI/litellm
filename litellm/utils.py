@@ -529,7 +529,6 @@ if WeakKeyDictionary is not None:
 
 
 def is_async_callable(callback: Any) -> bool:
-    print("CACHE LENGTH: ", len(_async_callable_cache) if _async_callable_cache is not None else 0)
     """Fast, cached check for whether a callback is an async function.
 
     Falls back gracefully if the object cannot be weak-referenced or cached.
