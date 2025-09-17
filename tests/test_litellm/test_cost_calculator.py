@@ -482,11 +482,10 @@ def test_gemini_25_implicit_caching_cost():
     print(f"✓ Gemini 2.5 implicit caching cost calculation is correct: ${result:.8f}")
 
 
-
 def test_log_context_cost_calculation():
     """
     Test that log context cost calculation works correctly with tiered pricing.
-    
+
     This test verifies that when using extended context (above 200k tokens),
     the log context costs are calculated using the appropriate tiered rates.
     """
@@ -520,7 +519,7 @@ def test_log_context_cost_calculation():
         ],
         usage=Usage(
             total_tokens=350000,  # Above 200k threshold
-            prompt_tokens=300000,  # Above 200k threshold
+            prompt_tokens=301000,  # Above 200k threshold
             completion_tokens=50000,
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 text_tokens=300000,
@@ -529,6 +528,7 @@ def test_log_context_cost_calculation():
                 image_tokens=None,
                 character_count=None,
                 video_length_seconds=None,
+                cache_creation_tokens=1000,
             ),
             completion_tokens_details=None,
             _cache_creation_input_tokens=1000,  # Some tokens added to cache
@@ -544,62 +544,83 @@ def test_log_context_cost_calculation():
 
     # Debug: Print the actual result
     print(f"DEBUG: Actual cost result: ${result:.6f}")
-    
+
     # Get model info to understand the pricing
     from litellm import get_model_info
-    model_info = get_model_info(model="claude-4-sonnet-20250514", custom_llm_provider="anthropic")
-    
+
+    model_info = get_model_info(
+        model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
+    )
+
     # Calculate expected cost based on actual model pricing
     input_cost_per_token = model_info.get("input_cost_per_token", 0)
     output_cost_per_token = model_info.get("output_cost_per_token", 0)
     cache_creation_cost_per_token = model_info.get("cache_creation_input_token_cost", 0)
-    
+
     # Check if tiered pricing is applied
-    input_cost_above_200k = model_info.get("input_cost_per_token_above_200k_tokens", input_cost_per_token)
-    output_cost_above_200k = model_info.get("output_cost_per_token_above_200k_tokens", output_cost_per_token)
-    cache_creation_above_200k = model_info.get("cache_creation_input_token_cost_above_200k_tokens", cache_creation_cost_per_token)
-    
+    input_cost_above_200k = model_info.get(
+        "input_cost_per_token_above_200k_tokens", input_cost_per_token
+    )
+    output_cost_above_200k = model_info.get(
+        "output_cost_per_token_above_200k_tokens", output_cost_per_token
+    )
+    cache_creation_above_200k = model_info.get(
+        "cache_creation_input_token_cost_above_200k_tokens",
+        cache_creation_cost_per_token,
+    )
+
     print(f"DEBUG: Base input cost per token: ${input_cost_per_token:.2e}")
     print(f"DEBUG: Base output cost per token: ${output_cost_per_token:.2e}")
-    print(f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}")
-    
+    print(
+        f"DEBUG: Base cache creation cost per token: ${cache_creation_cost_per_token:.2e}"
+    )
+
     # Handle tiered pricing - if not available, use base pricing
     if input_cost_above_200k is not None:
-        print(f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}")
+        print(
+            f"DEBUG: Tiered input cost per token (>200k): ${input_cost_above_200k:.2e}"
+        )
     else:
         print(f"DEBUG: No tiered input pricing available, using base pricing")
         input_cost_above_200k = input_cost_per_token
-        
+
     if output_cost_above_200k is not None:
-        print(f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}")
+        print(
+            f"DEBUG: Tiered output cost per token (>200k): ${output_cost_above_200k:.2e}"
+        )
     else:
         print(f"DEBUG: No tiered output pricing available, using base pricing")
         output_cost_above_200k = output_cost_per_token
-        
+
     if cache_creation_above_200k is not None:
-        print(f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}")
+        print(
+            f"DEBUG: Tiered cache creation cost per token (>200k): ${cache_creation_above_200k:.2e}"
+        )
     else:
         print(f"DEBUG: No tiered cache creation pricing available, using base pricing")
         cache_creation_above_200k = cache_creation_cost_per_token
-    
+
     # Since we're above 200k tokens, we should use tiered pricing if available
     expected_input_cost = 300000 * input_cost_above_200k
     expected_output_cost = 50000 * output_cost_above_200k
     expected_cache_cost = 1000 * cache_creation_above_200k
     expected_total = expected_input_cost + expected_output_cost + expected_cache_cost
-    
+
     print(f"DEBUG: Expected total: ${expected_total:.6f}")
-    
+
     # Allow for small floating point differences
     assert (
         abs(result - expected_total) < 1e-6
     ), f"Expected cost ${expected_total:.6f}, but got ${result:.6f}"
 
-    print(f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}")
+    print(
+        f"✓ Log context cost calculation with tiered pricing is correct: ${result:.6f}"
+    )
     print(f"  - Input tokens (300k): ${expected_input_cost:.6f}")
     print(f"  - Output tokens (50k): ${expected_output_cost:.6f}")
     print(f"  - Cache creation (1k): ${expected_cache_cost:.6f}")
     print(f"  - Total: ${result:.6f}")
+
 
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
