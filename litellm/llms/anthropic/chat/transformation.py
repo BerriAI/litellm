@@ -200,8 +200,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
-            input_schema_filtered = {k: v for k, v in _input_schema.items() if k in _allowed_properties}
-            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(**input_schema_filtered)
+            input_schema_filtered = {
+                k: v for k, v in _input_schema.items() if k in _allowed_properties
+            }
+            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(
+                **input_schema_filtered
+            )
 
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
