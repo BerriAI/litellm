@@ -135,7 +135,8 @@ async def test_mock_bedrock_file_url_mapping():
 @pytest.mark.asyncio()
 async def test_bedrock_retrieve_batch():
     """
-    Test bedrock batch retrieval functionality
+    Test bedrock batch retrieval functionality, validating that input and output file IDs 
+    are correctly extracted from the Bedrock response and included in the final transformed response.
     """
     print("Testing bedrock batch retrieval")
     
@@ -169,10 +170,9 @@ async def test_bedrock_retrieve_batch():
     # Print the mock response to debug
     print("MOCK RESPONSE DATA:", mock_bedrock_response)
     
-    with patch('litellm.llms.custom_httpx.http_handler.get_async_httpx_client') as mock_client:
-        mock_httpx_instance = MagicMock()
-        mock_client.return_value = mock_httpx_instance
-        mock_httpx_instance.get.return_value = mock_response
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get") as mock_get:
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
         
         # Test retrieve batch
         batch_response = await litellm.aretrieve_batch(
@@ -188,4 +188,8 @@ async def test_bedrock_retrieve_batch():
         assert batch_response.object == "batch"
         assert batch_response.status == "in_progress"  # Bedrock "InProgress" maps to "in_progress"
         assert batch_response.endpoint == "/v1/chat/completions"
+        
+        # Validate input and output file IDs in the final transformed response
+        assert batch_response.input_file_id == "s3://test-bucket/input/test-input.jsonl"
+        assert batch_response.output_file_id == "s3://test-bucket/output/"
 
