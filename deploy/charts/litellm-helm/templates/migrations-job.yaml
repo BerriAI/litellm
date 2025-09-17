@@ -7,11 +7,9 @@ metadata:
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
   annotations:
-    argocd.argoproj.io/hook: {{ .Values.migrationJob.hook | default "PreSync" }}
-    argocd.argoproj.io/hook-delete-policy: {{ .Values.migrationJob.hookDeletePolicy | default "BeforeHookCreation" }}
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
-    argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/hook: {{ .Values.migrationJob.hook | default "PreSync" | quote }}
+    argocd.argoproj.io/hook-delete-policy: {{ .Values.migrationJob.hookDeletePolicy | default "BeforeHookCreation" | quote }}
     {{- end }}
     {{- if .Values.migrationJob.hooks.helm.enabled }}
     helm.sh/hook: "pre-install,pre-upgrade"

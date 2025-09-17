@@ -256,11 +256,14 @@ migrationJob:
   extraContainers: []
   
   # Hook configuration
+  hook: "PreSync" # ArgoCD hook type (PreSync, Sync, PostSync, SyncFail, Skip)
+  hookDeletePolicy: "BeforeHookCreation" # ArgoCD hook delete policy (HookSucceeded, HookFailed, BeforeHookCreation)
   hooks:
     argocd:
       enabled: true
     helm:
       enabled: false
+      weight: "1" # Helm hook weight for ordering
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
