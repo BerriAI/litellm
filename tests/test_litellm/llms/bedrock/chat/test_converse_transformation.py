@@ -1590,3 +1590,281 @@ async def test_no_cache_control_no_cache_point():
     tool_content = result[2]["content"]
     assert len(tool_content) == 1
     assert "toolResult" in tool_content[0]
+
+
+# ============================================================================
+# Guarded Text Feature Tests
+# ============================================================================
+
+def test_guarded_text_wraps_in_guardrail_converse_content():
+    """Test that guarded_text content type gets wrapped in guardrailConverseContent blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Regular text content"},
+                {"type": "guarded_text", "text": "This should be guarded"},
+                {"type": "text", "text": "More regular text"}
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have 1 message
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    
+    # Should have 3 content blocks
+    content = result[0]["content"]
+    assert len(content) == 3
+    
+    # First and third should be regular text
+    assert "text" in content[0]
+    assert content[0]["text"] == "Regular text content"
+    assert "text" in content[2]
+    assert content[2]["text"] == "More regular text"
+    
+    # Second should be guardrailConverseContent
+    assert "guardrailConverseContent" in content[1]
+    assert content[1]["guardrailConverseContent"]["text"] == "This should be guarded"
+
+
+def test_guarded_text_with_system_messages():
+    """Test guarded_text with system messages using the full transformation."""
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # Should have system content blocks
+    assert "system" in result
+    assert len(result["system"]) == 1
+    assert result["system"][0]["text"] == "You are a helpful assistant."
+    
+    # Should have 1 message (system messages are removed)
+    assert "messages" in result
+    assert len(result["messages"]) == 1
+    
+    # User message should have both regular text and guarded text
+    user_message = result["messages"][0]
+    assert user_message["role"] == "user"
+    content = user_message["content"]
+    assert len(content) == 2
+    
+    # First should be regular text
+    assert "text" in content[0]
+    assert content[0]["text"] == "What is the main topic of this legal document?"
+    
+    # Second should be guardrailConverseContent
+    assert "guardrailConverseContent" in content[1]
+    assert content[1]["guardrailConverseContent"]["text"] == "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."
+
+
+def test_guarded_text_with_mixed_content_types():
+    """Test guarded_text with mixed content types including images."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look at this image"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,test"}},
+                {"type": "guarded_text", "text": "This sensitive content should be guarded"}
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have 1 message
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    
+    # Should have 3 content blocks
+    content = result[0]["content"]
+    assert len(content) == 3
+    
+    # First should be regular text
+    assert "text" in content[0]
+    assert content[0]["text"] == "Look at this image"
+    
+    # Second should be image
+    assert "image" in content[1]
+    
+    # Third should be guardrailConverseContent
+    assert "guardrailConverseContent" in content[2]
+    assert content[2]["guardrailConverseContent"]["text"] == "This sensitive content should be guarded"
+
+
+@pytest.mark.asyncio
+async def test_async_guarded_text():
+    """Test async version of guarded_text processing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "guarded_text", "text": "This should be guarded"}
+            ]
+        }
+    ]
+    
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have 1 message
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    
+    # Should have 2 content blocks
+    content = result[0]["content"]
+    assert len(content) == 2
+    
+    # First should be regular text
+    assert "text" in content[0]
+    assert content[0]["text"] == "Hello"
+    
+    # Second should be guardrailConverseContent
+    assert "guardrailConverseContent" in content[1]
+    assert content[1]["guardrailConverseContent"]["text"] == "This should be guarded"
+
+
+def test_guarded_text_with_tool_calls():
+    """Test guarded_text with tool calls in the conversation."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's the weather?"},
+                {"type": "guarded_text", "text": "Please be careful with sensitive information"}
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "It's sunny and 25°C"
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.amazon.nova-pro-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have 3 messages
+    assert len(result) == 3
+    
+    # First message (user) should have both text and guarded_text
+    user_message = result[0]
+    assert user_message["role"] == "user"
+    content = user_message["content"]
+    assert len(content) == 2
+    
+    # First should be regular text
+    assert "text" in content[0]
+    assert content[0]["text"] == "What's the weather?"
+    
+    # Second should be guardrailConverseContent
+    assert "guardrailConverseContent" in content[1]
+    assert content[1]["guardrailConverseContent"]["text"] == "Please be careful with sensitive information"
+    
+    # Other messages should not have guardrailConverseContent
+    for i in range(1, 3):
+        content = result[i]["content"]
+        for block in content:
+            assert "guardrailConverseContent" not in block
+
+
+def test_guarded_text_guardrail_config_preserved():
+    """Test that guardrailConfig is preserved when using guarded_text."""
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "guarded_text", "text": "This should be guarded"}
+            ]
+        }
+    ]
+    
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-abc123",
+            "guardrailVersion": "DRAFT"
+        }
+    }
+    
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={}
+    )
+    
+    # GuardrailConfig should be present at top level
+    assert "guardrailConfig" in result
+    assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+    
+    # GuardrailConfig should also be in inferenceConfig
+    assert "inferenceConfig" in result
+    assert "guardrailConfig" in result["inferenceConfig"]
+    assert result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+
+
