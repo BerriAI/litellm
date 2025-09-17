@@ -6,7 +6,54 @@ PostHog is an open-source product analytics platform that helps you track and an
 
 ## Usage with LiteLLM Proxy (LLM Gateway)
 
-[**Follow this link to start sending logs to PostHog with LiteLLM Proxy server**](../proxy/logging)
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  success_callback: ["posthog"]
+  failure_callback: ["posthog"]
+```
+
+**Step 2**: Set required environment variables
+
+```shell
+export POSTHOG_API_KEY="your-posthog-api-key"
+# Optional, defaults to https://app.posthog.com
+export POSTHOG_API_URL="https://app.posthog.com" # optional
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "user_id": "user-123",
+        "custom_field": "custom_value"
+    }
+}'
+```
 
 ## Usage with LiteLLM Python SDK
 
@@ -51,6 +98,8 @@ response = litellm.completion(
 
 Pass `user_id` in `metadata` to associate events with specific users in PostHog:
 
+**With LiteLLM Python SDK:**
+
 ```python
 import litellm
 
@@ -64,6 +113,31 @@ response = litellm.completion(
     metadata={
         "user_id": "user-123",  # Add user ID for PostHog tracking
         "custom_field": "custom_value"  # Add custom metadata
+    }
+)
+```
+
+**With LiteLLM Proxy using OpenAI Python SDK:**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="sk-1234",  # Your LiteLLM Proxy API key
+    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "user", "content": "Hello world"}
+    ],
+    extra_body={
+        "metadata": {
+            "user_id": "user-123",  # Add user ID for PostHog tracking
+            "project_name": "my-project",  # Add custom metadata
+            "environment": "production"
+        }
     }
 )
 ```
