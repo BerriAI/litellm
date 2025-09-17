@@ -4339,7 +4339,7 @@
     },
     "claude-3-5-haiku-20241022": {
         "cache_creation_input_token_cost": 1e-06,
-        "cache_creation_input_token_cost_above_1hr": 1.6e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 8e-08,
         "deprecation_date": "2025-10-01",
         "input_cost_per_token": 8e-07,
@@ -4366,6 +4366,7 @@
     },
     "claude-3-5-haiku-latest": {
         "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 1e-07,
         "deprecation_date": "2025-10-01",
         "input_cost_per_token": 1e-06,
@@ -4392,7 +4393,7 @@
     },
     "claude-3-5-sonnet-20240620": {
         "cache_creation_input_token_cost": 3.75e-06,
-        "cache_creation_input_token_cost_above_1hr": 1.6e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2025-06-01",
         "input_cost_per_token": 3e-06,
@@ -4413,7 +4414,7 @@
     },
     "claude-3-5-sonnet-20241022": {
         "cache_creation_input_token_cost": 3.75e-06,
-        "cache_creation_input_token_cost_above_1hr": 1.6e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2025-10-01",
         "input_cost_per_token": 3e-06,
@@ -4441,7 +4442,7 @@
     },
     "claude-3-5-sonnet-latest": {
         "cache_creation_input_token_cost": 3.75e-06,
-        "cache_creation_input_token_cost_above_1hr": 1.6e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2025-06-01",
         "input_cost_per_token": 3e-06,
@@ -4526,6 +4527,7 @@
     },
     "claude-3-haiku-20240307": {
         "cache_creation_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-08,
         "deprecation_date": "2025-03-01",
         "input_cost_per_token": 2.5e-07,
@@ -4545,6 +4547,7 @@
     },
     "claude-3-opus-20240229": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2025-03-01",
         "input_cost_per_token": 1.5e-05,
@@ -4564,6 +4567,7 @@
     },
     "claude-3-opus-latest": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2025-03-01",
         "input_cost_per_token": 1.5e-05,
