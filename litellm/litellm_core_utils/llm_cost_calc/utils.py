@@ -278,6 +278,13 @@ def generic_cost_per_token(
             )
             or 0
         )
+        cache_creation_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
+            )
+            or 0
+        )
         text_tokens = (
             cast(
                 Optional[int], getattr(usage.prompt_tokens_details, "text_tokens", None)
@@ -307,9 +314,8 @@ def generic_cost_per_token(
             or 0
         )
 
-    if getattr(usage, "_cache_creation_input_tokens", 0) is not None:
-        cache_creation_tokens = usage._cache_creation_input_tokens
     ## EDGE CASE - text tokens not set inside PromptTokensDetails
+
     if text_tokens == 0:
         text_tokens = (
             usage.prompt_tokens
@@ -333,7 +339,7 @@ def generic_cost_per_token(
     )
 
     ### CACHE WRITING COST - Now uses tiered pricing
-    prompt_cost += float(usage._cache_creation_input_tokens or 0) * cache_creation_cost
+    prompt_cost += float(cache_creation_tokens) * cache_creation_cost
 
     ### CHARACTER COST
 

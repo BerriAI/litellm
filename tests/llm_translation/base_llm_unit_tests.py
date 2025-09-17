@@ -954,6 +954,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching
 
@@ -1049,8 +1050,8 @@ class BaseLLMChatTest(ABC):
                 assert (
                     response.usage.prompt_tokens_details.cached_tokens > 0
                 ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
-        except litellm.InternalServerError:
-            pass
+        except litellm.InternalServerError as e:
+            print("InternalServerError", e)
 
     @pytest.fixture
     def pdf_messages(self):

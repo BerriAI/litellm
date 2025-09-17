@@ -250,7 +250,7 @@ async def test_anthropic_api_prompt_caching_basic():
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement"
                         * 400,
-                        "cache_control": {"type": "ephemeral"},
+                        : {"type": "ephemeral"},
                     }
                 ],
             },
@@ -510,6 +510,7 @@ async def test_anthropic_api_prompt_caching_streaming():
         if hasattr(chunk, "usage") and hasattr(
             chunk.usage, "cache_creation_input_tokens"
         ):
+            print("chunk.usage", chunk.usage)
             is_cache_creation_input_tokens_in_usage = True
 
         idx += 1
