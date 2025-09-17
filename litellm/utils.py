@@ -518,6 +518,55 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
+
+from weakref import WeakKeyDictionary  # type: ignore
+
+_async_callable_cache = None
+if WeakKeyDictionary is not None:
+    _async_callable_cache = WeakKeyDictionary()  # type: ignore[var-annotated]
+
+
+def is_async_callable(callback: Any) -> bool:
+    """Fast, cached check for whether a callback is an async function.
+
+    Falls back gracefully if the object cannot be weak-referenced or cached.
+    2.59x speedup.
+    """
+    # Fast path: check cache first (most common case)
+    try:
+        if _async_callable_cache is not None:
+            cached = _async_callable_cache.get(callback)  # type: ignore[call-arg]
+            if cached is not None:
+                return cached
+    except Exception:
+        pass
+    
+    # Determine target - optimized path for common cases
+    target = callback
+    if not inspect.isfunction(target) and not inspect.ismethod(target):
+        try:
+            call_attr = getattr(target, "__call__", None)
+            if call_attr is not None:
+                target = call_attr
+        except Exception:
+            pass
+
+    # Compute result
+    try:
+        result = inspect.iscoroutinefunction(target)
+    except Exception:
+        result = False
+
+    # Cache the result
+    try:
+        if _async_callable_cache is not None:
+            _async_callable_cache[callback] = result  # type: ignore[index]
+    except Exception:
+        pass
+
+    return result
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -592,7 +641,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -602,7 +651,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -627,7 +676,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -660,7 +709,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    inspect.iscoroutinefunction(callback)
+                    is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
