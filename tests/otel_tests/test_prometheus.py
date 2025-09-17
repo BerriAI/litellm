@@ -104,13 +104,12 @@ async def test_proxy_failure_metrics():
             metrics = await response.text()
 
         print("/metrics", metrics)
+        
+        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id", user_email="None"} 1.0'
 
-        # Check if the failure metric is present and correct
-        # Note: The actual metrics don't include user_email in this metric, and counts are cumulative
-        expected_metric_pattern = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id"}'
 
         assert (
-            expected_metric_pattern in metrics
+            expected_metric in metrics
         ), "Expected failure metric not found in /metrics."
         # Check for proxy total requests metric which tracks the requests
         total_requests_pattern = 'litellm_proxy_total_requests_metric_total{api_key_alias="None",end_user="None",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",status_code="429",team="None",team_alias="None",user="default_user_id",user_email="None"}'
