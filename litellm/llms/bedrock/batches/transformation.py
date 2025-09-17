@@ -311,17 +311,17 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             except Exception:
                 return None
         
-        created_at = parse_timestamp(response_data.get("submitTime"))
+        created_at = parse_timestamp(str(response_data.get("submitTime")) if response_data.get("submitTime") is not None else None)
         in_progress_states = {"InProgress", "Validating", "Scheduled"}
         in_progress_at = (
-            parse_timestamp(response_data.get("lastModifiedTime"))
+            parse_timestamp(str(response_data.get("lastModifiedTime")) if response_data.get("lastModifiedTime") is not None else None)
             if status_str in in_progress_states
             else None
         )
-        completed_at = parse_timestamp(response_data.get("endTime")) if status_str in {"Completed", "PartiallyCompleted"} else None
-        failed_at = parse_timestamp(response_data.get("endTime")) if status_str == "Failed" else None
-        cancelled_at = parse_timestamp(response_data.get("endTime")) if status_str == "Stopped" else None
-        expires_at = parse_timestamp(response_data.get("jobExpirationTime"))
+        completed_at = parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None) if status_str in {"Completed", "PartiallyCompleted"} else None
+        failed_at = parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None) if status_str == "Failed" else None
+        cancelled_at = parse_timestamp(str(response_data.get("endTime")) if response_data.get("endTime") is not None else None) if status_str == "Stopped" else None
+        expires_at = parse_timestamp(str(response_data.get("jobExpirationTime")) if response_data.get("jobExpirationTime") is not None else None)
         
         return created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
     
