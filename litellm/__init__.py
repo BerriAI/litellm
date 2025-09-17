@@ -147,6 +147,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vector_store_pre_call_hook",
     "dotprompt",
     "cloudzero",
+    "posthog",
 ]
 configured_cold_storage_logger: Optional[
     _custom_logger_compatible_callbacks_literal
