@@ -148,23 +148,16 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                     ),
                 ),
             }
+            
             # serialize datetime objects - for budget reset time in spend metrics
-            import json
-            from datetime import datetime, date
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
             
-            def custom_json_encoder(obj):
-                if isinstance(obj, (datetime, date)):
-                    return obj.isoformat()
-                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-            
-            # Serialize payload with custom encoder for debugging
             try:
-                verbose_logger.debug("payload %s", json.dumps(payload, indent=4, default=custom_json_encoder))
+                verbose_logger.debug("payload %s", safe_dumps(payload))
             except Exception as debug_error:
                 verbose_logger.debug("payload serialization failed: %s", str(debug_error))
             
-            # Convert payload to JSON string with custom encoder for HTTP request
-            json_payload = json.dumps(payload, default=custom_json_encoder)
+            json_payload = safe_dumps(payload)
             
             response = await self.async_client.post(
                 url=self.intake_url,
@@ -338,7 +331,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         if isinstance(response_obj, str):
             try:
                 import ast
-
                 response_obj = ast.literal_eval(response_obj)
             except (ValueError, SyntaxError):
                 try:
@@ -573,11 +565,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         Get the spend metrics from the standard logging payload
         """
         spend_metrics: DDLLMObsSpendMetrics = DDLLMObsSpendMetrics()
-        
-        # Get response cost for litellm_spend_metric
-        response_cost = standard_logging_payload.get("response_cost", 0.0)
-        if response_cost > 0:
-            spend_metrics["litellm_spend_metric"] = response_cost
+
+        # send response cost
+        spend_metrics["response_cost"] = standard_logging_payload.get("response_cost", 0.0)
 
         # Get budget information from metadata
         metadata = standard_logging_payload.get("metadata", {})
@@ -585,36 +575,45 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         # API key max budget
         user_api_key_max_budget = metadata.get("user_api_key_max_budget")
         if user_api_key_max_budget is not None:
-            # type casting to make sure its a float value
-            try:
-                if isinstance(user_api_key_max_budget, (int, float)):
-                    spend_metrics["litellm_api_key_max_budget_metric"] = float(user_api_key_max_budget)
-                elif isinstance(user_api_key_max_budget, str):
-                    spend_metrics["litellm_api_key_max_budget_metric"] = float(user_api_key_max_budget)
-            except (ValueError, TypeError):
-                verbose_logger.debug(f"Invalid user_api_key_max_budget value: {user_api_key_max_budget}")
+            spend_metrics["user_api_key_max_budget"] = float(user_api_key_max_budget)
 
-        # API key budget remaining hours
+        # API key spend
+        user_api_key_spend = metadata.get("user_api_key_spend")
+        if user_api_key_spend is not None:
+            try:
+                spend_metrics["user_api_key_spend"] = float(user_api_key_spend)
+            except (ValueError, TypeError):
+                verbose_logger.debug(f"Invalid user_api_key_spend value: {user_api_key_spend}")
+
+        # API key budget reset datetime
         user_api_key_budget_reset_at = metadata.get("user_api_key_budget_reset_at")
         if user_api_key_budget_reset_at is not None:
             try:
-                from datetime import datetime
-                budget_reset_at: datetime
+                from datetime import datetime, timezone
+
+                budget_reset_at = None
                 if isinstance(user_api_key_budget_reset_at, str):
-                    # Parse ISO string if it's a string
-                    budget_reset_at = datetime.fromisoformat(user_api_key_budget_reset_at.replace('Z', '+00:00'))
+                    # Handle ISO format strings that might have 'Z' suffix
+                    iso_string = user_api_key_budget_reset_at.replace('Z', '+00:00')
+                    budget_reset_at = datetime.fromisoformat(iso_string)
                 elif isinstance(user_api_key_budget_reset_at, datetime):
                     budget_reset_at = user_api_key_budget_reset_at
-                else:
-                    verbose_logger.debug(f"Invalid user_api_key_budget_reset_at type: {type(user_api_key_budget_reset_at)}")
-                    return spend_metrics
-                
-                remaining_hours = (
-                    budget_reset_at - datetime.now(budget_reset_at.tzinfo)
-                ).total_seconds() / 3600
-                spend_metrics["litellm_api_key_budget_remaining_hours_metric"] = max(0, remaining_hours)
+
+                if budget_reset_at is not None:
+                    # Preserve timezone info if already present
+                    if budget_reset_at.tzinfo is None:
+                        budget_reset_at = budget_reset_at.replace(tzinfo=timezone.utc)
+
+                    # Convert to ISO string format for JSON serialization
+                    # This prevents circular reference issues and ensures proper timezone representation
+                    iso_string = budget_reset_at.isoformat()
+                    spend_metrics["user_api_key_budget_reset_at"] = iso_string
+                    
+                    # Debug logging to verify the conversion
+                    verbose_logger.debug(f"Converted budget_reset_at to ISO format: {iso_string}")
             except Exception as e:
-                verbose_logger.debug(f"Error calculating remaining hours for budget reset: {e}")
+                verbose_logger.debug(f"Error processing budget reset datetime: {e}")
+                verbose_logger.debug(f"Original value: {user_api_key_budget_reset_at}")
 
         return spend_metrics
 

@@ -83,6 +83,7 @@ class DDLLMObsLatencyMetrics(TypedDict, total=False):
     guardrail_overhead_time_ms: float
 
 class DDLLMObsSpendMetrics(TypedDict, total=False):
-    litellm_spend_metric: float
-    litellm_api_key_max_budget_metric: float
-    litellm_api_key_budget_remaining_hours_metric: float
+    response_cost: float
+    user_api_key_spend: float
+    user_api_key_max_budget: float
+    user_api_key_budget_reset_at: str
