@@ -4150,15 +4150,28 @@ class StandardLoggingPayloadSetup:
         from litellm.integrations.s3 import get_s3_object_key
 
         # Only generate object key if cold storage is configured
-        if litellm.configured_cold_storage_logger is None:
+        configured_cold_storage_logger = litellm.configured_cold_storage_logger
+        if configured_cold_storage_logger is None:
             return None
 
         try:
             # Generate file name in same format as litellm.utils.get_logging_id
             s3_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{response_id}"
 
+            # Get the actual s3_path from the configured cold storage logger instance
+            s3_path = ""  # default value
+            
+            # Try to get the actual logger instance from the logger name
+            try:
+                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(configured_cold_storage_logger)
+                if custom_logger and hasattr(custom_logger, 's3_path') and custom_logger.s3_path:
+                    s3_path = custom_logger.s3_path
+            except Exception:
+                # If any error occurs in getting the logger instance, use default empty s3_path
+                pass
+            
             s3_object_key = get_s3_object_key(
-                s3_path="",  # Use empty path as default
+                s3_path=s3_path,  # Use actual s3_path from logger configuration
                 team_alias_prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
