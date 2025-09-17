@@ -826,6 +826,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and _usage["cache_creation_input_tokens"] is not None
         ):
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+            prompt_tokens += cache_creation_input_tokens
         if (
             "cache_read_input_tokens" in _usage
             and _usage["cache_read_input_tokens"] is not None
