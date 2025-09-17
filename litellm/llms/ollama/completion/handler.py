@@ -4,7 +4,7 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 [TODO]: migrate embeddings to a base handler as well.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.types.utils import EmbeddingResponse
@@ -13,7 +13,6 @@ from litellm.types.utils import EmbeddingResponse
 def _prepare_ollama_embedding_payload(
     model: str, prompts: List[str], optional_params: Dict[str, Any]
 ) -> Dict[str, Any]:
-
     data: Dict[str, Any] = {"model": model, "input": prompts}
     special_optional_params = ["truncate", "options", "keep_alive"]
 
@@ -78,13 +77,23 @@ async def ollama_aembeddings(
     optional_params: dict,
     logging_obj: Any,
     encoding: Any,
+    api_key: Optional[str] = None,
 ):
     if not api_base.endswith("/api/embed"):
         api_base += "/api/embed"
 
     data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response = await litellm.module_level_aclient.post(url=api_base, json=data)
+    headers = {}
+    if api_key is not None:
+        if api_base.startswith("https://ollama.com"):
+            headers["Authorization"] = api_key
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    response = await litellm.module_level_aclient.post(
+        url=api_base, json=data, headers=headers
+    )
     response_json = response.json()
 
     return _process_ollama_embedding_response(
@@ -105,13 +114,23 @@ def ollama_embeddings(
     model_response: EmbeddingResponse,
     logging_obj: Any,
     encoding: Any = None,
+    api_key: Optional[str] = None,
 ):
     if not api_base.endswith("/api/embed"):
         api_base += "/api/embed"
 
     data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
-    response = litellm.module_level_client.post(url=api_base, json=data)
+    headers = {}
+    if api_key is not None:
+        if api_base.startswith("https://ollama.com"):
+            headers["Authorization"] = api_key
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    response = litellm.module_level_client.post(
+        url=api_base, json=data, headers=headers
+    )
     response_json = response.json()
 
     return _process_ollama_embedding_response(

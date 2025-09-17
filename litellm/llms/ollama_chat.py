@@ -137,7 +137,10 @@ def get_ollama_response(  # noqa: PLR0915
 
     headers: Optional[dict] = None
     if api_key is not None:
-        headers = {"Authorization": "Bearer {}".format(api_key)}
+        if api_base.startswith("https://ollama.com"):
+            headers = {"Authorization": api_key}
+        else:
+            headers = {"Authorization": "Bearer {}".format(api_key)}
 
     sync_client = litellm.module_level_client
     if client is not None and isinstance(client, HTTPHandler):
@@ -214,7 +217,10 @@ def ollama_completion_stream(url, api_key, data, logging_obj):
         "follow_redirects": True,
     }
     if api_key is not None:
-        _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
+        if url.startswith("https://ollama.com"):
+            _request["headers"] = {"Authorization": api_key}
+        else:
+            _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
     with httpx.stream(**_request) as response:
         try:
             if response.status_code != 200:
@@ -283,7 +289,10 @@ async def ollama_async_streaming(
             "timeout": litellm.request_timeout,
         }
         if api_key is not None:
-            _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
+            if url.startswith("https://ollama.com"):
+                _request["headers"] = {"Authorization": api_key}
+            else:
+                _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
         async with client.stream(**_request) as response:
             if response.status_code != 200:
                 raise OllamaError(
@@ -370,7 +379,10 @@ async def ollama_acompletion(
                 "json": data,
             }
             if api_key is not None:
-                _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
+                if url.startswith("https://ollama.com"):
+                    _request["headers"] = {"Authorization": api_key}
+                else:
+                    _request["headers"] = {"Authorization": "Bearer {}".format(api_key)}
             resp = await session.post(**_request)
 
             if resp.status != 200:
