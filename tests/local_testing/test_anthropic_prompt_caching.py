@@ -250,7 +250,7 @@ async def test_anthropic_api_prompt_caching_basic():
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement"
                         * 400,
-                        : {"type": "ephemeral"},
+                        "cache_control": {"type": "ephemeral"},
                     }
                 ],
             },
