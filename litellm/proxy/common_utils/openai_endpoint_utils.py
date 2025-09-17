@@ -34,12 +34,7 @@ async def get_custom_llm_provider_from_request_body(request: Request) -> Optiona
 
     Safely reads the request body
     """
-    try:
-        request_body: dict = await _read_request_body(request=request) or {}
-    except Exception:
-        # If body cannot be parsed (e.g., mocked multipart edge cases), treat as absent
-        return None
-    provider = request_body.get("custom_llm_provider")
-    if isinstance(provider, str) and provider:
-        return provider
+    request_body: dict = await _read_request_body(request=request) or {}
+    if "custom_llm_provider" in request_body:
+        return request_body["custom_llm_provider"]
     return None
