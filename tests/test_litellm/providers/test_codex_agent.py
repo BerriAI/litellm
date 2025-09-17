@@ -44,7 +44,7 @@ def test_codex_agent_completion_returns_joined_output(mock_popen, tmp_path, monk
 
     # Call completion (non-stream) and verify OpenAI-style ModelResponse
     resp = _ll.completion(
-        model="codex-agent",
+        model="codex-agent/gpt-5",
         messages=[{"role": "user", "content": "hi"}],
         optional_params={
             "extra_body": {
