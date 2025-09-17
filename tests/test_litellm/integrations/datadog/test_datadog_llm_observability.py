@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import Mock, patch, MagicMock
 
@@ -901,89 +901,12 @@ class TestDataDogLLMObsLoggerToolCalls:
             output_function_info = output_tool_calls[0].get("function", {})
             assert output_function_info.get("name") == "format_response"
 
-
-def create_standard_logging_payload() -> StandardLoggingPayload:
-    """Create a standard logging payload for testing"""
-    return {
-        "id": "test_id",
-        "trace_id": "test_trace_id",
-        "call_type": "completion",
-        "stream": False,
-        "response_cost": 0.1,
-        "response_cost_failure_debug_info": None,
-        "status": "success",
-        "custom_llm_provider": None,
-        "total_tokens": 30,
-        "prompt_tokens": 20,
-        "completion_tokens": 10,
-        "startTime": 1234567890.0,
-        "endTime": 1234567891.0,
-        "completionStartTime": 1234567890.5,
-        "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-3.5-turbo",
-            "model_map_value": None
-        },
-        "model": "gpt-3.5-turbo",
-        "model_id": "model-123",
-        "model_group": "openai-gpt",
-        "api_base": "https://api.openai.com",
-        "metadata": {
-            "user_api_key_hash": "test_hash",
-            "user_api_key_org_id": None,
-            "user_api_key_alias": "test_alias",
-            "user_api_key_team_id": "test_team",
-            "user_api_key_user_id": "test_user",
-            "user_api_key_team_alias": "test_team_alias",
-            "user_api_key_end_user_id": None,
-            "user_api_key_request_route": None,
-            "user_api_key_max_budget": None,
-            "user_api_key_budget_reset_at": None,
-            "user_api_key_user_email": None,
-            "spend_logs_metadata": None,
-            "requester_ip_address": "127.0.0.1",
-            "requester_metadata": None,
-            "requester_custom_headers": None,
-            "prompt_management_metadata": None,
-            "mcp_tool_call_metadata": None,
-            "vector_store_request_metadata": None,
-            "applied_guardrails": None,
-            "usage_object": None,
-            "cold_storage_object_key": None,
-        },
-        "cache_hit": False,
-        "cache_key": None,
-        "saved_cache_cost": 0.0,
-        "request_tags": [],
-        "end_user": None,
-        "requester_ip_address": "127.0.0.1",
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "response": {"choices": [{"message": {"content": "Hi there!"}}]},
-        "error_str": None,
-        "model_parameters": {"stream": True},
-        "hidden_params": {
-            "model_id": "model-123",
-            "cache_key": None,
-            "api_base": "https://api.openai.com",
-            "response_cost": "0.1",
-            "additional_headers": None,
-            "litellm_overhead_time_ms": None,
-            "batch_models": None,
-            "litellm_model_name": None,
-            "usage_object": None,
-        },
-        "error_information": None,
-        "guardrail_information": None,
-        "standard_built_in_tools_params": None,
-    }  # type: ignore
-
-
 def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPayload:
     """Create a StandardLoggingPayload object with spend metrics for testing"""
     from datetime import datetime, timezone
 
-    # Create a budget reset time 24 hours from now
-    budget_reset_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    # Create a budget reset time 10 days from now (using "10d" format)
+    budget_reset_at = datetime.now(timezone.utc) + timedelta(days=10)
 
     return {
         "id": "test-request-id-spend",
@@ -1019,8 +942,9 @@ def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPaylo
             "user_api_key_user_email": None,
             "user_api_key_end_user_id": None,
             "user_api_key_request_route": None,
+            "user_api_key_spend": 0.67,
             "user_api_key_max_budget": 10.0,  # $10 max budget
-            "user_api_key_budget_reset_at": budget_reset_at.isoformat(),
+            "user_api_key_budget_reset_at": budget_reset_at.isoformat(),  # ISO format: 2025-09-26T...
             "spend_logs_metadata": None,
             "requester_ip_address": "127.0.0.1",
             "requester_metadata": None,
@@ -1064,23 +988,32 @@ async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     """Test that budget metrics are properly extracted and logged"""
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
-    # Create a standard logging payload with budget metadata
-    payload = create_standard_logging_payload()
+    # Create a standard logging payload with spend metrics
+    payload = create_standard_logging_payload_with_spend_metrics()
 
-    # Add budget information to metadata
-    payload["metadata"]["user_api_key_max_budget"] = 10.0
-    payload["metadata"]["user_api_key_budget_reset_at"] = "2025-09-15T00:00:00+00:00"
+    # Show the budget reset time in ISO format
+    budget_reset_iso = payload["metadata"]["user_api_key_budget_reset_at"]
+    print(f"Budget reset time (ISO format): {budget_reset_iso}")
+    from datetime import datetime, timezone
+    print(f"Current time: {datetime.now(timezone.utc).isoformat()}")
 
     # Test the _get_spend_metrics method
     spend_metrics = datadog_llm_obs_logger._get_spend_metrics(payload)
 
     # Verify budget metrics are present
-    assert "litellm_api_key_max_budget_metric" in spend_metrics
-    assert spend_metrics["litellm_api_key_max_budget_metric"] == 10.0
+    assert "user_api_key_max_budget" in spend_metrics
+    assert spend_metrics["user_api_key_max_budget"] == 10.0
 
-    assert "litellm_api_key_budget_remaining_hours_metric" in spend_metrics
-    # The remaining hours should be calculated based on the reset time
-    assert spend_metrics["litellm_api_key_budget_remaining_hours_metric"] >= 0
+    assert "user_api_key_budget_reset_at" in spend_metrics
+    # The budget reset should be a datetime string in ISO format
+    budget_reset = spend_metrics["user_api_key_budget_reset_at"]
+    assert isinstance(budget_reset, str)
+    print(f"Budget reset datetime: {budget_reset}")
+    # Should be close to 10 days from now
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+    time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
+    assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
 
     print(f"Spend metrics: {spend_metrics}")
 
@@ -1091,18 +1024,22 @@ async def test_datadog_llm_obs_spend_metrics_no_budget(mock_env_vars):
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
     # Create a standard logging payload without budget metadata
-    payload = create_standard_logging_payload()
+    payload = create_standard_logging_payload_with_spend_metrics()
+
+    # Remove budget-related metadata to test no-budget scenario
+    payload["metadata"].pop("user_api_key_max_budget", None)
+    payload["metadata"].pop("user_api_key_budget_reset_at", None)
 
     # Test the _get_spend_metrics method
     spend_metrics = datadog_llm_obs_logger._get_spend_metrics(payload)
 
     # Verify only response cost is present
-    assert "litellm_spend_metric" in spend_metrics
-    assert spend_metrics["litellm_spend_metric"] == 0.1
+    assert "response_cost" in spend_metrics
+    assert spend_metrics["response_cost"] == 0.15
 
     # Budget metrics should not be present
-    assert "litellm_api_key_max_budget_metric" not in spend_metrics
-    assert "litellm_api_key_budget_remaining_hours_metric" not in spend_metrics
+    assert "user_api_key_max_budget" not in spend_metrics
+    assert "user_api_key_budget_reset_at" not in spend_metrics
 
     print(f"Spend metrics (no budget): {spend_metrics}")
 
@@ -1110,6 +1047,7 @@ async def test_datadog_llm_obs_spend_metrics_no_budget(mock_env_vars):
 @pytest.mark.asyncio
 async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     """Test that spend metrics are correctly included in DataDog LLM Observability payloads"""
+    from datetime import datetime
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
     standard_payload = create_standard_logging_payload_with_spend_metrics()
@@ -1138,17 +1076,28 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     spend_metrics = metadata.get("spend_metrics", {})
     assert spend_metrics, "Spend metrics should exist in metadata"
 
-    # Check that all three spend metrics are present
-    assert "litellm_spend_metric" in spend_metrics
-    assert "litellm_api_key_max_budget_metric" in spend_metrics
-    assert "litellm_api_key_budget_remaining_hours_metric" in spend_metrics
+    # Check that all metrics are present
+    assert "response_cost" in spend_metrics
+    assert "user_api_key_spend" in spend_metrics
+    assert "user_api_key_max_budget" in spend_metrics
+    assert "user_api_key_budget_reset_at" in spend_metrics
 
     # Verify the values are correct
-    assert spend_metrics["litellm_spend_metric"] == 0.15  # response_cost
-    assert spend_metrics["litellm_api_key_max_budget_metric"] == 10.0  # max budget
+    assert spend_metrics["response_cost"] == 0.15  # response_cost
+    assert spend_metrics["user_api_key_spend"] == 0.67  # lol
+    assert spend_metrics["user_api_key_max_budget"] == 10.0  # max budget
 
-    # Verify remaining hours is a reasonable value (should be close to 24 since we set it to 24 hours from now)
-    remaining_hours = spend_metrics["litellm_api_key_budget_remaining_hours_metric"]
-    assert isinstance(remaining_hours, (int, float))
-    assert 20 <= remaining_hours <= 25  # Should be close to 24 hours
-
+    # Verify budget reset is a datetime string in ISO format
+    budget_reset = spend_metrics["user_api_key_budget_reset_at"]
+    assert isinstance(budget_reset, str)
+    print(f"Budget reset in payload: {budget_reset}")    # In StandardLoggingUserAPIKeyMetadata
+    user_api_key_budget_reset_at: Optional[str] = None
+    
+    # In DDLLMObsSpendMetrics  
+    user_api_key_budget_reset_at: str
+    # Should be close to 10 days from now
+    from datetime import datetime, timezone
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+    time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
+    assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
