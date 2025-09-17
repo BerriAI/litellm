@@ -487,7 +487,8 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        pass
+        for key, value in vars(litellm_params).items():
+            setattr(self, key, value)
 
 
 def log_guardrail_information(func):
