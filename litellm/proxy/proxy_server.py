@@ -248,7 +248,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -295,7 +297,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -4030,6 +4034,37 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
+
+import aiohttp
+
+http_client: aiohttp.ClientSession = None
+# for completion
+@router.post("/aiohttp/chat/completions")
+@router.post("/aiohttp/v1/chat/completions")
+async def proxy_completion(request: Request):
+    global http_client
+    # Get the raw request body
+    body = await request.json()
+    
+    # Get the authorization header
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    if http_client is None:
+        http_client = aiohttp.ClientSession()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': auth_header
+    }
+
+    async with http_client.post(
+        'https://exampleopenaiendpoint-production-0ee2.up.railway.app/chat/completions',
+        headers=headers,
+        json=body
+    ) as response:
+        return await response.json()
 
 
 @router.post(
