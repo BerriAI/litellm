@@ -104,9 +104,14 @@ async def test_proxy_failure_metrics():
             metrics = await response.text()
 
         print("/metrics", metrics)
+        
+        expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id", user_email="None"} 1.0'
 
+<<<<<<< HEAD
         # Check if the failure metric is present and correct
         expected_metric = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id", user_email="None"} 1.0'
+=======
+>>>>>>> @{u}
 
         assert (
             expected_metric in metrics
