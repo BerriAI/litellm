@@ -4469,6 +4469,7 @@
     },
     "claude-3-7-sonnet-20250219": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-02-01",
         "input_cost_per_token": 3e-06,
@@ -4497,6 +4498,7 @@
     },
     "claude-3-7-sonnet-latest": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2025-06-01",
         "input_cost_per_token": 3e-06,
@@ -4691,6 +4693,7 @@
     },
     "claude-opus-4-20250514": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "anthropic",
@@ -4717,6 +4720,7 @@
     },
     "claude-sonnet-4-20250514": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "anthropic",
