@@ -469,16 +469,13 @@ async def get_end_user_object(
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
-        if isinstance(cached_user_obj, dict):
-            return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
-        elif isinstance(cached_user_obj, LiteLLM_EndUserTable):
-            return_obj = cached_user_obj
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
+        # Convert cached dict to LiteLLM_EndUserTable instance
+        return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+        check_in_budget(end_user_obj=return_obj)
+        return return_obj
+
     # else, check db
-    try:
+    try:        
         response = await prisma_client.db.litellm_endusertable.find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True},
@@ -487,9 +484,9 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        # save the end-user object to cache
+        # save the end-user object to cache (always store as dict for consistency)
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=response
+            key="end_user_id:{}".format(end_user_id), value=response.dict()
         )
 
         _response = LiteLLM_EndUserTable(**response.dict())
