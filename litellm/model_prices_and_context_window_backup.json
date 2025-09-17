@@ -6228,6 +6228,7 @@
         "input_cost_per_token": 8e-07,
         "output_cost_per_token": 4e-06,
         "cache_creation_input_token_cost": 1e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.6e-06,
         "cache_read_input_token_cost": 8e-08,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.01,
