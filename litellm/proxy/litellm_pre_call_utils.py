@@ -171,12 +171,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    )
-    team_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
-    )
+    key_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    team_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -272,7 +272,7 @@ class LiteLLMProxyRequestSetup:
         if timeout_header is not None:
             return float(timeout_header)
         return None
-    
+
     @staticmethod
     def _get_stream_timeout_from_request(headers: dict) -> Optional[float]:
         """
@@ -292,13 +292,14 @@ class LiteLLMProxyRequestSetup:
         if num_retries_header is not None:
             return int(num_retries_header)
         return None
-    
+
     @staticmethod
     def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
         """
         Get the `spend_logs_metadata` from the request headers.
         """
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
         spend_logs_metadata_header = headers.get("x-litellm-spend-logs-metadata", None)
         if spend_logs_metadata_header is not None:
             return safe_json_loads(spend_logs_metadata_header)
@@ -337,16 +338,24 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def add_internal_user_from_user_mapping(general_settings: Optional[Dict], user_api_key_dict: UserAPIKeyAuth, headers: dict) -> UserAPIKeyAuth:
+    def add_internal_user_from_user_mapping(
+        general_settings: Optional[Dict],
+        user_api_key_dict: UserAPIKeyAuth,
+        headers: dict,
+    ) -> UserAPIKeyAuth:
         if general_settings is None:
             return user_api_key_dict
         user_header_mapping = general_settings.get("user_header_mappings")
         if not user_header_mapping:
             return user_api_key_dict
-        header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(user_header_mapping)
+        header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+            user_header_mapping
+        )
         if not header_name:
             return user_api_key_dict
-        header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(headers, header_name)
+        header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, header_name
+        )
         if header_value:
             user_api_key_dict.user_id = header_value
             return user_api_key_dict
@@ -497,8 +506,10 @@ class LiteLLMProxyRequestSetup:
         timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
-        
-        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
+
+        stream_timeout = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers
+        )
         if stream_timeout is not None:
             data["stream_timeout"] = stream_timeout
 
@@ -507,7 +518,7 @@ class LiteLLMProxyRequestSetup:
             data["num_retries"] = num_retries
 
         return data
-    
+
     @staticmethod
     def add_litellm_metadata_from_request_headers(
         headers: dict,
@@ -520,11 +531,16 @@ class LiteLLMProxyRequestSetup:
         Relevant issue: https://github.com/BerriAI/litellm/issues/14008
         """
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
+
         metadata_from_headers = LitellmMetadataFromRequestHeaders()
-        spend_logs_metadata = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
+        spend_logs_metadata = (
+            LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(
+                headers
+            )
+        )
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
-        
+
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
@@ -539,6 +555,8 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_spend=user_api_key_dict.spend,
+            user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
@@ -589,11 +607,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = (
-                LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=key_metadata["tags"],
-                )
+            data[_metadata_variable_name][
+                "tags"
+            ] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=key_metadata["tags"],
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -715,7 +733,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-
     _headers = clean_headers(
         request.headers,
         litellm_key_header_name=(
@@ -741,8 +758,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-
-
     data.update(
         LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
             headers=_headers,
@@ -764,7 +779,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
-    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(general_settings, user_api_key_dict, _headers)
+    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+        general_settings, user_api_key_dict, _headers
+    )
 
     # Parse user info from headers
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
@@ -773,7 +790,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             user_api_key_dict.end_user_id = user
         if "user" not in data:
             data["user"] = user
-
 
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
@@ -824,9 +840,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
+        data[_metadata_variable_name][
+            "global_max_parallel_requests"
+        ] = general_settings.get("global_max_parallel_requests", None)
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
