@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 # CompactifAI
 https://docs.compactif.ai/
 
-CompactifAI offers highly compressed versions of leading language models, delivering up to **70% lower inference costs**, **4x throughput gains**, and **low-latency inference** with minimal quality loss (<5%). CompactifAI's OpenAI-compatible API makes integration straightforward, enabling developers to build ultra-efficient, scalable AI applications with superior concurrency and resource efficiency.
+CompactifAI offers highly compressed versions of leading language models, delivering up to **70% lower inference costs**, **4x throughput gains**, and **low-latency inference** with minimal quality loss (under 5%). CompactifAI's OpenAI-compatible API makes integration straightforward, enabling developers to build ultra-efficient, scalable AI applications with superior concurrency and resource efficiency.
 
 | Property | Details |
 |-------|-------|
@@ -192,7 +192,7 @@ Common model formats:
 ## Benefits
 
 - **Cost Efficient**: Up to 70% lower inference costs compared to standard models
-- **High Performance**: 4x throughput gains with minimal quality loss (<5%)
+- **High Performance**: 4x throughput gains with minimal quality loss (under 5%)
 - **Low Latency**: Optimized for fast response times
 - **Drop-in Replacement**: Full OpenAI API compatibility
 - **Scalable**: Superior concurrency and resource efficiency
