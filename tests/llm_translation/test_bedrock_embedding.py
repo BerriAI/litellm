@@ -78,7 +78,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             pytest.fail(f"Error occurred: {e}")
 
 
-def test_text_embedding():
+def test_e2e_bedrock_embedding():
     """Test text embedding with TwelveLabs Marengo"""
     print("Testing text embedding...")
     litellm._turn_on_debug()
@@ -91,26 +91,22 @@ def test_text_embedding():
 
 
 
-def test_image_embedding():
+def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
     """Test image embedding with TwelveLabs Marengo"""
     print("Testing image embedding...")
+    litellm._turn_on_debug()
     
-    # Create a simple base64 encoded image (1x1 pixel PNG)
-    png_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\tpHYs\x00\x00\x0b\x13\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\nIDATx\x9cc```\x00\x00\x00\x04\x00\x01\xdd\x8d\xb4\x1c\x00\x00\x00\x00IEND\xaeB`\x82'
-    base64_image = base64.b64encode(png_data).decode('utf-8')
-    data_uri = f"data:image/png;base64,{base64_image}"
+    # Load duck.png and convert to base64
+    duck_img_path = os.path.join(os.path.dirname(__file__), "duck.png")
+    with open(duck_img_path, "rb") as img_file:
+        duck_img_data = base64.b64encode(img_file.read()).decode('utf-8')
+        duck_img_base64 = f"data:image/png;base64,{duck_img_data}"
     
-    try:
         response = litellm.embedding(
-            model="bedrock/twelvelabs.marengo-embed-2-7-v1:0",
-            input=[data_uri],
-            aws_access_key_id="your-access-key",
-            aws_secret_access_key="your-secret-key",
-            aws_region_name="us-west-2"
+            model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input=[duck_img_base64],
+            aws_region_name="us-east-1"
         )
         print(f"Image embedding successful! Vector size: {response}")
         return True
-    except Exception as e:
-        print(f"Image embedding failed: {e}")
-        return False
 
