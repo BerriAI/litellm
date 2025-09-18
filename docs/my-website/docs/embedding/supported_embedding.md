@@ -266,6 +266,61 @@ print(response)
 | Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="cohere.embed-multilingual-v3", input=input)` |
+| TwelveLabs Marengo Embed 2.7 | `embedding(model="bedrock/twelvelabs.marengo-embed-2-7-v1:0", input=input)` |
+
+### TwelveLabs Marengo Embed 2.7
+
+TwelveLabs Marengo Embed 2.7 supports multimodal embeddings for text and images, with plans to support video and audio in future phases.
+
+#### Text Embedding Usage
+```python
+from litellm import embedding
+import os
+
+# Set your AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" 
+os.environ["AWS_REGION_NAME"] = ""
+
+response = embedding(
+    model="bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+#### Image Embedding Usage
+```python
+from litellm import embedding
+import os
+
+# Set your AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" 
+os.environ["AWS_REGION_NAME"] = ""
+
+# Base64 encoded image
+image_b64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
+
+response = embedding(
+    model="bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+    input=[image_b64],
+    # Optional: specify embedding options
+    embeddingOption=["visual-text", "visual-image"]
+)
+print(response)
+```
+
+#### Advanced Parameters
+```python
+response = embedding(
+    model="bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+    input=["text to embed"],
+    # Optional parameters
+    textTruncate="end",  # "start", "end", or "none"
+    embeddingOption=["visual-text"]  # ["visual-text", "visual-image", "audio"]
+)
+```
 
 
 ## Cohere Embedding Models
