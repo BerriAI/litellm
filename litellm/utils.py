@@ -520,6 +520,12 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
+
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+
+
+
+
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -594,7 +600,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -604,7 +610,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -629,7 +635,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if inspect.iscoroutinefunction(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -662,7 +668,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    inspect.iscoroutinefunction(callback)
+                    coroutine_checker.is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
@@ -899,12 +905,7 @@ def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
-        if inspect.iscoroutine(value):
-            return True
-        elif inspect.iscoroutinefunction(value):
-            return True
-        else:
-            return False
+        return coroutine_checker.is_async_callable(value)
 
     async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
         """
@@ -1598,7 +1599,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
-    is_coroutine = inspect.iscoroutinefunction(original_function)
+    is_coroutine = coroutine_checker.is_async_callable(original_function)
 
     # Return the appropriate wrapper based on the original function type
     if is_coroutine:
