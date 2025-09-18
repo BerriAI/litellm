@@ -69,15 +69,6 @@ class TwelveLabsMarengoEmbeddingConfig:
             if "textTruncate" not in inference_params:
                 transformed_request["textTruncate"] = "end"
 
-        # Set default embedding options for Phase 1 (text and image)
-        if "embeddingOption" not in inference_params:
-            if is_encoded:
-                # For images, return both visual-text and visual-image embeddings
-                transformed_request["embeddingOption"] = ["visual-text", "visual-image"]
-            else:
-                # For text, return visual-text embedding
-                transformed_request["embeddingOption"] = ["visual-text"]
-
         # Apply any additional inference parameters
         for k, v in inference_params.items():
             if k not in [
