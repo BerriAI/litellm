@@ -312,6 +312,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "parasail",
     "vercel_ai_gateway",
     "ovhcloud",
 ]
@@ -490,6 +491,7 @@ openai_compatible_providers: List = [
     "morph",
     "lambda_ai",
     "hyperbolic",
+    "parasail",
     "vercel_ai_gateway",
     "aiml",
 ]

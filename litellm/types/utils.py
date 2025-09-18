@@ -2320,6 +2320,7 @@ class LlmProviders(str, Enum):
     OOBABOOGA = "oobabooga"
     OLLAMA = "ollama"
     OLLAMA_CHAT = "ollama_chat"
+    PARASAIL = "parasail"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     MISTRAL = "mistral"
