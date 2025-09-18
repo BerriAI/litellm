@@ -102,6 +102,61 @@ class AmazonConverseConfig(BaseConfig):
             "performanceConfig": PerformanceConfigBlock,
         }
 
+    @staticmethod
+    def _convert_consecutive_user_messages_to_guarded_text(
+        messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Convert consecutive user messages at the end to guarded_text type if guardrailConfig is present
+        and no guarded_text is already present in those messages.
+        """
+        # Check if guardrailConfig is present
+        if "guardrailConfig" not in optional_params:
+            return messages
+
+        # Find all consecutive user messages at the end
+        consecutive_user_message_indices = []
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                consecutive_user_message_indices.append(i)
+            else:
+                break
+
+        if not consecutive_user_message_indices:
+            return messages
+
+        # Process each consecutive user message
+        messages_copy = copy.deepcopy(messages)
+        for user_message_index in consecutive_user_message_indices:
+            user_message = messages_copy[user_message_index]
+            content = user_message.get("content", [])
+
+            if isinstance(content, list):
+                has_guarded_text = any(
+                    isinstance(item, dict) and item.get("type") == "guarded_text"
+                    for item in content
+                )
+                if has_guarded_text:
+                    continue  # Skip this message if it already has guarded_text
+
+                # Convert text elements to guarded_text
+                new_content = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        new_item = {"type": "guarded_text", "text": item["text"]}  # type: ignore
+                        new_content.append(new_item)
+                    else:
+                        new_content.append(item)
+
+                messages_copy[user_message_index]["content"] = new_content  # type: ignore
+            elif isinstance(content, str):
+                # If content is a string, convert it to guarded_text
+                messages_copy[user_message_index]["content"] = [  # type: ignore
+                    {"type": "guarded_text", "text": content}  # type: ignore
+                ]
+
+        return messages_copy
+
     @classmethod
     def get_config(cls):
         return {
@@ -769,6 +824,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
@@ -820,6 +880,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
 
         _data: CommonRequestObject = self._transform_request_helper(
             model=model,
