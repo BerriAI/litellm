@@ -576,8 +576,8 @@ async def test_user_email_in_all_required_metrics():
     Test that user_email label is present in all the metrics that were requested to have it:
     - litellm_proxy_total_requests_metric_total
     - litellm_proxy_failed_requests_metric_total
-    - litellm_input_tokens_total
-    - litellm_output_tokens_total
+    - litellm_input_tokens_metric_total
+    - litellm_output_tokens_metric_total
     - litellm_requests_metric_total
     - litellm_spend_metric_total
     """
@@ -608,8 +608,8 @@ async def test_user_email_in_all_required_metrics():
         # Check that user_email appears in all the required metrics
         required_metrics_with_user_email = [
             "litellm_proxy_total_requests_metric_total",
-            "litellm_input_tokens_total",
-            "litellm_output_tokens_total",
+            "litellm_input_tokens_metric_total",
+            "litellm_output_tokens_metric_total",
             "litellm_requests_metric_total",
             "litellm_spend_metric_total"
         ]
