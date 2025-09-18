@@ -171,10 +171,6 @@ class TestMCPRequestHandler:
             with patch.object(
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
             ) as mock_team_servers:
-<<<<<<< HEAD
-
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
                 # Configure mocks to return the test data
                 mock_key_servers.return_value = key_servers
                 mock_team_servers.return_value = team_servers
@@ -346,17 +342,11 @@ class TestMCPRequestHandler:
         # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-<<<<<<< HEAD
                 token=(
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     if api_key
                     else None
                 ),
-=======
-                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                if api_key
-                else None,
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
                 api_key=api_key,
                 user_id="test-user-id" if api_key else None,
                 team_id="test-team-id" if api_key else None,
@@ -374,10 +364,6 @@ class TestMCPRequestHandler:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
-<<<<<<< HEAD
-                mcp_protocol_version,
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
@@ -557,10 +543,6 @@ class TestMCPRequestHandler:
                 mcp_auth_header,
                 mcp_servers_result,
                 mcp_server_auth_headers,
-<<<<<<< HEAD
-                mcp_protocol_version,
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
@@ -599,10 +581,6 @@ class TestMCPCustomHeaderName:
             with patch(
                 "litellm.proxy.proxy_server.general_settings"
             ) as mock_general_settings:
-<<<<<<< HEAD
-
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
                 # Configure mocks
                 mock_get_secret.return_value = env_var
                 mock_general_settings.get.return_value = general_setting
@@ -706,10 +684,6 @@ class TestMCPCustomHeaderName:
             "_get_mcp_client_side_auth_header_name",
             return_value="custom-auth-header",
         ):
-<<<<<<< HEAD
-
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
             # Create ASGI scope with custom header
             scope = {
                 "type": "http",
@@ -742,10 +716,6 @@ class TestMCPCustomHeaderName:
                     mcp_auth_header,
                     mcp_servers,
                     mcp_server_auth_headers,
-<<<<<<< HEAD
-                    mcp_protocol_version,
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
                 ) = await MCPRequestHandler.process_mcp_request(scope)
 
                 # Assert the results
@@ -965,10 +935,6 @@ class TestMCPAccessGroupsE2E:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
-<<<<<<< HEAD
-                mcp_protocol_version,
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
@@ -997,10 +963,6 @@ def test_mcp_path_based_server_segregation(monkeypatch):
             mcp_auth_header,
             mcp_servers,
             mcp_server_auth_headers,
-<<<<<<< HEAD
-            mcp_protocol_version,
-=======
->>>>>>> 78d744e15d (fix: remove adding Mcp-Protocol-Version header (#14069))
         ) = get_auth_context()
 
         # Capture the MCP servers for testing

@@ -18,7 +18,6 @@ from typing import Optional
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
-    MCPSpecVersion,
     MCPTransport,
     UserAPIKeyAuth,
 )
