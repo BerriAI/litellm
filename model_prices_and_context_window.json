@@ -13256,6 +13256,16 @@
         ],
         "supports_tool_choice": false
     },
+    "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "lemonade",
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "groq/deepseek-r1-distill-llama-70b": {
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "groq",
