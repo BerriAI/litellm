@@ -1023,4 +1023,4 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     assert response.json() == {"status": "ok"}
 
     # The context should have mcp_servers set to ["zapier", "group1"]
-    assert list(captured_mcp_servers.values())[0] == ["zapier", "group1/tools"]
+    assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
