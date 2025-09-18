@@ -1,57 +1,58 @@
-# Codex Agent (CLI)
+# Codex Agent (Experimental, Env‑Gated)
 
-Run the Codex headless CLI from LiteLLM and stream JSONL output—useful for iterative, tool-using workflows.
+Integrate an experimental “codex‑agent” via the LiteLLM Router for iterative, tool‑using workflows.
+It is opt‑in and disabled by default. Use through Router like any other model.
 
 - Provider slug: `codex-agent` (alias: `codex_cli_agent`)
-- Status: Experimental; disabled by default (env-gated)
+- Status: Experimental; disabled by default (env‑gated)
 
-## Setup
+## Enabling (Environment‑Gated)
 
-1. Install Codex CLI and authenticate (`codex login`).
-2. Set environment variables:
-   - `LITELLM_ENABLE_CODEX_AGENT=1` (enable provider)
-   - `LITELLM_CODEX_BINARY_PATH=/abs/path/to/codex` (recommended)
+Set the feature flag to opt‑in explicitly:
+
+```bash
+export LITELLM_ENABLE_CODEX_AGENT=1
+```
+
+Add a Router model entry that points to the provider alias (no client changes):
+
+```python
+from litellm import Router
+router = Router(model_list=[
+  {"model_name": "codex-agent-1", "litellm_params": {"model": "codex-agent/mini"}},
+])
+```
 
 ## Usage
 
 ```python
-from litellm import completion
+from litellm import Router
 import os
 
 os.environ["LITELLM_ENABLE_CODEX_AGENT"] = "1"
-os.environ["LITELLM_CODEX_BINARY_PATH"] = "/absolute/path/to/codex"
+router = Router(model_list=[
+  {"model_name": "codex-agent-1", "litellm_params": {"model": "codex-agent/mini"}},
+])
 
-resp = completion(
-  model="codex-agent/gpt-5",  # maps to --model gpt-5
-  messages=[{"role": "user", "content": "plan steps"}],
-  optional_params={
-    "extra_body": {
-      "codex_args": ["--json", "--max-iterations", "5"],
-      "codex_sandbox": "read-only",
-      "codex_approval_mode": "never"
-    }
-  },
+resp = await router.acompletion(
+  model="codex-agent-1",
+  messages=[{"role": "user", "content": "Plan steps and use tools as needed."}],
 )
 print(resp.choices[0].message.content)
 ```
 
-## Parameters (extra_body)
-
-- `codex_cli_model`: maps to `--model`
-- `codex_args`: list of CLI args passed through as-is
-- `codex_sandbox`: `read-only` | `workspace-write` | `danger-full-access`
-- `codex_approval_mode`: `never` (default) | `ask` | `always`
-- Timeouts: `codex_first_byte_seconds`, `codex_idle_timeout_seconds`, `codex_max_run_seconds`
-- Images: `codex_images` (list of file paths)
-- Working dir persistence: `working_dir_persistence_key`
-
-## Safety defaults
-
-- `sandbox=read-only`
-- `approval_mode=never`
-- “YOLO” / full access disabled unless explicitly allowed by env
-
 ## Notes
 
-- This provider runs a local CLI, not an HTTP endpoint.
-- Follow the provider guide for repo conventions: https://docs.litellm.ai/docs/provider_registration/
+- Experimental surface; subject to change.
+- Off by default; enable only via `LITELLM_ENABLE_CODEX_AGENT=1`.
+- Use through Router like any other model; keep CI guarded by the flag.
+
+### Disable
+
+Unset the flag or remove the Router model entry:
+
+```bash
+unset LITELLM_ENABLE_CODEX_AGENT
+```
+
+Follow the provider guide for repo conventions: https://docs.litellm.ai/docs/provider_registration/
