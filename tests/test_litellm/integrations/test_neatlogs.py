@@ -13,7 +13,7 @@ from litellm.integrations.neatlogs.neatlogs import NeatlogsLogger
 
 @pytest.fixture
 def neatlogs_config():
-    """Fixture for NeatLogs configuration"""
+    """NeatLogs configuration"""
     return {
         "api_key": "test_api_key",
         "endpoint": "https://app.neatlogs.com/api/data/v2"
