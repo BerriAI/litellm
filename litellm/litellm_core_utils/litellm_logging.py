@@ -3905,22 +3905,25 @@ class StandardLoggingPayloadSetup:
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
             user_api_key_alias=None,
+            user_api_key_spend=None,
+            user_api_key_max_budget=None,
+            user_api_key_budget_reset_at=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
+            user_api_key_end_user_id=None,
+            user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
-            user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
             requester_custom_headers=None,
-            user_api_key_request_route=None,
             cold_storage_object_key=None,
         )
         if isinstance(metadata, dict):
@@ -4583,14 +4586,10 @@ def get_standard_logging_metadata(
         cold_storage_object_key=None,
     )
     if isinstance(metadata, dict):
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = StandardLoggingMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in StandardLoggingMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
+        # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
+        for key in StandardLoggingMetadata.__annotations__.keys():
+            if key in metadata:
+                clean_metadata[key] = metadata[key]  # type: ignore
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
