@@ -88,10 +88,14 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     text: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
 class GuardrailConverseContentBlock(TypedDict, total=False):
     """Content block for selective guardrail evaluation in Bedrock Converse API"""
 
-    text: str
+    text: GuardrailConverseTextBlock
 
 
 class ContentBlock(TypedDict, total=False):
@@ -103,7 +107,7 @@ class ContentBlock(TypedDict, total=False):
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
-    guardrailConverseContent: GuardrailConverseContentBlock
+    guardContent: GuardrailConverseContentBlock
 
 
 class MessageBlock(TypedDict):
