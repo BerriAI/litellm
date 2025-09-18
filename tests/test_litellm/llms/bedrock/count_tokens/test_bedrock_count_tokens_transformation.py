@@ -1,10 +1,9 @@
-import json
 import os
 import sys
-from unittest.mock import MagicMock
-import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 
 
@@ -27,7 +26,7 @@ def test_transform_anthropic_to_bedrock_request():
 
     anthropic_request = {
         "model": "anthropic.claude-3-sonnet-20240229-v1:0",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     result = config.transform_anthropic_to_bedrock_count_tokens(anthropic_request)

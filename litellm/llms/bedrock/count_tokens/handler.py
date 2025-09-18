@@ -40,7 +40,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Validate the request
             self.validate_count_tokens_request(request_data)
 
-            verbose_logger.debug(f"Processing CountTokens request for resolved model: {resolved_model}")
+            verbose_logger.debug(
+                f"Processing CountTokens request for resolved model: {resolved_model}"
+            )
 
             # Get AWS region using existing LiteLLM function
             aws_region_name = self._get_aws_region_name(
@@ -59,7 +61,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Transformed request: {bedrock_request}")
 
             # Get endpoint URL using simplified function
-            endpoint_url = self.get_bedrock_count_tokens_endpoint(resolved_model, aws_region_name)
+            endpoint_url = self.get_bedrock_count_tokens_endpoint(
+                resolved_model, aws_region_name
+            )
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 
@@ -76,6 +80,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
 
             # Make HTTP request
             import httpx
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     endpoint_url,
@@ -91,7 +96,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                     verbose_logger.error(f"AWS Bedrock error: {error_text}")
                     raise HTTPException(
                         status_code=400,
-                        detail={"error": f"AWS Bedrock error: {error_text}"}
+                        detail={"error": f"AWS Bedrock error: {error_text}"},
                     )
 
                 bedrock_response = response.json()
@@ -99,7 +104,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Bedrock response: {bedrock_response}")
 
             # Transform response back to expected format
-            final_response = self.transform_bedrock_response_to_anthropic(bedrock_response)
+            final_response = self.transform_bedrock_response_to_anthropic(
+                bedrock_response
+            )
 
             verbose_logger.debug(f"Final response: {final_response}")
 
@@ -112,5 +119,5 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail={"error": f"CountTokens processing error: {str(e)}"}
+                detail={"error": f"CountTokens processing error: {str(e)}"},
             )
