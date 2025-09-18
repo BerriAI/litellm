@@ -200,8 +200,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
-            input_schema_filtered = {k: v for k, v in _input_schema.items() if k in _allowed_properties}
-            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(**input_schema_filtered)
+            input_schema_filtered = {
+                k: v for k, v in _input_schema.items() if k in _allowed_properties
+            }
+            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(
+                **input_schema_filtered
+            )
 
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
@@ -822,6 +826,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and _usage["cache_creation_input_tokens"] is not None
         ):
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+            prompt_tokens += cache_creation_input_tokens
         if (
             "cache_read_input_tokens" in _usage
             and _usage["cache_read_input_tokens"] is not None
