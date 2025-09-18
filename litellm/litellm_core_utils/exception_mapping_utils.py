@@ -1449,6 +1449,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         response=getattr(original_exception, "response", None),
                     )
+                elif "invalid type: parameter" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                    )
                 elif "too many tokens" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(

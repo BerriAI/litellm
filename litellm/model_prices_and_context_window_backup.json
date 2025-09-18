@@ -296,6 +296,18 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1024
     },
+    "twelvelabs.marengo-embed-2-7-v1:0": {
+        "input_cost_per_token": 7e-05,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "max_tokens": 77,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "supports_embedding_image_input": true,
+        "supports_image_input": true,
+        "supports_multimodal_embedding": true
+    },
     "amazon.titan-text-express-v1": {
         "input_cost_per_token": 1.3e-06,
         "litellm_provider": "bedrock",
