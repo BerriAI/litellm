@@ -309,9 +309,6 @@ class BedrockEmbedding(BaseAWSLLM):
             )
 
             responses.append(response)
-
-        returned_response: Optional[EmbeddingResponse] = None
-
         ## TRANSFORM RESPONSE ##
         return self._transform_response(
             response_list=responses, model=model, provider=provider
