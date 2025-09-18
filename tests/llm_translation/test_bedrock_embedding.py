@@ -76,3 +76,41 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+def test_text_embedding():
+    """Test text embedding with TwelveLabs Marengo"""
+    print("Testing text embedding...")
+    litellm._turn_on_debug()
+    response = litellm.embedding(
+        model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        input=["Hello world from LiteLLM with TwelveLabs Marengo!"],
+        aws_region_name="us-east-1"
+    )
+    print(f"Text embedding successful! Vector size: {response}")
+
+
+
+def test_image_embedding():
+    """Test image embedding with TwelveLabs Marengo"""
+    print("Testing image embedding...")
+    
+    # Create a simple base64 encoded image (1x1 pixel PNG)
+    png_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\tpHYs\x00\x00\x0b\x13\x00\x00\x0b\x13\x01\x00\x9a\x9c\x18\x00\x00\x00\nIDATx\x9cc```\x00\x00\x00\x04\x00\x01\xdd\x8d\xb4\x1c\x00\x00\x00\x00IEND\xaeB`\x82'
+    base64_image = base64.b64encode(png_data).decode('utf-8')
+    data_uri = f"data:image/png;base64,{base64_image}"
+    
+    try:
+        response = litellm.embedding(
+            model="bedrock/twelvelabs.marengo-embed-2-7-v1:0",
+            input=[data_uri],
+            aws_access_key_id="your-access-key",
+            aws_secret_access_key="your-secret-key",
+            aws_region_name="us-west-2"
+        )
+        print(f"Image embedding successful! Vector size: {response}")
+        return True
+    except Exception as e:
+        print(f"Image embedding failed: {e}")
+        return False
+
