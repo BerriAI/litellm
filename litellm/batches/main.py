@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
+from litellm.llms.bedrock.batches.handler import BedrockBatchesAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import OpenAIBatchesAPI
@@ -46,6 +47,7 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
+bedrock_batches_instance = BedrockBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
@@ -769,7 +771,7 @@ def list_batches(
 
 async def acancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -810,7 +812,7 @@ async def acancel_batch(
 
 def cancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -917,9 +919,30 @@ def cancel_batch(
                 cancel_batch_data=_cancel_batch_request,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "bedrock":
+            # For Bedrock, we don't need api_base or api_key in the traditional sense
+            # The AWS credentials are handled through boto3/environment variables
+            model = kwargs.get("model", "")
+            
+            # Create logging object for Bedrock requests
+            litellm_logging_obj = kwargs.get(
+                "litellm_logging_obj", LiteLLMLoggingObj()
+            )
+            
+            response = bedrock_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                cancel_batch_data=_cancel_batch_request,
+                api_key=None,  # Not used for Bedrock
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                optional_params=dict(optional_params),
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                model=model,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'bedrock' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

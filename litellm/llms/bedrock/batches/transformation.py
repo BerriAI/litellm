@@ -441,6 +441,129 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             metadata=enriched_metadata,
         )
 
+    def transform_cancel_batch_request(
+        self,
+        batch_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> Dict[str, Any]:
+        """
+        Transform batch cancellation request for Bedrock.
+        
+        Args:
+            batch_id: Bedrock job ARN
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            Transformed request data for Bedrock StopModelInvocationJob API
+        """
+        # For Bedrock, batch_id should be the full job ARN
+        # The StopModelInvocationJob API expects the full ARN as the identifier
+        if not batch_id.startswith("arn:aws:bedrock:"):
+            raise ValueError(f"Invalid batch_id format. Expected ARN, got: {batch_id}")
+        
+        # Extract the job identifier from the ARN - use the full ARN path part
+        # ARN format: arn:aws:bedrock:region:account:model-invocation-job/job-name
+        arn_parts = batch_id.split(":")
+        if len(arn_parts) < 6:
+            raise ValueError(f"Invalid ARN format: {batch_id}")
+        
+        region = arn_parts[3]
+        # arn_parts[5] contains "model-invocation-job/{jobId}"
+        
+        # Build the endpoint URL for StopModelInvocationJob
+        # AWS API format: POST /model-invocation-job/{jobIdentifier}/stop
+        # Use the FULL ARN as jobIdentifier and URL-encode it (includes ':' and '/')
+        import urllib.parse as _ul
+        encoded_arn = _ul.quote(batch_id, safe="")
+        endpoint_url = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}/stop"
+        
+        # Use common utility for AWS signing
+        signed_headers, signed_data = self.common_utils.sign_aws_request(
+            service_name="bedrock",
+            data={},  # POST request with empty body
+            endpoint_url=endpoint_url,
+            optional_params=optional_params,
+            method="POST"
+        )
+        
+        # Return pre-signed request format
+        return {
+            "method": "POST",
+            "url": endpoint_url,
+            "headers": signed_headers,
+            "data": signed_data.decode('utf-8') if signed_data else "{}"
+        }
+
+    def transform_cancel_batch_response(
+        self,
+        model: Optional[str],
+        raw_response,
+        logging_obj: Any,
+        litellm_params: dict,
+    ):
+        """
+        Transform Bedrock batch cancellation response to OpenAI Batch format.
+        
+        Args:
+            model: Optional model name
+            raw_response: HTTP response from StopModelInvocationJob
+            logging_obj: LiteLLM logging object
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            OpenAI Batch object representing the cancelled batch
+        """
+        from litellm.types.llms.bedrock import BedrockGetBatchResponse
+        from openai.types.batch import Batch
+        
+        try:
+            response_data: BedrockGetBatchResponse = raw_response.json()
+        except Exception as e:
+            raise ValueError(f"Failed to parse Bedrock cancel batch response: {e}")
+        
+        job_arn = response_data.get("jobArn", "")
+        status_str: str = str(response_data.get("status", "Stopping"))
+        
+        # Map Bedrock status to OpenAI-compatible status
+        status_mapping = {
+            "Stopping": "cancelling",
+            "Stopped": "cancelled",
+        }
+        
+        # For cancel requests, we expect the status to be "Stopping" or "Stopped"
+        openai_status = status_mapping.get(status_str, "cancelling")
+        
+        # Create a minimal OpenAI Batch object for the cancelled batch
+        # We don't have all the original batch details in the cancel response,
+        # so we'll create a minimal representation
+        return Batch(
+            id=job_arn,
+            object="batch",
+            endpoint="/v1/chat/completions",
+            errors=None,
+            input_file_id="",  # Not available in cancel response
+            completion_window="24h",
+            status=openai_status,  # type: ignore
+            output_file_id=None,
+            error_file_id=None,
+            created_at=int(response_data.get("submitTime", 0)) if response_data.get("submitTime") else 0,
+            in_progress_at=None,
+            expires_at=None,
+            finalizing_at=None,
+            completed_at=None,
+            failed_at=None,
+            expired_at=None,
+            cancelling_at=int(response_data.get("lastModifiedTime", 0)) if response_data.get("lastModifiedTime") and status_str == "Stopping" else None,
+            cancelled_at=int(response_data.get("endTime", 0)) if response_data.get("endTime") and status_str == "Stopped" else None,
+            request_counts=None,
+            metadata={
+                "bedrock_job_arn": job_arn,
+                "bedrock_status": status_str,
+            },
+        )
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, Headers]
     ) -> BaseLLMException:
