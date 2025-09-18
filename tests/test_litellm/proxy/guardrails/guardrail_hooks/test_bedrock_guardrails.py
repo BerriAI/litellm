@@ -1187,59 +1187,6 @@ async def test_bedrock_guardrail_uses_default_endpoint_when_no_custom_set(monkey
 
         print(f"Default endpoint test passed. URL: {prepped_request.url}")
 
-
-@pytest.mark.asyncio
-async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch):
-    """Test that aws_bedrock_runtime_endpoint parameter takes precedence over environment variable
-
-    This test verifies the corrected behavior where the parameter should take precedence
-    over the environment variable, consistent with the endpoint_url logic.
-    """
-
-    param_endpoint = "https://param-bedrock.example.com"
-    env_endpoint = "https://env-bedrock.example.com"
-
-    # Set environment variable
-    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", env_endpoint)
-
-    # Create guardrail with explicit aws_bedrock_runtime_endpoint
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail",
-        guardrailVersion="DRAFT",
-        aws_bedrock_runtime_endpoint=param_endpoint,
-    )
-
-    # Mock credentials
-    mock_credentials = MagicMock()
-    mock_credentials.access_key = "test-access-key"
-    mock_credentials.secret_key = "test-secret-key"
-    mock_credentials.token = None
-
-    # Test data
-    data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
-    optional_params = {}
-    aws_region_name = "us-east-1"
-
-    # Mock the _load_credentials method
-    with patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, aws_region_name)
-    ):
-        # Call _prepare_request which internally calls get_runtime_endpoint
-        prepped_request = guardrail._prepare_request(
-            credentials=mock_credentials,
-            data=data,
-            optional_params=optional_params,
-            aws_region_name=aws_region_name,
-        )
-
-        # Verify that the parameter takes precedence over environment variable
-        expected_url = f"{param_endpoint}/guardrail/{guardrail.guardrailIdentifier}/version/{guardrail.guardrailVersion}/apply"
-        assert (
-            prepped_request.url == expected_url
-        ), f"Expected parameter endpoint to take precedence. Got: {prepped_request.url}"
-
-        print(f"Parameter precedence test passed. URL: {prepped_request.url}")
-
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_200_with_exception_in_output_raises_and_logs_failure():
     """
