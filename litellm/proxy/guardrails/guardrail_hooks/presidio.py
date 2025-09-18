@@ -675,5 +675,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Update the guardrails litellm params in memory
         """
+        super().update_in_memory_litellm_params(litellm_params)
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config
