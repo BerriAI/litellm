@@ -23,7 +23,6 @@ router = APIRouter(
 if MCP_AVAILABLE:
     from litellm.experimental_mcp_client.client import MCPTool
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        _convert_protocol_version_to_enum,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.server import (

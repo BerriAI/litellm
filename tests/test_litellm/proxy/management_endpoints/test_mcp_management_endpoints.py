@@ -31,7 +31,6 @@ def generate_mock_mcp_server_db_record(
     alias: str = "Test DB Server",
     url: str = "https://db-server.example.com/mcp",
     transport: str = "sse",
-    spec_version: str = "2025-03-26",
     auth_type: Optional[str] = None,
 ) -> LiteLLM_MCPServerTable:
     """Generate a mock MCP server record from database"""
@@ -41,11 +40,6 @@ def generate_mock_mcp_server_db_record(
         alias=alias,
         url=url,
         transport=MCPTransport.sse if transport == "sse" else MCPTransport.http,
-        spec_version=(
-            MCPSpecVersion.mar_2025
-            if spec_version == "2025-03-26"
-            else MCPSpecVersion.nov_2024
-        ),
         auth_type=MCPAuth.api_key if auth_type == "api_key" else None,
         created_at=now,
         updated_at=now,
@@ -59,7 +53,6 @@ def generate_mock_mcp_server_config_record(
     name: str = "Test Config Server",
     url: str = "https://config-server.example.com/mcp",
     transport: str = "http",
-    spec_version: str = "2025-03-26",
     auth_type: Optional[str] = None,
 ) -> MCPServer:
     """Generate a mock MCP server record from config.yaml"""
