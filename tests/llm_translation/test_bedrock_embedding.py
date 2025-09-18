@@ -79,7 +79,10 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
 
 
 def test_e2e_bedrock_embedding():
-    """Test text embedding with TwelveLabs Marengo"""
+    """
+    Test text embedding with TwelveLabs Marengo.
+    Validates that the transformation properly extracts embedding data from TwelveLabs response format.
+    """
     print("Testing text embedding...")
     litellm._turn_on_debug()
     response = litellm.embedding(
@@ -87,12 +90,37 @@ def test_e2e_bedrock_embedding():
         input=["Hello world from LiteLLM with TwelveLabs Marengo!"],
         aws_region_name="us-east-1"
     )
-    print(f"Text embedding successful! Vector size: {response}")
+    
+    # Validate response structure
+    assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+    assert hasattr(response, 'data'), "Response should have 'data' attribute"
+    assert len(response.data) > 0, "Response data should not be empty"
+    
+    # Validate first embedding
+    embedding_obj = response.data[0]
+    assert hasattr(embedding_obj, 'embedding'), "Embedding object should have 'embedding' attribute"
+    assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
+    assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
+    assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), "All embedding values should be numeric"
+    
+    # Validate embedding properties
+    assert embedding_obj.index == 0, "First embedding should have index 0"
+    assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
+    
+    # Validate usage information
+    assert hasattr(response, 'usage'), "Response should have usage information"
+    assert response.usage is not None, "Usage should not be None"
+    assert response.usage.total_tokens >= 0, "Total tokens should be non-negative"
+    
+    print(f"Text embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
 
 
 def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
-    """Test image embedding with TwelveLabs Marengo"""
+    """
+    Test image embedding with TwelveLabs Marengo.
+    Validates that the transformation properly extracts embedding data from TwelveLabs response format for images.
+    """
     print("Testing image embedding...")
     litellm._turn_on_debug()
     
@@ -107,6 +135,31 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
             input=[duck_img_base64],
             aws_region_name="us-east-1"
         )
-        print(f"Image embedding successful! Vector size: {response}")
-        return True
+        
+        # Validate response structure
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, 'data'), "Response should have 'data' attribute"
+        assert len(response.data) > 0, "Response data should not be empty"
+        
+        # Validate first embedding
+        embedding_obj = response.data[0]
+        assert hasattr(embedding_obj, 'embedding'), "Embedding object should have 'embedding' attribute"
+        assert isinstance(embedding_obj.embedding, list), "Embedding should be a list of floats"
+        assert len(embedding_obj.embedding) > 0, "Embedding vector should not be empty"
+        assert all(isinstance(x, (int, float)) for x in embedding_obj.embedding), "All embedding values should be numeric"
+        
+        # Validate embedding properties
+        assert embedding_obj.index == 0, "First embedding should have index 0"
+        assert embedding_obj.object == "embedding", "Embedding object type should be 'embedding'"
+        
+        # Validate usage information
+        assert hasattr(response, 'usage'), "Response should have usage information"
+        assert response.usage is not None, "Usage should not be None"
+        assert response.usage.total_tokens >= 0, "Total tokens should be non-negative"
+        
+        # TwelveLabs Marengo should return 1024-dimensional embeddings
+        expected_dimension = 1024
+        assert len(embedding_obj.embedding) == expected_dimension, f"TwelveLabs Marengo should return {expected_dimension}-dimensional embeddings, got {len(embedding_obj.embedding)}"
+        
+        print(f"Image embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
