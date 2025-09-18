@@ -29,7 +29,10 @@ def mock_embedding_http_handler():
 @pytest.fixture
 def mock_embedding_async_http_handler():
     """Fixture to mock the async HTTP handler for embedding tests"""
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new_callable=AsyncMock) as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
         mock_response.status_code = 200
@@ -38,10 +41,13 @@ def mock_embedding_async_http_handler():
         mock_post.return_value = mock_response
         yield mock_post
 
+
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
-        self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
+        self.mock_get_task_patcher = patch(
+            "litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model"
+        )
         self.mock_get_task = self.mock_get_task_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):
@@ -85,14 +91,16 @@ class TestHuggingFaceEmbedding:
     def test_embedding_with_sentence_similarity_task(self):
         """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""
 
-        similarity_response = {
-            "similarities": [[0, 0.9], [1, 0.8]]
-        }
+        similarity_response = {"similarities": [[0, 0.9], [1, 0.8]]}
 
         self.mock_http.return_value.json.return_value = similarity_response
 
         # Test with 2+ sentences (required for sentence-similarity)
-        input_text = ["This is the source sentence", "This is sentence one", "This is sentence two"]
+        input_text = [
+            "This is the source sentence",
+            "This is sentence one",
+            "This is sentence two",
+        ]
 
         response = litellm.embedding(
             model=self.model,

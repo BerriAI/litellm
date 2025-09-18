@@ -36,25 +36,27 @@ from litellm.proxy.utils import PrismaClient
 router = APIRouter()
 
 
-def handle_nested_budget_structure_in_organization_update_request(raw_data: dict) -> dict:
+def handle_nested_budget_structure_in_organization_update_request(
+    raw_data: dict,
+) -> dict:
     """
     Transform organization update request to handle UI payload format.
-    
+
     The UI sends nested budget data in 'litellm_budget_table', but our
     model expects flat budget fields at the top level.
     """
     transformed_data = raw_data.copy()
-    
+
     # Handle nested budget structure from UI
-    if 'litellm_budget_table' in transformed_data:
-        budget_data = transformed_data.pop('litellm_budget_table', {})
+    if "litellm_budget_table" in transformed_data:
+        budget_data = transformed_data.pop("litellm_budget_table", {})
         if budget_data:
             # Extract valid budget fields and merge into top level
             budget_fields = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
                 if key in budget_fields and value is not None:
                     transformed_data[key] = value
-    
+
     return transformed_data
 
 
@@ -294,11 +296,13 @@ async def update_organization(
 
     # Transform UI payload to expected format
     raw_data = await request.json()
-    raw_data_with_flat_budget_fields = handle_nested_budget_structure_in_organization_update_request(raw_data)
-    
+    raw_data_with_flat_budget_fields = (
+        handle_nested_budget_structure_in_organization_update_request(raw_data)
+    )
+
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
-    
+
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
 
@@ -323,18 +327,20 @@ async def update_organization(
         )
 
     # Handle budget updates if budget fields are provided
-    budget_fields = {k: v for k, v in data.model_dump().items() 
-                    if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None}
-    
+    budget_fields = {
+        k: v
+        for k, v in data.model_dump().items()
+        if k in LiteLLM_BudgetTable.model_fields.keys() and v is not None
+    }
+
     if budget_fields and existing_organization_row.budget_id:
         await update_budget(
             budget_obj=BudgetNewRequest(
-                budget_id=existing_organization_row.budget_id,
-                **budget_fields
+                budget_id=existing_organization_row.budget_id, **budget_fields
             ),
             user_api_key_dict=user_api_key_dict,
         )
-    
+
     # Remove budget fields from organization update data
     for field in LiteLLM_BudgetTable.model_fields.keys():
         updated_organization_row.pop(field, None)

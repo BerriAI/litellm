@@ -496,9 +496,9 @@ class MCPServerManager:
             )
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
-            
+
             prefixed_tools = self._create_prefixed_tools(tools, server)
-            
+
             return prefixed_tools
 
         except Exception as e:
@@ -530,7 +530,7 @@ class MCPServerManager:
         async def _list_tools_task():
             try:
                 await client.connect()
-                
+
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -660,32 +660,54 @@ class MCPServerManager:
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
-                "user_api_key_user_id": getattr(user_api_key_auth, 'user_id', None) if user_api_key_auth else None,
-                "user_api_key_team_id": getattr(user_api_key_auth, 'team_id', None) if user_api_key_auth else None,
-                "user_api_key_end_user_id": getattr(user_api_key_auth, 'end_user_id', None) if user_api_key_auth else None,
-                "user_api_key_hash": getattr(user_api_key_auth, 'api_key_hash', None) if user_api_key_auth else None,
+                "user_api_key_user_id": getattr(user_api_key_auth, "user_id", None)
+                if user_api_key_auth
+                else None,
+                "user_api_key_team_id": getattr(user_api_key_auth, "team_id", None)
+                if user_api_key_auth
+                else None,
+                "user_api_key_end_user_id": getattr(
+                    user_api_key_auth, "end_user_id", None
+                )
+                if user_api_key_auth
+                else None,
+                "user_api_key_hash": getattr(user_api_key_auth, "api_key_hash", None)
+                if user_api_key_auth
+                else None,
             }
-            
+
             # Create MCP request object for processing
-            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
-            
+            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(
+                pre_hook_kwargs
+            )
+
             # Convert to LLM format for existing guardrail compatibility
-            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
-            
+            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+                mcp_request_obj, pre_hook_kwargs
+            )
+
             try:
                 # Use standard pre_call_hook with call_type="mcp_call"
                 modified_data = await proxy_logging_obj.pre_call_hook(
-                    user_api_key_dict=user_api_key_auth, #type: ignore
+                    user_api_key_dict=user_api_key_auth,  # type: ignore
                     data=synthetic_llm_data,
-                    call_type="mcp_call" #type: ignore
+                    call_type="mcp_call",  # type: ignore
                 )
                 if modified_data:
                     # Convert response back to MCP format and apply modifications
-                    modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
+                    modified_kwargs = (
+                        proxy_logging_obj._convert_mcp_hook_response_to_kwargs(
+                            modified_data, pre_hook_kwargs
+                        )
+                    )
                     if modified_kwargs.get("arguments") != arguments:
                         arguments = modified_kwargs["arguments"]
-                        
-            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+
+            except (
+                BlockedPiiEntityError,
+                GuardrailRaisedException,
+                HTTPException,
+            ) as e:
                 # Re-raise guardrail exceptions to properly fail the MCP call
                 verbose_logger.error(
                     f"Guardrail blocked MCP tool call pre call: {str(e)}"
@@ -710,7 +732,6 @@ class MCPServerManager:
         )
 
         async with client:
-
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
@@ -721,7 +742,7 @@ class MCPServerManager:
                 # Create synthetic LLM data for during hook processing
                 from litellm.types.llms.base import HiddenParams
                 from litellm.types.mcp import MCPDuringCallRequestObject
-                
+
                 request_obj = MCPDuringCallRequestObject(
                     tool_name=name,
                     arguments=arguments,
@@ -729,28 +750,29 @@ class MCPServerManager:
                     start_time=start_time.timestamp() if start_time else None,
                     hidden_params=HiddenParams(),
                 )
-                
+
                 during_hook_kwargs = {
                     "name": name,
                     "arguments": arguments,
                     "server_name": server_name_from_prefix,
                     "user_api_key_auth": user_api_key_auth,
                 }
-                
-                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
-                
+
+                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+                    request_obj, during_hook_kwargs
+                )
+
                 during_hook_task = asyncio.create_task(
                     proxy_logging_obj.during_call_hook(
                         user_api_key_dict=user_api_key_auth,
                         data=synthetic_llm_data,
-                        call_type="mcp_call" #type: ignore
+                        call_type="mcp_call",  # type: ignore
                     )
                 )
                 tasks.append(during_hook_task)
 
             tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
             try:
-
                 mcp_responses = await asyncio.gather(*tasks)
 
                 # If proxy_logging_obj is None, the tool call result is at index 0
@@ -839,19 +861,21 @@ class MCPServerManager:
         )
 
         verbose_logger.info("Loading MCP servers from database into registry...")
-        
+
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
         db_mcp_servers = await get_all_mcp_servers(prisma_client)
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
-        
+
         # ensure the global_mcp_server_manager is up to date with the db
         for server in db_mcp_servers:
-            verbose_logger.debug(f"Adding server to registry: {server.server_id} ({server.server_name})")
+            verbose_logger.debug(
+                f"Adding server to registry: {server.server_id} ({server.server_name})"
+            )
             self.add_update_server(server)
-        
+
         verbose_logger.info(f"Registry now contains {len(self.get_registry())} servers")
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
@@ -1054,7 +1078,9 @@ class MCPServerManager:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
-                        description=_server_config.mcp_info.get("description") if _server_config.mcp_info else None,
+                        description=_server_config.mcp_info.get("description")
+                        if _server_config.mcp_info
+                        else None,
                         mcp_info=_server_config.mcp_info,
                         mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields

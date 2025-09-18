@@ -2283,7 +2283,7 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
-        
+
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
         litellm_params_with_url["upload_url"] = api_base
@@ -2574,11 +2574,11 @@ class BaseLLMHTTPHandler:
                     "url": transformed_request["url"],
                     "headers": transformed_request["headers"],
                 }
-                
+
                 # Only add data for non-GET requests
                 if method != "get" and transformed_request.get("data") is not None:
                     request_kwargs["data"] = transformed_request["data"]
-                
+
                 batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
@@ -2743,12 +2743,14 @@ class BaseLLMHTTPHandler:
                     "url": transformed_request["url"],
                     "headers": transformed_request["headers"],
                 }
-                
+
                 # Only add data for non-GET requests
                 if method != "get" and transformed_request.get("data") is not None:
                     request_kwargs["data"] = transformed_request["data"]
-                
-                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+
+                batch_response = await getattr(async_httpx_client, method)(
+                    **request_kwargs
+                )
             elif isinstance(transformed_request, dict) and api_base:
                 # For other providers that use JSON requests
                 batch_response = await async_httpx_client.get(

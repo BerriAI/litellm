@@ -25,7 +25,9 @@ def test_proxy_cost_calculation_scenario():
     model = "litellm_proxy/bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
 
     # Test model info lookup works
-    model_info = _get_model_info_helper(model=model, custom_llm_provider="litellm_proxy")
+    model_info = _get_model_info_helper(
+        model=model, custom_llm_provider="litellm_proxy"
+    )
     assert model_info is not None
 
     # Test cost calculation works
@@ -34,10 +36,18 @@ def test_proxy_cost_calculation_scenario():
         created=1234567890,
         model=model,
         object="chat.completion",
-        choices=[Choices(finish_reason="stop", index=0, message=Message(content="Test", role="assistant"))],
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Test", role="assistant"),
+            )
+        ],
         usage=Usage(total_tokens=150, prompt_tokens=100, completion_tokens=50),
     )
 
-    cost = completion_cost(completion_response=response, model=model, custom_llm_provider="litellm_proxy")
+    cost = completion_cost(
+        completion_response=response, model=model, custom_llm_provider="litellm_proxy"
+    )
     expected_cost = (100 * 8e-07) + (50 * 4e-06)
     assert cost == expected_cost

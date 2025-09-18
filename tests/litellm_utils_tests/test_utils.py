@@ -787,9 +787,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     standard_callback_dynamic_params = StandardCallbackDynamicParams(
         turn_off_message_logging=False
     )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -801,9 +801,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     standard_callback_dynamic_params = StandardCallbackDynamicParams(
         turn_off_message_logging=True
     )
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -814,9 +814,9 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
-        standard_callback_dynamic_params
-    )
+    litellm_logging_obj.model_call_details[
+        "standard_callback_dynamic_params"
+    ] = standard_callback_dynamic_params
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
@@ -1723,7 +1723,6 @@ def test_add_custom_logger_callback_to_specific_event(monkeypatch):
 
 
 def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
-
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -2146,7 +2145,6 @@ from unittest.mock import Mock
     ],
 )
 def test_get_applied_guardrails(test_case):
-
     # Setup
     litellm.callbacks = test_case["callbacks"]
 

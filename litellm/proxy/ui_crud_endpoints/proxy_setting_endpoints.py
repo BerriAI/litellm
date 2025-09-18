@@ -21,11 +21,11 @@ class IPAddress(BaseModel):
 
 class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
-    
+
     # Logo configuration
     logo_url: Optional[str] = Field(
         default=None,
-        description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL"
+        description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
 
@@ -495,12 +495,10 @@ async def update_sso_settings(sso_config: SSOConfig):
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump(exclude_none=True)
     for field_name, value in sso_data.items():
-
         if field_name == "user_email" and value is not None:
             # Store user_email in general_settings instead of environment variables
             config["general_settings"]["proxy_admin_email"] = value
         elif field_name == "ui_access_mode" and value is not None:
-
             config["general_settings"]["ui_access_mode"] = value
         elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
@@ -511,7 +509,6 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     stored_config = config
     if len(config["environment_variables"]) > 0:
-
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
             environment_variables=config["environment_variables"]
         )
@@ -571,28 +568,30 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 
     # Load existing config
     config = await proxy_config.get_config()
-    
+
     # Update config with UI theme settings
     if "general_settings" not in config:
         config["general_settings"] = {}
-    
+
     if "environment_variables" not in config:
         config["environment_variables"] = {}
 
     # Convert theme config to dict
     theme_data = theme_config.model_dump(exclude_none=True)
-    
+
     # Store UI theme config in litellm_settings (where it's retrieved from)
     if "litellm_settings" not in config:
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
-    
+
     # Update UI_LOGO_PATH environment variable if logo_url is provided
     # If logo_url is empty string, None, or null, remove the environment variable to use default
     logo_url = theme_data.get("logo_url")
     verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
-    
-    if logo_url and isinstance(logo_url, str) and logo_url.strip():  # Check if logo_url exists and is not empty/whitespace
+
+    if (
+        logo_url and isinstance(logo_url, str) and logo_url.strip()
+    ):  # Check if logo_url exists and is not empty/whitespace
         config["environment_variables"]["UI_LOGO_PATH"] = logo_url
         os.environ["UI_LOGO_PATH"] = logo_url
         verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
@@ -607,12 +606,15 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
-    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
+    if (
+        "environment_variables" in stored_config
+        and len(stored_config["environment_variables"]) > 0
+    ):
         # Only encrypt if there are environment variables to encrypt
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
             environment_variables=stored_config["environment_variables"]
         )
-    
+
     # Save the updated config
     await proxy_config.save_config(new_config=stored_config)
 
@@ -639,35 +641,35 @@ async def upload_logo(file: UploadFile = File(...)):
     # Validate file type
     allowed_extensions = {".png", ".jpg", ".jpeg", ".svg"}
     file_extension = Path(file.filename or "").suffix.lower()
-    
+
     if file_extension not in allowed_extensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}"
+            detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
-    
+
     # Validate file size (max 5MB)
     file_content = await file.read()
     if len(file_content) > 5 * 1024 * 1024:  # 5MB
         raise HTTPException(
-            status_code=400,
-            detail="File size too large. Maximum size is 5MB."
+            status_code=400, detail="File size too large. Maximum size is 5MB."
         )
-    
+
     # Create uploads directory if it doesn't exist
     current_dir = os.path.dirname(os.path.abspath(__file__))
     upload_dir = os.path.join(current_dir, "..", "uploads")
     os.makedirs(upload_dir, exist_ok=True)
-    
+
     # Generate unique filename
     import uuid
+
     unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
-    
+
     # Save the file
     with open(file_path, "wb") as buffer:
         buffer.write(file_content)
-    
+
     return {
         "message": "Logo uploaded successfully",
         "status": "success",

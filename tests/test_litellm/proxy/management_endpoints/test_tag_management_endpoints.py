@@ -27,13 +27,13 @@ async def test_create_and_get_tag():
     """
     # Mock the user authentication
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    
+
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-    
+
     try:
         # Mock the prisma client and _get_tags_config and _save_tags_config
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
@@ -99,13 +99,13 @@ async def test_update_tag():
     """
     # Mock the user authentication
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    
+
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-    
+
     try:
         # Mock the prisma client and _get_tags_config and _save_tags_config
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
@@ -117,16 +117,19 @@ async def test_update_tag():
         ) as mock_get_models:
             # Setup mocks for existing tag
             mock_get_tags.return_value = {
-            "test-tag": {
-                "name": "test-tag",
-                "description": "Original description",
-                "models": ["model-1"],
-                "created_at": "2023-01-01T00:00:00",
-                "updated_at": "2023-01-01T00:00:00",
-                "created_by": "user-123",
+                "test-tag": {
+                    "name": "test-tag",
+                    "description": "Original description",
+                    "models": ["model-1"],
+                    "created_at": "2023-01-01T00:00:00",
+                    "updated_at": "2023-01-01T00:00:00",
+                    "created_by": "user-123",
+                }
             }
+            mock_get_models.return_value = {
+                "model-1": "gpt-3.5-turbo",
+                "model-2": "gpt-4",
             }
-            mock_get_models.return_value = {"model-1": "gpt-3.5-turbo", "model-2": "gpt-4"}
 
             # Update tag data
             update_data = {
@@ -158,13 +161,13 @@ async def test_delete_tag():
     """
     # Mock the user authentication
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    
+
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
     app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-    
+
     try:
         # Mock the prisma client and _get_tags_config and _save_tags_config
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
@@ -174,14 +177,14 @@ async def test_delete_tag():
         ) as mock_save_tags:
             # Setup mocks for existing tag
             mock_get_tags.return_value = {
-            "test-tag": {
-                "name": "test-tag",
-                "description": "Test tag for deletion",
-                "models": ["model-1"],
-                "created_at": "2023-01-01T00:00:00",
-                "updated_at": "2023-01-01T00:00:00",
-                "created_by": "user-123",
-            }
+                "test-tag": {
+                    "name": "test-tag",
+                    "description": "Test tag for deletion",
+                    "models": ["model-1"],
+                    "created_at": "2023-01-01T00:00:00",
+                    "updated_at": "2023-01-01T00:00:00",
+                    "created_by": "user-123",
+                }
             }
 
             # Delete tag data

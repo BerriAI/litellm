@@ -400,10 +400,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            if call_type in [
-                LitellmCallTypes.completion.value,
-                LitellmCallTypes.acompletion.value,
-            ] or call_type == "mcp_call":
+            if (
+                call_type
+                in [
+                    LitellmCallTypes.completion.value,
+                    LitellmCallTypes.acompletion.value,
+                ]
+                or call_type == "mcp_call"
+            ):
                 messages = data["messages"]
                 tasks = []
                 for m in messages:

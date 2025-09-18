@@ -524,7 +524,6 @@ async def test_delete_deployment_type_mismatch():
     with patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), patch(
         "litellm.proxy.proxy_server.user_config_file_path", "test_config.yaml"
     ):
-
         # Call the function under test
         deleted_count = await pc._delete_deployment(db_models=[])
 
@@ -1150,7 +1149,6 @@ async def test_chat_completion_result_no_nested_none_values():
         "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
         return_value=mock_base_processor,
     ):
-
         # Call the chat_completion function
         result = await chat_completion(
             request=mock_request,

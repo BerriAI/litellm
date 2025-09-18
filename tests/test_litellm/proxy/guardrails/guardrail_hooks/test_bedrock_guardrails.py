@@ -238,7 +238,6 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
-
         mock_post.return_value = mock_bedrock_response
 
         # Call the method that should log the redacted response
@@ -345,7 +344,6 @@ async def test_bedrock_guardrail_original_response_not_modified():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
-
         mock_post.return_value = mock_bedrock_response
 
         # Call the method

@@ -14,9 +14,9 @@ def test_datadog_logging_async():
     try:
         # litellm.set_verbose = True
         os.environ["DD_API_KEY"] = "anything"
-        os.environ["_DATADOG_BASE_URL"] = (
-            "https://exampleopenaiendpoint-production.up.railway.app"
-        )
+        os.environ[
+            "_DATADOG_BASE_URL"
+        ] = "https://exampleopenaiendpoint-production.up.railway.app"
 
         os.environ["DD_SITE"] = "us5.datadoghq.com"
         os.environ["DD_API_KEY"] = "xxxxxx"
