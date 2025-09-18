@@ -740,5 +740,3 @@ router_settings:
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run |
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000 |
 | COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000 |
-| COROUTINE_CHECKER_DEFAULT_TTL | Default time-to-live in seconds for CoroutineChecker cache entries. Default is 3600 (1 hour) |
-| COROUTINE_CHECKER_MAX_SIZE_PER_ITEM | Maximum size per item in CoroutineChecker cache. Default is 1 |
