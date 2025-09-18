@@ -239,6 +239,7 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
+
         mock_post.return_value = mock_bedrock_response
 
         # Call the method that should log the redacted response
@@ -345,6 +346,7 @@ async def test_bedrock_guardrail_original_response_not_modified():
     ) as mock_load_creds, patch.object(
         guardrail, "_prepare_request", return_value=MagicMock()
     ) as mock_prepare_request:
+
         mock_post.return_value = mock_bedrock_response
 
         # Call the method
@@ -1048,6 +1050,195 @@ async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch
 
         print(f"Parameter precedence test passed. URL: {prepped_request.url}")
 
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
+    """Test that BedrockGuardrail respects aws_bedrock_runtime_endpoint when set"""
+
+    # Clear any existing environment variable to ensure clean test
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+
+    # Create guardrail with custom runtime endpoint
+    custom_endpoint = "https://custom-bedrock.example.com"
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_bedrock_runtime_endpoint=custom_endpoint,
+    )
+
+    # Mock credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    # Test data
+    data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    optional_params = {}
+    aws_region_name = "us-east-1"
+
+    # Mock the _load_credentials method to avoid actual AWS credential loading
+    with patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, aws_region_name)
+    ):
+        # Call _prepare_request which internally calls get_runtime_endpoint
+        prepped_request = guardrail._prepare_request(
+            credentials=mock_credentials,
+            data=data,
+            optional_params=optional_params,
+            aws_region_name=aws_region_name,
+        )
+
+        # Verify that the custom endpoint is used in the URL
+        expected_url = f"{custom_endpoint}/guardrail/{guardrail.guardrailIdentifier}/version/{guardrail.guardrailVersion}/apply"
+        assert (
+            prepped_request.url == expected_url
+        ), f"Expected URL to contain custom endpoint. Got: {prepped_request.url}"
+
+        print(f"Custom runtime endpoint test passed. URL: {prepped_request.url}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_respects_env_runtime_endpoint(monkeypatch):
+    """Test that BedrockGuardrail respects AWS_BEDROCK_RUNTIME_ENDPOINT environment variable"""
+
+    custom_endpoint = "https://env-bedrock.example.com"
+
+    # Set the environment variable
+    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", custom_endpoint)
+
+    # Create guardrail without explicit aws_bedrock_runtime_endpoint
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Mock credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    # Test data
+    data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    optional_params = {}
+    aws_region_name = "us-east-1"
+
+    # Mock the _load_credentials method
+    with patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, aws_region_name)
+    ):
+        # Call _prepare_request which internally calls get_runtime_endpoint
+        prepped_request = guardrail._prepare_request(
+            credentials=mock_credentials,
+            data=data,
+            optional_params=optional_params,
+            aws_region_name=aws_region_name,
+        )
+
+        # Verify that the custom endpoint from environment is used in the URL
+        expected_url = f"{custom_endpoint}/guardrail/{guardrail.guardrailIdentifier}/version/{guardrail.guardrailVersion}/apply"
+        assert (
+            prepped_request.url == expected_url
+        ), f"Expected URL to contain env endpoint. Got: {prepped_request.url}"
+
+        print(f"Environment runtime endpoint test passed. URL: {prepped_request.url}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_uses_default_endpoint_when_no_custom_set(monkeypatch):
+    """Test that BedrockGuardrail uses default endpoint when no custom endpoint is set"""
+
+    # Ensure no environment variable is set
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+
+    # Create guardrail without any custom endpoint
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Mock credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    # Test data
+    data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    optional_params = {}
+    aws_region_name = "us-west-2"
+
+    # Mock the _load_credentials method
+    with patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, aws_region_name)
+    ):
+        # Call _prepare_request which internally calls get_runtime_endpoint
+        prepped_request = guardrail._prepare_request(
+            credentials=mock_credentials,
+            data=data,
+            optional_params=optional_params,
+            aws_region_name=aws_region_name,
+        )
+
+        # Verify that the default endpoint is used
+        expected_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com/guardrail/{guardrail.guardrailIdentifier}/version/{guardrail.guardrailVersion}/apply"
+        assert (
+            prepped_request.url == expected_url
+        ), f"Expected default URL. Got: {prepped_request.url}"
+
+        print(f"Default endpoint test passed. URL: {prepped_request.url}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch):
+    """Test that aws_bedrock_runtime_endpoint parameter takes precedence over environment variable
+
+    This test verifies the corrected behavior where the parameter should take precedence
+    over the environment variable, consistent with the endpoint_url logic.
+    """
+
+    param_endpoint = "https://param-bedrock.example.com"
+    env_endpoint = "https://env-bedrock.example.com"
+
+    # Set environment variable
+    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", env_endpoint)
+
+    # Create guardrail with explicit aws_bedrock_runtime_endpoint
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_bedrock_runtime_endpoint=param_endpoint,
+    )
+
+    # Mock credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    # Test data
+    data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    optional_params = {}
+    aws_region_name = "us-east-1"
+
+    # Mock the _load_credentials method
+    with patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, aws_region_name)
+    ):
+        # Call _prepare_request which internally calls get_runtime_endpoint
+        prepped_request = guardrail._prepare_request(
+            credentials=mock_credentials,
+            data=data,
+            optional_params=optional_params,
+            aws_region_name=aws_region_name,
+        )
+
+        # Verify that the parameter takes precedence over environment variable
+        expected_url = f"{param_endpoint}/guardrail/{guardrail.guardrailIdentifier}/version/{guardrail.guardrailVersion}/apply"
+        assert (
+            prepped_request.url == expected_url
+        ), f"Expected parameter endpoint to take precedence. Got: {prepped_request.url}"
+
+        print(f"Parameter precedence test passed. URL: {prepped_request.url}")
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_200_with_exception_in_output_raises_and_logs_failure():
