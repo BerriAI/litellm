@@ -769,7 +769,7 @@ def list_batches(
 
 async def acancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -810,7 +810,7 @@ async def acancel_batch(
 
 def cancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -850,6 +850,45 @@ def cancel_batch(
         )
 
         _is_async = kwargs.pop("acancel_batch", False) is True
+        client = kwargs.get("client", None)
+        
+        # Try to use provider config first (for providers like bedrock)
+        model: Optional[str] = kwargs.get("model", None)
+        if model is not None:
+            provider_config = ProviderConfigManager.get_provider_batches_config(
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+            )
+        else:
+            provider_config = None
+            
+        if provider_config is not None:
+            response = base_llm_http_handler.cancel_batch(
+                batch_id=batch_id,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=extra_headers or {},
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                logging_obj=LiteLLMLoggingObj(
+                    model=model or "",
+                    messages=[],
+                    stream=False,
+                    call_type="batch_cancel",
+                    start_time=None,
+                    litellm_call_id="batch_cancel_" + batch_id,
+                    function_id="batch_cancel",
+                ),
+                _is_async=_is_async,
+                client=client
+                if client is not None
+                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                else None,
+                timeout=timeout,
+                model=model,
+            )
+            return response
+        
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
             api_base = (
@@ -919,7 +958,7 @@ def cancel_batch(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai' and 'azure' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'bedrock' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

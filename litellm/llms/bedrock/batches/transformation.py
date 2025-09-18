@@ -382,6 +382,106 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         
         return errors, enriched_metadata
 
+    def transform_cancel_batch_request(
+        self,
+        batch_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> Dict[str, Any]:
+        """
+        Transform batch cancellation request for Bedrock.
+        
+        Args:
+            batch_id: Bedrock job ARN
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            Transformed request data for Bedrock StopModelInvocationJob API
+        """
+        # For Bedrock, batch_id should be the full job ARN
+        if not batch_id.startswith("arn:aws:bedrock:"):
+            raise ValueError(f"Invalid batch_id format. Expected ARN, got: {batch_id}")
+        
+        # Extract the region from the ARN
+        arn_parts = batch_id.split(":")
+        if len(arn_parts) < 6:
+            raise ValueError(f"Invalid ARN format: {batch_id}")
+        
+        region = arn_parts[3]
+        
+        # Build the endpoint URL for StopModelInvocationJob
+        # AWS API format: POST /model-invocation-job/{jobIdentifier}/stop
+        import urllib.parse as _ul
+        encoded_arn = _ul.quote(batch_id, safe="")
+        endpoint_url = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}/stop"
+        
+        # Use common utility for AWS signing
+        signed_headers, signed_data = self.common_utils.sign_aws_request(
+            service_name="bedrock",
+            data={},  # POST request with empty body for stop operation
+            endpoint_url=endpoint_url,
+            optional_params=optional_params,
+            method="POST"
+        )
+        
+        # Return pre-signed request format
+        return {
+            "method": "POST",
+            "url": endpoint_url,
+            "headers": signed_headers,
+            "data": signed_data.decode('utf-8') if signed_data else ""
+        }
+
+    def transform_cancel_batch_response(
+        self,
+        model: Optional[str],
+        raw_response: Response,
+        logging_obj: Any,
+        litellm_params: dict,
+    ) -> LiteLLMBatch:
+        """
+        Transform Bedrock batch cancellation response to LiteLLM format.
+        
+        The StopModelInvocationJob API returns HTTP 200 with empty body on success.
+        We need to then call GetModelInvocationJob to get the updated status.
+        """
+        # Check if the stop request was successful
+        if raw_response.status_code != 200:
+            raise ValueError(f"Failed to cancel Bedrock batch job. Status: {raw_response.status_code}, Response: {raw_response.text}")
+        # Extract batch_id from the original request in litellm_params
+        #########################################################
+        # bedrock batches returns 200 on success with an empty response body
+        #########################################################
+        batch_id = ""
+        if "original_cancel_request" in litellm_params:
+            batch_id = litellm_params["original_cancel_request"].get("batch_id", "")
+        
+        # For now, return a basic response indicating the cancellation was requested
+        # In a real implementation, you might want to make another API call to get the updated status
+        return LiteLLMBatch(
+            id=batch_id,
+            object="batch",
+            endpoint="/v1/chat/completions",
+            errors=None,
+            input_file_id="",
+            completion_window="24h",
+            status="cancelling",  # Bedrock job will transition to "Stopping" then "Stopped"
+            output_file_id=None,
+            error_file_id=None,
+            created_at=int(time.time()),
+            in_progress_at=None,
+            expires_at=None,
+            finalizing_at=None,
+            completed_at=None,
+            failed_at=None,
+            expired_at=None,
+            cancelling_at=int(time.time()),
+            cancelled_at=None,
+            request_counts=None,
+            metadata={"cancellation_requested": "true"},
+        )
+
     def transform_retrieve_batch_response(
         self,
         model: Optional[str],

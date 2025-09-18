@@ -2575,9 +2575,11 @@ class BaseLLMHTTPHandler:
                     "headers": transformed_request["headers"],
                 }
                 
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
+                # Add data for non-GET requests
+                if method != "get":
+                    data = transformed_request.get("data")
+                    if data is not None:
+                        request_kwargs["data"] = data
                 
                 batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
             elif isinstance(transformed_request, dict) and api_base:
@@ -2607,6 +2609,193 @@ class BaseLLMHTTPHandler:
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params,
+        )
+
+    def cancel_batch(
+        self,
+        batch_id: str,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        logging_obj: "LiteLLMLoggingObj",
+        _is_async: bool = False,
+        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        model: Optional[str] = None,
+    ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
+        """
+        Cancel a batch using provider-specific configuration.
+        """
+        # Transform the request using provider config
+        transformed_request = provider_config.transform_cancel_batch_request(
+            batch_id=batch_id,
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+        )
+
+        if _is_async:
+            return self.async_cancel_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                batch_id=batch_id,
+                model=model,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                method = transformed_request["method"].lower()
+                request_kwargs = {
+                    "url": transformed_request["url"],
+                    "headers": transformed_request["headers"],
+                }
+                
+                # Add data for non-GET requests
+                if method != "get":
+                    data = transformed_request.get("data")
+                    if data is not None:
+                        request_kwargs["data"] = data
+                
+                batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
+            elif isinstance(transformed_request, dict) and api_base:
+                # For other providers that use JSON requests
+                batch_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=transformed_request,
+                )
+            else:
+                # Handle other request types if needed
+                if not api_base:
+                    raise ValueError("api_base is required for non-pre-signed requests")
+                batch_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                )
+        except Exception as e:
+            verbose_logger.exception(f"Error cancelling batch: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        # Store original request data for response transformation
+        litellm_params_with_request = {
+            **litellm_params,
+            "original_cancel_request": {"batch_id": batch_id},
+        }
+
+        return provider_config.transform_cancel_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params_with_request,
+        )
+
+    async def async_cancel_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: Optional[str],
+        logging_obj: "LiteLLMLoggingObj",
+        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        batch_id: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        """
+        Async version of cancel_batch
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        #########################################################
+        # Debug Logging
+        #########################################################
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": transformed_request,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                method = transformed_request["method"].lower()
+                request_kwargs = {
+                    "url": transformed_request["url"],
+                    "headers": transformed_request["headers"],
+                }
+                
+                # Add data for non-GET requests
+                if method != "get":
+                    data = transformed_request.get("data")
+                    if data is not None:
+                        request_kwargs["data"] = data
+                
+                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+            elif isinstance(transformed_request, dict) and api_base:
+                # For other providers that use JSON requests
+                batch_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=transformed_request,
+                )
+            else:
+                # Handle other request types if needed
+                if not api_base:
+                    raise ValueError("api_base is required for non-pre-signed requests")
+                batch_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                )
+        except Exception as e:
+            verbose_logger.exception(f"Error cancelling batch: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        # Store original request data for response transformation
+        litellm_params_with_request = {
+            **litellm_params,
+            "original_cancel_request": {"batch_id": batch_id},
+        }
+
+        return provider_config.transform_cancel_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params_with_request,
         )
 
     async def async_create_batch(
@@ -2744,9 +2933,11 @@ class BaseLLMHTTPHandler:
                     "headers": transformed_request["headers"],
                 }
                 
-                # Only add data for non-GET requests
-                if method != "get" and transformed_request.get("data") is not None:
-                    request_kwargs["data"] = transformed_request["data"]
+                # Add data for non-GET requests
+                if method != "get":
+                    data = transformed_request.get("data")
+                    if data is not None:
+                        request_kwargs["data"] = data
                 
                 batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
             elif isinstance(transformed_request, dict) and api_base:

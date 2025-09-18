@@ -201,6 +201,48 @@ class BaseBatchesConfig(ABC):
         pass
 
     @abstractmethod
+    def transform_cancel_batch_request(
+        self,
+        batch_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> Union[bytes, str, Dict[str, Any]]:
+        """
+        Transform the batch cancellation request to provider-specific format.
+        
+        Args:
+            batch_id: Batch ID to cancel
+            optional_params: Optional parameters
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            Transformed request data
+        """
+        pass
+
+    @abstractmethod
+    def transform_cancel_batch_response(
+        self,
+        model: Optional[str],
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> LiteLLMBatch:
+        """
+        Transform provider-specific batch cancellation response to LiteLLM format.
+        
+        Args:
+            model: Model name
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            litellm_params: LiteLLM parameters
+            
+        Returns:
+            LiteLLM batch object
+        """
+        pass
+
+    @abstractmethod
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[Dict, Headers]
     ) -> "BaseLLMException":
