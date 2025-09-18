@@ -710,7 +710,7 @@ class TestVertexBase:
         [
             # Test case 1: Gemini with custom API base
             (
-                "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
                 "gemini",
                 "test-api-key",
                 "generateContent",
@@ -719,11 +719,11 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 "test-api-key",
-                "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
-                "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
                 "gemini",
                 "test-api-key",
                 "generateContent",
@@ -732,7 +732,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 "test-api-key",
-                "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
             ),
             # Test case 3: Non-Gemini provider with custom API base
             (
@@ -762,7 +762,7 @@ class TestVertexBase:
             ),
             # Test case 5: Gemini without API key (should raise ValueError)
             (
-                "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
                 "gemini",
                 None,
                 "generateContent",
@@ -826,14 +826,14 @@ class TestVertexBase:
         
         # Test various Gemini models with custom API base
         test_cases = [
-            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
-            ("gemini-2.5-pro", "generateContent", "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
-            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
+            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
+            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
         ]
         
         for model, endpoint, expected_url in test_cases:
             _, result_url = vertex_base._check_custom_proxy(
-                api_base="https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+                api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
                 custom_llm_provider="gemini",
                 gemini_api_key="test-api-key",
                 endpoint=endpoint,
@@ -851,7 +851,7 @@ class TestVertexBase:
         
         # Test with streaming enabled
         _, result_url_streaming = vertex_base._check_custom_proxy(
-            api_base="https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
             custom_llm_provider="gemini",
             gemini_api_key="test-api-key",
             endpoint="generateContent",
@@ -861,12 +861,12 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_streaming_url = "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+        expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
         assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
         
         # Test with streaming disabled
         _, result_url_no_streaming = vertex_base._check_custom_proxy(
-            api_base="https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta",
+            api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
             custom_llm_provider="gemini",
             gemini_api_key="test-api-key",
             endpoint="generateContent",
@@ -876,5 +876,5 @@ class TestVertexBase:
             model="gemini-2.5-flash-lite",
         )
         
-        expected_no_streaming_url = "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+        expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
         assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"

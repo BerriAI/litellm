@@ -580,6 +580,7 @@ async def test_anthropic_api_prompt_caching_streaming():
         if hasattr(chunk, "usage") and hasattr(
             chunk.usage, "cache_creation_input_tokens"
         ):
+            print("chunk.usage", chunk.usage)
             is_cache_creation_input_tokens_in_usage = True
 
         idx += 1
