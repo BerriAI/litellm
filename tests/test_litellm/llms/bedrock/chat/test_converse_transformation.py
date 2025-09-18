@@ -1,7 +1,7 @@
+import asyncio
 import json
 import os
 import sys
-import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +12,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm import completion, RateLimitError, ModelResponse
+from litellm import ModelResponse, RateLimitError, completion
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -308,8 +308,12 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
     import httpx
-    from litellm.types.llms.bedrock import ConverseResponseBlock, ConverseTokenUsageBlock
+
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.llms.bedrock import (
+        ConverseResponseBlock,
+        ConverseTokenUsageBlock,
+    )
     from litellm.types.utils import ModelResponse
 
     # Simulate a Bedrock Converse response with a computer-use tool call
@@ -397,8 +401,12 @@ def test_transform_response_with_computer_use_tool():
 def test_transform_response_with_bash_tool():
     """Test response transformation with bash tool call."""
     import httpx
-    from litellm.types.llms.bedrock import ConverseResponseBlock, ConverseTokenUsageBlock
+
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.llms.bedrock import (
+        ConverseResponseBlock,
+        ConverseTokenUsageBlock,
+    )
     from litellm.types.utils import ModelResponse
 
     # Simulate a Bedrock Converse response with a bash tool call
@@ -1236,9 +1244,11 @@ def test_map_openai_params_with_response_format():
 @pytest.mark.asyncio
 async def test_assistant_message_cache_control():
     """Test that assistant messages with cache_control generate cachePoint blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
-    
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
     # Test assistant message with string content and cache_control
     messages = [
         {"role": "user", "content": "Hello"},
@@ -1287,8 +1297,10 @@ async def test_assistant_message_cache_control():
 @pytest.mark.asyncio
 async def test_assistant_message_list_content_cache_control():
     """Test assistant messages with list content and cache_control."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "Hello"},
@@ -1329,8 +1341,10 @@ async def test_assistant_message_list_content_cache_control():
 @pytest.mark.asyncio
 async def test_tool_message_cache_control():
     """Test that tool messages with cache_control generate cachePoint blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "What's the weather?"},
@@ -1391,8 +1405,10 @@ async def test_tool_message_cache_control():
 @pytest.mark.asyncio
 async def test_tool_message_string_content_cache_control():
     """Test tool messages with string content and message-level cache_control."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "What's the weather?"},
@@ -1445,8 +1461,10 @@ async def test_tool_message_string_content_cache_control():
 @pytest.mark.asyncio
 async def test_assistant_tool_calls_cache_control():
     """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "Calculate 2+2"},
@@ -1495,8 +1513,10 @@ async def test_assistant_tool_calls_cache_control():
 @pytest.mark.asyncio
 async def test_multiple_tool_calls_with_mixed_cache_control():
     """Test multiple tool calls where only some have cache_control."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "Do multiple calculations"},
@@ -1554,8 +1574,10 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
 @pytest.mark.asyncio
 async def test_no_cache_control_no_cache_point():
     """Test that messages without cache_control don't generate cachePoint blocks."""
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
-    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
     
     messages = [
         {"role": "user", "content": "Hello"},
@@ -2351,7 +2373,7 @@ def test_request_metadata_validation():
     config.transform_request(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
-        optional_params={"request_metadata": valid_metadata},
+        optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
         headers={}
     )
@@ -2363,7 +2385,7 @@ def test_request_metadata_validation():
         config.transform_request(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
-            optional_params={"request_metadata": too_many_items},
+            optional_params={"requestMetadata": too_many_items},
             litellm_params={},
             headers={}
         )
@@ -2386,7 +2408,7 @@ def test_request_metadata_key_constraints():
         config.transform_request(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
-            optional_params={"request_metadata": invalid_metadata},
+            optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
             headers={}
         )
@@ -2401,7 +2423,7 @@ def test_request_metadata_key_constraints():
         config.transform_request(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
-            optional_params={"request_metadata": invalid_metadata},
+            optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
             headers={}
         )
@@ -2424,7 +2446,7 @@ def test_request_metadata_value_constraints():
         config.transform_request(
             model="anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
-            optional_params={"request_metadata": invalid_metadata},
+            optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
             headers={}
         )
@@ -2439,7 +2461,7 @@ def test_request_metadata_value_constraints():
     config.transform_request(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
-        optional_params={"request_metadata": valid_metadata},
+        optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
         headers={}
     )
@@ -2462,14 +2484,14 @@ def test_request_metadata_character_pattern():
     config.transform_request(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
-        optional_params={"request_metadata": valid_metadata},
+        optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
         headers={}
     )
 
 
 def test_request_metadata_with_other_params():
-    """Test that request_metadata works alongside other parameters."""
+    """Test that requestMetadata works alongside other parameters."""
     config = AmazonConverseConfig()
 
     request_metadata = {
@@ -2503,7 +2525,7 @@ def test_request_metadata_with_other_params():
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
         optional_params={
-            "request_metadata": request_metadata,
+            "requestMetadata": request_metadata,
             "tools": tools,
             "max_tokens": 100,
             "temperature": 0.7
@@ -2523,7 +2545,7 @@ def test_request_metadata_with_other_params():
 
 
 def test_request_metadata_empty():
-    """Test handling of empty request_metadata."""
+    """Test handling of empty requestMetadata."""
     config = AmazonConverseConfig()
 
     messages = [{"role": "user", "content": "Hello!"}]
@@ -2532,7 +2554,7 @@ def test_request_metadata_empty():
     request_data = config.transform_request(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
-        optional_params={"request_metadata": {}},
+        optional_params={"requestMetadata": {}},
         litellm_params={},
         headers={}
     )
@@ -2547,7 +2569,7 @@ def test_request_metadata_not_provided():
 
     messages = [{"role": "user", "content": "Hello!"}]
 
-    # No request_metadata provided
+    # No requestMetadata provided
     request_data = config.transform_request(
         model="anthropic.claude-3-5-sonnet-20240620-v1:0",
         messages=messages,
