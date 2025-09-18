@@ -133,8 +133,8 @@ class AutoRouter(CustomLogger):
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model  # type: ignore
-        elif isinstance(route_choice, list) and len(route_choice) > 0:
-            model = getattr(route_choice[0], 'name', None) or self.default_model
+        elif isinstance(route_choice, list):
+            model = route_choice[0].name or self.default_model  # type: ignore
 
         return PreRoutingHookResponse(
             model=model,
