@@ -122,13 +122,7 @@ class AutoRouter(CustomLogger):
             )
 
         user_message = messages[-1]
-        # Handle both Message objects and Dict formats
-        if hasattr(user_message, "content"):
-            # It's a Message object
-            message_content = user_message.content or ""  # type: ignore
-        else:
-            # It's a Dict
-            message_content = user_message.get("content", "")  # type: ignore
+        message_content = user_message.get("content", "")  # type: ignore
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)  # type: ignore
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
