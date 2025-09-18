@@ -11,7 +11,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_env_dict,
 )
-from litellm.proxy._types import LiteLLM_MCPServerTable, MCPSpecVersion, MCPTransport
+from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
