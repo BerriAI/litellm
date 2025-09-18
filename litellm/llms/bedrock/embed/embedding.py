@@ -4,8 +4,8 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 
 import copy
 import json
-from typing import Any, Callable, List, Optional, Tuple, Union
 import urllib.parse
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import httpx
 
@@ -18,7 +18,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.types.llms.bedrock import AmazonEmbeddingRequest, CohereEmbeddingRequest
+from litellm.types.llms.bedrock import (
+    AmazonEmbeddingRequest,
+    CohereEmbeddingRequest,
+    TwelveLabsMarengoEmbeddingRequest,
+)
 from litellm.types.utils import EmbeddingResponse
 
 from ..base_aws_llm import BaseAWSLLM
@@ -29,6 +33,7 @@ from .amazon_titan_multimodal_transformation import (
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
+from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -164,16 +169,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -248,16 +253,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key,
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -336,7 +341,7 @@ class BedrockEmbedding(BaseAWSLLM):
         ### TRANSFORMATION ###
         unencoded_model_id = (
             optional_params.pop("model_id", None) or model
-        ) # default to model if not passed
+        )  # default to model if not passed
         modelId = urllib.parse.quote(unencoded_model_id, safe="")
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params,
@@ -394,6 +399,17 @@ class BedrockEmbedding(BaseAWSLLM):
                         )
                     )
                 batch_data.append(transformed_request)
+        elif provider == "twelvelabs" and model in [
+            "twelvelabs.marengo-embed-2-7-v1:0",
+        ]:
+            batch_data = []
+            for i in input:
+                twelvelabs_request: (
+                    TwelveLabsMarengoEmbeddingRequest
+                ) = TwelveLabsMarengoEmbeddingConfig()._transform_request(
+                    input=i, inference_params=inference_params
+                )
+                batch_data.append(twelvelabs_request)
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -445,7 +461,7 @@ class BedrockEmbedding(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
