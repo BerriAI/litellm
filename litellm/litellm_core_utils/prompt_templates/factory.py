@@ -2672,10 +2672,7 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                if not arguments or not arguments.strip():
-                    arguments_dict = {}
-                else:
-                    arguments_dict = json.loads(arguments)
+                arguments_dict = json.loads(arguments) if arguments else {}
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )
@@ -3124,9 +3121,9 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardrailConverseContent block
+                                # Wrap guarded_text in guardContent block
                                 _part = BedrockContentBlock(
-                                    guardrailConverseContent={"text": element["text"]}
+                                    guardContent={"text": {"text": element["text"]}}
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
@@ -3506,9 +3503,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardrailConverseContent block
+                            # Wrap guarded_text in guardContent block
                             _part = BedrockContentBlock(
-                                guardrailConverseContent={"text": element["text"]}
+                                guardContent={"text": {"text": element["text"]}}
                             )
                             _parts.append(_part)
                         elif element["type"] == "image_url":

@@ -103,7 +103,7 @@ class ContentBlock(TypedDict, total=False):
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
-    guardrailConverseContent: GuardrailConverseContentBlock
+    guardContent: GuardrailConverseContentBlock
 
 
 class MessageBlock(TypedDict):
