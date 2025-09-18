@@ -23,7 +23,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 @pytest.mark.asyncio
 class TestMCPRequestHandler:
-
     @pytest.mark.parametrize(
         "user_api_key_auth,object_permission_id,prisma_client_available,db_result,expected_result",
         [
@@ -172,7 +171,6 @@ class TestMCPRequestHandler:
             with patch.object(
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
             ) as mock_team_servers:
-
                 # Configure mocks to return the test data
                 mock_key_servers.return_value = key_servers
                 mock_team_servers.return_value = team_servers
@@ -588,7 +586,6 @@ class TestMCPCustomHeaderName:
             with patch(
                 "litellm.proxy.proxy_server.general_settings"
             ) as mock_general_settings:
-
                 # Configure mocks
                 mock_get_secret.return_value = env_var
                 mock_general_settings.get.return_value = general_setting
@@ -692,7 +689,6 @@ class TestMCPCustomHeaderName:
             "_get_mcp_client_side_auth_header_name",
             return_value="custom-auth-header",
         ):
-
             # Create ASGI scope with custom header
             scope = {
                 "type": "http",

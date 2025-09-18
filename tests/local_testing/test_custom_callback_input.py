@@ -934,18 +934,14 @@ async def test_async_completion_azure_caching():
     unique_time = time.time()
     response1 = await litellm.acompletion(
         model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
         model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
@@ -972,9 +968,7 @@ async def test_async_completion_azure_caching_streaming():
     unique_time = uuid.uuid4()
     response1 = await litellm.acompletion(
         model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
         stream=True,
     )
@@ -985,9 +979,7 @@ async def test_async_completion_azure_caching_streaming():
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
         model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
         stream=True,
     )
@@ -1463,7 +1455,6 @@ def test_logging_standard_payload_llm_headers(stream):
     with patch.object(
         customHandler, "log_success_event", new=MagicMock()
     ) as mock_client:
-
         resp = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],

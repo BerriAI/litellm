@@ -1057,7 +1057,6 @@ async def test_update_team_team_member_budget_not_passed_to_db():
     ) as mock_cache_team, patch(
         "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
-
         # Setup mock prisma client
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
@@ -1082,7 +1081,12 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
+            team_table,
+            user_api_key_dict,
+            updated_kv,
+            team_member_budget=None,
+            team_member_rpm_limit=None,
+            team_member_tpm_limit=None,
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1258,7 +1262,6 @@ async def test_bulk_team_member_add_success():
         new_callable=AsyncMock,
         return_value=mock_team_response,
     ) as mock_team_member_add:
-
         mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         result = await bulk_team_member_add(
@@ -1374,7 +1377,6 @@ async def test_bulk_team_member_add_all_users_flag():
         new_callable=AsyncMock,
         return_value=mock_team_response,
     ) as mock_team_member_add:
-
         # Mock the database find_many call
         mock_prisma.db.litellm_usertable.find_many = AsyncMock(
             return_value=mock_db_users
@@ -1422,7 +1424,6 @@ async def test_bulk_team_member_add_failure_scenario():
         new_callable=AsyncMock,
         side_effect=Exception("Database connection failed"),
     ) as mock_team_member_add:
-
         mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         result = await bulk_team_member_add(
@@ -1574,7 +1575,7 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
+
         # Mock user lookup
         mock_user_object = Mock()
         mock_user_object.model_dump.return_value = {
@@ -1582,7 +1583,7 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
             "teams": ["team_1", "team_2"],
         }
         mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
-        
+
         # Mock team lookup
         mock_teams = [
             Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
@@ -1632,7 +1633,7 @@ async def test_list_team_v2_security_check_admin_user():
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
+
         # Mock team lookup
         mock_teams = [
             Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
@@ -1682,19 +1683,25 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
     }
 
     # Configure DB mocks used by team_member_delete
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team_row)
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
     mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
 
     # User row to allow removal from user's teams list
     mock_user_row = MagicMock()
     mock_user_row.user_id = test_user_id
     mock_user_row.teams = [test_team_id]
-    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user_row])
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
 
     # Membership deletion should be called
     mock_db_client.db.litellm_teammembership = MagicMock()
-    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
 
     # Execute
     await team_member_delete(

@@ -682,7 +682,6 @@ async def test_generate_service_account_works_with_team_id():
     ) as mock_router, patch("litellm.proxy.proxy_server.premium_user", False), patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
     ) as mock_generate_key:
-
         # Configure mocks
         mock_prisma.return_value = AsyncMock()
         mock_router.return_value = None

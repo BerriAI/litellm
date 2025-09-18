@@ -127,7 +127,6 @@ def test_update_kwargs_before_fallbacks_unit_test():
 )
 @pytest.mark.asyncio
 async def test_update_kwargs_before_fallbacks(call_type):
-
     router = Router(
         model_list=[
             {

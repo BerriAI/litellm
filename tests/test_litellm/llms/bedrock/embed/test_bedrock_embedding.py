@@ -4,20 +4,16 @@ import sys
 from unittest.mock import Mock, patch
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../../../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
 # Mock responses for different embedding models
-titan_embedding_response = {
-    "embedding": [0.1, 0.2, 0.3],
-    "inputTextTokenCount": 10
-}
+titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
 
-cohere_embedding_response = {
-    "embeddings": [[0.1, 0.2, 0.3]],
-    "inputTextTokenCount": 10
-}
+cohere_embedding_response = {"embeddings": [[0.1, 0.2, 0.3]], "inputTextTokenCount": 10}
 
 # Test data
 test_input = "Hello world from litellm"
@@ -55,12 +51,12 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
             client=client,
             aws_region_name="us-east-1",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        assert isinstance(response.data[0]['embedding'], list)
-        assert len(response.data[0]['embedding']) == 3  # Based on mock response
+        assert isinstance(response.data[0]["embedding"], list)
+        assert len(response.data[0]["embedding"]) == 3  # Based on mock response
 
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" in headers
@@ -73,15 +69,17 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         ("bedrock/amazon.titan-embed-text-v1", "text", titan_embedding_response),
     ],
 )
-def test_bedrock_embedding_with_env_variable_bearer_token(model, input_type, embed_response):
+def test_bedrock_embedding_with_env_variable_bearer_token(
+    model, input_type, embed_response
+):
     """Test embedding functionality with bearer token from environment variable"""
     litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
-    
-    with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}), \
-         patch.object(client, "post") as mock_post:
-        
+
+    with patch.dict(
+        os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}
+    ), patch.object(client, "post") as mock_post:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
@@ -123,11 +121,11 @@ async def test_async_bedrock_embedding_with_bearer_token():
             client=client,
             aws_region_name="us-west-2",
             aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-west-2.amazonaws.com",
-            api_key=test_api_key
+            api_key=test_api_key,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        
+
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
@@ -137,8 +135,10 @@ def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
     litellm.set_verbose = True
     model = "bedrock/amazon.titan-embed-text-v1"
-    
-    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings") as mock_bedrock_embed:
+
+    with patch(
+        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings"
+    ) as mock_bedrock_embed:
         mock_embedding_response = litellm.EmbeddingResponse()
         mock_embedding_response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         mock_bedrock_embed.return_value = mock_embedding_response

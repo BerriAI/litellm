@@ -111,23 +111,19 @@ def _is_choice_non_empty(choice: Any) -> bool:
     """
     # Check finish_reason
     if hasattr(choice, "finish_reason") and choice.finish_reason is not None:
-
         return True
 
     # Check logprobs
     if hasattr(choice, "logprobs") and choice.logprobs is not None:
-
         return True
 
     # Check enhancements (if present)
     if hasattr(choice, "enhancements") and choice.enhancements is not None:
-
         return True
 
     # Deep check delta object
     if hasattr(choice, "delta") and choice.delta is not None:
         if _is_delta_non_empty(choice.delta):
-
             return True
 
     # Check model_extra for dynamically added fields on the choice
@@ -135,19 +131,15 @@ def _is_choice_non_empty(choice: Any) -> bool:
         for extra_field_name, extra_field_value in choice.model_extra.items():
             # Skip certain structural fields that are just default/None placeholders
             if extra_field_name == "index" and extra_field_value == 0:
-
                 continue
             if (
                 extra_field_name in {"finish_reason", "logprobs"}
                 and extra_field_value is None
             ):
-
                 continue
             if extra_field_name == "delta":
-
                 continue
             if _has_meaningful_content(extra_field_value):
-
                 return True
 
     # Check for any other non-standard fields on the choice
@@ -166,12 +158,10 @@ def _is_choice_non_empty(choice: Any) -> bool:
                 "enhancements",
             }
         ):
-
             continue
 
         attr_value = getattr(choice, attr_name, None)
         if _has_meaningful_content(attr_value):
-
             return True
 
     return False
@@ -192,7 +182,6 @@ def _is_delta_non_empty(delta: Delta) -> bool:
         for extra_field_name, extra_field_value in delta.model_extra.items():
             # Even structural fields are meaningful if they have actual content
             if _has_meaningful_content(extra_field_value):
-
                 return True
 
     # Check all regular attributes of the delta object
@@ -207,7 +196,6 @@ def _is_delta_non_empty(delta: Delta) -> bool:
 
         attr_value = getattr(delta, attr_name, None)
         if _has_meaningful_content(attr_value):
-
             return True
 
     return False

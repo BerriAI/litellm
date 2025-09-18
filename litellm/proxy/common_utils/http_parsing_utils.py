@@ -66,7 +66,9 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        verbose_proxy_logger.error(
+                            f"Invalid JSON payload received: {str(e)}"
+                        )
                         raise ProxyException(
                             message=f"Invalid JSON payload: {str(e)}",
                             type="invalid_request_error",
@@ -102,6 +104,7 @@ def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
         return {key: parsed_body[key] for key in accepted_keys}
     return None
 
+
 def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
     if request is None:
         return {}
@@ -114,6 +117,7 @@ def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
             "Unexpected error reading request query params - {}".format(e)
         )
         return {}
+
 
 def _safe_set_request_parsed_body(
     request: Optional[Request],

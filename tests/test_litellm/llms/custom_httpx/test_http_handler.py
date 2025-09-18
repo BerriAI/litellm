@@ -15,7 +15,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_ssl_configuration,
+)
 
 
 @pytest.mark.asyncio
@@ -130,24 +133,24 @@ async def test_aiohttp_transport_trust_env_setting(monkeypatch):
     # Test 1: Default trust_env behavior
     transport = AsyncHTTPHandler._create_aiohttp_transport()
     client_session = transport._get_valid_client_session()
-    
+
     # Default should be False (litellm.aiohttp_trust_env default)
-    default_trust_env = getattr(litellm, 'aiohttp_trust_env', False)
+    default_trust_env = getattr(litellm, "aiohttp_trust_env", False)
     assert client_session._trust_env == default_trust_env
-    
+
     # Test 2: Environment variable override
     monkeypatch.setenv("AIOHTTP_TRUST_ENV", "True")
     transport_with_env = AsyncHTTPHandler._create_aiohttp_transport()
     client_session_with_env = transport_with_env._get_valid_client_session()
-    
+
     # Should be True when environment variable is set
     assert client_session_with_env._trust_env is True
-    
+
     # Test 3: Verify environment variable with False value
     monkeypatch.setenv("AIOHTTP_TRUST_ENV", "False")
     transport_with_false_env = AsyncHTTPHandler._create_aiohttp_transport()
     client_session_with_false_env = transport_with_false_env._get_valid_client_session()
-    
+
     # Should respect the litellm.aiohttp_trust_env setting when env var is False
     assert client_session_with_false_env._trust_env == default_trust_env
 
@@ -156,18 +159,18 @@ def test_get_ssl_configuration():
     """Test that get_ssl_configuration() returns a proper SSL context with certifi CA bundle
     when no environment variables are set."""
     with patch.dict(os.environ, clear=True):
-        with patch('ssl.create_default_context') as mock_create_context:
+        with patch("ssl.create_default_context") as mock_create_context:
             # Mock the return value
             mock_ssl_context = MagicMock(spec=ssl.SSLContext)
             mock_create_context.return_value = mock_ssl_context
-            
+
             # Call the static method
             result = get_ssl_configuration()
-            
+
             # Verify ssl.create_default_context was called with certifi's CA file
             expected_ca_file = certifi.where()
             mock_create_context.assert_called_once_with(cafile=expected_ca_file)
-            
+
             # Verify it returns the mocked SSL context
             assert result == mock_ssl_context
 
@@ -176,10 +179,10 @@ def test_get_ssl_configuration_integration():
     """Integration test that _get_ssl_context() returns a working SSL context"""
     # Call the static method without mocking
     ssl_context = get_ssl_configuration()
-    
+
     # Verify it returns an SSLContext instance
     assert isinstance(ssl_context, ssl.SSLContext)
-    
+
     # Verify it has basic SSL context properties
     assert ssl_context.protocol is not None
     assert ssl_context.verify_mode is not None

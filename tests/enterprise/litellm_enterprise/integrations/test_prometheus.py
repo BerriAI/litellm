@@ -23,8 +23,12 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
+
 try:
-    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger, prometheus_label_factory
+    from enterprise.litellm_enterprise.integrations.prometheus import (
+        PrometheusLogger,
+        prometheus_label_factory,
+    )
 except Exception:
     PrometheusLogger = None
     prometheus_label_factory = None
@@ -375,6 +379,7 @@ def test_basic_functionality():
 # VALIDATION TESTS - Test the new validation logic for metrics and labels
 # ==============================================================================
 
+
 def test_invalid_metric_name_validation():
     """Test that invalid metric names are caught and raise ValueError"""
     # Clear registry before test
@@ -383,7 +388,7 @@ def test_invalid_metric_name_validation():
     # Set up test configuration with invalid metric name
     test_config = [
         {
-            "group": "service_metrics", 
+            "group": "service_metrics",
             "metrics": [
                 "invalid_metric_name_that_does_not_exist",
                 "litellm_deployment_total_requests",  # valid metric
@@ -397,7 +402,7 @@ def test_invalid_metric_name_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid metric
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid metric
     assert "invalid_metric_name_that_does_not_exist" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -426,7 +431,7 @@ def test_invalid_labels_validation():
     # Creating PrometheusLogger should raise ValueError due to invalid labels
     with pytest.raises(ValueError) as exc_info:
         PrometheusLogger()
-    
+
     # Verify error message contains information about invalid labels
     assert "invalid_label_name" in str(exc_info.value)
     assert "Configuration validation failed" in str(exc_info.value)
@@ -447,7 +452,7 @@ def test_valid_configuration_passes_validation():
             ],
             "include_labels": [
                 "litellm_model_name",
-                "api_provider", 
+                "api_provider",
                 "requested_model",
             ],
         }
@@ -460,9 +465,9 @@ def test_valid_configuration_passes_validation():
         logger = PrometheusLogger()
         # Verify the logger was created successfully
         assert logger is not None
-        assert hasattr(logger, 'enabled_metrics')
-        assert 'litellm_deployment_total_requests' in logger.enabled_metrics
-        assert 'litellm_deployment_failure_responses' in logger.enabled_metrics
+        assert hasattr(logger, "enabled_metrics")
+        assert "litellm_deployment_total_requests" in logger.enabled_metrics
+        assert "litellm_deployment_failure_responses" in logger.enabled_metrics
     except Exception as e:
         pytest.fail(f"Valid configuration should not raise exception: {e}")
 

@@ -37,15 +37,21 @@ def print_version(base_url: str, api_key: Optional[str]):
 
 @click.group(invoke_without_command=True)
 @click.option(
-    "--version", "-v", is_flag=True, is_eager=True, expose_value=False,
+    "--version",
+    "-v",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
     callback=lambda ctx, param, value: (
         print_version(
             ctx.params.get("base_url") or "http://localhost:4000",
-            ctx.params.get("api_key")
+            ctx.params.get("api_key"),
         )
         or ctx.exit()
-    ) if value and not ctx.resilient_parsing else None,
+    )
+    if value and not ctx.resilient_parsing
+    else None,
 )
 @click.option(
     "--base-url",
@@ -71,7 +77,7 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
 
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
-    
+
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
         interactive_shell(ctx)

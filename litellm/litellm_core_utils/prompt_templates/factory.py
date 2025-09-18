@@ -3079,7 +3079,6 @@ class BedrockConverseMessagesProcessor:
                 messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
-
     @staticmethod
     async def _bedrock_converse_messages_pt_async(  # noqa: PLR0915
         messages: List,
@@ -3171,7 +3170,6 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             if user_content:
-
                 if len(contents) > 0 and contents[-1]["role"] == "user":
                     if (
                         assistant_continue_message is not None
@@ -3554,7 +3552,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
             msg_i += 1
         if user_content:
-
             if len(contents) > 0 and contents[-1]["role"] == "user":
                 if (
                     assistant_continue_message is not None

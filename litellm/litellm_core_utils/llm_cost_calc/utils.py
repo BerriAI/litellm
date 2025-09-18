@@ -149,7 +149,6 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )
@@ -324,9 +323,12 @@ def generic_cost_per_token(
             - cache_creation_tokens
         )
 
-    prompt_base_cost, completion_base_cost, cache_creation_cost, cache_read_cost = (
-        _get_token_base_cost(model_info=model_info, usage=usage)
-    )
+    (
+        prompt_base_cost,
+        completion_base_cost,
+        cache_creation_cost,
+        cache_read_cost,
+    ) = _get_token_base_cost(model_info=model_info, usage=usage)
 
     prompt_cost = float(text_tokens) * prompt_base_cost
 
