@@ -883,6 +883,9 @@ class PromptTokensDetailsWrapper(
     video_length_seconds: Optional[float] = None
     """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
 
+    cache_creation_tokens: Optional[int] = None
+    """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.character_count is None:
@@ -893,6 +896,8 @@ class PromptTokensDetailsWrapper(
             del self.video_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.cache_creation_tokens is None:
+            del self.cache_creation_tokens
 
 
 class ServerToolUse(BaseModel):
@@ -954,6 +959,7 @@ class Usage(CompletionUsage):
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
+        # guarantee prompt_token_details is always a PromptTokensDetailsWrapper
         if prompt_tokens_details:
             if isinstance(prompt_tokens_details, dict):
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
@@ -987,6 +993,18 @@ class Usage(CompletionUsage):
                 )
             else:
                 _prompt_tokens_details.cached_tokens = params["cache_read_input_tokens"]
+
+        if "cache_creation_input_tokens" in params and isinstance(
+            params["cache_creation_input_tokens"], int
+        ):
+            if _prompt_tokens_details is None:
+                _prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cache_creation_tokens=params["cache_creation_input_tokens"]
+                )
+            else:
+                _prompt_tokens_details.cache_creation_tokens = params[
+                    "cache_creation_input_tokens"
+                ]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
