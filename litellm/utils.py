@@ -519,11 +519,7 @@ def get_dynamic_callbacks(
 
 
 
-from weakref import WeakKeyDictionary  # type: ignore
-
-_async_callable_cache = None
-if WeakKeyDictionary is not None:
-    _async_callable_cache = WeakKeyDictionary()  # type: ignore[var-annotated]
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 
 
 def is_async_callable(callback: Any) -> bool:
@@ -532,39 +528,7 @@ def is_async_callable(callback: Any) -> bool:
     Falls back gracefully if the object cannot be weak-referenced or cached.
     2.59x speedup.
     """
-    # Fast path: check cache first (most common case)
-    try:
-        if _async_callable_cache is not None:
-            cached = _async_callable_cache.get(callback)  # type: ignore[call-arg]
-            if cached is not None:
-                return cached
-    except Exception:
-        pass
-    
-    # Determine target - optimized path for common cases
-    target = callback
-    if not inspect.isfunction(target) and not inspect.ismethod(target):
-        try:
-            call_attr = getattr(target, "__call__", None)
-            if call_attr is not None:
-                target = call_attr
-        except Exception:
-            pass
-
-    # Compute result
-    try:
-        result = inspect.iscoroutinefunction(target)
-    except Exception:
-        result = False
-
-    # Cache the result
-    try:
-        if _async_callable_cache is not None:
-            _async_callable_cache[callback] = result  # type: ignore[index]
-    except Exception:
-        pass
-
-    return result
+    return coroutine_checker.is_async_callable(callback)
 
 
 def function_setup(  # noqa: PLR0915
@@ -946,12 +910,7 @@ def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
-        if inspect.iscoroutine(value):
-            return True
-        elif inspect.iscoroutinefunction(value):
-            return True
-        else:
-            return False
+        return coroutine_checker.check_coroutine(value)
 
     async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
         """
@@ -1645,7 +1604,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
-    is_coroutine = inspect.iscoroutinefunction(original_function)
+    is_coroutine = coroutine_checker.is_coroutine_function(original_function)
 
     # Return the appropriate wrapper based on the original function type
     if is_coroutine:
