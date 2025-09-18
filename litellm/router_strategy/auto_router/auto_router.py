@@ -122,7 +122,7 @@ class AutoRouter(CustomLogger):
             )
 
         user_message = messages[-1]
-        message_content = user_message.get("content", "")  # type: ignore
+        message_content = user_message.get("content", "")
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)  # type: ignore
         verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
