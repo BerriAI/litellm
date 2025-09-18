@@ -2140,6 +2140,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_api_key: Optional[str]
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
+    langsmith_sampling_rate: Optional[float]
 
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
