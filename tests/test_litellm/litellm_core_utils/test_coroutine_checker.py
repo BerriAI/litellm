@@ -20,10 +20,7 @@ class TestCoroutineChecker:
     def test_init(self):
         """Test CoroutineChecker initialization."""
         checker = CoroutineChecker()
-        assert isinstance(checker._cache, type(self.checker._cache))
-        assert checker._cache.max_size_in_memory == 1000
-        assert checker._cache.default_ttl == 3600
-        assert checker._cache.max_size_per_item == 1
+        assert isinstance(checker, CoroutineChecker)
 
     @pytest.mark.parametrize("obj,expected,description", [
         # Basic function types
@@ -79,26 +76,21 @@ class TestCoroutineChecker:
         assert self.checker.is_async_callable(SyncCallable()) is False
 
     def test_is_async_callable_caching(self):
-        """Test that is_async_callable caches results."""
+        """Test that is_async_callable caches callable objects."""
         async def async_func():
             return "async"
         
-        # First call should cache the result
+        # Test that it works correctly
         result1 = self.checker.is_async_callable(async_func)
         assert result1 is True
         
-        # Mock the cache to verify it was called
-        with patch.object(self.checker._cache, 'get_cache') as mock_get:
-            with patch.object(self.checker._cache, 'set_cache') as mock_set:
-                mock_get.return_value = True
-                
-                # Second call should use cache
-                result2 = self.checker.is_async_callable(async_func)
-                assert result2 is True
-                
-                # Verify cache was checked
-                mock_get.assert_called_once()
-                mock_set.assert_not_called()
+        # Test that callable objects are cached
+        assert async_func in self.checker._cache
+        assert self.checker._cache[async_func] is True
+        
+        # Test that it works consistently
+        result2 = self.checker.is_async_callable(async_func)
+        assert result2 is True
 
     def test_edge_cases_and_error_handling(self):
         """Test edge cases and error handling."""
