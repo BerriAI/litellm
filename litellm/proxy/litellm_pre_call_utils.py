@@ -571,7 +571,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
-            user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at,
+            user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
         )
         return user_api_key_logged_metadata
 
