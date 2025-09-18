@@ -34,7 +34,12 @@ def create_vertex_url(
     api_base: Optional[str] = None,
 ) -> str:
     """Return the base url for the vertex garden models"""
-    #  f"https://{self.endpoint.location}-aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{self.endpoint.location}"
+    # If api_base is provided and contains a dedicated domain, use it directly[ Online inference request to a shared public endpoint ] - 
+    if api_base and "prediction.vertexai.goog" in api_base: # Will always contain "prediction.vertexai.goog"
+        # Expected format: https://cloud.google.com/vertex-ai/docs/predictions/get-online-predictions#online_explain_custom_trained-drest
+        return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:predict"
+    
+    # Default to shared Vertex AI domain
     return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
@@ -108,27 +113,37 @@ class VertexAIModelGardenModels(VertexBase):
                 vertex_project=vertex_project or project_id,
                 stream=stream,
                 model=model,
-            )
-
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
                 api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
             )
-            model = ""
+
+            # For dedicated domains, use the URL directly without _check_custom_proxy
+            custom_endpoint = False
+            if api_base and "prediction.vertexai.goog" in api_base:
+                # Use the dedicated domain URL directly
+                final_api_base = default_api_base
+                custom_endpoint = True
+            else:
+                # Use the standard proxy check for shared domains
+                if len(default_api_base.split(":")) > 1:
+                    endpoint = default_api_base.split(":")[-1]
+                else:
+                    endpoint = ""
+
+                _, final_api_base = self._check_custom_proxy(
+                    api_base=api_base,
+                    custom_llm_provider="vertex_ai",
+                    gemini_api_key=None,
+                    endpoint=endpoint,
+                    stream=stream,
+                    auth_header=None,
+                    url=default_api_base,
+                )
+            
+            # Don't set model to empty string - keep the original model for logging
             return openai_like_chat_completions.completion(
                 model=model,
                 messages=messages,
-                api_base=api_base,
+                api_base=final_api_base,
                 api_key=access_token,
                 custom_prompt_dict=custom_prompt_dict,
                 model_response=model_response,
@@ -142,6 +157,7 @@ class VertexAIModelGardenModels(VertexBase):
                 timeout=timeout,
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
+                custom_endpoint=custom_endpoint,  # Prevent automatic /chat/completions append
             )
 
         except Exception as e:

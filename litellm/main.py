@@ -2939,8 +2939,8 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_base=api_base,
                     extra_headers=extra_headers,
                 )
-            elif "openai" in model:
-                # Vertex Model Garden - OpenAI compatible models
+            elif "openai" in model or model.startswith("mg-endpoint-"):
+                # Vertex Model Garden - OpenAI compatible models or Model Garden online inference endpoints
                 model_response = vertex_model_garden_chat_completion.completion(
                     model=model,
                     messages=messages,
