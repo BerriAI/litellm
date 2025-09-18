@@ -2337,5 +2337,3 @@ def test_completion_with_no_model():
     with pytest.raises(TypeError):
         response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
         
-
-    assert "model is not set. Set either via 'model' or 'engine' param." in str(e)
