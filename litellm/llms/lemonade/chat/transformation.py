@@ -106,5 +106,8 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             api_key=api_key,
         )
 
+        # Storing lemonade in the model response for easier cost calculation later
+        setattr(model_response, "model", "lemonade/" + model)
+
         return model_response
     
