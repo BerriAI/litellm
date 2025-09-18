@@ -556,7 +556,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="anthropic",
                     )
-                elif "overloaded_error" in error_str:
+                elif "overloaded_error" in error_str or "Overloaded" in error_str:
                     exception_mapping_worked = True
                     raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
