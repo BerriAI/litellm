@@ -1,0 +1,110 @@
+"""
+Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
+"""
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+
+import httpx
+from pydantic import BaseModel
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+)
+from litellm.types.utils import ModelResponse
+
+from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+
+class LemonadeChatConfig(OpenAILikeChatConfig):
+    repeat_penalty: Optional[float] = None
+    functions: Optional[list] = None
+    logit_bias: Optional[dict] = None
+    max_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = None
+    n: Optional[int] = None
+    presence_penalty: Optional[int] = None
+    stop: Optional[Union[str, list]] = None
+    temperature: Optional[int] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    response_format: Optional[dict] = None
+    tools: Optional[list] = None
+
+    def __init__(
+        self,
+        repeat_penalty: Optional[float] = None,
+        functions: Optional[list] = None,
+        logit_bias: Optional[dict] = None,
+        max_completion_tokens: Optional[int] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[int] = None,
+        stop: Optional[Union[str, list]] = None,
+        temperature: Optional[int] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        response_format: Optional[dict] = None,
+        tools: Optional[list] = None,
+    ) -> None:
+        locals_ = locals().copy()
+        for key, value in locals_.items():
+            if key != "self" and value is not None:
+                setattr(self.__class__, key, value)
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "lemonade"
+
+    @classmethod
+    def get_config(cls):
+        return super().get_config()
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: Optional[str], api_key: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
+        # lemonade is openai compatible, we just need to set this to custom_openai and have the api_base be lemonade's endpoint
+        api_base = (
+            api_base
+            or get_secret_str("LEMONADE_API_BASE")
+            or "http://localhost:8000/api/v1"
+        )  # type: ignore
+        # Lemonade doesn't check the key
+        key = "lemonade"
+        return api_base, key
+
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        model_response = super().transform_response(
+            model=model,
+            model_response=model_response,
+            raw_response=raw_response,
+            messages=messages,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            encoding=encoding,
+            optional_params=optional_params,
+            json_mode=json_mode,
+            litellm_params=litellm_params,
+            api_key=api_key,
+        )
+
+        return model_response
+    
