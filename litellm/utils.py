@@ -59,10 +59,12 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
-# Cache class to avoid repeated imports
-_LiteLLMLogging = None
-_coroutine_checker = None
-_set_callbacks = None
+# Import cached imports utilities
+from litellm.litellm_core_utils.cached_imports import (
+    get_coroutine_checker,
+    get_litellm_logging_class,
+    get_set_callbacks,
+)
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -226,41 +228,6 @@ from typing import (
     get_args,
 )
 
-# Type annotations for cached imports (after typing imports)
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.litellm_core_utils.coroutine_checker import CoroutineChecker
-
-_LiteLLMLogging: Optional[Type["Logging"]] = _LiteLLMLogging  # type: ignore
-_coroutine_checker: Optional["CoroutineChecker"] = _coroutine_checker  # type: ignore
-_set_callbacks: Optional[Callable] = _set_callbacks  # type: ignore
-
-def _get_litellm_logging_class() -> Type["Logging"]:
-    """Get the cached LiteLLM Logging class, initializing if needed."""
-    global _LiteLLMLogging
-    if _LiteLLMLogging is not None:
-        return _LiteLLMLogging
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    _LiteLLMLogging = Logging
-    return _LiteLLMLogging
-
-def _get_coroutine_checker() -> "CoroutineChecker":
-    """Get the cached coroutine checker instance, initializing if needed."""
-    global _coroutine_checker
-    if _coroutine_checker is not None:
-        return _coroutine_checker
-    from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
-    _coroutine_checker = coroutine_checker
-    return _coroutine_checker
-
-def _get_set_callbacks() -> Callable:
-    """Get the cached set_callbacks function, initializing if needed."""
-    global _set_callbacks
-    if _set_callbacks is not None:
-        return _set_callbacks
-    from litellm.litellm_core_utils.litellm_logging import set_callbacks
-    _set_callbacks = set_callbacks
-    return _set_callbacks
 
 from openai import OpenAIError as OriginalError
 
@@ -629,12 +596,12 @@ def function_setup(  # noqa: PLR0915
                     + litellm.failure_callback
                 )
             )
-            _get_set_callbacks()(callback_list=callback_list, function_id=function_id)
+            get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if _get_coroutine_checker().is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -644,7 +611,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if _get_coroutine_checker().is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -669,7 +636,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if _get_coroutine_checker().is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -702,7 +669,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    _get_coroutine_checker().is_async_callable(callback)
+                    get_coroutine_checker().is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
@@ -826,7 +793,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        logging_obj = _get_litellm_logging_class()(
+        logging_obj = get_litellm_logging_class()( # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
             stream=stream,
@@ -939,7 +906,7 @@ def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
-        return _get_coroutine_checker().is_async_callable(value)
+        return get_coroutine_checker().is_async_callable(value)
 
     async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
         """
@@ -1633,7 +1600,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
-    is_coroutine = _get_coroutine_checker().is_async_callable(original_function)
+    is_coroutine = get_coroutine_checker().is_async_callable(original_function)
 
     # Return the appropriate wrapper based on the original function type
     if is_coroutine:
