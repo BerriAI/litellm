@@ -19,6 +19,13 @@ cohere_embedding_response = {
     "inputTextTokenCount": 10
 }
 
+twelvelabs_embedding_response = {
+    "embedding": [0.1, 0.2, 0.3],
+    "embeddingOption": "visual-text",
+    "startSec": 0.0,
+    "endSec": 1.0
+}
+
 # Test data
 test_input = "Hello world from litellm"
 test_image_base64 = "data:image/png,test_image_base64_data"
@@ -32,6 +39,8 @@ test_image_base64 = "data:image/png,test_image_base64_data"
         ("bedrock/amazon.titan-embed-image-v1", "image", titan_embedding_response),
         ("bedrock/cohere.embed-english-v3", "text", cohere_embedding_response),
         ("bedrock/cohere.embed-multilingual-v3", "text", cohere_embedding_response),
+        ("bedrock/twelvelabs.marengo-embed-2-7-v1:0", "text", twelvelabs_embedding_response),
+        ("bedrock/twelvelabs.marengo-embed-2-7-v1:0", "image", twelvelabs_embedding_response),
     ],
 )
 def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_response):
