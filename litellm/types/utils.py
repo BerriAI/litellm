@@ -2405,6 +2405,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    LEMONADE = "lemonade"
 
 
 # Create a set of all provider values for quick lookup
