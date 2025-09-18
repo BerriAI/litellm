@@ -1731,6 +1731,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
+    duration: Optional[float] = 0.0
 
     _hidden_params: dict = {}
     _response_headers: Optional[dict] = None
