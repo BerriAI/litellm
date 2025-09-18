@@ -79,7 +79,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         else:
             return self._transform_to_invoke_model_format(request_data)
 
-    def _transform_to_converse_format(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _transform_to_converse_format(
+        self, messages: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """Transform to Converse input format."""
         # Extract system messages if present
         system_messages = []
@@ -90,10 +92,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
                 system_messages.append({"text": message.get("content", "")})
             else:
                 # Transform message content to Bedrock format
-                transformed_message = {
-                    "role": message.get("role"),
-                    "content": []
-                }
+                transformed_message = {"role": message.get("role"), "content": []}
 
                 # Handle content - ensure it's in the correct array format
                 content = message.get("content", "")
@@ -107,22 +106,18 @@ class BedrockCountTokensConfig(BaseAWSLLM):
                 user_messages.append(transformed_message)
 
         # Build the converse input format
-        converse_input = {
-            "messages": user_messages
-        }
+        converse_input = {"messages": user_messages}
 
         # Add system messages if present
         if system_messages:
             converse_input["system"] = system_messages
 
         # Build the complete request
-        return {
-            "input": {
-                "converse": converse_input
-            }
-        }
+        return {"input": {"converse": converse_input}}
 
-    def _transform_to_invoke_model_format(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _transform_to_invoke_model_format(
+        self, request_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Transform to InvokeModel input format."""
         import json
 
@@ -130,15 +125,11 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # Remove the 'model' field from the body as it's not part of the model input
         body_data = {k: v for k, v in request_data.items() if k != "model"}
 
-        return {
-            "input": {
-                "invokeModel": {
-                    "body": json.dumps(body_data)
-                }
-            }
-        }
+        return {"input": {"invokeModel": {"body": json.dumps(body_data)}}}
 
-    def get_bedrock_count_tokens_endpoint(self, model: str, aws_region_name: str) -> str:
+    def get_bedrock_count_tokens_endpoint(
+        self, model: str, aws_region_name: str
+    ) -> str:
         """
         Construct the AWS Bedrock CountTokens API endpoint using existing LiteLLM functions.
 
@@ -161,8 +152,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return endpoint
 
-
-    def transform_bedrock_response_to_anthropic(self, bedrock_response: Dict[str, Any]) -> Dict[str, Any]:
+    def transform_bedrock_response_to_anthropic(
+        self, bedrock_response: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 
@@ -178,9 +170,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         """
         input_tokens = bedrock_response.get("inputTokens", 0)
 
-        return {
-            "input_tokens": input_tokens
-        }
+        return {"input_tokens": input_tokens}
 
     def validate_count_tokens_request(self, request_data: Dict[str, Any]) -> None:
         """

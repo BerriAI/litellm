@@ -172,7 +172,9 @@ async def gemini_proxy_route(
         request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
-    base_target_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    base_target_url = (
+        os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -489,8 +491,7 @@ async def handle_bedrock_count_tokens(
         model = request_body.get("model")
         if not model:
             raise HTTPException(
-                status_code=400,
-                detail={"error": "Model is required in request body"}
+                status_code=400, detail={"error": "Model is required in request body"}
             )
 
         # Get model parameters from router
@@ -511,7 +512,7 @@ async def handle_bedrock_count_tokens(
                 # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
                 for key, value in model_litellm_params.items():
                     if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
-                        litellm_params[key] = value
+                        litellm_params[key] = value  # type: ignore
 
         verbose_proxy_logger.debug(f"Count tokens litellm_params: {litellm_params}")
         verbose_proxy_logger.debug(f"Resolved model: {resolved_model}")
@@ -531,8 +532,7 @@ async def handle_bedrock_count_tokens(
     except Exception as e:
         verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail={"error": f"CountTokens processing error: {str(e)}"}
+            status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"}
         )
 
 
@@ -588,13 +588,13 @@ async def bedrock_llm_proxy_route(
                 "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
                 + endpoint,
             },
-        ) 
+        )
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
     data["custom_llm_provider"] = "bedrock"
-    
+
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
