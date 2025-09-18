@@ -567,11 +567,6 @@ def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
-    # Ensure cached instances are initialized
-    _get_litellm_logging_class()
-    _get_coroutine_checker()
-    _get_set_callbacks()
-
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
@@ -831,7 +826,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        logging_obj = _LiteLLMLogging(
+        logging_obj = _get_litellm_logging_class()(
             model=model,  # type: ignore
             messages=messages,
             stream=stream,
