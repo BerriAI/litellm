@@ -55,6 +55,7 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -4049,7 +4050,7 @@ class Router:
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
-                    if inspect.iscoroutinefunction(
+                    if coroutine_checker.is_async_callable(
                         response
                     ):  # async errors are often returned as coroutines
                         response = await response
@@ -4097,7 +4098,7 @@ class Router:
         """
         model_group = kwargs.get("model")
         response = original_function(*args, **kwargs)
-        if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
+        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
