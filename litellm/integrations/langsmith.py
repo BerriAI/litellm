@@ -39,6 +39,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Optional[str] = None,
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
+        langsmith_sampling_rate: Optional[float] = None,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -49,7 +50,8 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_base_url=langsmith_base_url,
         )
         self.sampling_rate: float = (
-            float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            langsmith_sampling_rate
+            or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
             if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
             and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
             else 1.0
@@ -442,9 +444,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
