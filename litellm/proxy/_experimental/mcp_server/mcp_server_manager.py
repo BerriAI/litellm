@@ -34,8 +34,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPTransport,
     MCPTransportType,
     UserAPIKeyAuth,
@@ -70,38 +68,6 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
-def _convert_protocol_version_to_enum(
-    protocol_version: Optional[str | MCPSpecVersionType],
-) -> MCPSpecVersionType:
-    """
-    Convert string protocol version to MCPSpecVersion enum.
-
-    Args:
-        protocol_version: String protocol version, enum, or None
-
-    Returns:
-        MCPSpecVersionType: The enum value
-    """
-    if not protocol_version:
-        return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
-
-    # If it's already an MCPSpecVersion enum, return it
-    if isinstance(protocol_version, MCPSpecVersion):
-        return cast(MCPSpecVersionType, protocol_version)
-
-    # If it's a string, try to match it to enum values
-    if isinstance(protocol_version, str):
-        for version in MCPSpecVersion:
-            if version.value == protocol_version:
-                return cast(MCPSpecVersionType, version)
-
-    # If no match found, return default
-    verbose_logger.warning(
-        f"Unknown protocol version '{protocol_version}', using default"
-    )
-    return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
-
-
 class MCPServerManager:
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -113,8 +79,7 @@ class MCPServerManager:
                 "name": "zapier_mcp_server",
                 "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
                 "transport": "sse",
-                "auth_type": "api_key",
-                "spec_version": "2025-03-26"
+                "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
@@ -223,7 +188,6 @@ class MCPServerManager:
                 server_name=server_name,
                 url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
-                spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
                 alias=alias,
             )
@@ -873,7 +837,6 @@ class MCPServerManager:
         server_name: str,
         url: str,
         transport: str,
-        spec_version: str,
         auth_type: Optional[str] = None,
         alias: Optional[str] = None,
     ) -> str:
@@ -889,7 +852,6 @@ class MCPServerManager:
             server_name: Name of the server
             url: Server URL
             transport: Transport type (sse, http, etc.)
-            spec_version: MCP spec version
             auth_type: Authentication type (optional)
             alias: Server alias (optional)
 
@@ -897,7 +859,9 @@ class MCPServerManager:
             A deterministic server ID string
         """
         # Create a string from all the identifying parameters
-        params_string = f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}|{alias or ''}"
+        params_string = (
+            f"{server_name}|{url}|{transport}|{auth_type or ''}|{alias or ''}"
+        )
 
         # Generate SHA-256 hash
         hash_object = hashlib.sha256(params_string.encode("utf-8"))
@@ -1054,7 +1018,6 @@ class MCPServerManager:
                         alias=_server_config.alias,
                         url=_server_config.url,
                         transport=_server_config.transport,
-                        spec_version=_server_config.spec_version,
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
@@ -1117,7 +1080,6 @@ class MCPServerManager:
                 description=server.description,
                 url=server.url,
                 transport=server.transport,
-                spec_version=server.spec_version,
                 auth_type=server.auth_type,
                 created_at=server.created_at,
                 created_by=server.created_by,

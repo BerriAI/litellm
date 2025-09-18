@@ -1,9 +1,9 @@
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import TypedDict
 
-from litellm.proxy._types import MCPAuthType, MCPSpecVersionType, MCPTransportType
+from litellm.proxy._types import MCPAuthType, MCPTransportType
 from litellm.types.mcp import MCPServerCostInfo
 
 

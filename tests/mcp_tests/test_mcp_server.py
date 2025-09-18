@@ -479,7 +479,6 @@ def test_generate_stable_server_id():
                 "server_name": "zapier_mcp_server",
                 "url": "https://actions.zapier.com/mcp/sse",
                 "transport": "sse",
-                "spec_version": "2025-03-26",
                 "auth_type": "api_key",
             },
             "expected_hash": "8d5c9f8a12e3b7c4f6a2d8e1b5c9f2a4",
@@ -489,7 +488,6 @@ def test_generate_stable_server_id():
                 "server_name": "google_drive_mcp_server",
                 "url": "https://drive.google.com/mcp/http",
                 "transport": "http",
-                "spec_version": "2024-11-20",
                 "auth_type": None,
             },
             "expected_hash": "7a4b2e8f3c1d9e6b5a7c8f2d4e1b9c6a",
@@ -499,7 +497,6 @@ def test_generate_stable_server_id():
                 "server_name": "local_test_server",
                 "url": "http://localhost:8080/mcp",
                 "transport": "http",
-                "spec_version": "2025-03-26",
                 "auth_type": "basic",
             },
             "expected_hash": "2f1e8d7c6b5a4e3f2d1c9b8a7e6f5d4c",
@@ -527,7 +524,6 @@ def test_generate_stable_server_id():
         "server_name": "test_server",
         "url": "https://test.com/mcp",
         "transport": "sse",
-        "spec_version": "2025-03-26",
         "auth_type": "api_key",
     }
 
@@ -538,7 +534,6 @@ def test_generate_stable_server_id():
         {"server_name": "different_server"},
         {"url": "https://different.com/mcp"},
         {"transport": "http"},
-        {"spec_version": "2024-11-20"},
         {"auth_type": "basic"},
         {"auth_type": None},
     ]
@@ -558,7 +553,6 @@ def test_generate_stable_server_id():
         "server_name": "test_server",
         "url": "https://test.com/mcp",
         "transport": "sse",
-        "spec_version": "2025-03-26",
         "auth_type": None,
     }
 
@@ -566,7 +560,6 @@ def test_generate_stable_server_id():
         "server_name": "test_server",
         "url": "https://test.com/mcp",
         "transport": "sse",
-        "spec_version": "2025-03-26",
         "auth_type": "",
     }
 
@@ -584,7 +577,6 @@ def test_generate_stable_server_id():
         server_name="zapier_mcp_server",
         url="https://actions.zapier.com/mcp/sk-ak-example/sse",
         transport="sse",
-        spec_version="2025-03-26",
         auth_type="api_key",
     )
 
@@ -592,7 +584,6 @@ def test_generate_stable_server_id():
         server_name="github_mcp_server",
         url="https://api.github.com/mcp/http",
         transport="http",
-        spec_version="2025-03-26",
         auth_type=None,
     )
 
@@ -601,7 +592,6 @@ def test_generate_stable_server_id():
         server_name="zapier_mcp_server",
         url="https://actions.zapier.com/mcp/sk-ak-example/sse",
         transport="sse",
-        spec_version="2025-03-26",
         auth_type="api_key",
     )
 
@@ -609,7 +599,6 @@ def test_generate_stable_server_id():
         server_name="github_mcp_server",
         url="https://api.github.com/mcp/http",
         transport="http",
-        spec_version="2025-03-26",
         auth_type=None,
     )
 
@@ -1038,7 +1027,6 @@ def test_mcp_server_manager_config_integration_with_database():
         server_name="database-server",
         url="https://db-server.com/mcp",
         transport="http",
-        spec_version="2025-03-26",
         auth_type="none",
         description="Database server description",
         created_at=datetime.datetime.now(),
@@ -1356,7 +1344,6 @@ def test_add_update_server_with_alias():
     mock_mcp_server.server_name = "Test Server"
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.spec_version = "2025-03-26"
     mock_mcp_server.auth_type = None
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}
@@ -1388,7 +1375,6 @@ def test_add_update_server_without_alias():
     mock_mcp_server.server_name = "Test Server"
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.spec_version = "2025-03-26"
     mock_mcp_server.auth_type = None
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}
@@ -1420,7 +1406,6 @@ def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.server_name = None
     mock_mcp_server.url = "https://test-server.com/mcp"
     mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.spec_version = "2025-03-26"
     mock_mcp_server.auth_type = None
     mock_mcp_server.description = "Test server description"
     mock_mcp_server.mcp_info = {}

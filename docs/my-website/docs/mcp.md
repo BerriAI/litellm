@@ -114,7 +114,6 @@ mcp_servers:
     description: "My custom MCP server"
     auth_type: "api_key"
     auth_value: "abc123"
-    spec_version: "2025-03-26"
 ```
 
 **Configuration Options:**
@@ -716,7 +715,6 @@ mcp_servers:
     url: https://mcp.deepwiki.com/mcp
     transport: "http"
     auth_type: "none"
-    spec_version: "2025-03-26"
     access_groups: ["dev_group"]
 ```
 

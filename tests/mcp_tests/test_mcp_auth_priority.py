@@ -25,7 +25,6 @@ def test_mcp_server_works_without_config_auth_value():
         alias="test_no_config",
         url="https://api.example.com/mcp",
         transport=MCPTransport.http,
-        spec_version=MCPSpecVersion.jun_2025,
         auth_type=MCPAuth.authorization,
         authentication_token=None,  # No config auth
     )
