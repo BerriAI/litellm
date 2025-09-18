@@ -38,7 +38,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
-
+    POINTGUARDAI = "pointguard_ai"
 
 
 class Role(Enum):
@@ -391,6 +391,26 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
     )
 
 
+class PointGuardAIGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the PointGuardAI guardrail"""
+
+    api_email: Optional[str] = Field(
+        default=None, description="API email for the PointGuardAI service"
+    )
+    org_id: Optional[str] = Field(
+        default=None, description="Organization ID for PointGuardAI"
+    )
+    policy_config_name: Optional[str] = Field(
+        default=None, description="Policy configuration name for PointGuardAI"
+    )
+    model_provider_name: Optional[str] = Field(
+        default=None, description="Model provider identifier"
+    )
+    model_name: Optional[str] = Field(
+        default=None, description="Model name"
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -480,6 +500,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
+    PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
