@@ -147,7 +147,7 @@ def initialize_pointguardai(litellm_params: LitellmParams, guardrail: Guardrail)
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         api_email=litellm_params.api_email,
-        org_id=litellm_params.org_id,
+        org_code=litellm_params.org_code,
         policy_config_name=litellm_params.policy_config_name,
         model_provider_name=litellm_params.model_provider_name,
         model_name=litellm_params.model_name,

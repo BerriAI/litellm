@@ -38,7 +38,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
-    POINTGUARDAI = "pointguardai"
+    POINTGUARDAI = "pointguard_ai"
 
 
 class Role(Enum):

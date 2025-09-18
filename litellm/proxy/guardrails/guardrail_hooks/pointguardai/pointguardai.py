@@ -32,7 +32,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
         api_base: str,
         api_key: str,
         api_email: str,
-        org_id: str,
+        org_code: str,
         policy_config_name: str,
         model_provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
@@ -52,13 +52,13 @@ class PointGuardAIGuardrail(CustomGuardrail):
             raise HTTPException(status_code=500, detail="Missing required parameter: api_key")
         if not api_email:
             raise HTTPException(status_code=500, detail="Missing required parameter: api_email")
-        if not org_id:
-            raise HTTPException(status_code=500, detail="Missing required parameter: org_id")
+        if not org_code:
+            raise HTTPException(status_code=500, detail="Missing required parameter: org_code")
         if not policy_config_name:
             raise HTTPException(status_code=500, detail="Missing required parameter: policy_config_name")
 
         self.pointguardai_api_base = api_base or os.getenv("POINTGUARDAI_API_URL_BASE")
-        self.pointguardai_org_id = org_id or os.getenv("POINTGUARDAI_ORG_CODE", None)
+        self.pointguardai_org_code = org_code or os.getenv("POINTGUARDAI_ORG_CODE", None)
         self.pointguardai_policy_config_name = policy_config_name or os.getenv(
             "POINTGUARDAI_CONFIG_NAME", None
         )
@@ -96,13 +96,13 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         # Fill in the API URL with the org ID
         if self.pointguardai_api_base and "{{org}}" in self.pointguardai_api_base:
-            if self.pointguardai_org_id:
+            if self.pointguardai_org_code:
                 self.pointguardai_api_base = self.pointguardai_api_base.replace(
-                    "{{org}}", self.pointguardai_org_id
+                    "{{org}}", self.pointguardai_org_code
                 )
             else:
                 verbose_proxy_logger.warning(
-                    "API URL contains {{org}} template but no org_id provided"
+                    "API URL contains {{org}} template but no org_code provided"
                 )
 
         # Store new parameters
@@ -117,7 +117,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             "PointGuardAI: Configured with api_base: %s", self.pointguardai_api_base
         )
         verbose_proxy_logger.debug(
-            "PointGuardAI: Configured with org_id: %s", self.pointguardai_org_id
+            "PointGuardAI: Configured with org_code: %s", self.pointguardai_org_code
         )
         verbose_proxy_logger.debug(
             "PointGuardAI: Configured with policy_config_name: %s",
