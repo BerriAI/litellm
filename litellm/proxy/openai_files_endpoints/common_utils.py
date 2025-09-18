@@ -6,6 +6,9 @@ from litellm.types.utils import SpecialEnums
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
+    # Ensure b64_uid is a string and not a mock object
+    if not isinstance(b64_uid, str):
+        return False
     # Add padding back if needed
     padded = b64_uid + "=" * (-len(b64_uid) % 4)
     # Decode from base64
@@ -36,6 +39,9 @@ def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
     returns: ["gpt-4o-mini", "gemini-2.0-flash"]
     """
     try:
+        # Ensure unified_file_id is a string and not a mock object
+        if not isinstance(unified_file_id, str):
+            return []
         match = re.search(r"target_model_names,([^;]+)", unified_file_id)
         if match:
             # Split on comma and strip whitespace from each model name
@@ -53,6 +59,9 @@ def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
     """
     ## use regex to get the model_id from the file_id
     try:
+        # Ensure file_id is a string and not a mock object
+        if not isinstance(file_id, str):
+            return None
         return file_id.split("model_id:")[1].split(";")[0]
     except Exception:
         return None
@@ -60,6 +69,9 @@ def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
 
 def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     ## use regex to get the batch_id from the file_id
+    # Ensure file_id is a string and not a mock object
+    if not isinstance(file_id, str):
+        return ""
     if "llm_batch_id" in file_id:
         return file_id.split("llm_batch_id:")[1].split(",")[0]
     else:

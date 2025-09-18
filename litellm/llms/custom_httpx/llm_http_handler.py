@@ -2200,6 +2200,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             optional_params={},
         )
+
         if _is_async:
             return self.async_create_file(
                 transformed_request=transformed_request,
@@ -2216,7 +2217,6 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client()
         else:
             sync_httpx_client = client
-        
 
         if isinstance(transformed_request, dict) and "method" in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
@@ -2283,11 +2283,11 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
-
+        
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
         litellm_params_with_url["upload_url"] = api_base
-        
+
         return provider_config.transform_create_file_response(
             model=None,
             raw_response=upload_response,
@@ -2423,7 +2423,7 @@ class BaseLLMHTTPHandler:
         # get config from model, custom llm provider
         if model is None:
             raise ValueError("model is required for create_batch")
-            
+
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -2520,6 +2520,95 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params_with_request,
         )
 
+    def retrieve_batch(
+        self,
+        batch_id: str,
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        logging_obj: "LiteLLMLoggingObj",
+        _is_async: bool = False,
+        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        model: Optional[str] = None,
+    ) -> Union["LiteLLMBatch", Coroutine[Any, Any, "LiteLLMBatch"]]:
+        """
+        Retrieve a batch using provider-specific configuration.
+        """
+        # Transform the request using provider config
+        transformed_request = provider_config.transform_retrieve_batch_request(
+            batch_id=batch_id,
+            optional_params=litellm_params,
+            litellm_params=litellm_params,
+        )
+
+        if _is_async:
+            return self.async_retrieve_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                batch_id=batch_id,
+                model=model,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        try:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                method = transformed_request["method"].lower()
+                request_kwargs = {
+                    "url": transformed_request["url"],
+                    "headers": transformed_request["headers"],
+                }
+                
+                # Only add data for non-GET requests
+                if method != "get" and transformed_request.get("data") is not None:
+                    request_kwargs["data"] = transformed_request["data"]
+                
+                batch_response = getattr(sync_httpx_client, method)(**request_kwargs)
+            elif isinstance(transformed_request, dict) and api_base:
+                # For other providers that use JSON requests
+                batch_response = sync_httpx_client.get(
+                    url=api_base,
+                    headers={**headers, "Content-Type": "application/json"},
+                    params=transformed_request,
+                )
+            else:
+                # Handle other request types if needed
+                if not api_base:
+                    raise ValueError("api_base is required for non-pre-signed requests")
+                batch_response = sync_httpx_client.get(
+                    url=api_base,
+                    headers=headers,
+                )
+        except Exception as e:
+            verbose_logger.exception(f"Error retrieving batch: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_retrieve_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
     async def async_create_batch(
         self,
         transformed_request: Union[bytes, str, dict],
@@ -2604,6 +2693,242 @@ class BaseLLMHTTPHandler:
             raw_response=batch_response,
             logging_obj=logging_obj,
             litellm_params=litellm_params_with_request,
+        )
+
+    async def async_retrieve_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        provider_config: "BaseBatchesConfig",
+        headers: dict,
+        api_base: Optional[str],
+        logging_obj: "LiteLLMLoggingObj",
+        client: Optional[Union["HTTPHandler", "AsyncHTTPHandler"]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        batch_id: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        """
+        Async version of retrieve_batch
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        #########################################################
+        # Debug Logging
+        #########################################################
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": transformed_request,
+                "api_base": api_base,
+                "headers": headers,
+                "batch_id": batch_id,
+            },
+        )
+
+        try:
+            if (
+                isinstance(transformed_request, dict)
+                and "method" in transformed_request
+            ):
+                # Handle pre-signed requests (e.g., from Bedrock with AWS auth)
+                method = transformed_request["method"].lower()
+                request_kwargs = {
+                    "url": transformed_request["url"],
+                    "headers": transformed_request["headers"],
+                }
+                
+                # Only add data for non-GET requests
+                if method != "get" and transformed_request.get("data") is not None:
+                    request_kwargs["data"] = transformed_request["data"]
+                
+                batch_response = await getattr(async_httpx_client, method)(**request_kwargs)
+            elif isinstance(transformed_request, dict) and api_base:
+                # For other providers that use JSON requests
+                batch_response = await async_httpx_client.get(
+                    url=api_base,
+                    headers={**headers, "Content-Type": "application/json"},
+                    params=transformed_request,
+                )
+            else:
+                # Handle other request types if needed
+                if not api_base:
+                    raise ValueError("api_base is required for non-pre-signed requests")
+                batch_response = await async_httpx_client.get(
+                    url=api_base,
+                    headers=headers,
+                )
+        except Exception as e:
+            verbose_logger.exception(f"Error retrieving batch: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_retrieve_batch_response(
+            model=model,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def cancel_response_api_handler(
+        self,
+        response_id: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> Union[ResponsesAPIResponse, Coroutine[Any, Any, ResponsesAPIResponse]]:
+        """
+        Async version of the responses API handler.
+        Uses async HTTP client to make requests.
+        """
+        if _is_async:
+            return self.async_cancel_response_api_handler(
+                response_id=response_id,
+                responses_api_provider_config=responses_api_provider_config,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client,
+            )
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url, data = responses_api_provider_config.transform_cancel_response_api_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=response_id,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=data, timeout=timeout
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        return responses_api_provider_config.transform_cancel_response_api_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_cancel_response_api_handler(
+        self,
+        response_id: str,
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: Optional[str],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+    ) -> ResponsesAPIResponse:
+        """
+        Async version of the cancel response API handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = responses_api_provider_config.validate_environment(
+            headers=extra_headers or {}, model="None", litellm_params=litellm_params
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = responses_api_provider_config.get_complete_url(
+            api_base=litellm_params.api_base,
+            litellm_params=dict(litellm_params),
+        )
+
+        url, data = responses_api_provider_config.transform_cancel_response_api_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=response_id,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=data, timeout=timeout
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=responses_api_provider_config,
+            )
+
+        return responses_api_provider_config.transform_cancel_response_api_response(
+            raw_response=response,
+            logging_obj=logging_obj,
         )
 
     def list_files(self):
@@ -2766,10 +3091,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -2959,10 +3281,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -3196,15 +3515,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -3295,15 +3615,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -3377,11 +3698,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3452,11 +3774,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3535,13 +3858,14 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            generate_content_provider_config.sync_get_auth_token_and_url(
-                api_base=litellm_params.api_base,
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-            )
+        (
+            headers,
+            api_base,
+        ) = generate_content_provider_config.sync_get_auth_token_and_url(
+            api_base=litellm_params.api_base,
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         if extra_headers:
@@ -3641,13 +3965,14 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            await generate_content_provider_config.get_auth_token_and_url(
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-                api_base=litellm_params.api_base,
-            )
+        (
+            headers,
+            api_base,
+        ) = await generate_content_provider_config.get_auth_token_and_url(
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:

@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import contextvars
-from typing import Coroutine, Optional, TypedDict
+from typing import Coroutine, Optional
+
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 

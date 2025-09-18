@@ -34,6 +34,7 @@ from litellm.integrations.neatlogs import NeatlogsLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
+from litellm.integrations.posthog import PostHogLogger
 
 try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
@@ -90,6 +91,7 @@ class CustomLoggerRegistry:
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
         "cloudzero": CloudZeroLogger,
+        "posthog": PostHogLogger,
     }
 
     try:

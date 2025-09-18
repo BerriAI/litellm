@@ -174,6 +174,35 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
     assert prompt_cost < 0.085
 
 
+def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
+    model = "claude-3-5-haiku-20241022"
+    usage = Usage(
+        completion_tokens=90,
+        prompt_tokens=28436,
+        total_tokens=28526,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
+        prompt_tokens_details=None,
+        cache_creation_input_tokens=2000,
+    )
+
+    custom_llm_provider = "anthropic"
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    print(f"prompt_cost: {prompt_cost}")
+    assert round(prompt_cost, 3) == 0.023
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
