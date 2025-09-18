@@ -349,7 +349,7 @@ class BedrockEmbedding(BaseAWSLLM):
             model_id=unencoded_model_id,
         )
 
-        provider = model.split(".")[0]
+        provider = self.get_bedrock_embedding_provider(model)
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
             k: v
@@ -399,9 +399,7 @@ class BedrockEmbedding(BaseAWSLLM):
                         )
                     )
                 batch_data.append(transformed_request)
-        elif provider == "twelvelabs" and model in [
-            "twelvelabs.marengo-embed-2-7-v1:0",
-        ]:
+        elif provider == "twelvelabs":
             batch_data = []
             for i in input:
                 twelvelabs_request: (
