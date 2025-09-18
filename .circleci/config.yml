@@ -2879,7 +2879,34 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-      
+      - run:
+          name: Run UI unit tests (Vitest)
+          command: |
+            # Use the same Node version we installed earlier with nvm
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            nvm use v18.17.0
+            
+            cd ui/litellm-dashboard
+            # Ensure clean, deterministic install (skip if you prefer npm install)
+            npm ci || npm install
+            
+            # Run Vitest via your package.json script:
+            #   - --run to avoid watch mode on CI
+            #   - --coverage to produce coverage
+            #   - --coverage.reporter=lcov so Codecov can ingest lcov.info
+            #   - Feel free to drop --reporter if you don’t need extra output
+            npm run test -- --run --coverage --coverage.reporter=lcov
+            
+            # If you use a JUnit reporter (e.g., vitest-junit-reporter),
+            # ensure it writes to ./test-results/junit.xml so Circle collects it
+            mkdir -p test-results || true
+            - store_test_results:
+                path: ui/litellm-dashboard/test-results
+            - store_artifacts:
+                path: ui/litellm-dashboard/coverage
+                destination: ui-coverage
+
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
