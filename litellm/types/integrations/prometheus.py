@@ -500,8 +500,8 @@ class UserAPIKeyLabelValues(BaseModel):
         Optional[str],
         Field(..., alias=UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value),
     ] = None
-    tags: List[str] = []
-    custom_metadata_labels: Dict[str, str] = {}
+    tags: List[str] = Field(default_factory=list)
+    custom_metadata_labels: Dict[str, str] = Field(default_factory=dict)
     model_id: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.MODEL_ID.value)
     ] = None

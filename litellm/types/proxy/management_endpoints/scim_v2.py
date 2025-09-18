@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, Field
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -63,7 +63,7 @@ class SCIMGroup(SCIMResource):
 
 # SCIM List Response Models
 class SCIMListResponse(BaseModel):
-    schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
+    schemas: List[str] = Field(default_factory=lambda: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"])
     totalResults: int
     startIndex: Optional[int] = 1
     itemsPerPage: Optional[int] = 10
@@ -88,7 +88,7 @@ class SCIMPatchOperation(BaseModel):
 
 
 class SCIMPatchOp(BaseModel):
-    schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
+    schemas: List[str] = Field(default_factory=lambda: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"])
     Operations: List[SCIMPatchOperation]
 
 
@@ -101,14 +101,14 @@ class SCIMFeature(BaseModel):
 
 
 class SCIMServiceProviderConfig(BaseModel):
-    schemas: List[str] = [
+    schemas: List[str] = Field(default_factory=lambda: [
         "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
-    ]
-    patch: SCIMFeature = SCIMFeature(supported=True)
-    bulk: SCIMFeature = SCIMFeature(supported=False)
-    filter: SCIMFeature = SCIMFeature(supported=False)
-    changePassword: SCIMFeature = SCIMFeature(supported=False)
-    sort: SCIMFeature = SCIMFeature(supported=False)
-    etag: SCIMFeature = SCIMFeature(supported=False)
+    ])
+    patch: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=True))
+    bulk: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=False))
+    filter: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=False))
+    changePassword: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=False))
+    sort: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=False))
+    etag: SCIMFeature = Field(default_factory=lambda: SCIMFeature(supported=False))
     authenticationSchemes: Optional[List[Dict[str, Any]]] = None
     meta: Optional[Dict[str, Any]] = None
