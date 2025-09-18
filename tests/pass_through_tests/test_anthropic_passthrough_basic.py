@@ -21,7 +21,7 @@ class TestAnthropicMessagesEndpoint(BaseAnthropicMessagesTest):
     def test_anthropic_messages_to_wildcard_model(self):
         client = self.get_client()
         response = client.messages.create(
-            model="anthropic/claude-3-opus-20240229",
+            model="claude-3-5-sonnet-20241022",
             messages=[{"role": "user", "content": "Hello, world!"}],
             max_tokens=100,
         )
