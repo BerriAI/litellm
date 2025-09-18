@@ -524,8 +524,6 @@ def get_dynamic_callbacks(
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 
 
-
-
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -3465,20 +3463,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
 
-    elif custom_llm_provider == "cohere":
-        ## check if unsupported param passed in
-        # handle cohere params
-        optional_params = litellm.CohereConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=(
-                drop_params
-                if drop_params is not None and isinstance(drop_params, bool)
-                else False
-            ),
-        )
-    elif custom_llm_provider == "cohere_chat":
+    elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
         # handle cohere params
         optional_params = litellm.CohereChatConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -6903,10 +6888,8 @@ class ProviderConfigManager:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
-        elif litellm.LlmProviders.COHERE_CHAT == provider:
+        elif litellm.LlmProviders.COHERE_CHAT == provider or litellm.LlmProviders.COHERE == provider:
             return litellm.CohereChatConfig()
-        elif litellm.LlmProviders.COHERE == provider:
-            return litellm.CohereConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
         elif litellm.LlmProviders.CLARIFAI == provider:

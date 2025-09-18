@@ -106,7 +106,7 @@ async def test_proxy_failure_metrics():
         print("/metrics", metrics)
 
         # Check if the failure metric is present and correct - use pattern matching for robustness
-        expected_metric_pattern = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id"}'
+        expected_metric_pattern = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None",end_user="None",exception_class="Openai.RateLimitError",exception_status="429",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",route="/chat/completions",team="None",team_alias="None",user="default_user_id",user_email="None"}'
 
         # Check if the pattern is in metrics (this metric doesn't include user_email field)
         assert any(expected_metric_pattern in line for line in metrics.split('\n')), f"Expected failure metric pattern not found in /metrics. Pattern: {expected_metric_pattern}"
@@ -576,8 +576,8 @@ async def test_user_email_in_all_required_metrics():
     Test that user_email label is present in all the metrics that were requested to have it:
     - litellm_proxy_total_requests_metric_total
     - litellm_proxy_failed_requests_metric_total
-    - litellm_input_tokens_total
-    - litellm_output_tokens_total
+    - litellm_input_tokens_metric_total
+    - litellm_output_tokens_metric_total
     - litellm_requests_metric_total
     - litellm_spend_metric_total
     """
@@ -608,8 +608,8 @@ async def test_user_email_in_all_required_metrics():
         # Check that user_email appears in all the required metrics
         required_metrics_with_user_email = [
             "litellm_proxy_total_requests_metric_total",
-            "litellm_input_tokens_total",
-            "litellm_output_tokens_total",
+            "litellm_input_tokens_metric_total",
+            "litellm_output_tokens_metric_total",
             "litellm_requests_metric_total",
             "litellm_spend_metric_total"
         ]
