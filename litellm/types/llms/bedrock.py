@@ -360,6 +360,35 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
+# TwelveLabs Marengo Embed 2.7 types
+TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
+TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
+
+
+class TwelveLabsMediaSource(TypedDict, total=False):
+    base64String: str
+    s3Location: dict  # {"uri": str, "bucketOwner": str}
+
+
+class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
+    inputType: Required[TWELVELABS_EMBEDDING_INPUT_TYPES]
+    inputText: str
+    mediaSource: TwelveLabsMediaSource
+    textTruncate: Literal["end", "none"]
+    startSec: float
+    lengthSec: float
+    useFixedLengthSec: float
+    minClipSec: int
+    embeddingOption: List[TWELVELABS_EMBEDDING_OPTIONS]
+
+
+class TwelveLabsMarengoEmbeddingResponse(TypedDict):
+    embedding: List[float]
+    embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
+    startSec: float
+    endSec: float
+
+
 AmazonEmbeddingRequest = Union[
     AmazonTitanMultimodalEmbeddingRequest,
     AmazonTitanV2EmbeddingRequest,

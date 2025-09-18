@@ -822,6 +822,7 @@ bedrock_embedding_models: set = set(
         "amazon.titan-embed-text-v1",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
+        "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
 
@@ -1065,4 +1066,6 @@ SENTRY_PII_DENYLIST = [
 ]
 
 # CoroutineChecker cache configuration
-COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000))
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
+    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
+)
