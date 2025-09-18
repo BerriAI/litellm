@@ -188,14 +188,14 @@ class AmazonConverseConfig(BaseConfig):
 
         if not isinstance(metadata, dict):
             raise litellm.exceptions.BadRequestError(
-                message="request_metadata must be a dictionary",
+                message="requestMetadata must be a dictionary",
                 model="bedrock",
                 llm_provider="bedrock",
             )
 
         if len(metadata) > 16:
             raise litellm.exceptions.BadRequestError(
-                message="request_metadata can contain a maximum of 16 items",
+                message="requestMetadata can contain a maximum of 16 items",
                 model="bedrock",
                 llm_provider="bedrock",
             )
@@ -206,42 +206,42 @@ class AmazonConverseConfig(BaseConfig):
         for key, value in metadata.items():
             if not isinstance(key, str):
                 raise litellm.exceptions.BadRequestError(
-                    message="request_metadata keys must be strings",
+                    message="requestMetadata keys must be strings",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
 
             if not isinstance(value, str):
                 raise litellm.exceptions.BadRequestError(
-                    message="request_metadata values must be strings",
+                    message="requestMetadata values must be strings",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
 
             if len(key) == 0 or len(key) > 256:
                 raise litellm.exceptions.BadRequestError(
-                    message="request_metadata key length must be 1-256 characters",
+                    message="requestMetadata key length must be 1-256 characters",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
 
             if len(value) > 256:
                 raise litellm.exceptions.BadRequestError(
-                    message="request_metadata value length must be 0-256 characters",
+                    message="requestMetadata value length must be 0-256 characters",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
 
             if not key_pattern.match(key):
                 raise litellm.exceptions.BadRequestError(
-                    message=f"request_metadata key '{key}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
+                    message=f"requestMetadata key '{key}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
 
             if not value_pattern.match(value):
                 raise litellm.exceptions.BadRequestError(
-                    message=f"request_metadata value '{value}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
+                    message=f"requestMetadata value '{value}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
                     model="bedrock",
                     llm_provider="bedrock",
                 )
@@ -259,7 +259,7 @@ class AmazonConverseConfig(BaseConfig):
             "top_p",
             "extra_headers",
             "response_format",
-            "request_metadata",
+            "requestMetadata",
         ]
 
         if (
@@ -569,10 +569,10 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                         value
                     )
-            if param == "request_metadata":
-                if value is not None:
-                    self._validate_request_metadata(value)
-                    optional_params["request_metadata"] = value
+            if param == "requestMetadata":
+                if value is not None and isinstance(value, dict):
+                    self._validate_request_metadata(value)  # type: ignore
+                    optional_params["requestMetadata"] = value
 
         # Only update thinking tokens for non-GPT-OSS models
         if "gpt-oss" not in model:
@@ -777,8 +777,8 @@ class AmazonConverseConfig(BaseConfig):
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
 
-        # Extract request_metadata before processing other parameters
-        request_metadata = inference_params.pop("request_metadata", None)
+        # Extract requestMetadata before processing other parameters
+        request_metadata = inference_params.pop("requestMetadata", None)
         if request_metadata is not None:
             self._validate_request_metadata(request_metadata)
 
