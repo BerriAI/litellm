@@ -1842,11 +1842,29 @@ response = embedding(
 print(response)
 ```
 
+#### Titan V2 - encoding_format support
+```python
+from litellm import embedding
+# Float format (default)
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="float"  # Returns float array
+)
+
+# Binary format
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="base64"  # Returns base64 encoded binary
+)
+```
+
 ## Supported AWS Bedrock Embedding Models
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
-| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | `dimensions`, `encoding_format` |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/cohere_transformation.py#L18)
