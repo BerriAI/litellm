@@ -24,7 +24,7 @@ from typing import (
     cast,
     get_args,
     get_origin,
-    get_type_hints,
+    get_type_hints, Awaitable,
 )
 
 from litellm.constants import (
@@ -796,7 +796,18 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
+
+security_headers = {}
+# Load security headers from the environment variable
+security_headers_str = os.getenv("SECURITY_HEADERS", "{}")
+try:
+    security_headers = json.loads(security_headers_str)
+except json.JSONDecodeError as e:
+    verbose_proxy_logger.exception(
+        f"An error occurred parsing security headers: {str(e)}"
+    )
+
 
 
 # get current directory
@@ -891,6 +902,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_headers(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    origin = request.headers.get("origin")
+    if "*" not in origins and origin and origin not in origins:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "error": {
+                    "message": f"CORS policy violation. Origin '{origin}' is not allowed. Allowed origins are {origins}",
+                }
+            },
+            headers={"Content-Type": "application/json"},
+        )
+    response = await call_next(request)
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    if security_headers:
+        for header, value in security_headers.items():
+            response.headers[header] = value
+    return response
 
 app.add_middleware(PrometheusAuthMiddleware)
 
