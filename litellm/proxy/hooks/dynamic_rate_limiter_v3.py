@@ -19,21 +19,10 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptorRateLimitObject,
 )
 from litellm.types.router import ModelGroupInfo
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
-    from litellm.types.caching import RedisPipelineIncrementOperation
-
-    Span = Union[_Span, Any]
-    InternalUsageCache = _InternalUsageCache
-else:
-    Span = Any
-    InternalUsageCache = Any
+from litellm.proxy.utils import InternalUsageCache
 
 
-
-class _PROXY_DynamicRateLimitHandler(CustomLogger):
+class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     """
     Simple validation version that uses v3 parallel request limiter for priority-based rate limiting.
     
@@ -42,8 +31,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     2. Leverages Redis Lua scripts for atomic operations under high traffic
     3. Creates priority-specific rate limit descriptors
     """
-    def __init__(self, internal_usage_cache: InternalUsageCache):
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache)
+    def __init__(self, internal_usage_cache: DualCache):
+        self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
+        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache)
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
