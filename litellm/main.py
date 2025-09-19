@@ -36,7 +36,11 @@ from typing import (
     Union,
     cast,
     get_args,
+    TYPE_CHECKING,
 )
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 import dotenv
 import httpx
@@ -374,6 +378,8 @@ async def acompletion(
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    # Session management
+    shared_session: Optional["ClientSession"] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -466,6 +472,16 @@ async def acompletion(
     #########################################################
     #########################################################
 
+    # Log shared session usage
+    if shared_session is not None:
+        verbose_logger.debug(
+            f"🔄 SHARED SESSION: acompletion called with shared_session (ID: {id(shared_session)})"
+        )
+    else:
+        verbose_logger.debug(
+            "🔄 NO SHARED SESSION: acompletion called without shared_session"
+        )
+
     # Adjusted to use explicit arguments instead of *args and **kwargs
     completion_kwargs = {
         "model": model,
@@ -506,6 +522,7 @@ async def acompletion(
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
         "web_search_options": web_search_options,
+        "shared_session": shared_session,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -930,6 +947,8 @@ def completion(  # type: ignore # noqa: PLR0915
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
+    # Session management
+    shared_session: Optional["ClientSession"] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1075,7 +1094,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -1596,6 +1614,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
@@ -1642,6 +1661,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,  # type: ignore
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     custom_llm_provider=custom_llm_provider,
@@ -1771,6 +1791,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
@@ -1800,6 +1821,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,
                     client=client,
                     custom_llm_provider=custom_llm_provider,
@@ -1830,6 +1852,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
@@ -1881,6 +1904,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
@@ -1954,6 +1978,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 timeout=timeout,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
@@ -2032,7 +2057,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -2044,6 +2068,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         optional_params=optional_params,
                         timeout=timeout,
                         litellm_params=litellm_params,
+                        shared_session=shared_session,
                         acompletion=acompletion,
                         stream=stream,
                         api_key=api_key,
@@ -2070,6 +2095,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         client=client,  # pass AsyncOpenAI, OpenAI client
                         organization=organization,
                         custom_llm_provider=custom_llm_provider,
+                        shared_session=shared_session,
                     )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -2110,6 +2136,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 optional_params=optional_params,
                 timeout=timeout,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 acompletion=acompletion,
                 stream=stream,
                 api_key=api_key,
@@ -2197,6 +2224,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="clarifai",
                 timeout=timeout,
                 headers=headers,
@@ -2242,6 +2270,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="anthropic_text",
                 timeout=timeout,
                 headers=headers,
@@ -2427,6 +2456,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="cohere_chat",
                 timeout=timeout,
                 headers=headers,
@@ -2512,15 +2542,10 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "compactifai":
             api_key = (
-                api_key
-                or get_secret_str("COMPACTIFAI_API_KEY")
-                or litellm.api_key
+                api_key or get_secret_str("COMPACTIFAI_API_KEY") or litellm.api_key
             )
 
-            api_base = (
-                api_base
-                or "https://api.compactif.ai/v1"
-            )
+            api_base = api_base or "https://api.compactif.ai/v1"
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(
@@ -2694,6 +2719,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="openrouter",
                 timeout=timeout,
                 headers=headers,
@@ -2756,6 +2782,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="vercel_ai_gateway",
                 timeout=timeout,
                 headers=headers,
@@ -3106,9 +3133,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3242,6 +3269,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="watsonx_text",
                 timeout=timeout,
                 headers=headers,
@@ -3295,6 +3323,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="ollama",
                 timeout=timeout,
                 headers=headers,
@@ -3328,6 +3357,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="ollama_chat",
                 timeout=timeout,
                 headers=headers,
@@ -3348,6 +3378,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
@@ -3380,6 +3411,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="cloudflare",
                 timeout=timeout,
                 headers=headers,
@@ -3433,6 +3465,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     optional_params=optional_params,
                     litellm_params=litellm_params,
+                    shared_session=shared_session,
                     timeout=timeout,  # type: ignore
                     client=client,
                     custom_llm_provider=custom_llm_provider,
@@ -3450,7 +3483,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -3461,6 +3493,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                shared_session=shared_session,
                 custom_llm_provider="gradient_ai",
                 timeout=timeout,
                 headers=headers,
@@ -5089,9 +5122,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6079,9 +6112,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6092,9 +6125,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6105,9 +6138,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk
