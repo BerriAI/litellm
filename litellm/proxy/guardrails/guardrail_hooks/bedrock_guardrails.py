@@ -110,7 +110,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
-        self.guardrail_provider = "bedrock"
 
         # store kwargs as optional_params
         self.optional_params = kwargs
