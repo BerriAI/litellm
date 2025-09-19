@@ -86,8 +86,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
 
-        Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
-        Note: Gemini image generation models use generateContent, not predict
+        Gemini 2.5 Flash Image Preview: :generateContent
+        Other Imagen models: :predict
         """
         complete_url: str = (
             api_base
@@ -96,7 +96,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         )
 
         complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/models/{model}:generateContent"
+
+        # Gemini 2.5 Flash Image Preview uses generateContent endpoint
+        if "2.5-flash-image-preview" in model:
+            complete_url = f"{complete_url}/models/{model}:generateContent"
+        else:
+            # All other Imagen models use predict endpoint
+            complete_url = f"{complete_url}/models/{model}:predict"
+
         return complete_url
 
     def validate_environment(
