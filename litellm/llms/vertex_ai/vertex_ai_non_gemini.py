@@ -452,7 +452,7 @@ def completion(  # noqa: PLR0915
                 },
             )
             request_str += f"llm_model.predict(instances={instances[0]})\n"
-            print(f"request_str: {request_str}")
+            # print(f"request_str: {request_str}")  # Removed: avoid logging potential sensitive data.
             # Use predict method which automatically handles dedicated endpoint URLs
             response = llm_model.predict(
                 instances=[instances[0]],  # Convert back from dict format
