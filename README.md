@@ -12,6 +12,13 @@
         <br>
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (LLM Gateway)</a> | <a href="https://docs.litellm.ai/docs/hosted" target="_blank"> Hosted Proxy (Preview)</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+
+<p align="center">
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/nightly-parity-stress.yml"><img src="https://github.com/grahama1970/litellm/actions/workflows/nightly-parity-stress.yml/badge.svg" alt="Nightly Parity & Stress"></a>
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/weekly-streaming-stress.yml"><img src="https://github.com/grahama1970/litellm/actions/workflows/weekly-streaming-stress.yml/badge.svg" alt="Weekly Streaming Stress"></a>
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/manual-stress.yml"><img src="https://img.shields.io/badge/Manual%20Stress-%E2%86%92-blue" alt="Manual Stress"></a>
+</p>
+
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">

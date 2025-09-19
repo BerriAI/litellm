@@ -1,0 +1,59 @@
+name: Weekly Streaming Stress (Safe)
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # 07:00 UTC every Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-streaming-stress
+  cancel-in-progress: true
+
+jobs:
+  stream-stress:
+    if: ${{ secrets.OPENAI_API_KEY != '' || secrets.GEMINI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: live-stress
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Stress (legacy, streaming)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ vars.LITELLM_DEFAULT_MODEL }}
+        run: |
+          uv run local/scripts/stress_e2e.py --stream --total 80 --concurrency 10 --out stress_stream_legacy.jsonl | tee stress_stream_legacy_summary.json
+      - name: Stress (extracted, streaming)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ vars.LITELLM_DEFAULT_MODEL }}
+        run: |
+          uv run local/scripts/stress_e2e.py --stream --total 80 --concurrency 10 --extracted --out stress_stream_extracted.jsonl | tee stress_stream_extracted_summary.json
+      - name: Enforce error threshold
+        run: |
+          set -e
+          L_ERRS=$(jq -r '.errors // 0' stress_stream_legacy_summary.json)
+          E_ERRS=$(jq -r '.errors // 0' stress_stream_extracted_summary.json)
+          echo "legacy stream errors=$L_ERRS extracted stream errors=$E_ERRS"
+          if [ "$L_ERRS" != "0" ] || [ "$E_ERRS" != "0" ]; then
+            echo "Streaming stress error threshold exceeded" >&2
+            exit 1
+          fi
+      - name: Upload Streaming Stress Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: streaming-stress-artifacts
+          path: |
+            stress_stream_legacy.jsonl
+            stress_stream_extracted.jsonl
+            stress_stream_legacy_summary.json
+            stress_stream_extracted_summary.json
