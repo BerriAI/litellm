@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 
 class WatsonXAPIParams(TypedDict):
-    project_id: str
+    project_id: Optional[str]
     space_id: Optional[str]
     region_name: Optional[str]
 
