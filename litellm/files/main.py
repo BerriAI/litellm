@@ -731,7 +731,7 @@ def file_list(
 
 async def afile_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -886,6 +886,32 @@ def file_content(
                 file_content_request=_file_content_request,
                 client=client,
                 litellm_params=litellm_params_dict,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=api_base,
+                vertex_credentials=vertex_credentials,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
             )
         else:
             raise litellm.exceptions.BadRequestError(
