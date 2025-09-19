@@ -46,3 +46,9 @@ curl -s localhost:8788/agent/run -H 'content-type: application/json' -d '{
 - Router seam: `LITELLM_ROUTER_CORE=extracted` to use the extracted streaming iterator. Default: `legacy`.
 - The research tools module is optional and `httpx`-gated.
 
+
+
+## Troubleshooting
+- Optional deps: install `httpx` for HTTP tools and research; install `Pillow` for image helpers used by local docs smokes.
+- Extracted streaming seam is opt-in: set `LITELLM_ROUTER_CORE=extracted`. Default is `legacy`.
+- If a test complains about missing event loop, ensure your test runner creates an event loop (see tests/smoke/conftest.py for a minimal fixture).
