@@ -37,19 +37,16 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         - For Qwen-VL models: preserve multimodal content
         - For other models: convert content list to string
         """
-        if model.startswith("qwen-vl"):
-            transformed_messages = []
-            for message in messages:
-                if isinstance(message.get("content"), list):
-                    transformed_messages.append(message)
-                else:
-                    transformed_messages.append({
-                        "role": message["role"],
-                        "content": message.get("content", "")
-                    })
-            messages = transformed_messages
-        else:
-            messages = handle_messages_with_content_list_to_str_conversion(messages)
+        transformed_messages = []
+        for message in messages:
+            if isinstance(message.get("content"), list):
+                transformed_messages.append(message)
+            else:
+                transformed_messages.append({
+                    "role": message["role"],
+                    "content": message.get("content", "")
+                })
+        messages = transformed_messages
             
         if is_async:
             return super()._transform_messages(
