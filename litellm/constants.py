@@ -769,6 +769,12 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
+BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "amazon",
+    "twelvelabs",
+]
+
 BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",

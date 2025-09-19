@@ -5,11 +5,12 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from typing import Any, Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union, get_args
 
 import httpx
 
 import litellm
+from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -150,6 +151,44 @@ class BedrockEmbedding(BaseAWSLLM):
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return response.json()
+    
+    def _transform_response(
+        self, response_list: List[dict], model: str, provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+    ) -> Optional[EmbeddingResponse]:
+        """
+        Transforms the response from the Bedrock embedding provider to the OpenAI format.
+        """
+        returned_response: Optional[EmbeddingResponse] = None
+        if model == "amazon.titan-embed-image-v1":
+            returned_response = (
+                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
+                    response_list=response_list, model=model
+                )
+            )
+        elif model == "amazon.titan-embed-text-v1":
+            returned_response = AmazonTitanG1Config()._transform_response(
+                response_list=response_list, model=model
+            )
+        elif model == "amazon.titan-embed-text-v2:0":
+            returned_response = AmazonTitanV2Config()._transform_response(
+                response_list=response_list, model=model
+            )
+        elif provider == "twelvelabs":
+            returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+                response_list=response_list, model=model
+            )
+        
+        
+        ########################################################## 
+        # Validate returned response
+        ##########################################################
+        if returned_response is None:
+            raise Exception(
+                "Unable to map model response to known provider format. model={}".format(
+                    model
+                )
+            )
+        return returned_response
 
     def _single_func_embeddings(
         self,
@@ -162,6 +201,7 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_region_name: str,
         model: str,
         logging_obj: Any,
+        provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: Optional[str] = None,
     ):
         responses: List[dict] = []
@@ -208,32 +248,9 @@ class BedrockEmbedding(BaseAWSLLM):
 
             responses.append(response)
 
-        returned_response: Optional[EmbeddingResponse] = None
-
-        ## TRANSFORM RESPONSE ##
-        if model == "amazon.titan-embed-image-v1":
-            returned_response = (
-                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
-                    response_list=responses, model=model
-                )
-            )
-        elif model == "amazon.titan-embed-text-v1":
-            returned_response = AmazonTitanG1Config()._transform_response(
-                response_list=responses, model=model
-            )
-        elif model == "amazon.titan-embed-text-v2:0":
-            returned_response = AmazonTitanV2Config()._transform_response(
-                response_list=responses, model=model
-            )
-
-        if returned_response is None:
-            raise Exception(
-                "Unable to map model response to known provider format. model={}".format(
-                    model
-                )
-            )
-
-        return returned_response
+        return self._transform_response(
+            response_list=responses, model=model, provider=provider
+        )
 
     async def _async_single_func_embeddings(
         self,
@@ -246,6 +263,7 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_region_name: str,
         model: str,
         logging_obj: Any,
+        provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: Optional[str] = None,
     ):
         responses: List[dict] = []
@@ -291,33 +309,10 @@ class BedrockEmbedding(BaseAWSLLM):
             )
 
             responses.append(response)
-
-        returned_response: Optional[EmbeddingResponse] = None
-
         ## TRANSFORM RESPONSE ##
-        if model == "amazon.titan-embed-image-v1":
-            returned_response = (
-                AmazonTitanMultimodalEmbeddingG1Config()._transform_response(
-                    response_list=responses, model=model
-                )
-            )
-        elif model == "amazon.titan-embed-text-v1":
-            returned_response = AmazonTitanG1Config()._transform_response(
-                response_list=responses, model=model
-            )
-        elif model == "amazon.titan-embed-text-v2:0":
-            returned_response = AmazonTitanV2Config()._transform_response(
-                response_list=responses, model=model
-            )
-
-        if returned_response is None:
-            raise Exception(
-                "Unable to map model response to known provider format. model={}".format(
-                    model
-                )
-            )
-
-        return returned_response
+        return self._transform_response(
+            response_list=responses, model=model, provider=provider
+        )
 
     def embeddings(
         self,
@@ -349,7 +344,12 @@ class BedrockEmbedding(BaseAWSLLM):
             model_id=unencoded_model_id,
         )
 
-        provider = model.split(".")[0]
+        provider = self.get_bedrock_embedding_provider(model)
+        if provider is None:
+            raise Exception(
+                f"Unable to determine bedrock embedding provider for model: {model}. "
+                f"Supported providers: {list(get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL))}"
+            )
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
             k: v
@@ -399,9 +399,7 @@ class BedrockEmbedding(BaseAWSLLM):
                         )
                     )
                 batch_data.append(transformed_request)
-        elif provider == "twelvelabs" and model in [
-            "twelvelabs.marengo-embed-2-7-v1:0",
-        ]:
+        elif provider == "twelvelabs":
             batch_data = []
             for i in input:
                 twelvelabs_request: (
@@ -438,8 +436,9 @@ class BedrockEmbedding(BaseAWSLLM):
                     model=model,
                     logging_obj=logging_obj,
                     api_key=api_key,
+                    provider=provider,
                 )
-            return self._single_func_embeddings(
+            returned_response = self._single_func_embeddings(
                 client=(
                     client
                     if client is not None and isinstance(client, HTTPHandler)
@@ -454,7 +453,11 @@ class BedrockEmbedding(BaseAWSLLM):
                 model=model,
                 logging_obj=logging_obj,
                 api_key=api_key,
+                provider=provider,
             )
+            if returned_response is None:
+                raise Exception("Unable to map Bedrock request to provider")
+            return returned_response
         elif data is None:
             raise Exception("Unable to map Bedrock request to provider")
 
