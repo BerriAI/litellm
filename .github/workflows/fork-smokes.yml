@@ -2,9 +2,9 @@ name: Fork Smokes
 
 on:
   push:
-    branches: [ fork/stable ]
+    branches: [ fork/stable, pr/httpx-error-tail ]
   pull_request:
-    branches: [ fork/stable ]
+    branches: [ fork/stable, pr/httpx-error-tail ]
 
 jobs:
   smokes:
