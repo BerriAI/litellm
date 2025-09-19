@@ -103,8 +103,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
         disable_exception_on_block: Optional[bool] = False,
+        logging_only: Optional[bool] = None,
         **kwargs,
     ):
+        if logging_only is True:
+            kwargs["event_hook"] = GuardrailEventHooks.logging_only
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -128,6 +131,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.pre_mcp_call,
                 GuardrailEventHooks.during_mcp_call,
+                GuardrailEventHooks.logging_only,
             ]
 
         super().__init__(**kwargs)
@@ -1024,3 +1028,44 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         verbose_proxy_logger.debug(
                             "Applied masking to choice text content"
                         )
+
+    @log_guardrail_information
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """
+        Masks the input before logging to observability platforms.
+        Only runs when mode: "logging_only" is configured.
+        
+        Note: This intentionally logs guardrail execution info even though
+        logging_only mode doesn't block requests. This is for audit/compliance
+        purposes to track that detection occurred.
+        """
+        if call_type == "completion" or call_type == "acompletion":
+            messages = kwargs.get("messages")
+            if messages:
+                try:
+                    # Run Bedrock guardrail on input messages
+                    bedrock_response = await self.make_bedrock_api_request(
+                        source="INPUT", messages=messages, request_data=kwargs
+                    )
+                    
+                    if bedrock_response:
+                        # DEBUG: Log the entire Bedrock response
+                        verbose_proxy_logger.debug(
+                            f"Bedrock logging_only: Full response = {bedrock_response}"
+                        )
+                        
+                        # Apply masking to messages for logging
+                        masked_messages = self._update_messages_with_updated_bedrock_guardrail_response(
+                            messages=messages, bedrock_guardrail_response=bedrock_response
+                        )
+                        kwargs["messages"] = masked_messages
+                        verbose_proxy_logger.debug(
+                            f"Bedrock logging_only: Masked messages for logging"
+                        )
+                        
+                except Exception as e:
+                    verbose_proxy_logger.warning(f"Bedrock logging_only masking failed: {e}")
+
+        return kwargs, result
