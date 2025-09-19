@@ -1,12 +1,13 @@
 """
 Unit tests for Bedrock Guardrails
 """
-
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
@@ -860,7 +861,6 @@ async def test__redact_pii_matches_comprehensive_coverage():
 
     print("Comprehensive coverage redaction test passed")
 
-
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
     """Test that BedrockGuardrail respects aws_bedrock_runtime_endpoint when set"""
@@ -1049,3 +1049,76 @@ async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch
         ), f"Expected parameter endpoint to take precedence. Got: {prepped_request.url}"
 
         print(f"Parameter precedence test passed. URL: {prepped_request.url}")
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_200_with_exception_in_output_raises_and_logs_failure():
+    """
+    When Bedrock returns HTTP 200 but the body contains Output.__type with 'Exception',
+    the guardrail should:
+      - raise an HTTPException(400) with the Output payload in detail
+      - log the request trace with guardrail_status='failure'
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Mock a Bedrock "success" HTTP status but an Exception embedded in the body
+    payload = {
+        "Output": {
+            "__type": "com.amazonaws#InternalServerException",
+            "message": "Something went wrong upstream",
+        },
+        "action": "NONE",
+    }
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = json.dumps(payload).encode("utf-8")
+    mock_resp.text = json.dumps(payload)
+    mock_resp.json.return_value = payload
+
+    # Minimal request data
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    # Mock creds and request prep
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "ak"
+    mock_credentials.secret_key = "sk"
+    mock_credentials.token = None
+
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(
+        guardrail,
+        "_prepare_request",
+        return_value=MagicMock(url="http://example", headers={}, body=b""),
+    ), patch.object(
+        guardrail, "add_standard_logging_guardrail_information_to_request_data"
+    ) as mock_add_trace:
+        mock_post.return_value = mock_resp
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+        # 1) Raised HTTPException with 400 status
+        err = excinfo.value
+        assert err.status_code == 400
+        assert err.detail["error"] == "Guardrail application failed."
+
+        # 2) Detail includes the Output object from the Bedrock body
+        assert err.detail["bedrock_guardrail_response"] == payload["Output"]
+
+        # 3) Trace logging received a 'failure' status
+        assert mock_add_trace.called
+        _, kwargs = mock_add_trace.call_args
+        assert kwargs["guardrail_status"] == "failure"
+        # And the JSON passed to tracing is the same response we received
+        assert kwargs["guardrail_json_response"] == payload
