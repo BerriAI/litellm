@@ -90,6 +90,7 @@ litellm --config /path/to/config.yaml
 | Azure OpenAI|   [Usage](../docs/providers/azure#azure-text-to-speech-tts)                 |
 | Vertex AI   |   [Usage](../docs/providers/vertex#text-to-speech-apis)                 |
 | Gemini      |   [Usage](#gemini-text-to-speech)                 |
+| ElevenLabs  |   [Usage](../docs/providers/elevenlabs#text-to-speech-tts)                 |
 
 ## `/audio/speech` to `/chat/completions` Bridge
 

@@ -281,6 +281,100 @@ async def test_speech_litellm_vertex_async_with_voice_ssml():
         }
 
 
+def test_speech_litellm_elevenlabs_sync():
+    """Test ElevenLabs text-to-speech sync functionality"""
+    # Mock the response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"fake mp3 audio data for elevenlabs sync"
+    mock_response.headers = {"content-type": "audio/mpeg"}
+
+    # Set up the mock for synchronous calls
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+    ) as mock_sync_post:
+        mock_sync_post.return_value = mock_response
+        model = "elevenlabs/eleven_multilingual_v2"
+
+        response = litellm.speech(
+            model=model,
+            voice="test_voice_sync",
+            input="The quick brown fox jumped over the lazy dogs",
+            api_key="sk_test_elevenlabs_sync_key",
+        )
+
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
+
+        assert isinstance(response, HttpxBinaryResponseContent)
+
+        # Assert synchronous call
+        mock_sync_post.assert_called_once()
+        _, kwargs = mock_sync_post.call_args
+        print("ElevenLabs sync call args:", kwargs)
+
+        # Verify URL structure
+        assert "text-to-speech/test_voice_sync" in kwargs["url"]
+
+        # Verify headers
+        assert "xi-api-key" in kwargs["headers"]
+        assert kwargs["headers"]["xi-api-key"] == "sk_test_elevenlabs_sync_key"
+        assert kwargs["headers"]["Content-Type"] == "application/json"
+
+        # Verify request body
+        assert kwargs["json"] == {
+            "text": "The quick brown fox jumped over the lazy dogs",
+            "model_id": "eleven_multilingual_v2",
+        }
+
+
+@pytest.mark.asyncio
+async def test_speech_litellm_elevenlabs_async():
+    """Test ElevenLabs text-to-speech async functionality"""
+    # Mock the response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.content = b"fake mp3 audio data for elevenlabs"
+    mock_response.headers = {"content-type": "audio/mpeg"}
+
+    # Set up the mock for asynchronous calls
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_async_post:
+        mock_async_post.return_value = mock_response
+        model = "elevenlabs/eleven_multilingual_v2"
+
+        response = await litellm.aspeech(
+            model=model,
+            voice="test_voice_id",
+            input="The quick brown fox jumped over the lazy dogs",
+            api_key="sk_test_elevenlabs_key",
+        )
+
+        from litellm.llms.openai.openai import HttpxBinaryResponseContent
+
+        assert isinstance(response, HttpxBinaryResponseContent)
+
+        # Assert asynchronous call
+        mock_async_post.assert_called_once()
+        _, kwargs = mock_async_post.call_args
+        print("ElevenLabs call args:", kwargs)
+
+        # Verify URL structure
+        assert "text-to-speech/test_voice_id" in kwargs["url"]
+
+        # Verify headers
+        assert "xi-api-key" in kwargs["headers"]
+        assert kwargs["headers"]["xi-api-key"] == "sk_test_elevenlabs_key"
+        assert kwargs["headers"]["Content-Type"] == "application/json"
+
+        # Verify request body
+        assert kwargs["json"] == {
+            "text": "The quick brown fox jumped over the lazy dogs",
+            "model_id": "eleven_multilingual_v2",
+        }
+
+
 @pytest.mark.skip(reason="causes openai rate limit errors")
 def test_audio_speech_cost_calc():
     from litellm.integrations.custom_logger import CustomLogger
