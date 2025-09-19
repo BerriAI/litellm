@@ -2015,6 +2015,7 @@ class GuardrailMode(TypedDict, total=False):
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
+    guardrail_provider: Optional[str]
     guardrail_mode: Optional[
         Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]
     ]
