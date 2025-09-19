@@ -46,7 +46,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             or priority not in litellm.priority_reservation
         ):
             verbose_proxy_logger.debug(
-                f"Priority Reservation not set. priority={priority}, but litellm.priority_reservation is {litellm.priority_reservation}."
+                "Priority Reservation not set for the given priority."
             )
         elif priority is not None and litellm.priority_reservation is not None:
             if os.getenv("LITELLM_LICENSE", None) is None:
