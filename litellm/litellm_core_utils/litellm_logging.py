@@ -3421,7 +3421,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "dynamic_rate_limiter":
-            from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+            from litellm.proxy.hooks.dynamic_rate_limiter import (
                 _PROXY_DynamicRateLimitHandler,
             )
 
@@ -3700,7 +3700,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                     return callback  # type: ignore
 
         elif logging_integration == "dynamic_rate_limiter":
-            from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+            from litellm.proxy.hooks.dynamic_rate_limiter import (
                 _PROXY_DynamicRateLimitHandler,
             )
 
