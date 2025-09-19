@@ -102,7 +102,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=True):
         if server.name == "working_server":
             # Working server returns tools
             tool1 = MagicMock()
@@ -184,7 +184,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=True):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
 
@@ -479,7 +479,7 @@ async def test_list_tools_single_server_unprefixed_names():
     )
 
     async def mock_get_tools_from_server(
-        server, mcp_auth_header=None, mcp_protocol_version=None, add_prefix=True
+        server, mcp_auth_header=None, add_prefix=False
     ):
         tool = MagicMock()
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
@@ -498,7 +498,6 @@ async def test_list_tools_single_server_unprefixed_names():
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
-            mcp_protocol_version=None,
         )
 
     # Should be unprefixed since only one server is allowed
@@ -542,7 +541,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
     )
 
     async def mock_get_tools_from_server(
-        server, mcp_auth_header=None, mcp_protocol_version=None, add_prefix=True
+        server, mcp_auth_header=None, add_prefix=True
     ):
         tool = MagicMock()
         # When multiple servers, add_prefix should be True -> prefixed names
@@ -562,7 +561,6 @@ async def test_list_tools_multiple_servers_prefixed_names():
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
-            mcp_protocol_version=None,
         )
 
     # Should be prefixed since multiple servers are allowed
