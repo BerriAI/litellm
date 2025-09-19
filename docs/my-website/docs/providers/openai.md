@@ -681,6 +681,42 @@ response = litellm.acompletion(
 )
 ```
 
+:::tip
+
+If you are using OpenAI models together with models from other providers (e.g. Anthropic), we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/anthropic#usage---set-ssl_verifyfalse)
+
+:::
+
+### Using HTTP/HTTPS Proxy with LiteLLM
+
+This is done by setting your own `httpx.Client` 
+
+- For `litellm.completion` set `litellm.client_session=httpx.Client(proxy="http://proxy.com")`
+- For `litellm.acompletion` set `litellm.aclient_session=AsyncClient.Client(proxy="http://proxy.com")`
+```python
+import litellm, httpx
+
+# for completion
+litellm.client_session = httpx.Client(proxy="http://proxy.com")
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+
+# for acompletion
+litellm.aclient_session = httpx.AsyncClient(proxy="http://proxy.com")
+response = litellm.acompletion(
+    model="gpt-3.5-turbo",
+    messages=messages,
+)
+```
+
+:::tip
+
+If you are using OpenAI models together with models from other providers (e.g. Anthropic), we recommend setting this parameter along with the other parameter mentioned on [this page.](/docs/providers/anthropic#using-httphttps-proxy-with-litellm)
+
+:::
+
 
 ### Using OpenAI Proxy with LiteLLM
 ```python
