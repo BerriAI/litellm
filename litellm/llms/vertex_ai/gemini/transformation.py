@@ -99,7 +99,16 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
+            if image["type"] == "url":
+                # For URL images, we need to convert to base64 for Vertex AI inline_data
+                from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
+                base64_data = convert_url_to_base64(image["data"])
+                # Extract media type and data from base64 data URL
+                media_type, data = base64_data.split("data:")[1].split(";base64,")
+                _blob = BlobType(data=data, mime_type=media_type)
+            else:
+                # For base64 images, use the media_type and data directly
+                _blob = BlobType(data=image["data"], mime_type=image["media_type"])
             return PartType(inline_data=_blob)
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
