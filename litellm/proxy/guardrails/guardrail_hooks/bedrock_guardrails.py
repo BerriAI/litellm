@@ -384,9 +384,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         #########################################################
         if response.status_code == 200:
-            # check if the response contains an error
-            if self._check_bedrock_response_for_exception(response=response):
-                raise self._get_http_exception_for_failed_guardrail(response)
             # check if the response was flagged
             _json_response = response.json()
             redacted_response = _redact_pii_matches(_json_response)
@@ -451,19 +448,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return "failure"
             return "success"
         return "failure"
-
-    def _get_http_exception_for_failed_guardrail(
-        self, response: httpx.Response
-    ) -> HTTPException:
-        return HTTPException(
-            status_code=400,
-            detail={
-                "error": "Guardrail application failed.",
-                "bedrock_guardrail_response": json.loads(
-                    response.content.decode("utf-8")
-                ).get("Output", {}),
-            },
-        )
 
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
