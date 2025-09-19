@@ -31,7 +31,12 @@ This release is not yet live.
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:main-v1.77.2.rc.2
 ```
+
 </TabItem>
 
 <TabItem value="pip" label="Pip">
