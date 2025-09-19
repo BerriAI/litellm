@@ -1,8 +1,9 @@
 import React, { useState } from "react";
+import { Tooltip } from "antd";
 import PresidioDetectedEntities from "./PresidioDetectedEntities";
 import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
-} from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails"
+} from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
 
 interface RecognitionMetadata {
   recognizer_name: string;
@@ -44,9 +45,13 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
   // Default to presidio for backwards compatibility
   const guardrailProvider = data.guardrail_provider ?? "presidio";
 
-  if (!data) {
-    return null;
-  }
+  if (!data) return null;
+
+  const isSuccess =
+    typeof data.guardrail_status === "string" &&
+    data.guardrail_status.toLowerCase() === "success";
+
+  const tooltipTitle = isSuccess ? null : "Guardrail failed to run.";
 
   // Calculate total masked entities
   const totalMaskedEntities = data.masked_entity_count ? 
@@ -73,13 +78,18 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           <h3 className="text-lg font-medium">Guardrail Information</h3>
-          <span className={`ml-3 px-2 py-1 rounded-md text-xs font-medium inline-block ${
-            data.guardrail_status === "success" 
-              ? 'bg-green-100 text-green-800' 
-              : 'bg-red-100 text-red-800'
-          }`}>
-            {data.guardrail_status}
-          </span>
+
+          {/* Header status chip with tooltip */}
+          <Tooltip title={tooltipTitle} placement="top" arrow destroyTooltipOnHide>
+            <span
+              className={`ml-3 px-2 py-1 rounded-md text-xs font-medium inline-block ${
+                isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
+              }`}
+            >
+              {data.guardrail_status}
+            </span>
+          </Tooltip>
+
           {totalMaskedEntities > 0 && (
             <span className="ml-3 px-2 py-1 bg-blue-50 text-blue-700 rounded-md text-xs font-medium">
               {totalMaskedEntities} masked {totalMaskedEntities === 1 ? 'entity' : 'entities'}
@@ -104,15 +114,18 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
                 </div>
                 <div className="flex">
                   <span className="font-medium w-1/3">Status:</span>
-                  <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${
-                    data.guardrail_status === "success" 
-                      ? 'bg-green-100 text-green-800' 
-                      : 'bg-red-100 text-red-800'
-                  }`}>
-                    {data.guardrail_status}
-                  </span>
+                  <Tooltip title={tooltipTitle} placement="top" arrow destroyTooltipOnHide>
+                    <span
+                      className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${
+                        isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800 cursor-help"
+                      }`}
+                    >
+                      {data.guardrail_status}
+                    </span>
+                  </Tooltip>
                 </div>
               </div>
+
               <div className="space-y-2">
                 <div className="flex">
                   <span className="font-medium w-1/3">Start Time:</span>
@@ -158,6 +171,6 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
       )}
     </div>
   );
-}
+};
 
 export default GuardrailViewer;
