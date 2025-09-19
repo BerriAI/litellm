@@ -1,4 +1,4 @@
-## Bedrock Embedding
+# Bedrock Embedding
 
 ## Supported Embedding Models
 
