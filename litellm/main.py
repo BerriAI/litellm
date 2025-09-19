@@ -5828,6 +5828,9 @@ async def ahealth_check(
                 litellm_logging_obj=litellm_logging_obj,
             )
 
+        if mode in ["chat", "completion"]:
+            model_params["max_tokens"] = 1
+
         mode_handlers = {
             "chat": lambda: litellm.acompletion(
                 **model_params,
