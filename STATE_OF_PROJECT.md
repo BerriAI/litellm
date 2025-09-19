@@ -129,3 +129,13 @@ Technical Debt (own it)
 Canary Parity Plan
 - See local/docs/02_operational/CANARY_PARITY_PLAN.md.
 - Gate wiring on: same_text true and worst_ttft/total ≤ 3% over one week.
+
+
+Wiring Draft
+- Branch: feat/extracted-transport-wiring-draft (PR #6 on fork).
+- Behavior: wires inner async call to router_core/transport_manager only when LITELLM_ROUTER_CORE=extracted. Default remains legacy.
+- Status: Do not merge until canary parity (same_text true; worst ttft/total ≤ 3%) passes for 7 days.
+
+Quick Links
+- QUICK_START.md for copy‑paste setup.
+- local/docs/02_operational/CANARY_PARITY_PLAN.md for canary runbook.

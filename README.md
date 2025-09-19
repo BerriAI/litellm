@@ -43,6 +43,11 @@ LiteLLM manages:
 Fork Status (our fork)
 - See `STATE_OF_PROJECT.md` for a concise, operator‑friendly status of this fork, including the router_core seam (opt‑in), extras, mini‑agent helper, validation steps, CI, and roadmap.
 
+Fork Quick Start
+- See QUICK_START.md for copy-paste examples (mini-agent, smokes, parity).
+- Mini-agent usage + troubleshooting: docs/my-website/docs/experimental/mini-agent.md
+- Project status and guardrails: STATE_OF_PROJECT.md
+
 
 🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
