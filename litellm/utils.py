@@ -40,7 +40,10 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
-import fastuuid as uuid
+try:
+    import fastuuid as uuid  # type: ignore
+except Exception:
+    import uuid as uuid
 import httpx
 import openai
 import tiktoken

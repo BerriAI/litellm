@@ -617,6 +617,15 @@ class Router:
         self.initialize_router_endpoints()
         self.apply_default_settings()
 
+        # Internal refactor flag (opt-in): legacy | extracted
+        try:
+            import os as _os
+            self._router_core_mode = (_os.getenv("LITELLM_ROUTER_CORE", "legacy").lower())
+            if self._router_core_mode not in ("legacy","extracted"):
+                self._router_core_mode = "legacy"
+        except Exception:
+            self._router_core_mode = "legacy"
+
     def apply_default_settings(self):
         """
         Apply the default settings to the router.
@@ -625,6 +634,33 @@ class Router:
         default_pre_call_checks: OptionalPreCallChecks = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
+
+    async def parallel_acompletions(self, requests, preserve_order=True, return_exceptions=True):
+        """Minimal parallel helper (experimental)."""
+        from litellm.router_utils.parallel_acompletion import _run_one
+        tasks = [asyncio.create_task(_run_one(self, req, i)) for i, req in enumerate(requests)]
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            if not return_exceptions:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                raise
+            results = [None] * len(tasks)
+        # Build ordered or arrival list
+        results = [r for r in results if r is not None]
+        if preserve_order:
+            results.sort(key=lambda x: x[0])
+        class _R:
+            def __init__(self, idx, response, error):
+                self.index = idx; self.response = response; self.error = error
+        out = []
+        for idx, resp, err in results:
+            if err and not return_exceptions:
+                raise err
+            out.append(_R(idx, resp, err))
+        return out
 
     def discard(self):
         """
@@ -1335,6 +1371,12 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
+                try:
+                    if getattr(self, "_router_core_mode", "legacy") == "extracted":
+                        from litellm.router_core.streaming_aggregator import acompletion_streaming_iterator as _agg
+                        return await _agg(self, response, messages, input_kwargs_for_streaming_fallback)
+                except Exception:
+                    pass
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,

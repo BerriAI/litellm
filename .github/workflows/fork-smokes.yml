@@ -1,0 +1,33 @@
+name: Fork Smokes
+
+on:
+  push:
+    branches: [ fork/stable ]
+  pull_request:
+    branches: [ fork/stable ]
+
+jobs:
+  smokes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e .
+          pip install pytest
+      - name: Mini-agent & HTTP tools
+        run: |
+          PYTHONPATH=$(pwd) pytest -q tests/smoke/test_mini_agent.py tests/smoke/test_mini_agent_repair_loop.py tests/smoke/test_mini_agent_research_on_unsure.py tests/smoke/test_mini_agent_response_shapes.py tests/smoke/test_http_tools_invoker.py tests/smoke/test_http_tools_invoker_headers.py tests/smoke/test_http_error_tail.py tests/smoke/test_agent_proxy_headers_and_errors.py tests/smoke/test_prune_history_preserve_pair.py
+      - name: Router streaming parity
+        run: |
+          PYTHONPATH=$(pwd) pytest -q tests/smoke/test_router_streaming_parity.py::test_router_streaming_parity
+      - name: Router streaming metrics (extracted)
+        run: |
+          PYTHONPATH=$(pwd) pytest -q tests/smoke/test_router_streaming_metrics_extracted.py::test_router_streaming_metrics_extracted
+      - name: Router streaming fallback parity
+        run: |
+          PYTHONPATH=$(pwd) pytest -q tests/smoke/test_router_streaming_fallback_parity.py::test_router_streaming_midstream_fallback_parity

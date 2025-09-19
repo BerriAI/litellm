@@ -14,7 +14,10 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
+try:
+    import fastuuid as uuid  # type: ignore
+except Exception:
+    import uuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status

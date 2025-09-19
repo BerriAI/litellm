@@ -766,22 +766,24 @@ class CommonBatchFilesUtils:
         """
         Generate a unique job name for AWS services.
         AWS services often have length limits, so this creates a concise name.
-        
+
         Args:
             model: Model name to include in the job name
             prefix: Prefix for the job name
-            
+
         Returns:
             Unique job name (≤ 63 characters for Bedrock compatibility)
         """
-        import fastuuid as uuid
+        try:
+            import fastuuid as uuid  # type: ignore
+        except Exception:
+            import uuid as uuid
         unique_id = str(uuid.uuid4())[:8]
         # Format: {prefix}-batch-{model}-{uuid}
         # Example: litellm-batch-claude-266c398e
         job_name = f"{prefix}-batch-{unique_id}"
-        
-        return job_name
 
+        return job_name
     def get_s3_bucket_and_key_from_config(
         self, 
         litellm_params: dict, 

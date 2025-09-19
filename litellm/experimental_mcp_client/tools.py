@@ -1,10 +1,18 @@
 import json
 from typing import Dict, List, Literal, Union
 
-from mcp import ClientSession
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import Tool as MCPTool
+try:
+    from mcp import ClientSession
+    from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+    from mcp.types import CallToolResult as MCPCallToolResult
+    from mcp.types import Tool as MCPTool
+    _MCP_AVAILABLE = True
+except Exception:  # optional MCP stack
+    ClientSession = object  # type: ignore
+    class MCPTool: ...  # type: ignore
+    class MCPCallToolRequestParams(dict): ...  # type: ignore
+    class MCPCallToolResult(dict): ...  # type: ignore
+    _MCP_AVAILABLE = False
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
@@ -89,6 +97,9 @@ async def load_mcp_tools(
 
     If format is set to "openai", the tools are converted to OpenAI API compatible tools.
     """
+    _ensure_mcp_available()
+    if not _MCP_AVAILABLE:
+        raise RuntimeError("MCP client not installed; install mcp to use these helpers.")
     tools = await session.list_tools()
     if format == "openai":
         return [
@@ -101,12 +112,20 @@ async def load_mcp_tools(
 # Call MCP Tool functions
 ########################################################
 
+def _ensure_mcp_available():
+    if not _MCP_AVAILABLE:
+        raise RuntimeError("MCP client not installed; install mcp to use these helpers.")
+
+
+
 
 async def call_mcp_tool(
     session: ClientSession,
     call_tool_request_params: MCPCallToolRequestParams,
 ) -> MCPCallToolResult:
     """Call an MCP tool."""
+    if not _MCP_AVAILABLE:
+        raise RuntimeError("MCP client not installed; install mcp to use these helpers.")
     tool_result = await session.call_tool(
         name=call_tool_request_params.name,
         arguments=call_tool_request_params.arguments,
