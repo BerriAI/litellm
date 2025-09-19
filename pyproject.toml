@@ -94,7 +94,6 @@ proxy = [
     "litellm-enterprise",
     "rich",
     "polars",
-    "pond",
 ]
 
 extra_proxy = [
