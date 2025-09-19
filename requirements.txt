@@ -63,4 +63,4 @@ pondpond==1.4.1 # for object pooling
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.19
+litellm-enterprise==0.1.20
