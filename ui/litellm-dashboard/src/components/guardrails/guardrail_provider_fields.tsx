@@ -28,6 +28,8 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
+const isArn = (val?: string) => typeof val === "string" && /^arn:/i.test(val?.trim());
+
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
   accessToken,
@@ -48,15 +50,15 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
     const fetchProviderParams = async () => {
       if (!accessToken) return;
-      
+
       setLoading(true);
       setError(null);
-      
+
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
         console.log("Provider params API response:", data);
         setProviderParams(data);
-        
+
         // Populate dynamic providers from API response
         populateGuardrailProviders(data);
         populateGuardrailProviderMap(data);
@@ -91,34 +93,43 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
   // Get the provider key matching the selected provider in the guardrail_provider_map
   const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-  
+
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
-  
+
   console.log("Provider key:", providerKey);
   console.log("Provider fields:", providerFields);
-  
+
   if (!providerFields || Object.keys(providerFields).length === 0) {
     return <div>No configuration fields available for this provider.</div>;
   }
 
   console.log("Value:", value);
+
+  const getValueFromEvent = (e: any) => {
+    if (e?.target) return e.target.value;
+    return e;
+  };
+
+  const isAwsBedrock = !!providerKey && providerKey.includes("bedrock");
+
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
       const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
       const fieldValue = parentValue ? parentValue[fieldKey] : value?.[fieldKey];
       console.log("Field value:", fieldValue);
+
       // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
       if (fieldKey === "ui_friendly_name") {
         return null;
       }
-      
+
       // Skip optional_params - they are handled in a separate step
       if (fieldKey === "optional_params" && field.type === "nested" && field.fields) {
         return null;
       }
-      
+
       // Handle other nested fields (like azure/text_moderations optional_params)
       if (field.type === "nested" && field.fields) {
         return (
@@ -130,18 +141,49 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           </div>
         );
       }
-      
+
+      // Build rules (include ARN check for AWS Bedrock's guardrailIdentifier)
+      const rules = [];
+      if (field.required) {
+        rules.push({ required: true, message: `${fieldKey} is required` });
+      }
+      if (isAwsBedrock && fieldKey === "guardrailIdentifier") {
+        rules.push({
+          validator: (_: any, val?: string) => {
+            if (!val) return Promise.resolve(); // required rule handles empties
+            if (isArn(val)) {
+              return Promise.reject(
+                new Error(
+                  'Do not paste an ARN here. Enter only the guardrail identifier (e.g., "my-guardrail-123").'
+                )
+              );
+            }
+            return Promise.resolve();
+          }
+        });
+      }
+
+      const commonFormItemProps = {
+        key: fullFieldKey,
+        name: fullFieldKey,
+        label: fieldKey,
+        tooltip: field.description,
+        rules,
+        validateTrigger: ["onBlur", "onSubmit"] as any,
+        getValueFromEvent, // ensure TextInput plays nice with AntD
+      };
+
+      // Small helper under the field (only for the guardrailIdentifier hint)
+      const extra =
+        isAwsBedrock && fieldKey === "guardrailIdentifier"
+          ? 'Tip: paste only the guardrail identifier (no "arn:...").'
+          : undefined;
+
       return (
-        <Form.Item
-          key={fullFieldKey}
-          name={fullFieldKey}
-          label={fieldKey}
-          tooltip={field.description}
-          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
-        >
+        <Form.Item {...commonFormItemProps} extra={extra}>
           {field.type === "select" && field.options ? (
-            <Select 
-              placeholder={field.description} 
+            <Select
+              placeholder={field.description}
               defaultValue={fieldValue || field.default_value}
             >
               {field.options.map((option) => (
@@ -151,9 +193,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               ))}
             </Select>
           ) : field.type === "multiselect" && field.options ? (
-            <Select 
+            <Select
               mode="multiple"
-              placeholder={field.description} 
+              placeholder={field.description}
               defaultValue={fieldValue || field.default_value}
             >
               {field.options.map((option) => (
@@ -195,11 +237,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     });
   };
 
-  return (
-    <>
-      {renderFields(providerFields)}
-    </>
-  );
+  return <>{renderFields(providerFields)}</>;
 };
 
-export default GuardrailProviderFields; 
+export default GuardrailProviderFields;
