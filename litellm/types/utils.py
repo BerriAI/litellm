@@ -13,7 +13,10 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
+try:
+    import fastuuid as uuid  # type: ignore
+except Exception:  # optional dependency
+    import uuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
