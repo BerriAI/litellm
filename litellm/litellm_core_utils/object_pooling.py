@@ -14,8 +14,9 @@ Memory Management Strategy:
 - Unlimited pools when maxsize is not specified (eviction controls actual usage)
 """
 
-from typing import Type, TypeVar, Optional, Callable
-from pond import Pond, PooledObjectFactory, PooledObject
+from typing import Any, Callable, Optional, Type, TypeVar
+
+from pond import Pond, PooledObject, PooledObjectFactory
 
 T = TypeVar('T')
 
@@ -50,7 +51,7 @@ class GenericPooledObjectFactory(PooledObjectFactory):
             pooled_object.keeped_object.__dict__.clear()
         del pooled_object
     
-    def reset(self, pooled_object: PooledObject) -> PooledObject:
+    def reset(self, pooled_object: PooledObject, **kwargs: Any) -> PooledObject:
         """Reset the pooled object to a clean state."""
         obj = pooled_object.keeped_object
         # Reset the object by calling its reset method if it exists
