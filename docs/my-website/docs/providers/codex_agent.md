@@ -41,6 +41,28 @@ resp = await router.acompletion(
 print(resp.choices[0].message.content)
 ```
 
+### Verify local codex binary (optional)
+
+You can configure the CLI path via either `LITELLM_CODEX_BINARY_PATH` (absolute) or `CODEX_HOME/bin/codex`. If neither is set, the provider falls back to `which("codex")`.
+
+```bash
+export LITELLM_ENABLE_CODEX_AGENT=1
+export CODEX_HOME="$HOME/.codex"
+# or: export LITELLM_CODEX_BINARY_PATH="/absolute/path/to/codex"
+codex --version  # quick sanity check
+```
+
+Then test a short run via Router (no special client code needed):
+
+```python
+from litellm import Router
+import os
+os.environ["LITELLM_ENABLE_CODEX_AGENT"] = "1"
+router = Router(model_list=[{"model_name":"codex-agent-1","litellm_params":{"model":"codex-agent/mini"}}])
+resp = await router.acompletion(model="codex-agent-1", messages=[{"role":"user","content":"echo hello then stop"}])
+print(resp.choices[0].message.content)
+```
+
 ## Notes
 
 - Experimental surface; subject to change.
