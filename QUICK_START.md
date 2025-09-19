@@ -29,8 +29,8 @@ This fork adds an opt‑in, experimental mini‑agent and a guarded Router strea
   - Enable extracted only in a canary service: export LITELLM_ROUTER_CORE=extracted.
 
 - Canary Parity (scripted)
-  - OPENAI_API_KEY=… LITELLM_DEFAULT_MODEL=openai/gpt-4o-mini     PARITY_ROUNDS=5 PARITY_THRESH_PCT=3.0     PARITY_OUT=/var/log/litellm_parity.jsonl     python local/scripts/router_core_parity.py
-  - Summarize over time: python local/scripts/parity_summarize.py --in /var/log/litellm_parity.jsonl --thresh 3.0
+  - OPENAI_API_KEY=… LITELLM_DEFAULT_MODEL=openai/gpt-4o-mini     PARITY_ROUNDS=5 PARITY_THRESH_PCT=3.0     PARITY_OUT=/var/log/litellm_parity.jsonl     uv run local/scripts/router_core_parity.py
+  - Summarize over time: uv run local/scripts/parity_summarize.py --in /var/log/litellm_parity.jsonl --thresh 3.0
   - Acceptance: same_text True and worst ttft/total ≤ 3% for 1 week.
 
 - Where to read more
