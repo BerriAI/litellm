@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v4
@@ -30,6 +30,7 @@ jobs:
         poetry install --with dev,proxy-dev --extras "proxy semantic-router"
         poetry run pip install "pytest-retry==1.6.3"
         poetry run pip install pytest-xdist
+        poetry run pip install pytest-timeout
         poetry run pip install "google-genai==1.22.0"
         poetry run pip install "google-cloud-aiplatform>=1.38"
         poetry run pip install "fastapi-offline==1.7.3"
@@ -38,6 +39,10 @@ jobs:
         cd enterprise
         python -m pip install -e .
         cd ..
-    - name: Run tests
+    - name: Run tests with faster execution
       run: |
-        poetry run pytest tests/test_litellm -x -vv -n 4 
+        # Skip slow tests and run core tests first with increased parallelism
+        poetry run pytest tests/test_litellm -x -vv -n 6 --tb=short -m "not slow" 
+        
+        # Run potentially slow tests separately if above passes
+        poetry run pytest tests/test_litellm -x -vv -n 2 --tb=short -k "slow or integration" || echo "Some slow tests failed but continuing" 

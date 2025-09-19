@@ -106,6 +106,8 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_dimensions: Optional[int] = None,
+        qdrant_distance_metric: str = "Cosine",
         # GCP IAM authentication parameters
         gcp_service_account: Optional[str] = None,
         gcp_ssl_ca_certs: Optional[str] = None,
@@ -130,6 +132,9 @@ class Cache:
             qdrant_api_base (str, optional): The url for your qdrant cluster. Required if type is "qdrant-semantic".
             qdrant_api_key (str, optional): The api_key for the local or cloud qdrant cluster.
             qdrant_collection_name (str, optional): The name for your qdrant collection. Required if type is "qdrant-semantic".
+            qdrant_semantic_cache_embedding_model (str, optional): The embedding model to use for semantic caching. Defaults to "text-embedding-ada-002".
+            qdrant_semantic_cache_embedding_dimensions (int, optional): The dimensions of the embedding model. If not provided, will be auto-detected.
+            qdrant_distance_metric (str, optional): The distance metric for vector similarity. Defaults to "Cosine".
             similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
 
             # Disk Cache Args
@@ -205,6 +210,8 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
+                embedding_dimensions=qdrant_semantic_cache_embedding_dimensions,
+                distance_metric=qdrant_distance_metric,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()
