@@ -1,0 +1,91 @@
+name: Nightly Parity & Stress (Canary Safe)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-parity-stress
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    if: ${{ secrets.OPENAI_API_KEY != '' || secrets.GEMINI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: live-stress  # create this environment in repo settings to add approvals if desired
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parity check
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Default model can be overridden at environment level
+          LITELLM_DEFAULT_MODEL: ${{ vars.LITELLM_DEFAULT_MODEL }}
+          PARITY_ROUNDS: '3'
+          PARITY_THRESH_PCT: '3.0'
+          PARITY_OUT: parity.jsonl
+        run: |
+          uv run local/scripts/router_core_parity.py | tee parity_summary.txt
+      - name: Upload Parity Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-artifacts
+          path: |
+            parity.jsonl
+            parity_summary.txt
+
+  stress:
+    if: ${{ secrets.OPENAI_API_KEY != '' || secrets.GEMINI_API_KEY != '' }}
+    needs: parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: live-stress
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Stress (legacy)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ vars.LITELLM_DEFAULT_MODEL }}
+        run: |
+          uv run local/scripts/stress_e2e.py --total 150 --concurrency 15 --out stress_legacy.jsonl | tee stress_legacy_summary.json
+      - name: Stress (extracted)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ vars.LITELLM_DEFAULT_MODEL }}
+        run: |
+          uv run local/scripts/stress_e2e.py --total 150 --concurrency 15 --extracted --out stress_extracted.jsonl | tee stress_extracted_summary.json
+      - name: Enforce error threshold
+        run: |
+          set -e
+          # Require zero errors in both runs (tune as needed)
+          L_ERRS=$(jq -r '.errors // 0' stress_legacy_summary.json)
+          E_ERRS=$(jq -r '.errors // 0' stress_extracted_summary.json)
+          echo "legacy errors=$L_ERRS extracted errors=$E_ERRS"
+          if [ "$L_ERRS" != "0" ] || [ "$E_ERRS" != "0" ]; then
+            echo "Stress error threshold exceeded" >&2
+            exit 1
+          fi
+      - name: Upload Stress Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-artifacts
+          path: |
+            stress_legacy.jsonl
+            stress_extracted.jsonl
+            stress_legacy_summary.json
+            stress_extracted_summary.json
