@@ -116,7 +116,7 @@ class VertexAIBatchTransformation:
         """
 
         output_file_id: str = (
-            response.get("outputInfo", {}).get("gcsOutputDirectory", "")
+            response.get("outputInfo", OutputInfo()).get("gcsOutputDirectory", "")
             + "/predictions.jsonl"
         )
         if output_file_id != "/predictions.jsonl":
