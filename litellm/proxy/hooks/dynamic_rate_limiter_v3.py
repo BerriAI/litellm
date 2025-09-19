@@ -3,7 +3,7 @@ Dynamic rate limiter v3
 """
 
 import os
-from typing import List, Literal, Optional, Union, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 
@@ -15,11 +15,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
-    _PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptorRateLimitObject,
+    _PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.types.router import ModelGroupInfo
 from litellm.proxy.utils import InternalUsageCache
+from litellm.types.router import ModelGroupInfo
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
