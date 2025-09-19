@@ -239,6 +239,18 @@ def completion(  # noqa: PLR0915
                 location=vertex_location,
             )
             request_str += f"llm_model = aiplatform.PrivateEndpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
+        elif model == "dedicated" or (optional_params.get("model_id") and "mg-endpoint-" in optional_params.get("model_id", "")):
+            mode = "dedicated"
+            model = optional_params.pop("model_id", model)
+            instances = [optional_params.copy()]
+            instances[0]["prompt"] = prompt
+            print_verbose(f"endpoint_name: {model}, project: {vertex_project}, location: {vertex_location}")
+            llm_model = aiplatform.Endpoint(
+                endpoint_name=model,
+                project=vertex_project,
+                location=vertex_location,
+            )
+            request_str += f"llm_model = aiplatform.Endpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
         else:  # assume vertex model garden on public endpoint
             mode = "custom"
 
@@ -422,6 +434,40 @@ def completion(  # noqa: PLR0915
             if stream is True:
                 response = TextStreamer(completion_response)
                 return response
+        elif mode == "dedicated":
+            """
+            Vertex AI Model Garden deployed on dedicated endpoint
+            """
+            if instances is None:
+                raise ValueError("instances are required for dedicated endpoint")
+            if llm_model is None:
+                raise ValueError("Unable to pick client for dedicated endpoint")
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": request_str,
+                },
+            )
+            request_str += f"llm_model.predict(instances={instances[0]})\n"
+            print(f"request_str: {request_str}")
+            # Use predict method which automatically handles dedicated endpoint URLs
+            response = llm_model.predict(
+                instances=[instances[0]],  # Convert back from dict format
+                parameters={}
+            )
+            
+            completion_response = response.predictions[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
+            if stream is True:
+                response = TextStreamer(completion_response)
+                return response
 
         ## LOGGING
         logging_obj.post_call(
@@ -591,6 +637,40 @@ async def async_completion(  # noqa: PLR0915
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
+
+        elif mode == "dedicated":
+            # Use fake streaming for dedicated endpoints since async predict is not supported
+            if instances is None:
+                raise ValueError("instances are required for dedicated endpoint")
+            if llm_model is None:
+                raise ValueError("Unable to pick client for dedicated endpoint")
+            
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={
+                    "complete_input_dict": optional_params,
+                    "request_str": request_str,
+                },
+            )
+            
+            # Use synchronous predict since async is not supported for dedicated endpoints
+            request_str += f"llm_model.predict(instances={instances[0]})\n"
+            response = llm_model.predict(
+                instances=[instances[0]],  # Convert back from dict format
+                parameters={}
+            )
+            
+            completion_response = response.predictions[0]
+            if (
+                isinstance(completion_response, str)
+                and "\nOutput:\n" in completion_response
+            ):
+                completion_response = completion_response.split("\nOutput:\n", 1)[1]
+            
+            # Return the response directly for async completion
+            return completion_response
 
         ## LOGGING
         logging_obj.post_call(
@@ -766,6 +846,43 @@ async def async_streaming(  # noqa: PLR0915
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
         if stream:
             response = TextStreamer(completion_response)
+
+    elif mode == "dedicated":
+        # Use fake streaming for dedicated endpoints since async streaming is not supported
+        if instances is None:
+            raise ValueError("Instances are required for dedicated endpoint")
+        
+        stream = optional_params.pop("stream", None)
+        
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key=None,
+            additional_args={
+                "complete_input_dict": optional_params,
+                "request_str": request_str,
+            },
+        )
+        
+        # Use synchronous predict since async is not supported for dedicated endpoints
+        request_str += f"llm_model.predict(instances={instances[0]})\n"
+        response = llm_model.predict(
+            instances=[instances[0]],  # Convert back from dict format
+            parameters={}
+        )
+        
+        completion_response = response.predictions[0]
+        if (
+            isinstance(completion_response, str)
+            and "\nOutput:\n" in completion_response
+        ):
+            completion_response = completion_response.split("\nOutput:\n", 1)[1]
+        
+        # Use TextStreamer for fake streaming
+        if stream:
+            response = TextStreamer(completion_response)
+        else:
+            response = completion_response
 
     if response is None:
         raise ValueError("Unable to generate response")
