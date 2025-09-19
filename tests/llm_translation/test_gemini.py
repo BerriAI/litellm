@@ -293,7 +293,7 @@ def test_gemini_2_5_flash_image_preview():
                     "content": {
                         "parts": [
                             {
-                                "inline_data": {
+                                "inlineData": {
                                     "data": "test_base64_image_data"
                                 }
                             }
@@ -331,6 +331,11 @@ def test_gemini_2_5_flash_image_preview():
         request_data = call_args.kwargs.get('json', {})
         assert "contents" in request_data
         assert "parts" in request_data["contents"][0]
+
+        # Verify response_modalities is set correctly for image generation
+        assert "generationConfig" in request_data
+        assert "response_modalities" in request_data["generationConfig"]
+        assert request_data["generationConfig"]["response_modalities"] == ["IMAGE", "TEXT"]
 
 
 def test_gemini_imagen_models_use_predict_endpoint():

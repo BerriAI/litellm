@@ -138,7 +138,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         Transform the image generation request to Gemini format
 
-        For Gemini 2.5 Flash Image Preview, use the standard Gemini format:
+        For Gemini 2.5 Flash Image Preview, use the standard Gemini format with response_modalities:
         {
           "contents": [
             {
@@ -146,7 +146,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 {"text": "Generate an image of..."}
               ]
             }
-          ]
+          ],
+          "generationConfig": {
+            "response_modalities": ["IMAGE", "TEXT"]
+          }
         }
         """
         # For Gemini 2.5 Flash Image Preview, use standard Gemini format
@@ -158,7 +161,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                             {"text": prompt}
                         ]
                     }
-                ]
+                ],
+                "generationConfig": {
+                    "response_modalities": ["IMAGE", "TEXT"]
+                }
             }
             return request_body
         else:
@@ -213,9 +219,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 content = candidate.get("content", {})
                 parts = content.get("parts", [])
                 for part in parts:
-                    # Look for inline_data with image
-                    if "inline_data" in part:
-                        inline_data = part["inline_data"]
+                    # Look for inlineData with image
+                    if "inlineData" in part:
+                        inline_data = part["inlineData"]
                         if "data" in inline_data:
                             model_response.data.append(ImageObject(
                                 b64_json=inline_data["data"],
@@ -230,5 +236,4 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     b64_json=prediction.get("bytesBase64Encoded", None),
                     url=None,  # Google AI returns base64, not URLs
                 ))
-
         return model_response
