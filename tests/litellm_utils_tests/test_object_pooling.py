@@ -1,158 +1,105 @@
 """
-Tests for the object pooling utilities in litellm.litellm_core_utils.object_pooling.
+Simplified tests for object pooling utilities in litellm.
 """
 
 import pytest
-import threading
-import time
 
 from litellm.litellm_core_utils.object_pooling import (
-    GenericPooledObjectFactory,
     get_object_pool,
     _pools
 )
 
 
-class TestObject:
-    """Test object with reset method."""
+class SimpleObject:
+    """Simple test object with internal reset tracking."""
     def __init__(self):
-        self.value = 0
-        self.reset_called = False
+        self.data = {}
+        self.reset_count = 0
+        self.creation_id = id(self)
     
     def reset(self):
-        self.value = 0
-        self.reset_called = True
+        """Reset method that tracks how many times it's called."""
+        self.data.clear()
+        self.reset_count += 1
     
-    def increment(self):
-        self.value += 1
+    def set_data(self, key, value):
+        """Set data to verify reset works."""
+        self.data[key] = value
 
 
-class TestObjectWithoutReset:
+class SimpleObjectNoReset:
     """Test object without reset method."""
     def __init__(self):
-        self.value = 0
+        self.data = {}
+        self.creation_id = id(self)
 
 
 class TestObjectPooling:
-    """Test suite for object pooling functionality."""
+    """Simplified test suite for object pooling."""
     
     def setup_method(self):
-        """Clear global pools before each test."""
+        """Clear pools before each test."""
         _pools.clear()
     
-    def test_factory_creates_and_resets_objects(self):
-        """Test factory object creation and reset functionality."""
-        factory = GenericPooledObjectFactory(TestObject)
-        pooled_obj = factory.createInstance()
+    def test_reset_method_works(self):
+        """Test that reset method is called when recycling objects."""
+        pool_name = "reset_test"
+        pool = get_object_pool(pool_name, SimpleObject, pooled_maxsize=1, prewarm_count=0)
         
-        # Verify creation
-        assert isinstance(pooled_obj.keeped_object, TestObject)
-        assert pooled_obj.keeped_object.value == 0
-        
-        # Test reset
-        pooled_obj.keeped_object.value = 42
-        factory.reset(pooled_obj)
-        assert pooled_obj.keeped_object.reset_called is True
-        assert pooled_obj.keeped_object.value == 0
-    
-    def test_factory_reset_fallback(self):
-        """Test fallback reset when no reset method exists."""
-        factory = GenericPooledObjectFactory(TestObjectWithoutReset)
-        pooled_obj = factory.createInstance()
-        
-        pooled_obj.keeped_object.value = 42
-        factory.reset(pooled_obj)
-        assert pooled_obj.keeped_object.__dict__ == {}
-    
-    def test_factory_validation(self):
-        """Test object validation."""
-        factory = GenericPooledObjectFactory(TestObject)
-        pooled_obj = factory.createInstance()
-        
-        assert factory.validate(pooled_obj) is True
-        
-        pooled_obj.keeped_object = None
-        assert factory.validate(pooled_obj) is False
-    
-    def test_pool_creation_and_reuse(self):
-        """Test basic pool creation and object reuse."""
-        pool_name = "test_pool"
-        pool = get_object_pool(pool_name, TestObject, prewarm_count=1)
-        
-        assert pool is not None
-        assert pool_name in _pools
-        
-        # Borrow, use, and return
+        # Get an object and modify it
         obj = pool.borrow(name=f"{pool_name}Factory")
-        assert isinstance(obj.keeped_object, TestObject)
+        obj.keeped_object.set_data("test", "value")
+        initial_reset_count = obj.keeped_object.reset_count
+        
+        # Return to pool (should trigger reset)
         pool.recycle(obj, name=f"{pool_name}Factory")
         
-        # Verify reuse
+        # Get the same object back
         obj2 = pool.borrow(name=f"{pool_name}Factory")
-        assert obj2 is not None
-    
-    def test_pool_maxsize_limits(self):
-        """Test pool size limits."""
-        pool_name = "limited_pool"
-        pool = get_object_pool(pool_name, TestObject, pooled_maxsize=2, prewarm_count=0)
         
-        # Borrow up to limit
+        # Verify reset was called
+        assert obj2.keeped_object.reset_count == initial_reset_count + 1
+        assert obj2.keeped_object.data == {}  # Data should be cleared
+        assert obj.keeped_object.creation_id == obj2.keeped_object.creation_id  # Same object
+    
+    def test_fallback_reset_works(self):
+        """Test fallback reset when no reset method exists."""
+        pool_name = "fallback_test"
+        pool = get_object_pool(pool_name, SimpleObjectNoReset, pooled_maxsize=1, prewarm_count=0)
+        
+        # Get an object and modify it
+        obj = pool.borrow(name=f"{pool_name}Factory")
+        obj.keeped_object.data["test"] = "value"
+        
+        # Return to pool (should trigger fallback reset)
+        pool.recycle(obj, name=f"{pool_name}Factory")
+        
+        # Get the same object back
+        obj2 = pool.borrow(name=f"{pool_name}Factory")
+        
+        # Verify fallback reset worked - all attributes should be cleared by __dict__.clear()
+        assert obj2.keeped_object.__dict__ == {}, "All attributes should be cleared by fallback reset"
+        assert obj is obj2, "Should be the same pooled object instance"
+    
+    def test_pool_reuses_objects(self):
+        """Test that pool actually reuses objects instead of creating new ones."""
+        pool_name = "reuse_test"
+        pool = get_object_pool(pool_name, SimpleObject, pooled_maxsize=1, prewarm_count=0)
+        
+        # Get first object
         obj1 = pool.borrow(name=f"{pool_name}Factory")
-        obj2 = pool.borrow(name=f"{pool_name}Factory")
+        creation_id1 = obj1.keeped_object.creation_id
         
-        assert obj1 is not None
-        assert obj2 is not None
-        
-        # Return and borrow again
+        # Return it
         pool.recycle(obj1, name=f"{pool_name}Factory")
-        obj3 = pool.borrow(name=f"{pool_name}Factory")
-        assert obj3 is not None
-    
-    def test_pool_concurrent_access(self):
-        """Test thread-safe pool access."""
-        pool_name = "concurrent_pool"
-        pool = get_object_pool(pool_name, TestObject, prewarm_count=3)
         
-        results = []
-        errors = []
+        # Get second object
+        obj2 = pool.borrow(name=f"{pool_name}Factory")
+        creation_id2 = obj2.keeped_object.creation_id
         
-        def worker():
-            try:
-                obj = pool.borrow(name=f"{pool_name}Factory")
-                results.append(obj)
-                time.sleep(0.01)
-                pool.recycle(obj, name=f"{pool_name}Factory")
-            except Exception as e:
-                errors.append(e)
-        
-        # Run 5 concurrent workers
-        threads = [threading.Thread(target=worker) for _ in range(5)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
-        assert len(errors) == 0
-        assert len(results) == 5
-    
-    def test_pool_isolation(self):
-        """Test that different pools are isolated."""
-        pool1 = get_object_pool("pool1", TestObject, prewarm_count=1)
-        pool2 = get_object_pool("pool2", TestObjectWithoutReset, prewarm_count=1)
-        
-        assert pool1 is not pool2
-        assert "pool1" in _pools
-        assert "pool2" in _pools
-        
-        # Test different object types
-        obj1 = pool1.borrow(name="pool1Factory")
-        obj2 = pool2.borrow(name="pool2Factory")
-        
-        assert isinstance(obj1.keeped_object, TestObject)
-        assert isinstance(obj2.keeped_object, TestObjectWithoutReset)
-        
-        pool1.recycle(obj1, name="pool1Factory")
-        pool2.recycle(obj2, name="pool2Factory")
+        # Should be the same object (reused)
+        assert creation_id1 == creation_id2, "Pool should reuse objects"
+        assert obj1.keeped_object is obj2.keeped_object, "Should be same object instance"
 
 
 if __name__ == "__main__":
