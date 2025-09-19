@@ -2825,8 +2825,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v20
+            nvm use v20
             
             cd ui/litellm-dashboard
             
@@ -2882,30 +2882,22 @@ jobs:
       - run:
           name: Run UI unit tests (Vitest)
           command: |
-            # Use the same Node version we installed earlier with nvm
+            # Use Node 20 (several deps require >=20)
             export NVM_DIR="/opt/circleci/.nvm"
             source "$NVM_DIR/nvm.sh"
-            nvm use v18.17.0
-            
+            nvm install 20
+            nvm use 20
+      
             cd ui/litellm-dashboard
-            # Ensure clean, deterministic install (skip if you prefer npm install)
             npm ci || npm install
-            
-            # Run Vitest via your package.json script:
-            #   - --run to avoid watch mode on CI
-            #   - --coverage to produce coverage
-            #   - --coverage.reporter=lcov so Codecov can ingest lcov.info
-            #   - Feel free to drop --reporter if you don’t need extra output
-            npm run test -- --run --coverage --coverage.reporter=lcov
-            
-            # If you use a JUnit reporter (e.g., vitest-junit-reporter),
-            # ensure it writes to ./test-results/junit.xml so Circle collects it
-            mkdir -p test-results || true
-            - store_test_results:
-                path: ui/litellm-dashboard/test-results
-            - store_artifacts:
-                path: ui/litellm-dashboard/coverage
-                destination: ui-coverage
+      
+            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
+            CI=true npm run test -- --run --coverage \
+              --coverage.provider=v8 \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reportsDirectory=coverage/html
+
 
       - run:
           name: Build Docker image
