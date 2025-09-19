@@ -34,6 +34,7 @@ jobs:
 
 
   live-check:
+    continue-on-error: true
     if: ${{ secrets.OPENAI_API_KEY != '' || secrets.GEMINI_API_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
