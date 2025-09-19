@@ -1063,7 +1063,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         )
                         kwargs["messages"] = masked_messages
                         verbose_proxy_logger.debug(
-                            f"Bedrock logging_only: Masked messages for logging"
+                            "Bedrock logging_only: Masked messages for logging"
                         )
                         
                 except Exception as e:
