@@ -465,3 +465,10 @@ All these checks must pass before your PR can be merged.
 1. Navigate to `ui/litellm-dashboard`
 2. Install dependencies `npm install`
 3. Run `npm run dev` to start the dashboard
+
+
+## Operations
+- Canary runbook: local/docs/02_operational/CANARY_PARITY_PLAN.md
+- Stress testing: local/docs/02_operational/STRESS_TESTING.md
+- Parity scripts: local/scripts/router_core_parity.py, local/scripts/parity_summarize.py (use `uv run`)
+- CI (live, secrets-gated): Nightly Parity & Stress, Weekly Streaming Stress, and Manual Stress workflows (see badges above).
