@@ -85,17 +85,18 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
     ) -> str:
         """
         Get the complete url for the request
-        
-        Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:predict
+
+        Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+        Note: Gemini image generation models use generateContent, not predict
         """
         complete_url: str = (
-            api_base 
-            or get_secret_str("GEMINI_API_BASE") 
+            api_base
+            or get_secret_str("GEMINI_API_BASE")
             or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/models/{model}:predict"
+        complete_url = f"{complete_url}/models/{model}:generateContent"
         return complete_url
 
     def validate_environment(
@@ -128,35 +129,46 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the image generation request to Google AI Imagen format
-        
-        Google AI API format:
+        Transform the image generation request to Gemini format
+
+        For Gemini 2.5 Flash Image Preview, use the standard Gemini format:
         {
-          "instances": [
+          "contents": [
             {
-              "prompt": "Robot holding a red skateboard"
+              "parts": [
+                {"text": "Generate an image of..."}
+              ]
             }
-          ],
-          "parameters": {
-            "sampleCount": 4,
-            "aspectRatio": "1:1",
-            "personGeneration": "allow_adult"
-          }
+          ]
         }
         """
-        from litellm.types.llms.gemini import (
-            GeminiImageGenerationInstance,
-            GeminiImageGenerationParameters,
-        )
-        request_body: GeminiImageGenerationRequest = GeminiImageGenerationRequest(
-            instances=[
-                GeminiImageGenerationInstance(
-                    prompt=prompt
-                )
-            ],
-            parameters=GeminiImageGenerationParameters(**optional_params)
-        )
-        return request_body.model_dump(exclude_none=True)
+        # For Gemini 2.5 Flash Image Preview, use standard Gemini format
+        if "2.5-flash-image-preview" in model:
+            request_body: dict = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ]
+            }
+            return request_body
+        else:
+            # For other Imagen models, use the original Imagen format
+            from litellm.types.llms.gemini import (
+                GeminiImageGenerationInstance,
+                GeminiImageGenerationParameters,
+            )
+            request_body_obj: GeminiImageGenerationRequest = GeminiImageGenerationRequest(
+                instances=[
+                    GeminiImageGenerationInstance(
+                        prompt=prompt
+                    )
+                ],
+                parameters=GeminiImageGenerationParameters(**optional_params)
+            )
+            return request_body_obj.model_dump(exclude_none=True)
 
     def transform_image_generation_response(
         self,
@@ -185,14 +197,31 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         
         if not model_response.data:
             model_response.data = []
-        
-        # Google AI returns predictions with generated images
-        predictions = response_data.get("predictions", [])
-        for prediction in predictions:
-            # Google AI returns base64 encoded images in the prediction
-            model_response.data.append(ImageObject(
-                b64_json=prediction.get("bytesBase64Encoded", None),
-                url=None,  # Google AI returns base64, not URLs
-            ))
-        
+
+        # Handle different response formats based on model
+        if "2.5-flash-image-preview" in model:
+            # Gemini 2.5 Flash Image Preview returns in candidates format
+            candidates = response_data.get("candidates", [])
+            for candidate in candidates:
+                content = candidate.get("content", {})
+                parts = content.get("parts", [])
+                for part in parts:
+                    # Look for inline_data with image
+                    if "inline_data" in part:
+                        inline_data = part["inline_data"]
+                        if "data" in inline_data:
+                            model_response.data.append(ImageObject(
+                                b64_json=inline_data["data"],
+                                url=None,
+                            ))
+        else:
+            # Original Imagen format - predictions with generated images
+            predictions = response_data.get("predictions", [])
+            for prediction in predictions:
+                # Google AI returns base64 encoded images in the prediction
+                model_response.data.append(ImageObject(
+                    b64_json=prediction.get("bytesBase64Encoded", None),
+                    url=None,  # Google AI returns base64, not URLs
+                ))
+
         return model_response
