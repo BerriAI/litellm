@@ -331,3 +331,38 @@ def test_ollama_streaming_with_chunk_builder():
     response = stream_chunk_builder(list(response))
 
     assert response.choices[0].message.tool_calls, "No tool call detected"
+
+@pytest.mark.skip(reason="local only test")
+def test_ollama_streaming_parameterless_tool_call():
+    from litellm.main import stream_chunk_builder
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_time",
+                "description": "Get the current date and time",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        }
+    ]
+    completion_kwargs = {
+        "model": "ollama_chat/qwen2.5:0.5b",  # Must be an ollama_chat model
+        "messages": [
+            {"role": "user", "content": "Tell me the current time"},
+            {
+                "role": "assistant",
+                "content": (
+                    "<think>\nThe user is asking for the current time. "
+                    "I will use the get_time tool function to provide this information. "
+                    "Since it doesn't require any parameters, I just need to call it directly.\n</think>\n\n"
+                ),
+            },
+        ],
+        "tools": tools,
+        "stream": True,
+    }
+    response = litellm.completion(**completion_kwargs)
+    response = stream_chunk_builder(list(response))
+
+    assert response.choices[0].message.tool_calls, "No tool call detected for parameterless function"
+
