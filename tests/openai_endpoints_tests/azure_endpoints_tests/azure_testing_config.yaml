@@ -1,0 +1,76 @@
+model_list:
+  # Main Azure model for testing - use GPT-4.1 deployment
+  - model_name: azure-o4-mini
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+      
+  # Alias for test compatibility - gpt-4 (maps to gpt-4.1 deployment)
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+      
+  # Additional alias for gpt-4o (maps to gpt-4.1 deployment)
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+
+  # Direct alias for gpt-4o-mini model name (maps to gpt-4.1 deployment)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+
+  # GPT-4.1 alias for direct use
+  - model_name: gpt-4.1
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+
+  # O4-mini model for responses API ONLY
+  - model_name: o4-mini
+    litellm_params:
+      model: azure/o4-mini
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2025-03-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: o4-mini
+
+# General settings
+general_settings:
+  master_key: sk-1234
+  # No database required for E2E testing
+  
+# Files API settings for batch operations
+files_settings:
+  - upload_type: "local"  # Store files locally for testing
+    local_dir: "/tmp/litellm_files"  # Temporary directory for file storage
+  
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  request_timeout: 600
+  telemetry: false
