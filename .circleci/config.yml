@@ -2826,8 +2826,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v20
+            nvm use v20
             
             cd ui/litellm-dashboard
             
@@ -2880,7 +2880,26 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
+      - run:
+          name: Run UI unit tests (Vitest)
+          command: |
+            # Use Node 20 (several deps require >=20)
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
       
+            cd ui/litellm-dashboard
+            npm ci || npm install
+      
+            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
+            CI=true npm run test -- --run --coverage \
+              --coverage.provider=v8 \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reportsDirectory=coverage/html
+
+
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
