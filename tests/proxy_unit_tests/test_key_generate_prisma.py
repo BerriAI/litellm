@@ -3428,6 +3428,16 @@ async def test_list_keys(prisma_client):
         ),
         page=1,
         size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("response=", response)
     assert "keys" in response
@@ -3442,6 +3452,16 @@ async def test_list_keys(prisma_client):
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
         page=1,
         size=2,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("pagination response=", response)
     assert len(response["keys"]) == 2
@@ -3470,9 +3490,18 @@ async def test_list_keys(prisma_client):
     response = await list_keys(
         request,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        user_id=user_id,
         page=1,
         size=10,
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=None,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     print("filtered user_id response=", response)
     assert len(response["keys"]) == 1
@@ -3482,9 +3511,18 @@ async def test_list_keys(prisma_client):
     response = await list_keys(
         request,
         UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value),
-        key_alias=key_alias,
         page=1,
         size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_hash=None,
+        key_alias=key_alias,
+        return_full_object=False,
+        include_team_keys=False,
+        include_created_by_keys=False,
+        sort_by=None,
+        sort_order="desc",
     )
     assert len(response["keys"]) == 1
     assert _key in response["keys"]
