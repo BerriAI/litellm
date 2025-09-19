@@ -1049,3 +1049,64 @@ async def test_bedrock_guardrail_parameter_takes_precedence_over_env(monkeypatch
         ), f"Expected parameter endpoint to take precedence. Got: {prepped_request.url}"
 
         print(f"Parameter precedence test passed. URL: {prepped_request.url}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_logging_only():
+    """Test BedrockGuardrail with logging_only=True masks PII in logs"""
+    
+    # Mock Bedrock response with PII detection
+    mock_bedrock_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{
+            "sensitiveInformationPolicy": {
+                "piiEntities": [
+                    {
+                        "match": "123-45-6789",
+                        "type": "US_SOCIAL_SECURITY_NUMBER",
+                        "start": 25,
+                        "end": 36
+                    }
+                ]
+            }
+        }],
+        "outputs": [{
+            "text": "My name is John Smith and my SSN is {US_SOCIAL_SECURITY_NUMBER}. Please help me."
+        }]
+    }
+    
+    # Create guardrail with logging_only=True
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="1",
+        logging_only=True
+    )
+    
+    # Test input with PII
+    test_kwargs = {
+        "messages": [
+            {"role": "user", "content": "My name is John Smith and my SSN is 123-45-6789. Please help me."}
+        ]
+    }
+    
+    # Mock the Bedrock API call
+    with patch.object(guardrail, 'make_bedrock_api_request', new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = mock_bedrock_response
+        
+        # Call the logging hook
+        result_kwargs, result = await guardrail.async_logging_hook(
+            kwargs=test_kwargs.copy(),
+            result=None,
+            call_type="completion"
+        )
+        
+        # Verify PII was masked in the returned kwargs
+        masked_content = result_kwargs["messages"][0]["content"]
+        assert "123-45-6789" not in masked_content, "SSN should be masked in logs"
+        assert "{US_SOCIAL_SECURITY_NUMBER}" in masked_content, "PII should be replaced with placeholder"
+        assert "John Smith" in masked_content, "Non-PII content should remain unchanged"
+        
+        # Verify the API was called
+        mock_api.assert_called_once()
+        
+    print("Bedrock guardrail logging_only test passed")
