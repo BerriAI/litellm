@@ -124,3 +124,8 @@ Technical Debt (own it)
 - Parallel helpers in router tests: useful for smokes but not a public abstraction. Keep test‑only; do not export.
 - Event‑loop bootstrapping in tests: safeguards smokes but should not be relied on by embedders. Keep wrapped in try/except and document as test‑only.
 - Metrics attachment via hidden params: handy for debugging; treat as unofficial and avoid downstream coupling. If needed later, expose a formal callback.
+
+
+Canary Parity Plan
+- See local/docs/02_operational/CANARY_PARITY_PLAN.md.
+- Gate wiring on: same_text true and worst_ttft/total ≤ 3% over one week.

@@ -101,3 +101,11 @@ test-llm-translation-single: install-test-deps
 	poetry run pytest tests/llm_translation/$(FILE) \
 		--junitxml=test-results/junit.xml \
 		-v --tb=short --maxfail=100 --timeout=300
+
+canary-run:
+	@echo "Running single parity check"
+	PYTHONPATH=$(PWD) python local/scripts/router_core_parity.py
+
+canary-summarize:
+	@echo "Summarizing parity JSONL"
+	PYTHONPATH=$(PWD) python local/scripts/parity_summarize.py --in $${PARITY_OUT}
