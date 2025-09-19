@@ -379,6 +379,7 @@ class updateDeployment(BaseModel):
     model_name: Optional[str] = None
     litellm_params: Optional[updateLiteLLMParams] = None
     model_info: Optional[ModelInfo] = None
+    is_active: Optional[bool] = None  # Support for enable/disable functionality
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -448,6 +449,7 @@ class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    is_active: Optional[bool] = True  # New field for enable/disable functionality
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -456,6 +458,7 @@ class Deployment(BaseModel):
         model_name: str,
         litellm_params: LiteLLM_Params,
         model_info: Optional[Union[ModelInfo, dict]] = None,
+        is_active: Optional[bool] = True,
         **params,
     ):
         if model_info is None:
@@ -476,6 +479,7 @@ class Deployment(BaseModel):
             model_info=model_info,
             model_name=model_name,
             litellm_params=litellm_params,
+            is_active=is_active,
             **params,
         )
 
