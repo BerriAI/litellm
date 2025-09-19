@@ -82,6 +82,7 @@ const sidebars = {
         "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
         "tutorials/cost_tracking_coding",
+        "tutorials/provider_gemini_cli",
       ]
     },
 
@@ -585,6 +586,7 @@ const sidebars = {
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
         "tutorials/claude_responses_api",
+        "tutorials/provider_gemini_cli",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
