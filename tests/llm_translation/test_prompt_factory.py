@@ -183,6 +183,91 @@ def test_bedrock_tool_calling_pt():
     converted_tools = _bedrock_tools_pt(tools=tools)
 
     print(converted_tools)
+    
+    # Validate the converted tool
+    assert len(converted_tools) == 1
+    tool_spec = converted_tools[0]["toolSpec"]
+    assert tool_spec["name"] == "get_current_weather"
+    assert tool_spec["description"] == "Get the current weather in a given location"
+
+def test_bedrock_tool_calling_pt_multiple_formats():
+    """Test _bedrock_tools_pt with multiple tool formats and edge cases"""
+    tools = [
+        # Standard OpenAI function format
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "The location"}
+                    }
+                }
+            }
+        },
+        
+        # Direct tool format
+        {
+            "name": "search_tool",
+            "description": "Search for information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                }
+            }
+        },
+        
+        # Tool with empty function (should be skipped)
+        {
+            "type": "function",
+            "function": None
+        },
+        
+        # Tool with empty name (should be skipped)
+        {
+            "type": "function", 
+            "function": {
+                "name": "",
+                "description": "Empty name tool"
+            }
+        },
+        
+        # Tool with only whitespace name (should be skipped)
+        {
+            "name": "   ",
+            "description": "Whitespace name tool"  
+        }
+    ]
+    
+    converted_tools = _bedrock_tools_pt(tools=tools)
+    
+    # Should have 2 valid tools (first 2), others should be skipped
+    assert len(converted_tools) == 2, f"Expected 2 tools, got {len(converted_tools)}"
+    
+    # Check each tool has valid name and description
+    for i, tool in enumerate(converted_tools):
+        tool_spec = tool["toolSpec"]
+        name = tool_spec["name"]
+        description = tool_spec["description"]
+        
+        # Validate tool name is not empty
+        assert name and name.strip(), f"Tool {i+1} has empty name"
+        
+        # Validate description is not empty
+        assert description and description.strip(), f"Tool {i+1} has empty description"
+        
+        # Validate name matches Bedrock pattern [a-zA-Z][a-zA-Z0-9_]*
+        import re
+        assert re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', name), f"Tool {i+1} name '{name}' doesn't match Bedrock pattern"
+    
+    # Verify specific tool names
+    expected_names = ["get_weather", "search_tool"]
+    actual_names = [tool["toolSpec"]["name"] for tool in converted_tools]
+    assert actual_names == expected_names, f"Expected {expected_names}, got {actual_names}"
+
 
 
 def test_convert_url_to_img():

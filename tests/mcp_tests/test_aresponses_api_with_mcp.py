@@ -82,6 +82,90 @@ async def test_mcp_helper_methods():
     
     print("✓ MCP helper methods test passed!")
 
+def test_mcp_tool_name_extraction_chat_completions():
+    """Test our crucial fix for extracting tool names from Chat Completions format."""
+    
+    # Test Chat Completions dict format (tool_call["function"]["name"])
+    chat_completions_tool_call = {
+        "id": "call_test_123",
+        "type": "function",
+        "function": {
+            "name": "bedrock_test_tool",
+            "arguments": '{"param": "bedrock_value"}'
+        }
+    }
+    
+    tool_name, tool_arguments, tool_call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(chat_completions_tool_call)
+    
+    assert tool_name == "bedrock_test_tool"
+    assert tool_arguments == '{"param": "bedrock_value"}'
+    assert tool_call_id == "call_test_123"
+    
+    print("✓ MCP tool name extraction for Chat Completions format test passed!")
+
+
+def test_mcp_tool_name_extraction_responses_api():
+    """Test tool name extraction from ResponsesAPI format."""
+    
+    # Test ResponsesAPI dict format (tool_call["name"])
+    responses_api_tool_call = {
+        "name": "responses_test_tool",
+        "arguments": '{"param": "responses_value"}',
+        "call_id": "call_responses_456"
+    }
+    
+    tool_name, tool_arguments, tool_call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(responses_api_tool_call)
+    
+    assert tool_name == "responses_test_tool"
+    assert tool_arguments == '{"param": "responses_value"}'
+    assert tool_call_id == "call_responses_456"
+    
+    print("✓ MCP tool name extraction for ResponsesAPI format test passed!")
+
+
+def test_mcp_extract_tool_calls_from_chat_completions_response():
+    """Test our fix for extracting tool calls from Chat Completions response format."""
+    
+    # Mock Chat Completions response with tool calls
+    class MockMessage:
+        def __init__(self):
+            self.tool_calls = [
+                {
+                    "id": "call_mock_1",
+                    "type": "function",
+                    "function": {
+                        "name": "mock_tool_1",
+                        "arguments": '{"arg": "value1"}'
+                    }
+                },
+                {
+                    "id": "call_mock_2", 
+                    "type": "function",
+                    "function": {
+                        "name": "mock_tool_2",
+                        "arguments": '{"arg": "value2"}'
+                    }
+                }
+            ]
+    
+    class MockChoice:
+        def __init__(self):
+            self.message = MockMessage()
+    
+    class MockResponse:
+        def __init__(self):
+            self.choices = [MockChoice()]
+    
+    mock_response = MockResponse()
+    
+    # Test extraction
+    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(mock_response)
+    
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "mock_tool_1"
+    assert tool_calls[1]["function"]["name"] == "mock_tool_2"
+    
+    print("✓ MCP tool calls extraction from Chat Completions response test passed!")
 
 @pytest.mark.asyncio
 async def test_mcp_output_elements_addition():
