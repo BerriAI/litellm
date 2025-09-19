@@ -13260,6 +13260,8 @@
         "input_cost_per_token": 0,
         "litellm_provider": "lemonade",
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 0,
         "supports_function_calling": true,
