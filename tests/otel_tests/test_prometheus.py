@@ -252,8 +252,8 @@ async def create_test_team(
 
 async def create_test_user(
     session: aiohttp.ClientSession, user_data: Dict[str, Any]
-) -> str:
-    """Create a new user and return the user_id"""
+) -> Dict[str, Any]:
+    """Create a new user and return the user info"""
     url = "http://0.0.0.0:4000/user/new"
     headers = {
         "Authorization": "Bearer sk-1234",
@@ -576,10 +576,10 @@ async def test_user_email_in_all_required_metrics():
     Test that user_email label is present in all the metrics that were requested to have it:
     - litellm_proxy_total_requests_metric_total
     - litellm_proxy_failed_requests_metric_total
-    - litellm_input_tokens_total
-    - litellm_output_tokens_total
+    - litellm_input_tokens_metric_total
+    - litellm_output_tokens_metric_total
     - litellm_requests_metric_total
-    - litellm_spend_metric_total
+    - litellm_spend_metric
     """
     async with aiohttp.ClientSession() as session:
         # Create a user with user_email
@@ -608,15 +608,15 @@ async def test_user_email_in_all_required_metrics():
         # Check that user_email appears in all the required metrics
         required_metrics_with_user_email = [
             "litellm_proxy_total_requests_metric_total",
-            "litellm_input_tokens_total",
-            "litellm_output_tokens_total",
+            "litellm_input_tokens_metric_total",
+            "litellm_output_tokens_metric_total",
             "litellm_requests_metric_total",
-            "litellm_spend_metric_total"
+            "litellm_spend_metric"
         ]
 
+        import re
         for metric_name in required_metrics_with_user_email:
             # Check that the metric exists and contains user_email label
-            import re
             # Look for the metric with user_email in its labels
             pattern = rf'{metric_name}{{[^}}]*user_email="{re.escape(user_email)}"[^}}]*}}'
             matches = re.findall(pattern, metrics_text)
