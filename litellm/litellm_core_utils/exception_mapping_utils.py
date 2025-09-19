@@ -556,7 +556,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="anthropic",
                     )
-                elif "overloaded_error" in error_str:
+                elif "overloaded_error" in error_str or "Overloaded" in error_str:
                     exception_mapping_worked = True
                     raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
@@ -1444,6 +1444,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                    )
+                elif "invalid type: parameter" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                         model=model,
