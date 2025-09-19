@@ -59,6 +59,12 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
+# Import cached imports utilities
+from litellm.litellm_core_utils.cached_imports import (
+    get_coroutine_checker,
+    get_litellm_logging_class,
+    get_set_callbacks,
+)
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -221,6 +227,7 @@ from typing import (
     cast,
     get_args,
 )
+
 
 from openai import OpenAIError as OriginalError
 
@@ -521,16 +528,12 @@ def get_dynamic_callbacks(
 
 
 
-from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 
 
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
     ### NOTICES ###
-    from litellm import Logging as LiteLLMLogging
-    from litellm.litellm_core_utils.litellm_logging import set_callbacks
-
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
@@ -593,12 +596,12 @@ def function_setup(  # noqa: PLR0915
                     + litellm.failure_callback
                 )
             )
-            set_callbacks(callback_list=callback_list, function_id=function_id)
+            get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -608,7 +611,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -633,7 +636,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if coroutine_checker.is_async_callable(callback):
+                if get_coroutine_checker().is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -666,7 +669,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    coroutine_checker.is_async_callable(callback)
+                    get_coroutine_checker().is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
@@ -790,7 +793,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        logging_obj = LiteLLMLogging(
+        logging_obj = get_litellm_logging_class()( # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
             stream=stream,
@@ -903,7 +906,7 @@ def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
     def check_coroutine(value) -> bool:
-        return coroutine_checker.is_async_callable(value)
+        return get_coroutine_checker().is_async_callable(value)
 
     async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
         """
@@ -1597,7 +1600,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
-    is_coroutine = coroutine_checker.is_async_callable(original_function)
+    is_coroutine = get_coroutine_checker().is_async_callable(original_function)
 
     # Return the appropriate wrapper based on the original function type
     if is_coroutine:

@@ -1597,7 +1597,7 @@ async def test_no_cache_control_no_cache_point():
 # ============================================================================
 
 def test_guarded_text_wraps_in_guardrail_converse_content():
-    """Test that guarded_text content type gets wrapped in guardrailConverseContent blocks."""
+    """Test that guarded_text content type gets wrapped in guardContent blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
     
     messages = [
@@ -1631,9 +1631,9 @@ def test_guarded_text_wraps_in_guardrail_converse_content():
     assert "text" in content[2]
     assert content[2]["text"] == "More regular text"
     
-    # Second should be guardrailConverseContent
-    assert "guardrailConverseContent" in content[1]
-    assert content[1]["guardrailConverseContent"]["text"] == "This should be guarded"
+    # Second should be guardContent
+    assert "guardContent" in content[1]
+    assert content[1]["guardContent"]["text"]["text"] == "This should be guarded"
 
 
 def test_guarded_text_with_system_messages():
@@ -1685,9 +1685,9 @@ def test_guarded_text_with_system_messages():
     assert "text" in content[0]
     assert content[0]["text"] == "What is the main topic of this legal document?"
     
-    # Second should be guardrailConverseContent
-    assert "guardrailConverseContent" in content[1]
-    assert content[1]["guardrailConverseContent"]["text"] == "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."
+    # Second should be guardContent
+    assert "guardContent" in content[1]
+    assert content[1]["guardContent"]["text"]["text"] == "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."
 
 
 def test_guarded_text_with_mixed_content_types():
@@ -1726,9 +1726,9 @@ def test_guarded_text_with_mixed_content_types():
     # Second should be image
     assert "image" in content[1]
     
-    # Third should be guardrailConverseContent
-    assert "guardrailConverseContent" in content[2]
-    assert content[2]["guardrailConverseContent"]["text"] == "This sensitive content should be guarded"
+    # Third should be guardContent
+    assert "guardContent" in content[2]
+    assert content[2]["guardContent"]["text"]["text"] == "This sensitive content should be guarded"
 
 
 @pytest.mark.asyncio
@@ -1764,9 +1764,9 @@ async def test_async_guarded_text():
     assert "text" in content[0]
     assert content[0]["text"] == "Hello"
     
-    # Second should be guardrailConverseContent
-    assert "guardrailConverseContent" in content[1]
-    assert content[1]["guardrailConverseContent"]["text"] == "This should be guarded"
+    # Second should be guardContent
+    assert "guardContent" in content[1]
+    assert content[1]["guardContent"]["text"]["text"] == "This should be guarded"
 
 
 def test_guarded_text_with_tool_calls():
@@ -1818,15 +1818,15 @@ def test_guarded_text_with_tool_calls():
     assert "text" in content[0]
     assert content[0]["text"] == "What's the weather?"
     
-    # Second should be guardrailConverseContent
-    assert "guardrailConverseContent" in content[1]
-    assert content[1]["guardrailConverseContent"]["text"] == "Please be careful with sensitive information"
+    # Second should be guardContent
+    assert "guardContent" in content[1]
+    assert content[1]["guardContent"]["text"]["text"] == "Please be careful with sensitive information"
     
-    # Other messages should not have guardrailConverseContent
+    # Other messages should not have guardContent
     for i in range(1, 3):
         content = result[i]["content"]
         for block in content:
-            assert "guardrailConverseContent" not in block
+            assert "guardContent" not in block
 
 
 def test_guarded_text_guardrail_config_preserved():
@@ -2066,234 +2066,11 @@ def test_auto_convert_in_full_transformation():
     assert "messages" in result
     assert len(result["messages"]) == 1
     
-    # The message should have guardrailConverseContent
+    # The message should have guardContent
     message = result["messages"][0]
     assert "content" in message
     assert len(message["content"]) == 1
-    assert "guardrailConverseContent" in message["content"][0]
-    assert message["content"][0]["guardrailConverseContent"]["text"] == "What is the main topic of this legal document?"
+    assert "guardContent" in message["content"][0]
+    assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
 
-
-def test_convert_consecutive_user_messages_to_guarded_text():
-    """Test that consecutive user messages at the end are converted to guarded_text."""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "First user message"
-                }
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": "Assistant response"
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Second user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Third user message"
-                }
-            ]
-        }
-    ]
-    
-    optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
-    }
-    
-    # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
-    
-    # Verify the conversion - only the last two user messages should be converted
-    assert len(converted_messages) == 4
-    
-    # First user message should remain unchanged
-    assert converted_messages[0]["role"] == "user"
-    assert converted_messages[0]["content"][0]["type"] == "text"
-    assert converted_messages[0]["content"][0]["text"] == "First user message"
-    
-    # Assistant message should remain unchanged
-    assert converted_messages[1]["role"] == "assistant"
-    assert converted_messages[1]["content"] == "Assistant response"
-    
-    # Second user message should be converted to guarded_text
-    assert converted_messages[2]["role"] == "user"
-    assert converted_messages[2]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[2]["content"][0]["text"] == "Second user message"
-    
-    # Third user message should be converted to guarded_text
-    assert converted_messages[3]["role"] == "user"
-    assert converted_messages[3]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[3]["content"][0]["text"] == "Third user message"
-
-
-def test_convert_all_user_messages_when_all_consecutive():
-    """Test that all user messages are converted when they are all consecutive at the end."""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "First user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Second user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Third user message"
-                }
-            ]
-        }
-    ]
-    
-    optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
-    }
-    
-    # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
-    
-    # Verify all three user messages are converted
-    assert len(converted_messages) == 3
-    
-    for i in range(3):
-        assert converted_messages[i]["role"] == "user"
-        assert converted_messages[i]["content"][0]["type"] == "guarded_text"
-    
-    assert converted_messages[0]["content"][0]["text"] == "First user message"
-    assert converted_messages[1]["content"][0]["text"] == "Second user message"
-    assert converted_messages[2]["content"][0]["text"] == "Third user message"
-
-
-def test_convert_consecutive_user_messages_with_string_content():
-    """Test that consecutive user messages with string content are converted to guarded_text."""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {
-            "role": "assistant",
-            "content": "Assistant response"
-        },
-        {
-            "role": "user",
-            "content": "First user message"
-        },
-        {
-            "role": "user",
-            "content": "Second user message"
-        }
-    ]
-    
-    optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
-    }
-    
-    # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
-    
-    # Verify the conversion
-    assert len(converted_messages) == 3
-    
-    # Assistant message should remain unchanged
-    assert converted_messages[0]["role"] == "assistant"
-    assert converted_messages[0]["content"] == "Assistant response"
-    
-    # Both user messages should be converted to guarded_text
-    assert converted_messages[1]["role"] == "user"
-    assert len(converted_messages[1]["content"]) == 1
-    assert converted_messages[1]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[1]["content"][0]["text"] == "First user message"
-    
-    assert converted_messages[2]["role"] == "user"
-    assert len(converted_messages[2]["content"]) == 1
-    assert converted_messages[2]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[2]["content"][0]["text"] == "Second user message"
-
-
-def test_skip_consecutive_user_messages_with_existing_guarded_text():
-    """Test that consecutive user messages with existing guarded_text are skipped."""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "guarded_text",
-                    "text": "Already guarded"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Should be converted"
-                }
-            ]
-        }
-    ]
-    
-    optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
-    }
-    
-    # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
-    
-    # Verify the conversion
-    assert len(converted_messages) == 2
-    
-    # First message should remain unchanged (already has guarded_text)
-    assert converted_messages[0]["role"] == "user"
-    assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[0]["content"][0]["text"] == "Already guarded"
-    
-    # Second message should be converted
-    assert converted_messages[1]["role"] == "user"
-    assert converted_messages[1]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[1]["content"][0]["text"] == "Should be converted"
 
