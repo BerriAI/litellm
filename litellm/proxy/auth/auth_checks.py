@@ -132,12 +132,13 @@ async def common_checks(
             user_object=user_object,
         )
 
-    # 3. If team is in budget
-    await _team_max_budget_check(
-        team_object=team_object,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=valid_token,
-    )
+    if route in LiteLLMRoutes.llm_api_routes.value:
+        # 3. If team is in budget
+        await _team_max_budget_check(
+            team_object=team_object,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
 
     # 4. If user is in budget
     ## 4.1 check personal budget, if personal key
