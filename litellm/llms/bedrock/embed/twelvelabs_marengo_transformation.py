@@ -69,15 +69,6 @@ class TwelveLabsMarengoEmbeddingConfig:
             if "textTruncate" not in inference_params:
                 transformed_request["textTruncate"] = "end"
 
-        # Set default embedding options for Phase 1 (text and image)
-        if "embeddingOption" not in inference_params:
-            if is_encoded:
-                # For images, return both visual-text and visual-image embeddings
-                transformed_request["embeddingOption"] = ["visual-text", "visual-image"]
-            else:
-                # For text, return visual-text embedding
-                transformed_request["embeddingOption"] = ["visual-text"]
-
         # Apply any additional inference parameters
         for k, v in inference_params.items():
             if k not in [
@@ -94,14 +85,32 @@ class TwelveLabsMarengoEmbeddingConfig:
     ) -> EmbeddingResponse:
         """
         Transform TwelveLabs response to OpenAI format.
-        Handles multiple embedding types in the response.
+        Handles the actual TwelveLabs response format: {"data": [{"embedding": [...]}]}
         """
         embeddings: List[Embedding] = []
         total_tokens = 0
 
         for response in response_list:
-            if "embedding" in response:
-                # Single embedding response
+            # TwelveLabs response format has a "data" field containing the embeddings
+            if "data" in response and isinstance(response["data"], list):
+                for item in response["data"]:
+                    if "embedding" in item:
+                        # Single embedding response
+                        embedding = Embedding(
+                            embedding=item["embedding"],
+                            index=len(embeddings),
+                            object="embedding",
+                        )
+                        embeddings.append(embedding)
+
+                        # Estimate token count (rough approximation)
+                        if "inputTextTokenCount" in item:
+                            total_tokens += item["inputTextTokenCount"]
+                        else:
+                            # Rough estimate: 1 token per 4 characters for text, or use embedding size
+                            total_tokens += len(item["embedding"]) // 4
+            elif "embedding" in response:
+                # Direct embedding response (fallback for other formats)
                 embedding = Embedding(
                     embedding=response["embedding"],
                     index=len(embeddings),

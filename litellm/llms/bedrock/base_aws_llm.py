@@ -20,7 +20,11 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
+from litellm.constants import (
+    BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
+    BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_MAX_POLICY_SIZE,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
 
@@ -325,6 +329,40 @@ class BaseAWSLLM:
             for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
                 if provider in model:
                     return provider
+        return None
+
+    @staticmethod
+    def get_bedrock_embedding_provider(
+        model: str,
+    ) -> Optional[BEDROCK_EMBEDDING_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the bedrock embedding provider from the model
+        
+        Handles scenarios like:
+        1. model=cohere.embed-english-v3:0 -> Returns `cohere`
+        2. model=amazon.titan-embed-text-v1 -> Returns `amazon`  
+        3. model=us.twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
+        4. model=twelvelabs.marengo-embed-2-7-v1:0 -> Returns `twelvelabs`
+        """
+        # Handle regional models like us.twelvelabs.marengo-embed-2-7-v1:0
+        if "." in model:
+            parts = model.split(".")
+            # Check if the second part (after potential region) is a known provider
+            if len(parts) >= 2:
+                potential_provider = parts[1]  # e.g., "twelvelabs" from "us.twelvelabs.marengo-embed-2-7-v1:0"
+                if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+                    return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
+            
+            # Check if the first part is a known provider (standard format)
+            potential_provider = parts[0]  # e.g., "cohere" from "cohere.embed-english-v3:0"
+            if potential_provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
+        
+        # Fallback: check if any provider name appears in the model string
+        for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+            if provider in model:
+                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
+        
         return None
 
     def _get_aws_region_name(

@@ -185,7 +185,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             alias: "",
             url: "",
             transport: "",
-            spec_version: "",
             auth_type: "",
             created_at: "",
             created_by: "",
