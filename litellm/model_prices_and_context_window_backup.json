@@ -296,6 +296,66 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1024
     },
+    "twelvelabs.marengo-embed-2-7-v1:0": {
+        "input_cost_per_token": 7e-05,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "max_tokens": 77,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "supports_embedding_image_input": true,
+        "supports_image_input": true
+    },
+    "us.twelvelabs.marengo-embed-2-7-v1:0": {
+        "input_cost_per_token": 7e-05,
+        "input_cost_per_video_per_second": 0.0007,
+        "input_cost_per_audio_per_second": 0.00014,
+        "input_cost_per_image": 0.0001,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "max_tokens": 77,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "supports_embedding_image_input": true,
+        "supports_image_input": true
+    },
+    "eu.twelvelabs.marengo-embed-2-7-v1:0": {
+        "input_cost_per_token": 7e-05,
+        "input_cost_per_video_per_second": 0.0007,
+        "input_cost_per_audio_per_second": 0.00014,
+        "input_cost_per_image": 0.0001,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 77,
+        "max_tokens": 77,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
+        "supports_embedding_image_input": true,
+        "supports_image_input": true
+    },
+    "twelvelabs.pegasus-1-2-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "output_cost_per_token": 7.5e-06,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_video_input": true
+    },
+    "us.twelvelabs.pegasus-1-2-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "output_cost_per_token": 7.5e-06,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_video_input": true
+    },
+    "eu.twelvelabs.pegasus-1-2-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "output_cost_per_token": 7.5e-06,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_video_input": true
+    },
     "amazon.titan-text-express-v1": {
         "input_cost_per_token": 1.3e-06,
         "litellm_provider": "bedrock",
