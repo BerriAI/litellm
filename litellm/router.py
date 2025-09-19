@@ -1299,53 +1299,63 @@ class Router:
 
             model_name = data["model"]
 
-            model_client = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
+            use_extracted = getattr(self, "_router_core_mode", "legacy") == "extracted"
+            response = None
+            if use_extracted:
+                try:
+                    from litellm.router_core.transport_manager import routed_acompletion_call as _rt
+                    response = await _rt(self, deployment=deployment, data=data, messages=messages, kwargs=kwargs, parent_otel_span=parent_otel_span)
+                except Exception:
+                    use_extracted = False
+            if not use_extracted:
+                model_client = self._get_async_openai_model_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                )
+                self.total_calls[model_name] += 1
 
-            input_kwargs = {
-                **data,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
+                input_kwargs = {
+                    **data,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
 
-            _response = litellm.acompletion(**input_kwargs)
+                _response = litellm.acompletion(**input_kwargs)
 
-            logging_obj: Optional[LiteLLMLogging] = kwargs.get(
-                "litellm_logging_obj", None
-            )
+                logging_obj: Optional[LiteLLMLogging] = kwargs.get(
+                    "litellm_logging_obj", None
+                )
 
-            rpm_semaphore = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-            if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
-            ):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
+                rpm_semaphore = self._get_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    client_type="max_parallel_requests",
+                )
+                if rpm_semaphore is not None and isinstance(
+                    rpm_semaphore, asyncio.Semaphore
+                ):
+                    async with rpm_semaphore:
+                        """
+                        - Check rpm limits before making the call
+                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                        """
+                        await self.async_routing_strategy_pre_call_checks(
+                            deployment=deployment,
+                            logging_obj=logging_obj,
+                            parent_otel_span=parent_otel_span,
+                        )
+                        response = await _response
+                else:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment,
                         logging_obj=logging_obj,
                         parent_otel_span=parent_otel_span,
                     )
-                    response = await _response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment,
-                    logging_obj=logging_obj,
-                    parent_otel_span=parent_otel_span,
-                )
 
-                response = await _response
+                    response = await _response
+
 
             ## CHECK CONTENT FILTER ERROR ##
             if isinstance(response, ModelResponse):
