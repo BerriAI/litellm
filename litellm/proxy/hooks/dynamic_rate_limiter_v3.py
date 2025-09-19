@@ -70,7 +70,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         we create descriptors with priority-adjusted limits and let the v3 limiter handle
         the actual rate limiting with its sliding window approach.
         """
-        descriptors = []
+        descriptors: List[RateLimitDescriptor] = []
         
         # Get model group info
         model_group_info: Optional[ModelGroupInfo] = self.llm_router.get_model_group_info(

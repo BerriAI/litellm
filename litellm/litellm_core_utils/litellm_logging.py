@@ -3460,14 +3460,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     )
                 )
 
-            dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandlerV3(
+            dynamic_rate_limiter_obj_v3 = _PROXY_DynamicRateLimitHandlerV3(
                 internal_usage_cache=internal_usage_cache
             )
 
             if llm_router is not None and isinstance(llm_router, litellm.Router):
-                dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
-            _in_memory_loggers.append(dynamic_rate_limiter_obj)
-            return dynamic_rate_limiter_obj  # type: ignore
+                dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
+            _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
+            return dynamic_rate_limiter_obj_v3  # type: ignore
         elif logging_integration == "langtrace":
             if "LANGTRACE_API_KEY" not in os.environ:
                 raise ValueError("LANGTRACE_API_KEY not found in environment variables")
