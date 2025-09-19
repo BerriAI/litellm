@@ -2326,3 +2326,14 @@ def test_get_whitelisted_models():
             file.write(f"{model}\n")
 
     print("whitelisted_models written to whitelisted_bedrock_models.txt")
+
+
+
+def test_completion_with_no_model():
+    """
+    Ensure error is raised when no model is provided
+    """
+    # test on empty
+    with pytest.raises(TypeError):
+        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
+        
