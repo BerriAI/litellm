@@ -73,6 +73,7 @@ if MCP_AVAILABLE:
         tools = await global_mcp_server_manager._get_tools_from_server(
             server=server,
             mcp_auth_header=server_auth_header,
+            add_prefix=False,
         )
         return _create_tool_response_objects(tools, server.mcp_info)
 
