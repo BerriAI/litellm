@@ -36,6 +36,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if "form" in content_type:
             parsed_body = dict(await request.form())
+            parsed_body = handle_metadata_dict_from_req(parsed_body)
         else:
             # Read the request body
             body = await request.body()
@@ -226,7 +227,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
             parsed_form_data.setdefault(clean_key, []).append(value)
         else:
             parsed_form_data[key] = value
-    return parsed_form_data
+    return handle_metadata_dict_from_req(parsed_form_data)
 
 
 async def get_request_body(request: Request) -> Dict[str, Any]:
@@ -244,3 +245,15 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
         raise ValueError(
             f"Unsupported content type: {request.headers.get('content-type')}"
         )
+
+def handle_metadata_dict_from_req(parsed_form_data):
+    try:
+        if ("metadata" in parsed_form_data
+                and parsed_form_data["metadata"] is not None
+                and isinstance(parsed_form_data["metadata"], str)):
+            parsed_form_data["metadata"] = json.loads(parsed_form_data["metadata"])
+
+    except json.JSONDecodeError:
+        pass
+
+    return parsed_form_data
