@@ -111,6 +111,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
+        self.guardrail_provider = "bedrock"
 
         # store kwargs as optional_params
         self.optional_params = kwargs
@@ -372,6 +373,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Add guardrail information to request trace
         #########################################################
         self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider=self.guardrail_provider,
             guardrail_json_response=response.json(),
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(
