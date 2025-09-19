@@ -37,3 +37,90 @@ This fork adds an opt‑in, experimental mini‑agent and a guarded Router strea
   - STATE_OF_PROJECT.md (status, guardrails, plan)
   - docs/my-website/docs/experimental/mini-agent.md (usage + troubleshooting)
   - local/docs/02_operational/CANARY_PARITY_PLAN.md (operations)
+
+
+- Mini‑Agent over HTTP Tools (in‑code)
+  - Start your tools gateway (see docs) at http://127.0.0.1:8789
+  - Then call the mini‑agent using the HTTP tools adapter:
+
+```python
+from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import AgentConfig, run_mcp_mini_agent
+from litellm.experimental_mcp_client.mini_agent.http_tools_invoker import HttpToolsInvoker
+
+mcp = HttpToolsInvoker("http://127.0.0.1:8789", headers={"Authorization": "Bearer <token>"})
+messages = [{"role": "user", "content": "call echo('hi') and finish"}]
+cfg = AgentConfig(model="openai/gpt-4o-mini", max_iterations=4)
+res = run_mcp_mini_agent(messages, mcp=mcp, cfg=cfg)
+print(res.stopped_reason, res.final_answer)
+```
+
+- Agent Proxy (HTTP entrypoint)
+  - Run the endpoint:
+
+```bash
+uvicorn litellm.experimental_mcp_client.mini_agent.agent_proxy:app --port 8788
+```
+
+  - Call it from Python:
+
+```python
+import httpx
+payload = {
+  "messages": [{"role": "user", "content": "hi"}],
+  "model": "openai/gpt-4o-mini",
+  "tool_backend": "http",
+  "tool_http_base_url": "http://127.0.0.1:8789",
+  "tool_http_headers": {"Authorization": "Bearer <token>"}
+}
+resp = httpx.post("http://127.0.0.1:8788/agent/run", json=payload, timeout=30.0)
+resp.raise_for_status()
+print(resp.json())
+```
+
+- Extras (optional helpers)
+  - Images (local/remote to data URL):
+
+```python
+from litellm.extras.images import compress_image
+url = compress_image("/path/to/image.png", max_kb=64, cache_dir=".cache")
+print(url[:64], "...")
+```
+
+  - Cache (Redis one‑liner for Router):
+
+```python
+from litellm.extras.cache import configure_cache_redis
+from litellm.router import Router
+
+r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
+configure_cache_redis(r, host="127.0.0.1", port=6379, ttl_seconds=300)
+```
+
+  - Response utils (extract text from Router response):
+
+```python
+from litellm.extras.response_utils import extract_content
+from litellm.router import Router
+
+r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
+resp = await r.acompletion(model="m", messages=[{"role":"user","content":"hi"}])
+print(extract_content(resp))
+```
+
+  - Batch helper (concurrent acompletions):
+
+```python
+import asyncio
+from litellm.extras.batch import acompletion_as_completed
+from litellm.router import Router
+
+r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
+reqs = [
+  {"model":"m","messages":[{"role":"user","content":f"hi {i}"}]}
+  for i in range(5)
+]
+async def go():
+  async for idx, resp in acompletion_as_completed(r, reqs, concurrency=2):
+    print(idx, getattr(getattr(resp.choices[0],"message",{}),"content",None))
+asyncio.run(go())
+```
