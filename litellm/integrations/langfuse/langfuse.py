@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -196,6 +196,7 @@ class LangFuseLogger:
             TranscriptionResponse,
             RerankResponse,
             HttpxBinaryResponseContent,
+            ResponsesAPIResponse,
         ],
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -305,6 +306,7 @@ class LangFuseLogger:
             TranscriptionResponse,
             RerankResponse,
             HttpxBinaryResponseContent,
+            ResponsesAPIResponse,
         ],
         prompt: dict,
         level: str,
@@ -369,6 +371,11 @@ class LangFuseLogger:
         ):
             input = prompt
             output = response_obj.results
+        elif response_obj is not None and isinstance(
+            response_obj, litellm.ResponsesAPIResponse
+        ):
+            input = prompt
+            output = self._get_responses_api_content_for_langfuse(response_obj)
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -765,6 +772,19 @@ class LangFuseLogger:
         """
         if response_obj.choices and len(response_obj.choices) > 0:
             return response_obj.choices[0].text
+        else:
+            return None
+
+    @staticmethod
+    def _get_responses_api_content_for_langfuse(
+        response_obj: ResponsesAPIResponse,
+    ):
+        """
+        Get the responses API content for Langfuse logging
+        """
+        if hasattr(response_obj, 'output') and response_obj.output:
+            # ResponsesAPIResponse.output is a list of strings
+            return response_obj.output
         else:
             return None
 

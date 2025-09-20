@@ -3026,10 +3026,13 @@ def test_custom_api_base(api_base):
         stream=stream,
         auth_header=None,
         url="my-fake-endpoint",
+        model="gemini-1.5-pro",  # Required for Gemini custom API base URLs
     )
 
     if api_base:
-        assert url == api_base + ":"
+        # For Gemini with custom API base, URL should be constructed as api_base/models/model:endpoint
+        expected_url = f"{api_base}/models/gemini-1.5-pro:"
+        assert url == expected_url
     else:
         assert url == test_endpoint
 

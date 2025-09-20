@@ -7,6 +7,7 @@ from litellm.proxy._types import LitellmUserRoles, NewUserRequest, ProxyExceptio
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
     _handle_team_membership_changes,
+    create_group,
     create_user,
     get_service_provider_config,
     patch_user,
@@ -911,3 +912,281 @@ async def test_update_group_e2e(mocker):
     
     # Verify SCIM transformation was called with updated team
     ScimTransformations.transform_litellm_team_to_scim_group.assert_called_once_with(updated_team)
+
+
+@pytest.mark.asyncio
+async def test_create_group_with_nonexistent_users_creates_users(mocker):
+    """
+    Test that creating a group with non-existent users creates those users.
+    This tests the scenario: Group Push ['new user', existing users...]
+    """
+    # Test data
+    group_id = "test-group-123"
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Test Group",
+        members=[
+            SCIMMember(value="existing-user", display="Existing User"),  # This user exists
+            SCIMMember(value="new-user-1", display="New User 1"),       # This user doesn't exist
+            SCIMMember(value="new-user-2", display="New User 2"),       # This user doesn't exist
+        ]
+    )
+
+    #########################################################
+    # We expect new-user-1 and new-user-2 to be created
+    #########################################################
+    
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    
+    # Mock team operations - team doesn't exist yet
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    
+    # Mock user lookup - only existing-user exists
+    def mock_user_lookup(where):
+        user_id = where["user_id"]
+        if user_id == "existing-user":
+            mock_user = mocker.MagicMock()
+            mock_user.user_id = user_id
+            return mock_user
+        return None  # new-user-1 and new-user-2 don't exist
+    
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    
+    # Mock dependencies
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client)
+    )
+    
+    # Mock new_user function to track user creation
+    mock_new_user = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock()
+    )
+    
+    # Mock created users return values
+    def mock_new_user_side_effect(data):
+        from litellm.proxy._types import NewUserResponse
+        return NewUserResponse(
+            key="sk-test-key-" + data.user_id,  # Required field from GenerateKeyResponse
+            user_id=data.user_id,
+            user_email=data.user_email,
+            metadata=data.metadata,
+            teams=data.teams,
+            user_role=data.user_role
+        )
+    
+    mock_new_user.side_effect = mock_new_user_side_effect
+    
+    # Mock new_team function
+    mock_created_team = mocker.MagicMock()
+    mock_created_team.team_id = group_id
+    mock_created_team.team_alias = "Test Group"
+    
+    mock_new_team = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mock_created_team)
+    )
+    
+    # Mock SCIM transformation
+    expected_scim_response = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Test Group",
+        members=[
+            SCIMMember(value="existing-user", display="existing-user"),
+            SCIMMember(value="new-user-1", display="new-user-1"),
+            SCIMMember(value="new-user-2", display="new-user-2")
+        ]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=expected_scim_response)
+    )
+    
+    # Execute the create_group function
+    result = await create_group(group=scim_group)
+
+    #########################################################
+    # Assert that new-user-1 and new-user-2 were created
+    #########################################################
+    
+    # Verify that new_user was called exactly twice (for new-user-1 and new-user-2)
+    assert mock_new_user.call_count == 2
+    
+    # Check the user creation calls
+    created_user_ids = set()
+    for call in mock_new_user.call_args_list:
+        user_request = call.kwargs["data"]
+        created_user_ids.add(user_request.user_id)
+        assert user_request.metadata["created_via"] == "scim_group_membership"
+        assert user_request.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        assert user_request.auto_create_key is False
+        assert user_request.teams == []  # Teams added separately
+    
+    assert created_user_ids == {"new-user-1", "new-user-2"}
+    
+    # Verify team creation was called with all members (existing + created)
+    mock_new_team.assert_called_once()
+    team_request = mock_new_team.call_args.kwargs["data"]
+    assert team_request.team_id == group_id
+    assert team_request.team_alias == "Test Group"
+    
+    # Verify all members are in the team (existing + newly created)
+    member_user_ids = {member.user_id for member in team_request.members_with_roles}
+    assert member_user_ids == {"existing-user", "new-user-1", "new-user-2"}
+    
+    # Verify response
+    assert result.id == group_id
+    assert result.displayName == "Test Group"
+    assert len(result.members) == 3
+
+
+@pytest.mark.asyncio
+async def test_update_group_with_nonexistent_users_creates_users(mocker):
+    """
+    Test that updating a group with non-existent users creates those users.
+    This tests the scenario where a group is updated with members that don't exist in user table.
+    """
+    # Test data
+    group_id = "existing-group-456"
+    
+    # Mock existing team
+    mock_existing_team = mocker.MagicMock()
+    mock_existing_team.team_id = group_id
+    mock_existing_team.team_alias = "Old Group Name"
+    mock_existing_team.members = ["old-user"]
+    mock_existing_team.members_with_roles = [{"user_id": "old-user", "role": "user"}]
+    mock_existing_team.metadata = {"existing": "data"}
+    
+    # SCIM group update request
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Updated Group Name",
+        members=[
+            SCIMMember(value="existing-user", display="Existing User"),  # This user exists
+            SCIMMember(value="new-user-3", display="New User 3"),       # This user doesn't exist
+            SCIMMember(value="new-user-4", display="New User 4"),       # This user doesn't exist
+        ]
+    )
+    
+    # Mock prisma client
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    
+    # Mock team operations
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+    
+    # Mock updated team response
+    mock_updated_team = mocker.MagicMock()
+    mock_updated_team.team_id = group_id
+    mock_updated_team.team_alias = "Updated Group Name"
+    mock_updated_team.members = ["existing-user", "new-user-3", "new-user-4"]
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+    
+    # Mock user lookup - only existing-user exists
+    def mock_user_lookup(where):
+        user_id = where["user_id"]
+        if user_id == "existing-user":
+            mock_user = mocker.MagicMock()
+            mock_user.user_id = user_id
+            return mock_user
+        return None  # new-user-3 and new-user-4 don't exist
+    
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=mock_user_lookup)
+    
+    # Mock dependencies
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client)
+    )
+    
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_team_exists",
+        AsyncMock(return_value=mock_existing_team)
+    )
+    
+    # Mock new_user function to track user creation
+    mock_new_user = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock()
+    )
+    
+    # Mock created users return values
+    def mock_new_user_side_effect(data):
+        from litellm.proxy._types import NewUserResponse
+        return NewUserResponse(
+            key="sk-test-key-" + data.user_id,  # Required field from GenerateKeyResponse
+            user_id=data.user_id,
+            user_email=data.user_email,
+            metadata=data.metadata,
+            teams=data.teams,
+            user_role=data.user_role
+        )
+    
+    mock_new_user.side_effect = mock_new_user_side_effect
+    
+    # Mock group membership changes
+    mock_handle_group_membership_changes = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_group_membership_changes",
+        AsyncMock()
+    )
+    
+    # Mock SCIM transformation
+    expected_scim_response = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Updated Group Name",
+        members=[
+            SCIMMember(value="existing-user", display="existing-user"),
+            SCIMMember(value="new-user-3", display="new-user-3"),
+            SCIMMember(value="new-user-4", display="new-user-4")
+        ]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=expected_scim_response)
+    )
+    
+    # Execute the update_group function
+    result = await update_group(group_id=group_id, group=scim_group_update)
+    
+    # Verify that new_user was called exactly twice (for new-user-3 and new-user-4)
+    assert mock_new_user.call_count == 2
+    
+    # Check the user creation calls
+    created_user_ids = set()
+    for call in mock_new_user.call_args_list:
+        user_request = call.kwargs["data"]
+        created_user_ids.add(user_request.user_id)
+        assert user_request.metadata["created_via"] == "scim_group_membership"
+        assert user_request.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+        assert user_request.auto_create_key is False
+        assert user_request.teams == []  # Teams added separately
+    
+    assert created_user_ids == {"new-user-3", "new-user-4"}
+    
+    # Verify team update was called
+    mock_prisma_client.db.litellm_teamtable.update.assert_called_once()
+    update_call = mock_prisma_client.db.litellm_teamtable.update.call_args
+    assert update_call[1]["where"]["team_id"] == group_id
+    assert update_call[1]["data"]["team_alias"] == "Updated Group Name"
+    
+    # Verify group membership changes were handled with all members (existing + created)
+    mock_handle_group_membership_changes.assert_called_once()
+    membership_call = mock_handle_group_membership_changes.call_args
+    assert membership_call[1]["group_id"] == group_id
+    assert membership_call[1]["final_members"] == {"existing-user", "new-user-3", "new-user-4"}
+    
+    # Verify response
+    assert result.id == group_id
+    assert result.displayName == "Updated Group Name"
+    assert len(result.members) == 3

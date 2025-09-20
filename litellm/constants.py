@@ -179,7 +179,7 @@ NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
-MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 1000))
+MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
@@ -313,6 +313,7 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "ovhcloud",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -768,6 +769,12 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
+BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "amazon",
+    "twelvelabs",
+]
+
 BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
@@ -821,6 +828,7 @@ bedrock_embedding_models: set = set(
         "amazon.titan-embed-text-v1",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
+        "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
 
@@ -1023,6 +1031,7 @@ SENTRY_DENYLIST = [
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
     "FIREWORKSAI_API_KEY",
+    "OVHCLOUD_API_KEY",
     # Database and Connection Strings
     "database_url",
     "redis_url",
@@ -1061,3 +1070,8 @@ SENTRY_PII_DENYLIST = [
     "SMTP_SENDER_EMAIL",
     "TEST_EMAIL_ADDRESS",
 ]
+
+# CoroutineChecker cache configuration
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
+    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
+)
