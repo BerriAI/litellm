@@ -76,6 +76,42 @@ else:
 router = APIRouter()
 
 
+def process_sso_jwt_access_token(
+    access_token_str: Optional[str],
+    sso_jwt_handler: Optional[JWTHandler],
+    result: Union[OpenID, dict, None],
+) -> None:
+    """
+    Process SSO JWT access token and extract team IDs if available.
+
+    This function decodes the JWT access token and extracts team IDs using the
+    sso_jwt_handler, then sets the team_ids attribute on the result object.
+
+    Args:
+        access_token_str: The JWT access token string
+        sso_jwt_handler: SSO-specific JWT handler for team ID extraction
+        result: The SSO result object to update with team IDs
+    """
+    if access_token_str and sso_jwt_handler and result:
+        import jwt
+
+        access_token_payload = jwt.decode(
+            access_token_str, options={"verify_signature": False}
+        )
+
+        # Handle both dict and object result types
+        if isinstance(result, dict):
+            result_team_ids: Optional[List[str]] = result.get("team_ids", [])
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                result["team_ids"] = team_ids
+        else:
+            result_team_ids = getattr(result, "team_ids", []) if result else []
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                setattr(result, "team_ids", team_ids)
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
     request: Request, source: Optional[str] = None, key: Optional[str] = None
@@ -343,19 +379,7 @@ async def get_generic_sso_response(
         )
 
         access_token_str: Optional[str] = generic_sso.access_token
-        if access_token_str and sso_jwt_handler:
-            import jwt
-
-            access_token_payload = jwt.decode(
-                access_token_str, options={"verify_signature": False}
-            )
-
-            result_team_ids: Optional[List[str]] = (
-                getattr(result, "team_ids", []) if result else []
-            )
-            if not result_team_ids:
-                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
-                setattr(result, "team_ids", team_ids)
+        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
 
     except Exception as e:
         verbose_proxy_logger.exception(
