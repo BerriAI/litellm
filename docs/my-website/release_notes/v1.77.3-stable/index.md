@@ -62,41 +62,81 @@ pip install litellm==1.77.3
 | CompactifAI | Various models | Varies | Contact provider | Contact provider | Chat completions |
 | TwelveLabs | `twelvelabs/marengo-embed-2.7` | 32K | $0.12 | $0.00 | Embeddings |
 
+#### Features
+
+- **[OVHCloud AI Endpoints](../../docs/providers/ovhcloud)**
+    - New provider support with comprehensive model catalog - [PR #14494](https://github.com/BerriAI/litellm/pull/14494)
+- **[CompactifAI](../../docs/providers/compactifai)**
+    - New provider integration - [PR #14532](https://github.com/BerriAI/litellm/pull/14532)
+- **[SambaNova](../../docs/providers/sambanova)**
+    - Added DeepSeek v3.1 and GPT-OSS-120B models - [PR #14500](https://github.com/BerriAI/litellm/pull/14500)
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Cross-region inference profile cost calculation - [PR #14566](https://github.com/BerriAI/litellm/pull/14566)
+    - AWS external ID parameter support for authentication - [PR #14582](https://github.com/BerriAI/litellm/pull/14582)
+    - CountTokens API implementation - [PR #14557](https://github.com/BerriAI/litellm/pull/14557)
+    - Titan V2 encoding_format parameter support - [PR #14687](https://github.com/BerriAI/litellm/pull/14687)
+    - Nova Canvas image generation inference profiles - [PR #14578](https://github.com/BerriAI/litellm/pull/14578)
+- **[Vertex AI](../../docs/providers/vertex)**
+    - Gemini labels field provider-aware filtering - [PR #14563](https://github.com/BerriAI/litellm/pull/14563)
+    - Gemini Batch API support - [PR #14733](https://github.com/BerriAI/litellm/pull/14733)
+- **[Volcengine](../../docs/providers/volcengine)**
+    - Fixed thinking parameters when disabled - [PR #14569](https://github.com/BerriAI/litellm/pull/14569)
+- **[Cohere](../../docs/providers/cohere)**
+    - Handle Generate API deprecation, default to chat endpoints - [PR #14676](https://github.com/BerriAI/litellm/pull/14676)
+- **[TwelveLabs](../../docs/providers/twelvelabs)**
+    - Added Marengo Embed 2.7 embedding support - [PR #14674](https://github.com/BerriAI/litellm/pull/14674)
+    - Bedrock Twelve Labs embedding provider support - [PR #14697](https://github.com/BerriAI/litellm/pull/14697)
+
+### Bug Fixes
+
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Empty arguments handling in tool call invocation - [PR #14583](https://github.com/BerriAI/litellm/pull/14583)
+    - AWS exceptions handling despite 200 response - [PR #14658](https://github.com/BerriAI/litellm/pull/14658)
+- **[Vertex AI](../../docs/providers/vertex)**
+    - Avoid deepcopy crash with non-pickleables in Gemini/Vertex - [PR #14418](https://github.com/BerriAI/litellm/pull/14418)
+- **[XAI](../../docs/providers/xai)**
+    - Fix unsupported stop parameter for grok-code models - [PR #14565](https://github.com/BerriAI/litellm/pull/14565)
+- **[Gemini](../../docs/providers/gemini)**
+    - Updated error message for Gemini API - [PR #14589](https://github.com/BerriAI/litellm/pull/14589)
+    - Fixed 2.5 Flash Image Preview model routing - [PR #14715](https://github.com/BerriAI/litellm/pull/14715)
+    - API key passing for token counting endpoints - [PR #14744](https://github.com/BerriAI/litellm/pull/14744)
+
+#### New Provider Support
+
+- **[OVHCloud AI Endpoints](../../docs/providers/ovhcloud)**
+    - Complete provider integration with model catalog and authentication - [PR #14494](https://github.com/BerriAI/litellm/pull/14494)
+- **[CompactifAI](../../docs/providers/compactifai)**
+    - New provider support with documentation - [PR #14532](https://github.com/BerriAI/litellm/pull/14532)
 
 ---
 
 ## LLM API Endpoints
 
-#### New Features
+#### Features
 
-- **[/responses](../../docs/response_api)** API cancel endpoint support - [PR #14594](https://github.com/BerriAI/litellm/pull/14594)
-- **OpenAI & Azure Cancel Endpoint** support for batch operations - [PR #14561](https://github.com/BerriAI/litellm/pull/14561)
-- **AWS Bedrock CountTokens API** implementation - [PR #14557](https://github.com/BerriAI/litellm/pull/14557)
-- **Gemini Batch API** support - [PR #14733](https://github.com/BerriAI/litellm/pull/14733)
+- **[Responses API](../../docs/response_api)**
+    - Cancel endpoint support for non-admin users - [PR #14594](https://github.com/BerriAI/litellm/pull/14594)
+    - Improved handling and cold storage configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
+    - Cost calculation fixes - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
+- **[Batch API](../../docs/completion/batches)**
+    - OpenAI & Azure cancel endpoint support - [PR #14561](https://github.com/BerriAI/litellm/pull/14561)
+    - Bedrock retrieve endpoint support - [PR #14618](https://github.com/BerriAI/litellm/pull/14618)
+    - Gemini Batch API support - [PR #14733](https://github.com/BerriAI/litellm/pull/14733)
+- **[CountTokens API](../../docs/providers/bedrock)**
+    - AWS Bedrock CountTokens API implementation - [PR #14557](https://github.com/BerriAI/litellm/pull/14557)
+- **General**
+    - Middle-truncation for spend log payloads - [PR #14637](https://github.com/BerriAI/litellm/pull/14637)
+    - Enhanced rate limit error messages with details - [PR #14736](https://github.com/BerriAI/litellm/pull/14736)
 
-#### Provider Updates
+#### Bugs
 
-- **[OVHCloud AI Endpoints](../../docs/providers/ovhcloud)** - New provider support - [PR #14494](https://github.com/BerriAI/litellm/pull/14494)
-- **[CompactifAI](../../docs/providers/compactifai)** - New provider integration - [PR #14532](https://github.com/BerriAI/litellm/pull/14532)
-- **[Cohere](../../docs/providers/cohere)** - Handle Generate API deprecation, default to chat endpoints - [PR #14676](https://github.com/BerriAI/litellm/pull/14676)
-- **[Bedrock](../../docs/providers/bedrock)**
-  - Cross-region inference profile cost calculation fix - [PR #14566](https://github.com/BerriAI/litellm/pull/14566)
-  - AWS external ID parameter support - [PR #14582](https://github.com/BerriAI/litellm/pull/14582)
-  - Empty arguments handling in tool calls - [PR #14583](https://github.com/BerriAI/litellm/pull/14583)
-  - Titan V2 encoding_format parameter support - [PR #14687](https://github.com/BerriAI/litellm/pull/14687)
-- **[Vertex AI](../../docs/providers/vertex)**
-  - Gemini labels field provider-aware filtering - [PR #14563](https://github.com/BerriAI/litellm/pull/14563)
-  - Avoid deepcopy crash with non-pickleables - [PR #14418](https://github.com/BerriAI/litellm/pull/14418)
-- **[Volcengine](../../docs/providers/volcengine)**
-  - Fixed thinking parameters when disabled - [PR #14569](https://github.com/BerriAI/litellm/pull/14569)
-
-#### Bug Fixes
-
-- **Grok Code Models** - Fix unsupported stop parameter - [PR #14565](https://github.com/BerriAI/litellm/pull/14565)
-- **Completion Chat ID** fix - [PR #14548](https://github.com/BerriAI/litellm/pull/14548)
-- **Gemini API Base** update - [PR #14604](https://github.com/BerriAI/litellm/pull/14604)
-- **Gemini 2.5 Flash Image Preview** model routing fix - [PR #14715](https://github.com/BerriAI/litellm/pull/14715)
-- **Rate Limiter** AttributeError fix - [PR #14609](https://github.com/BerriAI/litellm/pull/14609)
+- **General**
+    - Fixed completion chat ID handling - [PR #14548](https://github.com/BerriAI/litellm/pull/14548)
+    - Fix unsupported stop parameter for grok-code models - [PR #14565](https://github.com/BerriAI/litellm/pull/14565)
+    - Gemini API base update - [PR #14604](https://github.com/BerriAI/litellm/pull/14604)
+    - Gemini 2.5 Flash Image Preview model routing fix - [PR #14715](https://github.com/BerriAI/litellm/pull/14715)
+    - Rate limiter AttributeError fix - [PR #14609](https://github.com/BerriAI/litellm/pull/14609)
+    - Prevent AttributeError for _get_tags_from_request_kwargs - [PR #14735](https://github.com/BerriAI/litellm/pull/14735)
 
 ---
 
@@ -158,7 +198,7 @@ pip install litellm==1.77.3
 ---
 
 
-### MCP Gateway
+## MCP Gateway
 
 - **MCP Server Alias Parsing** - Multi-part URL path support - [PR #14558](https://github.com/BerriAI/litellm/pull/14558)
 - **MCP Filter Recomputation** - After server deletion - [PR #14542](https://github.com/BerriAI/litellm/pull/14542)
