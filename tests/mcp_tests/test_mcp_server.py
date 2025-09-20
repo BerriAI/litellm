@@ -729,7 +729,6 @@ async def test_get_tools_from_mcp_servers():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServer,
         MCPTransport,
-        MCPSpecVersion,
     )
 
     # Mock data
