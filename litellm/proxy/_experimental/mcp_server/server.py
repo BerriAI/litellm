@@ -384,6 +384,9 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers=allowed_mcp_servers,
             )
 
+        # Decide whether to add prefix based on number of allowed servers
+        add_prefix = not (len(allowed_mcp_servers) == 1)
+
         # Get tools from each allowed server
         all_tools = []
         for server_id in allowed_mcp_servers:
@@ -406,6 +409,7 @@ if MCP_AVAILABLE:
                 tools = await global_mcp_server_manager._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    add_prefix=add_prefix,
                 )
                 all_tools.extend(tools)
                 verbose_logger.debug(
@@ -639,29 +643,33 @@ if MCP_AVAILABLE:
         if mcp_path_match:
             mcp_servers_str = mcp_path_match.group(1)
             optional_path = mcp_path_match.group(2)
-            
+
             if mcp_servers_str:
                 # First, try to split by comma for comma-separated lists
-                if ',' in mcp_servers_str:
+                if "," in mcp_servers_str:
                     # For comma-separated lists, we need to handle the case where the last item
                     # might include the path (e.g., "zapier,group1/tools" -> ["zapier", "group1/tools"])
                     parts = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
-                    
+
                     # If there's an optional path AND the last part contains a slash that matches the optional path,
                     # remove the path portion from the last server name
-                    if optional_path and len(parts) > 0 and '/' in parts[-1]:
+                    if optional_path and len(parts) > 0 and "/" in parts[-1]:
                         last_part = parts[-1]
                         # Check if the last part ends with the optional path
-                        if optional_path and last_part.endswith(optional_path.lstrip('/')):
+                        if optional_path and last_part.endswith(
+                            optional_path.lstrip("/")
+                        ):
                             # Remove the path portion from the last server name
-                            parts[-1] = last_part[:-len(optional_path.lstrip('/'))]
-                    
+                            parts[-1] = last_part[: -len(optional_path.lstrip("/"))]
+
                     mcp_servers_from_path = parts
                 else:
                     # For single server, it might be just a name or contain slashes
                     # We need to determine where the server name ends and the path begins
                     # This is tricky - let's use the original logic but handle comma cases differently
-                    single_server_match = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", mcp_servers_str)
+                    single_server_match = re.match(
+                        r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", mcp_servers_str
+                    )
                     if single_server_match:
                         server_name = single_server_match.group(1)
                         mcp_servers_from_path = [server_name]
