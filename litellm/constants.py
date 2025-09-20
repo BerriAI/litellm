@@ -909,7 +909,6 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
-X_LITELLM_DISABLE_PROMPTS_IN_SPEND_LOGS = "x-litellm-disable-prompts-in-spend-logs"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
 LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
