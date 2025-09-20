@@ -524,7 +524,6 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
-        "completion/reliability",
         "proxy/veo_video_generation",
 
       ]
