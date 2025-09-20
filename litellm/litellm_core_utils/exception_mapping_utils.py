@@ -1307,21 +1307,35 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
+                        )
+                    if original_exception.status_code == 403:
+                        exception_mapping_worked = True
+                        raise PermissionDeniedError(
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=httpx.Response(
+                                status_code=403,
+                                request=httpx.Request(
+                                    method="POST",
+                                    url="https://cloud.google.com/vertex-ai/",
+                                ),
+                            ),
                         )
                     if original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
                     if original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
@@ -1329,7 +1343,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
+                            message=f"litellm.RateLimitError: {custom_llm_provider.capitalize()}Exception - {error_str}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -1354,10 +1368,17 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                                 request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                             ),
                         )
+                    if original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise APIConnectionError(
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                        )
                     if original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
