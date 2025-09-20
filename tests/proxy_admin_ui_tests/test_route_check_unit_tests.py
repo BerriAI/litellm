@@ -94,7 +94,11 @@ def test_is_llm_api_route():
     assert RouteChecks.is_llm_api_route("/mcp/tools") is True
     assert RouteChecks.is_llm_api_route("/mcp/tools/call") is True
     assert RouteChecks.is_llm_api_route("/mcp/tools/list") is True
-
+    
+    
+    # model info routes (added to llm_api_routes)
+    assert RouteChecks.is_llm_api_route("/model/info") is True
+    assert RouteChecks.is_llm_api_route("/v1/model/info") is True
     
     # check non-matching routes
     assert RouteChecks.is_llm_api_route("/some/random/route") is False

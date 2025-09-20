@@ -135,6 +135,8 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     "/anthropic/v1/count_tokens",
     "/gemini/v1/models",
     "/gemini/countTokens",
+    "/model/info",
+    "/v1/model/info",
 ])
 def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
     """

@@ -374,6 +374,9 @@ class LiteLLMRoutes(enum.Enum):
         + passthrough_routes_wildcard
         + apply_guardrail_routes
         + mcp_routes
+        + ["/model/info", "/model/info"]
+        + ["/model/info", "/v1/model/info"]
+        + ["/model/info", "/v2/model/info"]
     )
     info_routes = [
         "/key/info",
