@@ -234,14 +234,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         analyze_results: Any,
-        output_parse_pii: bool,
-        masked_entity_count: Dict[str, int],
-    ) -> str:
+    ) -> Dict:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
         """
         try:
             async with aiohttp.ClientSession() as session:
+                if self.mock_redacted_text is not None:
+                    return self.mock_redacted_text
+
                 # Make the request to /anonymize
                 anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
                 verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
@@ -255,34 +256,43 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 ) as response:
                     redacted_text = await response.json()
 
-                new_text = text
                 if redacted_text is not None:
-                    verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                    for item in redacted_text["items"]:
-                        start = item["start"]
-                        end = item["end"]
-                        replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii is True:
-                            # check if token in dict
-                            # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                            if replacement in self.pii_tokens:
-                                replacement = replacement + str(uuid.uuid4())
-
-                            self.pii_tokens[replacement] = new_text[
-                                start:end
-                            ]  # get text it'll replace
-
-                        new_text = new_text[:start] + replacement + new_text[end:]
-                        entity_type = item.get("entity_type", None)
-                        if entity_type is not None:
-                            masked_entity_count[entity_type] = (
-                                masked_entity_count.get(entity_type, 0) + 1
-                            )
-                    return redacted_text["text"]
+                    return redacted_text
                 else:
                     raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
             raise e
+
+    def _record_values_from_anonymizer_items(
+        self,
+        original_text: str,
+        anonymize_items_response: Any,
+        output_parse_pii: bool,
+        masked_entity_count: Dict[str, int],
+    ):
+        """
+        Extract and store items from the Presidio anonymizer output.
+        """
+        for item in anonymize_items_response:
+            start = item["start"]
+            end = item["end"]
+            replacement = item["text"]  # replacement token
+            if item["operator"] == "replace" and output_parse_pii is True:
+                # check if token in dict
+                # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
+                if replacement in self.pii_tokens:
+                    replacement = replacement + str(uuid.uuid4())
+
+                self.pii_tokens[replacement] = original_text[
+                    start:end
+                ]  # get text it'll replace
+
+            original_text = original_text[:start] + replacement + original_text[end:]
+            entity_type = item.get("entity_type", None)
+            if entity_type is not None:
+                masked_entity_count[entity_type] = (
+                    masked_entity_count.get(entity_type, 0) + 1
+                )
 
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
@@ -328,33 +338,35 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         masked_entity_count: Dict[str, int] = {}
         exception_str: str = ""
         try:
-            if self.mock_redacted_text is not None:
-                redacted_text = self.mock_redacted_text
-            else:
-                # First get analysis results
-                analyze_results = await self.analyze_text(
-                    text=text,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            # First get analysis results
+            analyze_results = await self.analyze_text(
+                text=text,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
 
-                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+            verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
-                ####################################################
-                # Blocked Entities check
-                ####################################################
-                self.raise_exception_if_blocked_entities_detected(
-                    analyze_results=analyze_results
-                )
+            ####################################################
+            # Blocked Entities check
+            ####################################################
+            self.raise_exception_if_blocked_entities_detected(
+                analyze_results=analyze_results
+            )
 
-                # Then anonymize the text using the analysis results
-                return await self.anonymize_text(
-                    text=text,
-                    analyze_results=analyze_results,
-                    output_parse_pii=output_parse_pii,
-                    masked_entity_count=masked_entity_count,
-                )
-            return redacted_text["text"]
+            anonymize_response = await self.anonymize_text(
+                text=text,
+                analyze_results=analyze_results,
+            )
+
+            self._record_values_from_anonymizer_items(
+                original_text=text,
+                anonymize_items_response=anonymize_response["items"],
+                output_parse_pii=self.output_parse_pii,
+                masked_entity_count=masked_entity_count,
+            )
+
+            return anonymize_response["text"]
         except Exception as e:
             status = "failure"
             exception_str = str(e)
@@ -402,10 +414,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            if call_type in [
-                LitellmCallTypes.completion.value,
-                LitellmCallTypes.acompletion.value,
-            ] or call_type == "mcp_call":
+            if (
+                call_type
+                in [
+                    LitellmCallTypes.completion.value,
+                    LitellmCallTypes.acompletion.value,
+                ]
+                or call_type == "mcp_call"
+            ):
                 messages = data["messages"]
                 tasks = []
                 for m in messages:
@@ -531,6 +547,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Output parse the response object to replace the masked tokens with user sent values
         """
+
         verbose_proxy_logger.debug(
             f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
         )
