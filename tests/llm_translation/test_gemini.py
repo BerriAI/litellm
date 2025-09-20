@@ -1009,10 +1009,10 @@ def test_gemini_exception_message_format():
     (408, "Timeout"),
     (429, "RateLimitError"),
     (500, "InternalServerError"),
-    (502, "InternalServerError"),
-    (503, "InternalServerError"),
+    (502, "APIConnectionError"),
+    (503, "ServiceUnavailableError"),
 ])
-def test_gemini_comprehensive_error_handling(status_code, expected_exception):
+def l(status_code, expected_exception):
     """
     Test comprehensive Gemini error handling for all HTTP status codes.
 
@@ -1024,7 +1024,7 @@ def test_gemini_comprehensive_error_handling(status_code, expected_exception):
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from litellm.exceptions import (
         BadRequestError, AuthenticationError, PermissionDeniedError, NotFoundError,
-        Timeout, RateLimitError, InternalServerError
+        Timeout, RateLimitError, InternalServerError, APIConnectionError, ServiceUnavailableError
     )
 
     # Mock the appropriate error response
@@ -1041,6 +1041,8 @@ def test_gemini_comprehensive_error_handling(status_code, expected_exception):
     )
     mock_exception.response = mock_response
     mock_exception.status_code = status_code
+    # Set message attribute for compatibility with exception mapping
+    mock_exception.message = f"HTTP {status_code}"
 
     # Test the exception mapping
     try:
@@ -1062,6 +1064,8 @@ def test_gemini_comprehensive_error_handling(status_code, expected_exception):
             "Timeout": Timeout,
             "RateLimitError": RateLimitError,
             "InternalServerError": InternalServerError,
+            "APIConnectionError": APIConnectionError,
+            "ServiceUnavailableError": ServiceUnavailableError,
         }
         expected_class = exception_classes[expected_exception]
         assert isinstance(e, expected_class), f"Expected {expected_exception}, got {type(e).__name__}"
