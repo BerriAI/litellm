@@ -140,9 +140,9 @@ pip install litellm==1.77.3
 
 - **Team Member Service Account Keys** - Allow team members to view keys they create - [PR #14619](https://github.com/BerriAI/litellm/pull/14619)
 - **Default Budget for JWT Teams** - Auto-assign budgets to generated teams - [PR #14514](https://github.com/BerriAI/litellm/pull/14514)
-- **Langsmith Sampling Rate** - Team-level tracing configuration - [PR #14740](https://github.com/BerriAI/litellm/pull/14740)
 - **SSO Access Control Groups** - Enhanced token info endpoint integration - [PR #14738](https://github.com/BerriAI/litellm/pull/14738)
 - **Health Test Connect Protection** - Restrict access based on model creation permissions - [PR #14650](https://github.com/BerriAI/litellm/pull/14650)
+- **Amazon Bedrock Guardrail Info View** - Enhanced logging visualization - [PR #14696](https://github.com/BerriAI/litellm/pull/14696)
 
 #### Bug Fixes
 
@@ -171,19 +171,24 @@ pip install litellm==1.77.3
     - Fixed tool calls metadata passing - [PR #14531](https://github.com/BerriAI/litellm/pull/14531)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Added logging support for Responses API - [PR #14597](https://github.com/BerriAI/litellm/pull/14597)
+- **[Langsmith](../../docs/proxy/logging#langsmith)**
+    - Langsmith Sampling Rate - Key/Team-level tracing configuration - [PR #14740](https://github.com/BerriAI/litellm/pull/14740)
 - **[Prometheus](../../docs/proxy/logging#prometheus)**
     - Multi-worker support improvements - [PR #14530](https://github.com/BerriAI/litellm/pull/14530)
     - User email labels in monitoring - [PR #14520](https://github.com/BerriAI/litellm/pull/14520)
 - **[Opik](../../docs/proxy/logging#opik)**
     - Fixed timezone issue - [PR #14708](https://github.com/BerriAI/litellm/pull/14708)
 
+### Bug Fixes
+
+- **[S3](../../docs/proxy/logging#s3-buckets)**
+    - Fixed 404 error when using s3_endpoint_url - [PR #14559](https://github.com/BerriAI/litellm/pull/14559)
+
 #### Guardrails
 
 - **Tool Permission Guardrail** - Fine-grained tool access control - [PR #14519](https://github.com/BerriAI/litellm/pull/14519)
 - **Bedrock Guardrails** - Selective guarding support with runtime endpoint configuration - [PR #14575](https://github.com/BerriAI/litellm/pull/14575), [PR #14650](https://github.com/BerriAI/litellm/pull/14650)
-- **Amazon Bedrock Guardrail Info View** - Enhanced logging visualization - [PR #14696](https://github.com/BerriAI/litellm/pull/14696)
 - **Default Last Message** in guardrails - [PR #14640](https://github.com/BerriAI/litellm/pull/14640)
-- **Bedrock Guardrail Silent Failure** correction - [PR #14707](https://github.com/BerriAI/litellm/pull/14707)
 - **AWS exceptions handling despite 200 response** - [PR #14658](https://github.com/BerriAI/litellm/pull/14658)
 #### New Integration
 
@@ -220,7 +225,6 @@ pip install litellm==1.77.3
 
 #### Storage & Configuration
 
-- **S3 Endpoint URL** - Fixed 404 errors - [PR #14559](https://github.com/BerriAI/litellm/pull/14559)
 - **Response API Cold Storage** - Improved handling and configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
 - **Middle-Truncation** for spend log payloads - [PR #14637](https://github.com/BerriAI/litellm/pull/14637)
 
