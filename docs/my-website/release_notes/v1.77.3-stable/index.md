@@ -129,27 +129,31 @@ pip install litellm==1.77.3
 
 ## Logging / Guardrail Integrations
 
-#### New Integrations
+#### Features
 
-- **[PostHog Observability](../../docs/observability/posthog)** - Complete observability integration - [PR #14610](https://github.com/BerriAI/litellm/pull/14610)
-- **Langfuse Logging** for Responses API - [PR #14597](https://github.com/BerriAI/litellm/pull/14597)
-- **DataDog Spend Metrics** - Enhanced spend tracking - [PR #14555](https://github.com/BerriAI/litellm/pull/14555)
-- **DataDog Stream Support** - is_streamed_request parameter - [PR #14673](https://github.com/BerriAI/litellm/pull/14673)
+- **[DataDog](../../docs/proxy/logging#datadog)**
+    - Enhanced spend tracking metrics - [PR #14555](https://github.com/BerriAI/litellm/pull/14555)
+    - Stream support with is_streamed_request parameter - [PR #14673](https://github.com/BerriAI/litellm/pull/14673)
+    - Fixed tool calls metadata passing - [PR #14531](https://github.com/BerriAI/litellm/pull/14531)
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
+    - Added logging support for Responses API - [PR #14597](https://github.com/BerriAI/litellm/pull/14597)
+- **[Prometheus](../../docs/proxy/logging#prometheus)**
+    - Multi-worker support improvements - [PR #14530](https://github.com/BerriAI/litellm/pull/14530)
+    - User email labels in monitoring - [PR #14520](https://github.com/BerriAI/litellm/pull/14520)
+- **[Opik](../../docs/proxy/logging#opik)**
+    - Fixed timezone issue - [PR #14708](https://github.com/BerriAI/litellm/pull/14708)
 
-#### Guardrail Features
+#### Guardrails
 
 - **Tool Permission Guardrail** - Fine-grained tool access control - [PR #14519](https://github.com/BerriAI/litellm/pull/14519)
 - **Bedrock Guardrails** - Selective guarding support with runtime endpoint configuration - [PR #14575](https://github.com/BerriAI/litellm/pull/14575), [PR #14650](https://github.com/BerriAI/litellm/pull/14650)
 - **Amazon Bedrock Guardrail Info View** - Enhanced logging visualization - [PR #14696](https://github.com/BerriAI/litellm/pull/14696)
 - **Default Last Message** in guardrails - [PR #14640](https://github.com/BerriAI/litellm/pull/14640)
-
-#### Bug Fixes
-
-- **DataDog Tool Calls** - Fixed metadata passing - [PR #14531](https://github.com/BerriAI/litellm/pull/14531)
-- **Prometheus Multi-Worker** support - [PR #14530](https://github.com/BerriAI/litellm/pull/14530)
-- **User Email Labels** in Prometheus monitoring - [PR #14520](https://github.com/BerriAI/litellm/pull/14520)
 - **Bedrock Guardrail Silent Failure** correction - [PR #14707](https://github.com/BerriAI/litellm/pull/14707)
-- **Opik Timezone Issue** fix - [PR #14708](https://github.com/BerriAI/litellm/pull/14708)
+
+#### New Integration
+
+- **[PostHog](../../docs/observability/posthog)** - Complete observability integration for LiteLLM usage tracking and analytics - [PR #14610](https://github.com/BerriAI/litellm/pull/14610)
 
 ---
 
