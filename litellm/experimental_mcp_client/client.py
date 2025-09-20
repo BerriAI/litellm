@@ -6,14 +6,28 @@ import base64
 from datetime import timedelta
 from typing import List, Optional
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
-from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import TextContent
-from mcp.types import Tool as MCPTool
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.sse import sse_client
+    from mcp.client.stdio import stdio_client
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+    from mcp.types import CallToolResult as MCPCallToolResult
+    from mcp.types import TextContent
+    from mcp.types import Tool as MCPTool
+except Exception:  # optional dependency; fail lazily on use
+    ClientSession = object  # type: ignore
+    StdioServerParameters = object  # type: ignore
+    def sse_client(*a, **k):
+        raise RuntimeError("MCP not installed")
+    def stdio_client(*a, **k):
+        raise RuntimeError("MCP not installed")
+    def streamablehttp_client(*a, **k):
+        raise RuntimeError("MCP not installed")
+    MCPCallToolRequestParams = dict  # type: ignore
+    MCPCallToolResult = dict  # type: ignore
+    TextContent = dict  # type: ignore
+    MCPTool = dict  # type: ignore
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp import (
