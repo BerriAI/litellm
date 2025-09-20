@@ -1,5 +1,5 @@
 ---
-title: "[Pre-Release] v1.77.2-stable - Bedrock Batches API"
+title: "v1.77.2-stable - Bedrock Batches API"
 slug: "v1-77-2"
 date: 2025-09-13T10:00:00
 authors:
@@ -21,12 +21,6 @@ import TabItem from '@theme/TabItem';
 
 ## Deploy this version
 
-:::info
-
-This release is not yet live.
-
-:::
-
 <Tabs>
 <TabItem value="docker" label="Docker">
 
@@ -34,7 +28,7 @@ This release is not yet live.
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-v1.77.2.rc.2
+ghcr.io/berriai/litellm:main-v1.77.2-stable
 ```
 
 </TabItem>
@@ -42,6 +36,7 @@ ghcr.io/berriai/litellm:main-v1.77.2.rc.2
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
+pip install litellm==1.77.2.post1
 ```
 
 </TabItem>
