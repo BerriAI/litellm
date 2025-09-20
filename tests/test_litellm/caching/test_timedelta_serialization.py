@@ -12,10 +12,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.caching.redis_cache import RedisCache, TimedeltaJSONEncoder
-from litellm.caching.s3_cache import S3Cache, TimedeltaJSONEncoder as S3TimedeltaJSONEncoder
-from litellm.caching.gcs_cache import GCSCache, TimedeltaJSONEncoder as GCSTimedeltaJSONEncoder
-from litellm.caching.azure_blob_cache import AzureBlobCache, TimedeltaJSONEncoder as AzureTimedeltaJSONEncoder
+from litellm.caching.redis_cache import RedisCache
+from litellm.caching.s3_cache import S3Cache
+from litellm.caching.gcs_cache import GCSCache
+from litellm.caching.azure_blob_cache import AzureBlobCache
+from litellm.caching.json_utils import TimedeltaJSONEncoder
 
 
 class TestTimedeltaJSONEncoder(unittest.TestCase):

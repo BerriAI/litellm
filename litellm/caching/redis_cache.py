@@ -23,15 +23,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
-
-
-class TimedeltaJSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder that handles timedelta objects by converting them to seconds."""
-    
-    def default(self, obj):
-        if isinstance(obj, timedelta):
-            return obj.total_seconds()
-        return super().default(obj)
+from .json_utils import TimedeltaJSONEncoder
 
 
 if TYPE_CHECKING:
@@ -225,7 +217,7 @@ class RedisCache(BaseCache):
         try:
             start_time = time.time()
             # Convert value to JSON string to handle complex objects like timedelta
-            if isinstance(value, (dict, list)) or hasattr(value, '__dict__'):
+            if isinstance(value, (dict, list)) or hasattr(value, "__dict__"):
                 serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
             else:
                 serialized_value = str(value)
