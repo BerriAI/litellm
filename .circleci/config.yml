@@ -1302,6 +1302,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    parallelism: 4
 
     steps:
       - checkout
@@ -1325,11 +1326,19 @@ jobs:
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
-          name: Run tests
+          name: Create test-results directory
+          command: mkdir -p test-results
+      - run:
+          name: Run tests with parallelism
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            # Get all test files and split them across parallel executors
+            find tests/logging_callback_tests -name "test_*.py" -type f | \
+            circleci tests run \
+              --command "xargs python -m pytest -vv --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5" \
+              --split-by=timings \
+              --timings-type=name
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
