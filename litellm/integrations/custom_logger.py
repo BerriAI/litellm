@@ -56,12 +56,11 @@ else:
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(
-        self, 
+        self,
         turn_off_message_logging: bool = False,
-
         # deprecated param, use `turn_off_message_logging` instead
         message_logging: bool = True,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Args:
@@ -152,7 +151,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Union[Dict[str, Any], Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional[PreRoutingHookResponse]:
@@ -185,9 +184,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
-    async def async_pre_call_check(
-        self, deployment: dict, parent_otel_span: Optional[Span]
-    ) -> Optional[dict]:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Optional[Span]) -> Optional[dict]:
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
@@ -210,29 +207,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):
         pass
 
-    async def log_success_fallback_event(
-        self, original_model_group: str, kwargs: dict, original_exception: Exception
-    ):
+    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
         pass
 
-    async def log_failure_fallback_event(
-        self, original_model_group: str, kwargs: dict, original_exception: Exception
-    ):
+    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
         pass
 
     #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
 
-    def translate_completion_input_params(
-        self, kwargs
-    ) -> Optional[ChatCompletionRequest]:
+    def translate_completion_input_params(self, kwargs) -> Optional[ChatCompletionRequest]:
         """
         Translates the input params, from the provider's native format to the litellm.completion() format.
         """
         pass
 
-    def translate_completion_output_params(
-        self, response: ModelResponse
-    ) -> Optional[BaseModel]:
+    def translate_completion_output_params(self, response: ModelResponse) -> Optional[BaseModel]:
         """
         Translates the output params, from the OpenAI format to the custom format.
         """
@@ -303,15 +292,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         pass
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> Tuple[dict, Any]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -361,9 +346,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_input_event(
-        self, model, messages, kwargs, print_verbose, callback_func
-    ):
+    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -375,9 +358,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    def log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
-    ):
+    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -391,9 +372,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
-    async def async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
-    ):
+    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -410,7 +389,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
-
 
     async def async_post_mcp_tool_call_hook(
         self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
@@ -473,15 +451,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def _truncate_text(self, text: str, max_length: int) -> str:
         """Truncate text if it exceeds max_length"""
         return (
-            text[:max_length]
-            + "...truncated by litellm, this logger does not support large content"
+            text[:max_length] + "...truncated by litellm, this logger does not support large content"
             if len(text) > max_length
             else text
         )
 
-    def _select_metadata_field(
-        self, request_kwargs: Optional[Dict] = None
-    ) -> Optional[str]:
+    def _select_metadata_field(self, request_kwargs: Optional[Dict] = None) -> Optional[str]:
         """
         Select the metadata field to use for logging
 
@@ -495,29 +470,28 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if LITELLM_METADATA_FIELD in request_kwargs:
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
-    
-    def redact_standard_logging_payload_from_model_call_details(
-        self, model_call_details: Dict
-    ) -> Dict:
+
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: Dict) -> Dict:
         """
         Only redacts messages and responses when self.turn_off_message_logging is True
-        
+
 
         By default, self.turn_off_message_logging is False and this does nothing.
-        
+
         Return a redacted deepcopy of the provided logging payload.
-        
+
         This is useful for logging payloads that contain sensitive information.
         """
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
         from litellm.types.utils import LiteLLMCommonStrings
+
         turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
-        
+
         if turn_off_message_logging is False:
             return model_call_details
-        
+
         # Only make a shallow copy of the top-level dict to avoid deepcopy issues
         # with complex objects like AuthenticationError that may be present
         model_call_details_copy = copy(model_call_details)
@@ -533,17 +507,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
         if standard_logging_object_copy.get("response") is not None:
-            model_response = ModelResponse(
-                choices=[Choices(message=Message(content=redacted_str))]
-            )
+            model_response = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
             model_response_dict = model_response.model_dump()
             standard_logging_object_copy["response"] = model_response_dict
 
         model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
         return model_call_details_copy
-    
 
-    
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
