@@ -635,7 +635,7 @@ if MCP_AVAILABLE:
         # Match /mcp/<servers>/<optional_path>
         # Where <servers> can be comma-separated list of server names
         # Server names can contain slashes (e.g., "custom_solutions/user_123")
-        mcp_path_match = re.match(r"^/mcp/([^?#]+?)(/[^?#]*)?(?:\?.*)?(?:#.*)?$", path)
+        mcp_path_match = re.match(r"^/mcp/([^?#]+)(/[^?#]*)?(?:\?.*)?(?:#.*)?$", path)
         if mcp_path_match:
             mcp_servers_str = mcp_path_match.group(1)
             optional_path = mcp_path_match.group(2)
