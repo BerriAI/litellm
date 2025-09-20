@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
 )
 
 
@@ -249,3 +250,28 @@ def test_safe_dumps_complex_metadata_like_object():
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
     assert parsed["model"] == "gpt-4"
+
+
+def test_disable_prompts_in_spend_logs_via_header():
+    """Test that prompts and responses are not stored when disabled via header."""
+    litellm_params = {
+        "proxy_server_request": {
+            "headers": {
+                "x-litellm-disable-prompts-in-spend-logs": "true"
+            }
+        }
+    }
+    
+    assert _should_store_prompts_and_responses_in_spend_logs(metadata=None, litellm_params=litellm_params) is False
+
+
+@patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True})
+def test_enable_prompts_in_spend_logs_when_header_not_present():
+    """Test that prompts and responses are stored when global setting is enabled and header not present."""
+    litellm_params = {
+        "proxy_server_request": {
+            "headers": {}
+        }
+    }
+    
+    assert _should_store_prompts_and_responses_in_spend_logs(metadata=None, litellm_params=litellm_params) is True

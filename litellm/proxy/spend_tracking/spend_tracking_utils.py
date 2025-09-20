@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING, MAX_STRING_LENGTH_PROMPT_IN_DB
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -95,7 +95,9 @@ def _get_spend_logs_metadata(
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+        _get_vector_store_request_for_spend_logs_payload(
+            vector_store_request_metadata=vector_store_request_metadata, metadata=metadata
+        )
     )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
@@ -334,7 +336,11 @@ def get_logging_payload(  # noqa: PLR0915
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            response=_get_response_for_spend_logs_payload(
+                payload=standard_logging_payload,
+                metadata=metadata,
+                litellm_params=litellm_params,
+            ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata, litellm_params=litellm_params
             ),
@@ -542,10 +548,10 @@ def _get_proxy_server_request_for_spend_logs_payload(
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
-        _proxy_server_request = cast(
-            Optional[dict], litellm_params.get("proxy_server_request", {})
-        )
+    if _should_store_prompts_and_responses_in_spend_logs(
+        metadata=metadata, litellm_params=litellm_params
+    ):
+        _proxy_server_request = _get_proxy_server_request(litellm_params)
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -556,11 +562,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
+    metadata: Optional[dict] = None,
 ) -> Optional[List[StandardLoggingVectorStoreRequest]]:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(metadata):
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
@@ -580,17 +587,44 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
+    metadata: Optional[dict] = None,
+    litellm_params: Optional[dict] = None,
 ) -> str:
+    """
+    Get response for spend logs payload.
+    Returns empty dict if database logging is disabled via header or global setting.
+    """
     if payload is None:
         return "{}"
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_prompts_and_responses_in_spend_logs(
+        metadata=metadata, litellm_params=litellm_params
+    ):
         return json.dumps(payload.get("response", {}))
     return "{}"
 
 
-def _should_store_prompts_and_responses_in_spend_logs() -> bool:
+def _get_proxy_server_request(litellm_params: Optional[dict]) -> Optional[dict]:
+    """Common method to get proxy server request from litellm_params."""
+    if not litellm_params:
+        return None
+    return cast(Optional[dict], litellm_params.get("proxy_server_request", {}))
+
+
+def _should_store_prompts_and_responses_in_spend_logs(
+    metadata: Optional[dict] = None,
+    litellm_params: Optional[dict] = None,
+) -> bool:
+    from litellm.constants import X_LITELLM_DISABLE_PROMPTS_IN_SPEND_LOGS
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
+
+    # Check if disabled via header first
+    _proxy_server_request = _get_proxy_server_request(litellm_params)
+    if _proxy_server_request:
+        headers = _proxy_server_request.get("headers", {})
+        header_value = headers.get(X_LITELLM_DISABLE_PROMPTS_IN_SPEND_LOGS)
+        if header_value and str(header_value).lower() == "true":
+            return False
 
     return (
         general_settings.get("store_prompts_in_spend_logs") is True

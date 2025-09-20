@@ -1,13 +1,21 @@
 model_list:
-  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+  - model_name: db-openai-endpoint
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      #########################################################
-      ########## batch specific params ########################
-      s3_bucket_name: litellm-proxy
-      s3_region_name: us-west-2
-      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
-    model_info: 
-      mode: batch
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      rpm: 100
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+
+
+
+# Litellm settings
+litellm_settings:
+  callbacks: ["prometheus", "dynamic_rate_limiter_v3"]
+  priority_reservation: {"dev": 0.1, "prod": 0.9}
+  set_verbose: true  # Enable debug logging to see priority allocation
+
+general_settings:
+  store_prompts_in_spend_logs: true
