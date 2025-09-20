@@ -6,14 +6,25 @@ import base64
 from datetime import timedelta
 from typing import List, Optional
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
-from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import TextContent
-from mcp.types import Tool as MCPTool
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.sse import sse_client
+    from mcp.client.stdio import stdio_client
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+    from mcp.types import CallToolResult as MCPCallToolResult
+    from mcp.types import TextContent
+    from mcp.types import Tool as MCPTool
+    _MCP_AVAILABLE = True
+except Exception:  # optional MCP stack
+    ClientSession = object  # type: ignore
+    StdioServerParameters = object  # type: ignore
+    sse_client = stdio_client = streamablehttp_client = None  # type: ignore
+    class MCPCallToolRequestParams(dict): ...  # type: ignore
+    class MCPCallToolResult(dict): ...  # type: ignore
+    class TextContent(dict): ...  # type: ignore
+    class MCPTool(dict): ...  # type: ignore
+    _MCP_AVAILABLE = False
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp import (
@@ -77,6 +88,8 @@ class MCPClient:
             raise
 
     async def connect(self):
+        if not _MCP_AVAILABLE:
+            raise RuntimeError("MCP client not installed; cannot connect.")
         """Initialize the transport and session."""
         if self._session:
             return  # Already connected
