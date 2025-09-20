@@ -963,6 +963,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
             mcp_auth_header,
             mcp_servers,
             mcp_server_auth_headers,
+            _,
         ) = get_auth_context()
 
         # Capture the MCP servers for testing
@@ -1008,3 +1009,31 @@ def test_mcp_path_based_server_segregation(monkeypatch):
 
     # The context should have mcp_servers set to ["zapier", "group1"]
     assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
+
+
+def test_get_forwardable_headers_from_scope_filters_correctly():
+    """
+    Scope-based extraction matches header-based forwarding rules.
+    """
+    scope = {
+        "type": "http",
+        "headers": [
+            # Forward
+            (b"x-custom-header", b"Custom-Value"),
+            (b"x-another-header", b"Another-Value"),
+            # Exclude
+            (b"x-litellm-api-key", b"Bearer sk-xxx"),
+            (b"x-mcp-servers", b"alias_1"),
+            (b"x-mcp-access-groups", b"groupA"),
+            (b"x-mcp-auth", b"Bearer token-123"),
+            (b"authorization", b"Bearer 1234"),
+            (b"content-type", b"application/json"),
+        ],
+    }
+
+    forwarded = MCPRequestHandler.get_forwardable_headers_from_scope(scope)
+
+    assert forwarded == {
+        "x-custom-header": "Custom-Value",
+        "x-another-header": "Another-Value",
+    }

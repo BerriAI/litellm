@@ -213,7 +213,25 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
             )
-            return await call_mcp_tool(**data)
+            # Optionally forward x- headers to MCP if enabled
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            forwarded_headers = None
+            try:
+                gs = getattr(proxy_config, "general_settings", None) or {}
+                if gs.get("forward_client_headers_to_mcp") is True:
+                    # FastAPI provides Headers already
+                    forwarded_headers = (
+                        MCPRequestHandler.get_forwardable_headers_from_headers(
+                            request.headers
+                        )
+                    )
+            except Exception:
+                forwarded_headers = None
+
+            return await call_mcp_tool(**data, forwarded_headers=forwarded_headers)
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(

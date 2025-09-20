@@ -4,7 +4,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 from datetime import timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -46,6 +46,7 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -59,6 +60,7 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
+        self.extra_headers: Optional[Dict[str, str]] = extra_headers or None
 
         # handle the basic auth value if provided
         if auth_value:
@@ -102,6 +104,11 @@ class MCPClient:
                 await self._session.initialize()
             elif self.transport_type == MCPTransport.sse:
                 headers = self._get_auth_headers()
+                # Merge any extra headers (do not override auth headers)
+                if self.extra_headers:
+                    for k, v in self.extra_headers.items():
+                        if k not in headers:
+                            headers[k] = v
                 self._transport_ctx = sse_client(
                     url=self.server_url,
                     timeout=self.timeout,
@@ -115,6 +122,11 @@ class MCPClient:
                 await self._session.initialize()
             else:  # http
                 headers = self._get_auth_headers()
+                # Merge any extra headers (do not override auth headers)
+                if self.extra_headers:
+                    for k, v in self.extra_headers.items():
+                        if k not in headers:
+                            headers[k] = v
                 self._transport_ctx = streamablehttp_client(
                     url=self.server_url,
                     timeout=timedelta(seconds=self.timeout),

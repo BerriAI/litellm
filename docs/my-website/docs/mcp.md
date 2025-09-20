@@ -1167,6 +1167,39 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 ```
 
 
+### Forwarding Custom Headers to MCP
+
+By default, LiteLLM does not forward arbitrary client-supplied headers to MCP servers. To allow pass-through of custom headers (in addition to any server-specific auth headers you set), enable it in your config:
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  forward_client_headers_to_mcp: true
+```
+
+When enabled, headers you provide under the MCP tool's `headers` field in your request are forwarded to the target MCP server. Headers used by LiteLLM for its own routing and authentication (for example, `x-litellm-api-key`) are not forwarded.
+
+```bash title="cURL example: forward a custom header" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+  --header 'Content-Type: application/json' \
+  --header "Authorization: Bearer $LITELLM_API_KEY" \
+  --data '{
+    "model": "gpt-4o",
+    "tools": [
+      {
+        "type": "mcp",
+        "server_label": "litellm",
+        "server_url": "litellm_proxy",
+        "require_approval": "never",
+        "headers": {
+          "x-custom-request-id": "abc-123"
+        }
+      }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+  }'
+```
+
 
 ## MCP Cost Tracking
 

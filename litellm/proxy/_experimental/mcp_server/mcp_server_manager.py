@@ -374,6 +374,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
+        forwarded_headers: Optional[Dict[str, str]] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -403,6 +404,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
+                extra_headers=forwarded_headers,
             )
         else:
             # For HTTP/SSE transports
@@ -413,6 +415,7 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
+                extra_headers=forwarded_headers,
             )
 
     async def _get_tools_from_server(
@@ -556,6 +559,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
+        forwarded_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -673,6 +677,7 @@ class MCPServerManager:
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
+            forwarded_headers=forwarded_headers,
         )
 
         async with client:

@@ -178,6 +178,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                _,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
@@ -235,6 +236,7 @@ if MCP_AVAILABLE:
             mcp_auth_header,
             _,
             mcp_server_auth_headers,
+            forwarded_headers,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -266,6 +268,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                forwarded_headers=forwarded_headers,
                 **data,  # for logging
             )
         except BlockedPiiEntityError as e:
@@ -492,6 +495,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        forwarded_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
@@ -539,6 +543,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                forwarded_headers=forwarded_headers,
                 litellm_logging_obj=litellm_logging_obj,
             )
 
@@ -591,6 +596,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        forwarded_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
@@ -603,6 +609,7 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            forwarded_headers=forwarded_headers,
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
@@ -706,12 +713,26 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # Build forwarded headers if enabled
+            from litellm.proxy.proxy_server import general_settings
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler as _MCPRH,
+            )
+
+            forwarded_headers = None
+            try:
+                if general_settings.get("forward_client_headers_to_mcp") is True:
+                    forwarded_headers = _MCPRH.get_forwardable_headers_from_scope(scope)
+            except Exception:
+                forwarded_headers = None
+
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                forwarded_headers=forwarded_headers,
             )
 
             # Ensure session managers are initialized
@@ -757,11 +778,25 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            # Build forwarded headers if enabled
+            from litellm.proxy.proxy_server import general_settings
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler as _MCPRH,
+            )
+
+            forwarded_headers = None
+            try:
+                if general_settings.get("forward_client_headers_to_mcp") is True:
+                    forwarded_headers = _MCPRH.get_forwardable_headers_from_scope(scope)
+            except Exception:
+                forwarded_headers = None
+
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                forwarded_headers=forwarded_headers,
             )
 
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -821,6 +856,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        forwarded_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -836,6 +872,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            forwarded_headers=forwarded_headers,
         )
         auth_context_var.set(auth_user)
 
@@ -844,6 +881,7 @@ if MCP_AVAILABLE:
             Optional[UserAPIKeyAuth],
             Optional[str],
             Optional[List[str]],
+            Optional[Dict[str, str]],
             Optional[Dict[str, str]],
         ]
     ):
@@ -861,8 +899,9 @@ if MCP_AVAILABLE:
                 auth_user.mcp_auth_header,
                 auth_user.mcp_servers,
                 auth_user.mcp_server_auth_headers,
+                getattr(auth_user, "forwarded_headers", None),
             )
-        return None, None, None, None
+        return None, None, None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############

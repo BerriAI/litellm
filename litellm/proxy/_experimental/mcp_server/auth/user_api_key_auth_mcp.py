@@ -249,6 +249,40 @@ class MCPRequestHandler:
             return Headers({})
 
     @staticmethod
+    def get_forwardable_headers_from_headers(headers: Headers) -> Dict[str, str]:
+        """
+        Extract forwardable client headers for MCP upstream calls.
+
+        Rules:
+        - Include headers starting with 'x-' (case-insensitive)
+        - Exclude sensitive/control headers.
+        """
+        excluded_exact = {
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY.lower(),
+            MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME.lower(),
+            MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME.lower(),
+            MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME.lower(),
+            "authorization",
+        }
+        forwarded: Dict[str, str] = {}
+        try:
+            for name, value in headers.items():
+                lname = name.lower()
+                if lname.startswith("x-") and lname not in excluded_exact:
+                    forwarded[name] = value
+        except Exception as e:
+            verbose_logger.debug(f"Failed extracting forwardable headers: {e}")
+        return forwarded
+
+    @staticmethod
+    def get_forwardable_headers_from_scope(scope: Scope) -> Dict[str, str]:
+        """
+        Extract forwardable headers directly from ASGI scope.
+        """
+        headers = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        return MCPRequestHandler.get_forwardable_headers_from_headers(headers)
+
+    @staticmethod
     async def get_allowed_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
