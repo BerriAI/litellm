@@ -76,6 +76,8 @@ pip install litellm==1.77.3
     - CountTokens API implementation - [PR #14557](https://github.com/BerriAI/litellm/pull/14557)
     - Titan V2 encoding_format parameter support - [PR #14687](https://github.com/BerriAI/litellm/pull/14687)
     - Nova Canvas image generation inference profiles - [PR #14578](https://github.com/BerriAI/litellm/pull/14578)
+    - Bedrock Batches API - batch processing support with file upload and request transformation - [PR #14618](https://github.com/BerriAI/litellm/pull/14618)
+    - Bedrock Twelve Labs embedding provider support - [PR #14697](https://github.com/BerriAI/litellm/pull/14697)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Gemini labels field provider-aware filtering - [PR #14563](https://github.com/BerriAI/litellm/pull/14563)
     - Gemini Batch API support - [PR #14733](https://github.com/BerriAI/litellm/pull/14733)
@@ -85,13 +87,11 @@ pip install litellm==1.77.3
     - Handle Generate API deprecation, default to chat endpoints - [PR #14676](https://github.com/BerriAI/litellm/pull/14676)
 - **[TwelveLabs](../../docs/providers/twelvelabs)**
     - Added Marengo Embed 2.7 embedding support - [PR #14674](https://github.com/BerriAI/litellm/pull/14674)
-    - Bedrock Twelve Labs embedding provider support - [PR #14697](https://github.com/BerriAI/litellm/pull/14697)
 
 ### Bug Fixes
 
 - **[Bedrock](../../docs/providers/bedrock)**
     - Empty arguments handling in tool call invocation - [PR #14583](https://github.com/BerriAI/litellm/pull/14583)
-    - AWS exceptions handling despite 200 response - [PR #14658](https://github.com/BerriAI/litellm/pull/14658)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Avoid deepcopy crash with non-pickleables in Gemini/Vertex - [PR #14418](https://github.com/BerriAI/litellm/pull/14418)
 - **[XAI](../../docs/providers/xai)**
@@ -114,29 +114,23 @@ pip install litellm==1.77.3
 
 #### Features
 
-- **[Responses API](../../docs/response_api)**
-    - Cancel endpoint support for non-admin users - [PR #14594](https://github.com/BerriAI/litellm/pull/14594)
-    - Improved handling and cold storage configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
-    - Cost calculation fixes - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
-- **[Batch API](../../docs/completion/batches)**
-    - OpenAI & Azure cancel endpoint support - [PR #14561](https://github.com/BerriAI/litellm/pull/14561)
-    - Bedrock retrieve endpoint support - [PR #14618](https://github.com/BerriAI/litellm/pull/14618)
-    - Gemini Batch API support - [PR #14733](https://github.com/BerriAI/litellm/pull/14733)
-- **[CountTokens API](../../docs/providers/bedrock)**
-    - AWS Bedrock CountTokens API implementation - [PR #14557](https://github.com/BerriAI/litellm/pull/14557)
+- **[/responses](../../docs/response_api)**
+    - Added cancel endpoint support for non-admin users - [PR #14594](https://github.com/BerriAI/litellm/pull/14594)
+    - Improved response handling and cold storage configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
+    - Added OpenAI & Azure /responses/cancel endpoint support - [PR #14561](https://github.com/BerriAI/litellm/pull/14561)
 - **General**
-    - Middle-truncation for spend log payloads - [PR #14637](https://github.com/BerriAI/litellm/pull/14637)
     - Enhanced rate limit error messages with details - [PR #14736](https://github.com/BerriAI/litellm/pull/14736)
+    - Middle-truncation for spend log payloads - [PR #14637](https://github.com/BerriAI/litellm/pull/14637)
 
 #### Bugs
 
-- **General**
+- **[/chat/completions](../../docs/completion/input)**
     - Fixed completion chat ID handling - [PR #14548](https://github.com/BerriAI/litellm/pull/14548)
-    - Fix unsupported stop parameter for grok-code models - [PR #14565](https://github.com/BerriAI/litellm/pull/14565)
-    - Gemini API base update - [PR #14604](https://github.com/BerriAI/litellm/pull/14604)
-    - Gemini 2.5 Flash Image Preview model routing fix - [PR #14715](https://github.com/BerriAI/litellm/pull/14715)
-    - Rate limiter AttributeError fix - [PR #14609](https://github.com/BerriAI/litellm/pull/14609)
     - Prevent AttributeError for _get_tags_from_request_kwargs - [PR #14735](https://github.com/BerriAI/litellm/pull/14735)
+- **[/responses](../../docs/response_api)**
+    - Fixed cost calculation - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
+- **General**
+    - Rate limiter AttributeError fix - [PR #14609](https://github.com/BerriAI/litellm/pull/14609)
 
 ---
 
@@ -190,7 +184,7 @@ pip install litellm==1.77.3
 - **Amazon Bedrock Guardrail Info View** - Enhanced logging visualization - [PR #14696](https://github.com/BerriAI/litellm/pull/14696)
 - **Default Last Message** in guardrails - [PR #14640](https://github.com/BerriAI/litellm/pull/14640)
 - **Bedrock Guardrail Silent Failure** correction - [PR #14707](https://github.com/BerriAI/litellm/pull/14707)
-
+- **AWS exceptions handling despite 200 response** - [PR #14658](https://github.com/BerriAI/litellm/pull/14658)
 #### New Integration
 
 - **[PostHog](../../docs/observability/posthog)** - Complete observability integration for LiteLLM usage tracking and analytics - [PR #14610](https://github.com/BerriAI/litellm/pull/14610)
