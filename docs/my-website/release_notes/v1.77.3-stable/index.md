@@ -207,7 +207,7 @@ pip install litellm==1.77.3
 
 ---
 
-## Performance Improvements
+## Performance / Loadbalancing / Reliability improvements
 
 - **+500 RPS Performance Boost** when sending the `user` field - [PR #14616](https://github.com/BerriAI/litellm/pull/14616)
 - **+50 RPS** by removing iscoroutine from hot path - [PR #14649](https://github.com/BerriAI/litellm/pull/14649)
