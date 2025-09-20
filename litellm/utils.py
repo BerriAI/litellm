@@ -2481,6 +2481,9 @@ def get_optional_params_transcription(
     elif custom_llm_provider == "groq":
         supported_params = litellm.GroqSTTConfig().get_supported_openai_params_stt()
         _check_valid_arg(supported_params=supported_params)
+        passed_params = {k: v for k, v in passed_params.items() if k != 'supported_params'
+                         and k != 'passed_params'
+                         and k != 'OPENAI_TRANSCRIPTION_PARAMS'}
         optional_params = litellm.GroqSTTConfig().map_openai_params_stt(
             non_default_params=non_default_params,
             optional_params=optional_params,
