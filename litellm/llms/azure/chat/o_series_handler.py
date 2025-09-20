@@ -4,7 +4,7 @@ Handler file for calls to Azure OpenAI's o1/o3 family of models
 Written separately to handle faking streaming for o1 and o3 models.
 """
 
-from typing import Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import httpx
 
@@ -12,6 +12,9 @@ from litellm.types.utils import ModelResponse
 
 from ...openai.openai import OpenAIChatCompletion
 from ..common_utils import BaseAzureLLM
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 
 class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
@@ -38,6 +41,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         client = self.get_azure_openai_client(
             litellm_params=litellm_params,
@@ -69,4 +73,5 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
             organization=organization,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            shared_session=shared_session,
         )
