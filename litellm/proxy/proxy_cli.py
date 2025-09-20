@@ -186,39 +186,6 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
     ):
-        # Set up Prometheus multiprocess mode for gunicorn workers
-        import os
-        import tempfile
-        from pathlib import Path
-
-        from litellm._logging import verbose_proxy_logger
-
-        if num_workers > 1 and not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-            multiproc_dir = os.path.join(
-                tempfile.gettempdir(), "litellm_prometheus_multiproc"
-            )
-            os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
-
-            try:
-                Path(multiproc_dir).mkdir(parents=True, exist_ok=True)
-
-                # Clean up any stale files from previous runs
-                for file in Path(multiproc_dir).glob("*"):
-                    if file.is_file():
-                        try:
-                            file.unlink()
-                        except Exception:
-                            pass  # Ignore errors if file is in use
-
-            except PermissionError:
-                verbose_proxy_logger.warning(
-                    f"Warning: Unable to create Prometheus multiprocess directory at {multiproc_dir} due to permission error. "
-                    f"Running in non-root environment. Prometheus metrics may not work correctly in multiprocess mode."
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Warning: Failed to create Prometheus multiprocess directory at {multiproc_dir}: {e}"
-                )
         """
         Run litellm with `gunicorn`
         """
@@ -558,26 +525,6 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
 ):
-    # CRITICAL: Set up Prometheus multiprocess mode BEFORE any imports
-    # This ensures all worker processes will use multiprocess mode
-    import os
-    import tempfile
-    from pathlib import Path
-
-    if num_workers > 1 and not os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-        multiproc_dir = os.path.join(
-            tempfile.gettempdir(), "litellm_prometheus_multiproc"
-        )
-        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
-        Path(multiproc_dir).mkdir(parents=True, exist_ok=True)
-
-        # Clean up any stale files from previous runs
-        for file in Path(multiproc_dir).glob("*"):
-            if file.is_file():
-                try:
-                    file.unlink()
-                except Exception:
-                    pass  # Ignore errors if file is in use
     args = locals()
     if local:
         from proxy_server import (
