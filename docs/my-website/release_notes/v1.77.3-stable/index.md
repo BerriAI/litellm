@@ -153,6 +153,15 @@ pip install litellm==1.77.3
 
 ---
 
+
+### MCP Gateway
+
+- **MCP Server Alias Parsing** - Multi-part URL path support - [PR #14558](https://github.com/BerriAI/litellm/pull/14558)
+- **MCP Filter Recomputation** - After server deletion - [PR #14542](https://github.com/BerriAI/litellm/pull/14542)
+- **MCP Gateway Tools List** improvements - [PR #14695](https://github.com/BerriAI/litellm/pull/14695)
+
+---
+
 ## Performance / Loadbalancing / Reliability improvements
 
 #### Rate Limiting & Caching
@@ -170,12 +179,6 @@ pip install litellm==1.77.3
 ---
 
 ## General Proxy Improvements
-
-#### MCP (Model Context Protocol)
-
-- **MCP Server Alias Parsing** - Multi-part URL path support - [PR #14558](https://github.com/BerriAI/litellm/pull/14558)
-- **MCP Filter Recomputation** - After server deletion - [PR #14542](https://github.com/BerriAI/litellm/pull/14542)
-- **MCP Gateway Tools List** improvements - [PR #14695](https://github.com/BerriAI/litellm/pull/14695)
 
 #### Storage & Configuration
 
