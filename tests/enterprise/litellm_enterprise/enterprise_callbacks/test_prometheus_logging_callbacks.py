@@ -563,15 +563,15 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     prometheus_logger.litellm_spend_metric = MagicMock()
 
     prometheus_logger._increment_top_level_request_and_spend_metrics(
-        end_user_id=None,
-        user_api_key="test_hash",
-        user_api_key_alias="test_alias", 
-        model="gpt-3.5-turbo",
-        user_api_team="test_team",
-        user_api_team_alias="test_team_alias",
-        user_id=None,
-        response_cost=0.1,
-        enum_values=enum_values,
+        None,  # end_user_id
+        "test_hash",  # user_api_key
+        "test_alias",  # user_api_key_alias
+        "gpt-3.5-turbo",  # model
+        "test_team",  # user_api_team
+        "test_team_alias",  # user_api_team_alias
+        None,  # user_id
+        0.1,  # response_cost
+        enum_values,  # enum_values
     )
 
     prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
