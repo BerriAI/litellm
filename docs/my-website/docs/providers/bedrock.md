@@ -1954,6 +1954,39 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
 </TabItem>
 </Tabs>
 
+### Using Inference Profiles with Image Generation
+
+For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import image_generation
+
+response = image_generation(
+    model="bedrock/amazon.nova-canvas-v1:0",
+    model_id="arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+    prompt="A cute baby sea otter"
+)
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: nova-canvas-inference-profile
+    litellm_params:
+      model: bedrock/amazon.nova-canvas-v1:0
+      model_id: arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0
+      aws_region_name: "eu-west-1"
+```
+
+</TabItem>
+</Tabs>
+
 ## Supported AWS Bedrock Image Generation Models
 
 | Model Name           | Function Call                               |
