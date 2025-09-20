@@ -223,6 +223,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
@@ -715,12 +716,13 @@ async def test_async_post_call_failure_hook(prometheus_logger):
     # Assert failed requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
         end_user=None,
+        user="test_user",
+        user_email=None,
         hashed_api_key="test_key",
         api_key_alias="test_alias",
-        requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
-        user="test_user",
+        requested_model="gpt-3.5-turbo",
         exception_status="429",
         exception_class="Openai.RateLimitError",
         route=user_api_key_dict.request_route,
