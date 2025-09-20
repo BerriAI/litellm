@@ -370,7 +370,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "litellm_proxy",
+      "url": "{LITELLM_PROXY_BASE_URL}/mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -397,6 +397,41 @@ Setting require_approval: "never" triggers automatic tool execution, returning t
 
 
 
+### Call directly in code 
+
+Useful when debugging your MCP integration.Here's a code example to call MCP tools directly in code.
+
+```python
+from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration with multiple servers
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-mcp-github-authorization": "GITHUB_PAT_TOKEN",
+            },
+        }
+    }
+}
+
+# Create a client that connects to all servers
+client = Client(config)
+
+
+async def main():
+    async with client:
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+```
 ## MCP Server Access Control
 
 LiteLLM Proxy provides two methods for controlling access to specific MCP servers:
