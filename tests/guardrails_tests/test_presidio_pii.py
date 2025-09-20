@@ -281,7 +281,8 @@ async def test_output_parsing():
         }
     ]
 
-    pii_masking.pii_tokens = {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
+    call_id = "call-failed"
+    pii_masking._pii_token_maps[call_id] = {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
 
     response = mock_completion(
         model="gpt-3.5-turbo",
@@ -291,6 +292,7 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
+            "litellm_call_id": call_id,
             "messages": [{"role": "system", "content": "You are an helpfull assistant"}]
         },
         response=response,
@@ -357,7 +359,9 @@ async def test_presidio_pii_masking_input_a():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
+    call_id = "call-1"
     request_data: dict = {
+        "litellm_call_id": call_id,
         "messages": [
             {
                 "role": "user",
@@ -388,8 +392,8 @@ async def test_presidio_pii_masking_input_a():
             "masked_entity_count"
         ]["PHONE_NUMBER"]
     )
-    assert "Jane Doe" == pii_masking.pii_tokens["<PERSON>"]
-    assert "23r323r23r2wwkl" == pii_masking.pii_tokens["<PHONE_NUMBER>"]
+    assert "Jane Doe" == pii_masking._pii_token_maps[call_id]["<PERSON>"]
+    assert "23r323r23r2wwkl" == pii_masking._pii_token_maps[call_id]["<PHONE_NUMBER>"]
 
 
 #   Test if PII masking works with input B (also test if the response != A's response)
@@ -408,7 +412,9 @@ async def test_presidio_pii_masking_input_b():
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
+    call_id = "call-1"
     request_data: dict = {
+        "litellm_call_id": call_id,
         "messages": [
             {
                 "role": "user",
@@ -433,8 +439,8 @@ async def test_presidio_pii_masking_input_b():
             "masked_entity_count"
         ]["PERSON"]
     )
-    assert "Jane Doe" == pii_masking.pii_tokens["<PERSON>"]
-    assert "<PHONE_NUMBER>" not in pii_masking.pii_tokens
+    assert "Jane Doe" == pii_masking._pii_token_maps[call_id]["<PERSON>"]
+    assert "<PHONE_NUMBER>" not in pii_masking._pii_token_maps[call_id]["<PERSON>"]
 
 
 @pytest.mark.asyncio
