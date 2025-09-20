@@ -542,7 +542,7 @@ def test_set_latency_metrics_missing_api_call_start(prometheus_logger):
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
 
 
-def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
+def test_aincrement_top_level_request_and_spend_metrics(prometheus_logger):
     """
     Test the increment_top_level_request_and_spend_metrics method
 
