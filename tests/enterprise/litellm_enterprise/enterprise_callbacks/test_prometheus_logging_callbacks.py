@@ -236,6 +236,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_input_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
@@ -250,6 +251,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_output_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
