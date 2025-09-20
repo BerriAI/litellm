@@ -565,13 +565,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 for i, status in enumerate(response["statuses"]):
                     if status["code"] == "OVER_LIMIT":
                         descriptor = descriptors[floor(i / 2)]
+                        
+                        # Calculate reset time (window_start + window_size)
+                        now = datetime.now().timestamp()
+                        reset_time = now + self.window_size  # Conservative estimate
+                        reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+                        
+                        # Handle negative remaining values more gracefully
+                        remaining_display = max(0, status['limit_remaining'])
+                        
+                        # Create detailed error message
+                        rate_limit_type = status['rate_limit_type']
+                        current_limit = status['current_limit']
+                        
+                        detail = (
+                            f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
+                            f"Limit type: {rate_limit_type}. "
+                            f"Current limit: {current_limit}, Remaining: {remaining_display}. "
+                            f"Limit resets at: {reset_time_formatted}"
+                        )
+                        
                         raise HTTPException(
                             status_code=429,
-                            detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
+                            detail=detail,
                             headers={
                                 "retry-after": str(self.window_size),
                                 "rate_limit_type": str(status["rate_limit_type"]),
-                            },  # Retry after 1 minute
+                                "reset_at": reset_time_formatted,
+                            },
                         )
 
             else:
@@ -832,7 +853,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             litellm_parent_otel_span: Union[Span, None] = (
                 _get_parent_otel_span_from_kwargs(kwargs)
             )
-            user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
+            litellm_metadata = kwargs["litellm_params"]["metadata"]
+            user_api_key = litellm_metadata.get("user_api_key") if litellm_metadata else None
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             if user_api_key:

@@ -49,6 +49,7 @@ const sidebars = {
           "proxy/guardrails/secret_detection",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/prompt_injection",
+          "proxy/guardrails/tool_permission",
         ].sort(),
       ],
     },
@@ -410,6 +411,7 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
+            "providers/bedrock_embedding",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
@@ -452,6 +454,7 @@ const sidebars = {
         "providers/elevenlabs",
         "providers/fireworks_ai",
         "providers/clarifai",
+        "providers/compactifai",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
@@ -487,7 +490,8 @@ const sidebars = {
         "providers/bytez",
         "providers/heroku",
         "providers/oci",
-        "providers/datarobot",  
+        "providers/datarobot",
+        "providers/ovhcloud",  
       ],
     },
     {

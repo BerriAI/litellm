@@ -3,7 +3,9 @@ Wrapper around router cache. Meant to handle model cooldown logic
 """
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+
+from typing_extensions import TypedDict
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache

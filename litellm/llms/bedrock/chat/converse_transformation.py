@@ -14,7 +14,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -101,6 +101,61 @@ class AmazonConverseConfig(BaseConfig):
             "guardrailConfig": GuardrailConfigBlock,
             "performanceConfig": PerformanceConfigBlock,
         }
+
+    @staticmethod
+    def _convert_consecutive_user_messages_to_guarded_text(
+        messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Convert consecutive user messages at the end to guarded_text type if guardrailConfig is present
+        and no guarded_text is already present in those messages.
+        """
+        # Check if guardrailConfig is present
+        if "guardrailConfig" not in optional_params:
+            return messages
+
+        # Find all consecutive user messages at the end
+        consecutive_user_message_indices = []
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                consecutive_user_message_indices.append(i)
+            else:
+                break
+
+        if not consecutive_user_message_indices:
+            return messages
+
+        # Process each consecutive user message
+        messages_copy = copy.deepcopy(messages)
+        for user_message_index in consecutive_user_message_indices:
+            user_message = messages_copy[user_message_index]
+            content = user_message.get("content", [])
+
+            if isinstance(content, list):
+                has_guarded_text = any(
+                    isinstance(item, dict) and item.get("type") == "guarded_text"
+                    for item in content
+                )
+                if has_guarded_text:
+                    continue  # Skip this message if it already has guarded_text
+
+                # Convert text elements to guarded_text
+                new_content = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        new_item = {"type": "guarded_text", "text": item["text"]}  # type: ignore
+                        new_content.append(new_item)
+                    else:
+                        new_content.append(item)
+
+                messages_copy[user_message_index]["content"] = new_content  # type: ignore
+            elif isinstance(content, str):
+                # If content is a string, convert it to guarded_text
+                messages_copy[user_message_index]["content"] = [  # type: ignore
+                    {"type": "guarded_text", "text": content}  # type: ignore
+                ]
+
+        return messages_copy
 
     @classmethod
     def get_config(cls):
@@ -397,7 +452,11 @@ class AmazonConverseConfig(BaseConfig):
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
-                    value=value, model=model, optional_params=optional_params, non_default_params=non_default_params, is_thinking_enabled=is_thinking_enabled
+                    value=value,
+                    model=model,
+                    optional_params=optional_params,
+                    non_default_params=non_default_params,
+                    is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
@@ -446,11 +505,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         return optional_params
-    
+
     def _translate_response_format_param(
-        self, 
-        value: dict, 
-        model: str, 
+        self,
+        value: dict,
+        model: str,
         optional_params: dict,
         non_default_params: dict,
         is_thinking_enabled: bool,
@@ -497,14 +556,13 @@ class AmazonConverseConfig(BaseConfig):
             )
             and not is_thinking_enabled
         ):
-
             optional_params["tool_choice"] = ToolChoiceValuesBlock(
                 tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
             )
         optional_params["json_mode"] = True
         if non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
-        
+
         return optional_params
 
     def update_optional_params_with_thinking_tokens(
@@ -766,6 +824,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
@@ -817,6 +880,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
 
         _data: CommonRequestObject = self._transform_request_helper(
             model=model,
@@ -991,7 +1059,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1006,9 +1076,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1129,9 +1199,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
 
         if message is not None:
             (
@@ -1144,12 +1214,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if (
             json_mode is True
@@ -1167,7 +1237,6 @@ class AmazonConverseConfig(BaseConfig):
                 # Bedrock returns the response wrapped in a "properties" object
                 # We need to extract the actual content from this wrapper
                 try:
-
                     response_data = json.loads(json_mode_content_str)
 
                     # If Bedrock wrapped the response in "properties", extract the content

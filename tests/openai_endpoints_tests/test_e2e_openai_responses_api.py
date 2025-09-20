@@ -128,3 +128,63 @@ def test_anthropic_with_responses_api():
         previous_response_id="hi",
     )
     print("anthropic response=", response)
+
+
+def test_cancel_response():
+    try:
+        client = get_test_client()
+        from litellm.types.llms.openai import ResponsesAPIResponse
+        response = client.responses.create(
+            model="gpt-4o", input="just respond with the word 'ping'", background=True
+        )
+        print("basic response=", response)
+
+        # cancel the response
+        cancel_response = client.responses.cancel(response.id)
+        print("CANCEL response=", cancel_response)
+        
+        # verify cancel response structure
+        assert hasattr(cancel_response, "id")
+    except Exception as e:
+        if "Cannot cancel a completed response" in str(e):
+            pass
+        else:
+            raise e
+
+
+def test_cancel_streaming_response():
+    try:
+        client = get_test_client()
+        from litellm.types.llms.openai import ResponsesAPIResponse
+        stream = client.responses.create(
+            model="gpt-4o", input="just respond with the word 'ping'", stream=True, background=True
+        )
+
+        collected_chunks = []
+        response_id = None
+        for chunk in stream:
+            print("stream chunk=", chunk)
+            collected_chunks.append(chunk)
+            # Extract response ID from the first chunk that has it
+            if response_id is None and hasattr(chunk, 'response') and hasattr(chunk.response, 'id'):
+                response_id = chunk.response.id
+
+        assert len(collected_chunks) > 0
+        
+        # cancel the response if we got a response ID
+        if response_id:
+            cancel_response = client.responses.cancel(response_id)
+            print("CANCEL streaming response=", cancel_response)
+            assert hasattr(cancel_response, "id")
+    except Exception as e:
+        if "Cannot cancel a completed response" in str(e):
+            pass
+        else:
+            raise e
+
+
+def test_cancel_invalid_response_id():
+    client = get_test_client()
+    with pytest.raises(Exception):
+        # Try to cancel a non-existent response ID
+        client.responses.cancel("invalid_response_id_12345")
