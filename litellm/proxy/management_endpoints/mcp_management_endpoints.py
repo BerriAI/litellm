@@ -1,5 +1,3 @@
-
-
 """
 1. Allow proxy admin to perform create, update, and delete operations on MCP servers in the db.
 2. Allows users to view the mcp servers they have access to.
@@ -17,8 +15,8 @@ Endpoints here:
 """
 
 import importlib
-from typing import Iterable, List, Optional
 from datetime import datetime
+from typing import Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -26,7 +24,9 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import validate_and_normalize_mcp_server_payload
+from litellm.proxy._experimental.mcp_server.utils import (
+    validate_and_normalize_mcp_server_payload,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -80,7 +80,6 @@ if MCP_AVAILABLE:
                 return True
         return False
 
-
     # Router to fetch all MCP tools available for the current key
 
     @router.get(
@@ -89,39 +88,22 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_tools(
-            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Get all MCP tools available for the current key, including those from access groups
         """
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-            MCPRequestHandler,
+        from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
+
+        tools = await _list_mcp_tools(
+            user_api_key_auth=user_api_key_dict,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
         )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        dumped_tools = [dict(tool) for tool in tools]
 
-        # This now includes both direct and access group servers
-        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
-
-        tools = []
-        errors = []
-        for server_id in server_ids:
-            try:
-                server_tools = await global_mcp_server_manager.get_tools_for_server(server_id)
-                tools.extend(server_tools)
-                verbose_proxy_logger.debug(f"Successfully fetched {len(server_tools)} tools from server {server_id}")
-            except Exception as e:
-                error_msg = f"Failed to get tools from server {server_id}: {str(e)}"
-                verbose_proxy_logger.warning(error_msg)
-                errors.append(error_msg)
-                # Continue with other servers instead of failing completely
-
-        verbose_proxy_logger.debug(f"Available tools: {tools}")
-        if errors:
-            verbose_proxy_logger.warning(f"Some servers failed to respond: {errors}")
-
-        return {"tools": tools}
+        return {"tools": dumped_tools}
 
     @router.get(
         "/access_groups",
@@ -129,13 +111,15 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_access_groups(
-            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Get all available MCP access groups from the database AND config
         """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
         access_groups = set()
 
@@ -149,7 +133,10 @@ if MCP_AVAILABLE:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
                 for server in mcp_servers:
-                    if hasattr(server, 'mcp_access_groups') and server.mcp_access_groups:
+                    if (
+                        hasattr(server, "mcp_access_groups")
+                        and server.mcp_access_groups
+                    ):
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
@@ -207,10 +194,14 @@ if MCP_AVAILABLE:
 
         # Perform health check using server manager
         try:
-            health_result = await global_mcp_server_manager.health_check_server(server_id)
+            health_result = await global_mcp_server_manager.health_check_server(
+                server_id
+            )
             return health_result
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error performing health check on MCP server {server_id}: {str(e)}")
+            verbose_proxy_logger.exception(
+                f"Error performing health check on MCP server {server_id}: {str(e)}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error performing health check: {str(e)}"},
@@ -233,19 +224,33 @@ if MCP_AVAILABLE:
         """
         # Use server manager to get health checks for allowed servers
         try:
-            all_health_results = await global_mcp_server_manager.health_check_allowed_servers(
-                user_api_key_auth=user_api_key_dict
+            all_health_results = (
+                await global_mcp_server_manager.health_check_allowed_servers(
+                    user_api_key_auth=user_api_key_dict
+                )
             )
-            
+
             return {
                 "total_servers": len(all_health_results),
-                "healthy_count": len([r for r in all_health_results.values() if r["status"] == "healthy"]),
-                "unhealthy_count": len([r for r in all_health_results.values() if r["status"] == "unhealthy"]),
-                "unknown_count": len([r for r in all_health_results.values() if r["status"] == "unknown"]),
-                "servers": all_health_results
+                "healthy_count": len(
+                    [r for r in all_health_results.values() if r["status"] == "healthy"]
+                ),
+                "unhealthy_count": len(
+                    [
+                        r
+                        for r in all_health_results.values()
+                        if r["status"] == "unhealthy"
+                    ]
+                ),
+                "unknown_count": len(
+                    [r for r in all_health_results.values() if r["status"] == "unknown"]
+                ),
+                "servers": all_health_results,
             }
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error performing health checks on MCP servers: {str(e)}")
+            verbose_proxy_logger.exception(
+                f"Error performing health checks on MCP servers: {str(e)}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error performing health checks: {str(e)}"},
@@ -269,8 +274,10 @@ if MCP_AVAILABLE:
         ```
         """
         # Use server manager to get all servers with health and team data
-        return await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
-            user_api_key_auth=user_api_key_dict
+        return (
+            await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=user_api_key_dict
+            )
         )
 
     @router.get(
@@ -306,13 +313,23 @@ if MCP_AVAILABLE:
 
         # Perform health check on the server using server manager
         try:
-            health_result = await global_mcp_server_manager.health_check_server(server_id)
+            health_result = await global_mcp_server_manager.health_check_server(
+                server_id
+            )
             # Update the server object with health check results
             mcp_server.status = health_result.get("status", "unknown")
-            mcp_server.last_health_check = datetime.fromisoformat(health_result.get("last_health_check", datetime.now().isoformat())) if health_result.get("last_health_check") else None
+            mcp_server.last_health_check = (
+                datetime.fromisoformat(
+                    health_result.get("last_health_check", datetime.now().isoformat())
+                )
+                if health_result.get("last_health_check")
+                else None
+            )
             mcp_server.health_check_error = health_result.get("error")
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error performing health check on server {server_id}: {e}")
+            verbose_proxy_logger.debug(
+                f"Error performing health check on server {server_id}: {e}"
+            )
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
@@ -403,7 +420,7 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
             global_mcp_server_manager.add_update_server(new_mcp_server)
-            
+
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
@@ -464,7 +481,7 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server not found, passed server_id={server_id}"},
             )
         global_mcp_server_manager.remove_server(mcp_server_record_deleted)
-        
+
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
 
@@ -539,7 +556,7 @@ if MCP_AVAILABLE:
                 },
             )
         global_mcp_server_manager.add_update_server(mcp_server_record_updated)
-        
+
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
 
@@ -548,4 +565,3 @@ if MCP_AVAILABLE:
             pass
 
         return mcp_server_record_updated
-

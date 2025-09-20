@@ -17,7 +17,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list"
 import KeyInfoView from "../templates/key_info_view"
 import { SessionView } from "./SessionView"
 import { VectorStoreViewer } from "./VectorStoreViewer"
-import { GuardrailViewer } from "./GuardrailViewer"
+import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer"
 import FilterComponent from "../molecules/filter"
 import { FilterOption } from "../molecules/filter"
 import { useLogFilterLogic } from "./log_filter_logic"
@@ -550,7 +550,7 @@ export default function SpendLogsTable({
                         </div>
 
                         <div className="flex items-center gap-2 min-w-0 flex-shrink">
-                          <div className="relative z-[9999]" ref={quickSelectRef}>
+                          <div className="relative z-50" ref={quickSelectRef}>
                             <button
                               onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                               className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
@@ -567,7 +567,7 @@ export default function SpendLogsTable({
                             </button>
 
                             {quickSelectOpen && (
-                              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-[9999]">
+                              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                                 <div className="space-y-1">
                                   {quickSelectOptions.map((option) => (
                                     <button

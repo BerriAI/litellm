@@ -1024,6 +1024,8 @@ class CustomStreamWrapper:
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
+        if hasattr(chunk, 'id'):
+            self.response_id = chunk.id
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
         try:
