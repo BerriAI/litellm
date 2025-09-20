@@ -248,7 +248,9 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+from litellm.proxy.management_endpoints.internal_user_endpoints import (
+    user_update,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -295,7 +297,9 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    set_files_config,
+)
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -1910,48 +1914,6 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                # CRITICAL: Set up prometheus multiprocess mode BEFORE importing
-                                import os
-                                import tempfile
-                                from pathlib import Path
-
-                                # Check if we're in a multiprocess environment
-                                num_workers = os.environ.get("NUM_WORKERS", "1")
-                                is_multiprocess = False
-
-                                try:
-                                    if int(num_workers) > 1:
-                                        is_multiprocess = True
-                                except (ValueError, TypeError):
-                                    pass
-
-                                # Check for gunicorn worker environment variables
-                                if os.environ.get(
-                                    "GUNICORN_CMD_ARGS"
-                                ) or os.environ.get("GUNICORN_WORKER_ID"):
-                                    is_multiprocess = True
-
-                                if is_multiprocess and not os.environ.get(
-                                    "PROMETHEUS_MULTIPROC_DIR"
-                                ):
-                                    # Set up multiprocess directory
-                                    multiproc_dir = os.path.join(
-                                        tempfile.gettempdir(),
-                                        "litellm_prometheus_multiproc",
-                                    )
-                                    os.environ["PROMETHEUS_MULTIPROC_DIR"] = (
-                                        multiproc_dir
-                                    )
-
-                                    # Ensure the directory exists
-                                    Path(multiproc_dir).mkdir(
-                                        parents=True, exist_ok=True
-                                    )
-
-                                    verbose_proxy_logger.info(
-                                        f"Prometheus multiprocess mode enabled with directory: {multiproc_dir}"
-                                    )
-
                                 try:
                                     from litellm_enterprise.integrations.prometheus import (
                                         PrometheusLogger,
@@ -1963,8 +1925,6 @@ class ProxyConfig:
                                     verbose_proxy_logger.debug(
                                         "mounting metrics endpoint"
                                     )
-                                    # Clean up any existing multiprocess metrics before mounting
-                                    PrometheusLogger.cleanup_multiprocess_metrics()
                                     PrometheusLogger._mount_metrics_endpoint(
                                         premium_user
                                     )
@@ -2209,8 +2169,6 @@ class ProxyConfig:
         if assistant_settings:
             for k, v in assistant_settings["litellm_params"].items():
                 if isinstance(v, str) and v.startswith("os.environ/"):
-                    import os
-
                     _v = v.replace("os.environ/", "")
                     v = os.getenv(_v)
                     assistant_settings["litellm_params"][k] = v
