@@ -1,11 +1,8 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
-import os
 import sys
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -18,64 +15,6 @@ from typing import (
     Tuple,
     cast,
 )
-
-
-# CRITICAL: Set up multiprocess mode BEFORE importing prometheus_client
-# This must happen at module import time, not at class instantiation time
-def _setup_early_multiprocess_mode():
-    """Setup multiprocess mode at import time if needed."""
-    try:
-        # Check if we're in a multiprocess environment
-        num_workers = os.environ.get("NUM_WORKERS", "1")
-        is_multiprocess = False
-
-        try:
-            if int(num_workers) > 1:
-                is_multiprocess = True
-        except (ValueError, TypeError):
-            pass
-
-        # Check for gunicorn worker environment variables
-        if os.environ.get("GUNICORN_CMD_ARGS") or os.environ.get("GUNICORN_WORKER_ID"):
-            is_multiprocess = True
-
-        # Check if PROMETHEUS_MULTIPROC_DIR is explicitly set (admin override)
-        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-            is_multiprocess = True
-
-        if is_multiprocess:
-            existing_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            if not existing_dir:
-                # Set up multiprocess directory
-                multiproc_dir = os.path.join(
-                    tempfile.gettempdir(), "litellm_prometheus_multiproc"
-                )
-                os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
-
-                # Ensure the directory exists
-                Path(multiproc_dir).mkdir(parents=True, exist_ok=True)
-
-                verbose_logger.info(
-                    f"Prometheus multiprocess mode auto-enabled with directory: {multiproc_dir}"
-                )
-            else:
-                # Directory already set, just ensure it exists
-                Path(existing_dir).mkdir(parents=True, exist_ok=True)
-                verbose_logger.info(
-                    f"Using existing Prometheus multiprocess directory: {existing_dir}"
-                )
-
-    except PermissionError as e:
-        verbose_logger.warning(
-            f"Warning: Unable to create Prometheus multiprocess directory due to permission error. "
-            f"Running in non-root environment. Prometheus metrics may not work correctly in multiprocess mode. Error: {e}"
-        )
-    except Exception as e:
-        verbose_logger.warning(f"Warning: Failed to setup early multiprocess mode: {e}")
-
-
-# Set up multiprocess mode before any prometheus imports
-_setup_early_multiprocess_mode()
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -104,18 +43,6 @@ class PrometheusLogger(CustomLogger):
 
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
-
-            # Initialize multiprocess mode for Prometheus metrics to handle multiple workers
-            self._setup_multiprocess_mode()
-
-            # Debug: Check if multiprocess mode is active
-            multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            if multiproc_dir:
-                verbose_logger.info(
-                    f"Prometheus multiprocess mode active with directory: {multiproc_dir}"
-                )
-            else:
-                verbose_logger.info("Prometheus running in single-process mode")
 
             if premium_user is not True:
                 verbose_logger.warning(
@@ -207,52 +134,47 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_output_tokens_metric"),
             )
 
-            # Remaining Budget for Team (use 'mostrecent' for multiprocess mode)
+            # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = self._gauge_factory(
                 "litellm_remaining_team_budget_metric",
                 "Remaining budget for team",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_team_budget_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
-            # Max Budget for Team (use 'mostrecent' for multiprocess mode)
+            # Max Budget for Team
             self.litellm_team_max_budget_metric = self._gauge_factory(
                 "litellm_team_max_budget_metric",
                 "Maximum budget set for team",
                 labelnames=self.get_labels_for_metric("litellm_team_max_budget_metric"),
-                multiprocess_mode="mostrecent",
             )
 
-            # Team Budget Reset At (use 'mostrecent' for multiprocess mode)
+            # Team Budget Reset At
             self.litellm_team_budget_remaining_hours_metric = self._gauge_factory(
                 "litellm_team_budget_remaining_hours_metric",
                 "Remaining days for team budget to be reset",
                 labelnames=self.get_labels_for_metric(
                     "litellm_team_budget_remaining_hours_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
-            # Remaining Budget for API Key (use 'mostrecent' for multiprocess mode)
+            # Remaining Budget for API Key
             self.litellm_remaining_api_key_budget_metric = self._gauge_factory(
                 "litellm_remaining_api_key_budget_metric",
                 "Remaining budget for api key",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_api_key_budget_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
-            # Max Budget for API Key (use 'mostrecent' for multiprocess mode)
+            # Max Budget for API Key
             self.litellm_api_key_max_budget_metric = self._gauge_factory(
                 "litellm_api_key_max_budget_metric",
                 "Maximum budget set for api key",
                 labelnames=self.get_labels_for_metric(
                     "litellm_api_key_max_budget_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
             self.litellm_api_key_budget_remaining_hours_metric = self._gauge_factory(
@@ -261,40 +183,36 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_api_key_budget_remaining_hours_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
             ########################################
             # LiteLLM Virtual API KEY metrics
             ########################################
-            # Remaining MODEL RPM limit for API Key (use 'mostrecent' for multiprocess mode)
+            # Remaining MODEL RPM limit for API Key
             self.litellm_remaining_api_key_requests_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_requests_for_model",
                 "Remaining Requests API Key can make for model (model based rpm limit on key)",
                 labelnames=["hashed_api_key", "api_key_alias", "model"],
-                multiprocess_mode="mostrecent",
             )
 
-            # Remaining MODEL TPM limit for API Key (use 'mostrecent' for multiprocess mode)
+            # Remaining MODEL TPM limit for API Key
             self.litellm_remaining_api_key_tokens_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_tokens_for_model",
                 "Remaining Tokens API Key can make for model (model based tpm limit on key)",
                 labelnames=["hashed_api_key", "api_key_alias", "model"],
-                multiprocess_mode="mostrecent",
             )
 
             ########################################
             # LLM API Deployment Metrics / analytics
             ########################################
 
-            # Remaining Rate Limit for model (use 'mostrecent' for multiprocess mode)
+            # Remaining Rate Limit for model
             self.litellm_remaining_requests_metric = self._gauge_factory(
                 "litellm_remaining_requests",
                 "LLM Deployment Analytics - remaining requests for model, returned from LLM API Provider",
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_requests_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
             self.litellm_remaining_tokens_metric = self._gauge_factory(
@@ -303,7 +221,6 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_remaining_tokens_metric"
                 ),
-                multiprocess_mode="mostrecent",
             )
 
             self.litellm_overhead_latency_metric = self._histogram_factory(
@@ -314,20 +231,18 @@ class PrometheusLogger(CustomLogger):
                 ),
                 buckets=LATENCY_BUCKETS,
             )
-            # llm api provider budget metrics (use 'mostrecent' for multiprocess mode)
+            # llm api provider budget metrics
             self.litellm_provider_remaining_budget_metric = self._gauge_factory(
                 "litellm_provider_remaining_budget_metric",
                 "Remaining budget for provider - used when you set provider budget limits",
                 labelnames=["api_provider"],
-                multiprocess_mode="mostrecent",
             )
 
-            # Metric for deployment state (use 'mostrecent' for multiprocess mode)
+            # Metric for deployment state
             self.litellm_deployment_state = self._gauge_factory(
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
                 labelnames=self.get_labels_for_metric("litellm_deployment_state"),
-                multiprocess_mode="mostrecent",
             )
 
             self.litellm_deployment_cooled_down = self._counter_factory(
@@ -404,105 +319,6 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
-
-    def _setup_multiprocess_mode(self):
-        """
-        Setup Prometheus multiprocess mode to handle multiple workers properly.
-        This ensures that metrics are aggregated correctly across all worker processes.
-        """
-        import os
-        import tempfile
-        from pathlib import Path
-
-        try:
-            # Check if we're in a multiprocess environment (multiple workers)
-            if not self._is_multiprocess_environment():
-                verbose_logger.debug(
-                    "Single process environment detected, skipping multiprocess setup"
-                )
-                return
-
-            # Set up multiprocess directory if not already configured
-            multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-            if not multiproc_dir:
-                # Create a temp directory for multiprocess metrics
-                multiproc_dir = os.path.join(
-                    tempfile.gettempdir(), "litellm_prometheus_multiproc"
-                )
-                os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
-                verbose_logger.debug(f"Set PROMETHEUS_MULTIPROC_DIR to {multiproc_dir}")
-
-            # Ensure the directory exists
-            Path(multiproc_dir).mkdir(parents=True, exist_ok=True)
-
-            # Force the prometheus_client to recognize multiprocess mode
-            # This is important because the environment variable must be set BEFORE importing prometheus_client
-            try:
-                from prometheus_client import multiprocess
-
-                # This will trigger the multiprocess mode if the env var is set
-                verbose_logger.debug(
-                    "Prometheus multiprocess module imported successfully"
-                )
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Failed to import prometheus multiprocess module: {e}"
-                )
-
-            verbose_logger.info(
-                f"Prometheus multiprocess mode enabled with directory: {multiproc_dir}"
-            )
-
-        except Exception as e:
-            verbose_logger.warning(f"Failed to setup Prometheus multiprocess mode: {e}")
-
-    def _is_multiprocess_environment(self) -> bool:
-        """
-        Detect if we're running in a multiprocess environment (uvicorn/gunicorn with multiple workers).
-        """
-        import os
-
-        # Check for common environment variables that indicate multiple workers
-        num_workers = os.environ.get("NUM_WORKERS", "1")
-        try:
-            if int(num_workers) > 1:
-                return True
-        except (ValueError, TypeError):
-            pass
-
-        # Check for gunicorn worker environment variables
-        if os.environ.get("GUNICORN_CMD_ARGS") or os.environ.get("GUNICORN_WORKER_ID"):
-            return True
-
-        # Check if PROMETHEUS_MULTIPROC_DIR is explicitly set (admin override)
-        if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
-            return True
-
-        return False
-
-    @staticmethod
-    def cleanup_multiprocess_metrics():
-        """
-        Clean up multiprocess metrics directory on startup.
-        This should be called once during application startup to prevent stale metrics.
-        """
-        import os
-        from pathlib import Path
-
-        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-        if multiproc_dir and os.path.exists(multiproc_dir):
-            try:
-                # Remove all files in the directory but keep the directory itself
-                for file_path in Path(multiproc_dir).glob("*"):
-                    if file_path.is_file():
-                        file_path.unlink()
-                verbose_logger.info(
-                    f"Cleaned up Prometheus multiprocess metrics directory: {multiproc_dir}"
-                )
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Failed to cleanup Prometheus multiprocess directory: {e}"
-                )
 
     def _parse_prometheus_config(self) -> Dict[str, List[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
@@ -913,16 +729,7 @@ class PrometheusLogger(CustomLogger):
             metric_name = args[0] if args else kwargs.get("name", "")
 
             if self._is_metric_enabled(metric_name):
-                # Handle multiprocess_mode parameter for Gauge metrics
-                if metric_class.__name__ == "Gauge" and "multiprocess_mode" in kwargs:
-                    # Pass through multiprocess_mode to the Gauge constructor
-                    return metric_class(*args, **kwargs)
-                else:
-                    # For Counter and Histogram, remove multiprocess_mode if present
-                    filtered_kwargs = {
-                        k: v for k, v in kwargs.items() if k != "multiprocess_mode"
-                    }
-                    return metric_class(*args, **filtered_kwargs)
+                return metric_class(*args, **kwargs)
             else:
                 return NoOpMetric()
 
@@ -1040,6 +847,13 @@ class PrometheusLogger(CustomLogger):
 
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
+            end_user_id=end_user_id,
+            user_api_key=user_api_key,
+            user_api_key_alias=user_api_key_alias,
+            model=model,
+            user_api_team=user_api_team,
+            user_api_team_alias=user_api_team_alias,
+            user_id=user_id,
             response_cost=response_cost,
             enum_values=enum_values,
         )
@@ -1206,6 +1020,13 @@ class PrometheusLogger(CustomLogger):
 
     def _increment_top_level_request_and_spend_metrics(
         self,
+        end_user_id: Optional[str],
+        user_api_key: Optional[str],
+        user_api_key_alias: Optional[str],
+        model: Optional[str],
+        user_api_team: Optional[str],
+        user_api_team_alias: Optional[str],
+        user_id: Optional[str],
         response_cost: float,
         enum_values: UserAPIKeyLabelValues,
     ):
@@ -1224,6 +1045,7 @@ class PrometheusLogger(CustomLogger):
             ),
             enum_values=enum_values,
         )
+
         self.litellm_spend_metric.labels(**_labels).inc(response_cost)
 
     def _set_virtual_key_rate_limit_metrics(
@@ -2351,14 +2173,13 @@ class PrometheusLogger(CustomLogger):
     def _mount_metrics_endpoint(premium_user: bool):
         """
         Mount the Prometheus metrics endpoint with optional authentication.
-        Uses multiprocess collector when running with multiple workers.
 
         Args:
             premium_user (bool): Whether the user is a premium user
+            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
+                                        Defaults to False.
         """
-        import os
-
-        from prometheus_client import CollectorRegistry, make_asgi_app
+        from prometheus_client import make_asgi_app
 
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy._types import CommonProxyErrors
@@ -2369,34 +2190,14 @@ class PrometheusLogger(CustomLogger):
                 f"Prometheus metrics are only available for premium users. {CommonProxyErrors.not_premium_user.value}"
             )
 
-        # Check if we're in multiprocess mode
-        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
-
-        if multiproc_dir:
-            # Use multiprocess collector for worker aggregation
-            try:
-                from prometheus_client import multiprocess
-
-                registry = CollectorRegistry()
-                multiprocess.MultiProcessCollector(registry)
-                metrics_app = make_asgi_app(registry)
-                verbose_proxy_logger.info(
-                    f"Starting Prometheus Metrics on /metrics with multiprocess collector (directory: {multiproc_dir})"
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Failed to setup multiprocess collector, falling back to default: {e}"
-                )
-                metrics_app = make_asgi_app()
-        else:
-            # Use default single-process collector
-            metrics_app = make_asgi_app()
-            verbose_proxy_logger.debug(
-                "Starting Prometheus Metrics on /metrics (single process mode)"
-            )
+        # Create metrics ASGI app
+        metrics_app = make_asgi_app()
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
+        verbose_proxy_logger.debug(
+            "Starting Prometheus Metrics on /metrics (no authentication)"
+        )
 
 
 def prometheus_label_factory(
@@ -2527,6 +2328,9 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         "tag_Service_web_app_v1": "false",
     }
     """
+    import re
+
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
@@ -2534,6 +2338,7 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
+    pattern_router = PatternMatchRouter()
 
     for configured_tag in configured_tags:
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")
