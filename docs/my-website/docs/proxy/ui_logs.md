@@ -35,6 +35,65 @@ general_settings:
 <Image img={require('../../img/ui_request_logs_content.png')}/>
 
 
+### [Opt Out] Disable Prompts/Responses in Spend Logs Per Request
+
+In certain use cases, you may want to disable prompts and responses in spend logs for a specific request even if the global setting is enabled.
+
+For use cases like embeddings where you want to track spend but not store large prompts/responses in the database, you can disable database logging using the `x-litellm-disable-prompts-in-spend-logs` header.
+
+This is especially useful for:
+- Embedding requests with large text inputs  
+- Requests where you want spend tracking but not content storage
+- Compliance scenarios where content shouldn't be persisted
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/embeddings' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <litellm-api-key>' \
+-H 'x-litellm-disable-prompts-in-spend-logs: true' \
+-d '{
+    "model": "text-embedding-ada-002",
+    "input": "Your large text content here..."
+}'
+```
+
+</TabItem>
+<TabItem value="OpenAI" label="OpenAI Python SDK">
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="<litellm-api-key>",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.embeddings.create(
+    model="text-embedding-ada-002",
+    input="Your large text content here...",
+    extra_headers={
+        "x-litellm-disable-prompts-in-spend-logs": "true"
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
+**What gets disabled:**
+- Messages field in `LiteLLM_SpendLogs` table will be empty (`{}`)
+- Response field in `LiteLLM_SpendLogs` table will be empty (`{}`) 
+
+**What remains enabled:**
+- All callback logging (Langfuse, DataDog, etc.) continues to work
+- Spend tracking, token counts, and other metadata are still logged normally
+- Token counting and usage metrics
+- Request metadata and headers
+
+
 ## Stop storing Error Logs in DB
 
 If you do not want to store error logs in DB, you can opt out with this setting
