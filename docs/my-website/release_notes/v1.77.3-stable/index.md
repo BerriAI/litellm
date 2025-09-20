@@ -116,7 +116,7 @@ pip install litellm==1.77.3
 
 - **[/responses](../../docs/response_api)**
     - Added cancel endpoint support for non-admin users - [PR #14594](https://github.com/BerriAI/litellm/pull/14594)
-    - Improved response handling and cold storage configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
+    - Improved response session handling and cold storage configuration with s3 - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
     - Added OpenAI & Azure /responses/cancel endpoint support - [PR #14561](https://github.com/BerriAI/litellm/pull/14561)
 - **General**
     - Enhanced rate limit error messages with details - [PR #14736](https://github.com/BerriAI/litellm/pull/14736)
@@ -131,6 +131,17 @@ pip install litellm==1.77.3
     - Fixed cost calculation - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
 - **General**
     - Rate limiter AttributeError fix - [PR #14609](https://github.com/BerriAI/litellm/pull/14609)
+
+---
+
+## Spend Tracking, Budgets and Rate Limiting
+
+- **Responses API Cost Calculation** fix - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
+- **Anthropic Cache Token Pricing** - Separate 1-hour vs 5-minute cache creation costs - [PR #14620](https://github.com/BerriAI/litellm/pull/14620), [PR #14652](https://github.com/BerriAI/litellm/pull/14652)
+- **Indochina Time Timezone** support for budget resets - [PR #14666](https://github.com/BerriAI/litellm/pull/14666)
+- **Soft Budget Alert Cache Issues** - Resolved soft budget alert cache issues - [PR #14491](https://github.com/BerriAI/litellm/pull/14491)
+- **Dynamic Rate Limiter v3** - Priority routing improvements - [PR #14734](https://github.com/BerriAI/litellm/pull/14734)
+- **Enhanced Rate Limit Errors** - More detailed error messages - [PR #14736](https://github.com/BerriAI/litellm/pull/14736)
 
 ---
 
@@ -149,15 +160,6 @@ pip install litellm==1.77.3
 - **SCIM v2** - Fix group PUSH and PUT operations for non-existent members - [PR #14581](https://github.com/BerriAI/litellm/pull/14581)
 - **Guardrail View/Edit/Delete** behavior fixes - [PR #14622](https://github.com/BerriAI/litellm/pull/14622)
 - **In-Memory Guardrail** update failures - [PR #14653](https://github.com/BerriAI/litellm/pull/14653)
-
----
-
-## Performance Improvements
-
-- **+500 RPS Performance Boost** when sending the `user` field - [PR #14616](https://github.com/BerriAI/litellm/pull/14616)
-- **+50 RPS** by removing iscoroutine from hot path - [PR #14649](https://github.com/BerriAI/litellm/pull/14649)
-- **7% reduction** in __init__ overhead - [PR #14689](https://github.com/BerriAI/litellm/pull/14689)
-- **Generic Object Pool** implementation for better resource management - [PR #14702](https://github.com/BerriAI/litellm/pull/14702)
 
 ---
 
@@ -205,33 +207,18 @@ pip install litellm==1.77.3
 
 ---
 
-## Performance / Loadbalancing / Reliability improvements
+## Performance Improvements
 
-#### Rate Limiting & Caching
-
-- **Cache Key Collision Fix** - Resolved soft budget alert cache issues - [PR #14491](https://github.com/BerriAI/litellm/pull/14491)
-- **Dynamic Rate Limiter v3** - Priority routing improvements - [PR #14734](https://github.com/BerriAI/litellm/pull/14734)
-- **Enhanced Rate Limit Errors** - More detailed error messages - [PR #14736](https://github.com/BerriAI/litellm/pull/14736)
-
-#### Cost Tracking
-
-- **Responses API Cost Calculation** fix - [PR #14675](https://github.com/BerriAI/litellm/pull/14675)
-- **Anthropic Cache Token Pricing** - Separate 1-hour vs 5-minute cache creation costs - [PR #14620](https://github.com/BerriAI/litellm/pull/14620), [PR #14652](https://github.com/BerriAI/litellm/pull/14652)
-- **Indochina Time Timezone** support for budget resets - [PR #14666](https://github.com/BerriAI/litellm/pull/14666)
+- **+500 RPS Performance Boost** when sending the `user` field - [PR #14616](https://github.com/BerriAI/litellm/pull/14616)
+- **+50 RPS** by removing iscoroutine from hot path - [PR #14649](https://github.com/BerriAI/litellm/pull/14649)
+- **7% reduction** in __init__ overhead - [PR #14689](https://github.com/BerriAI/litellm/pull/14689)
+- **Generic Object Pool** implementation for better resource management - [PR #14702](https://github.com/BerriAI/litellm/pull/14702)
 
 ---
 
 ## General Proxy Improvements
 
-#### Storage & Configuration
-
-- **Response API Cold Storage** - Improved handling and configuration - [PR #14534](https://github.com/BerriAI/litellm/pull/14534)
 - **Middle-Truncation** for spend log payloads - [PR #14637](https://github.com/BerriAI/litellm/pull/14637)
-
-#### Batch Processing
-
-- **Bedrock Retrieve Endpoint** - Batch support - [PR #14618](https://github.com/BerriAI/litellm/pull/14618)
-- **Bedrock Twelve Labs Embedding** provider support - [PR #14697](https://github.com/BerriAI/litellm/pull/14697)
 
 #### Security
 
