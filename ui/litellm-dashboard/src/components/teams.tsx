@@ -130,14 +130,13 @@ const getOrganizationModels = (
 
   if (organization) {
     if (organization.models.length > 0) {
-      console.log(`organization.models: ${organization.models}`);
       tempModelsToPick = organization.models;
     } else {
-      // show all available models if the team has no models set
+      // Organization has no specific models, use all user models
       tempModelsToPick = userModels;
     }
   } else {
-    // no team set, show all available models
+    // No organization selected, use all user models
     tempModelsToPick = userModels;
   }
 
@@ -210,12 +209,37 @@ const Teams: React.FC<TeamProps> = ({
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
-    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
+    // Don't process if userModels hasn't loaded yet
+    if (userModels.length === 0) {
+      return;
+    }
+
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    console.log(`models: ${models}`);
     setModelsToPick(models);
-    form.setFieldValue("models", []);
-  }, [currentOrgForCreateTeam, userModels]);
+    
+    // Only clear selected models if they're no longer available in the new organization
+    const currentSelectedModels = form.getFieldValue("models") || [];
+    
+    const stillAvailableModels = currentSelectedModels.filter((selectedModel: string) => 
+      selectedModel === "all-proxy-models" || models.includes(selectedModel)
+    );
+    
+    // Only update the form if some models are no longer available
+    if (stillAvailableModels.length !== currentSelectedModels.length) {
+      const removedModels = currentSelectedModels.filter(model => 
+        model !== "all-proxy-models" && !models.includes(model)
+      );
+      
+      if (removedModels.length > 0 && currentOrgForCreateTeam) {
+        // Show user-friendly notification
+        NotificationsManager.warning(
+          `Some selected models are not available in "${currentOrgForCreateTeam.organization_alias}": ${removedModels.join(', ')}`
+        );
+      }
+      
+      form.setFieldValue("models", stillAvailableModels);
+    }
+  }, [currentOrgForCreateTeam, userModels, form]);
 
   // Add this useEffect to fetch guardrails
   useEffect(() => {
@@ -1270,26 +1294,55 @@ const Teams: React.FC<TeamProps> = ({
                       }}
                       optionFilterProp="children"
                     >
-                      {organizations?.map((org) => (
-                        <Select2.Option
-                          key={org.organization_id}
-                          value={org.organization_id}
-                        >
-                          <span className="font-medium">
-                            {org.organization_alias}
-                          </span>{" "}
-                          <span className="text-gray-500">
-                            ({org.organization_id})
-                          </span>
-                        </Select2.Option>
-                      ))}
+                      {organizations?.map((org) => {
+                        const orgModels = getOrganizationModels(org, userModels);
+                        const hasAvailableModels = orgModels.length > 0;
+                        
+                        return (
+                          <Select2.Option
+                            key={org.organization_id}
+                            value={org.organization_id}
+                            disabled={!hasAvailableModels}
+                          >
+                            <span className={`font-medium ${!hasAvailableModels ? 'text-gray-400' : ''}`}>
+                              {org.organization_alias}
+                            </span>{" "}
+                            <span className="text-gray-500 text-xs">
+                              ({hasAvailableModels ? `${orgModels.length} models` : 'No models available'})
+                            </span>
+                          </Select2.Option>
+                        );
+                      })}
                     </Select2>
                   </Form.Item>
+                  
+                  {/* Warning when organization has no available models */}
+                  {currentOrgForCreateTeam && modelsToPick.length === 0 && (
+                    <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                      <div className="flex items-center">
+                        <AlertTriangleIcon className="h-5 w-5 text-yellow-600 mr-2" />
+                        <div>
+                          <p className="text-sm text-yellow-800 font-medium">
+                            No models available for this organization
+                          </p>
+                          <p className="text-xs text-yellow-700 mt-1">
+                            The selected organization "{currentOrgForCreateTeam.organization_alias}" doesn't have any models that match your available models. 
+                            Contact your administrator to configure the organization models.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <Form.Item
                     label={
                       <span>
                         Models{" "}
-                        <Tooltip title="These are the models that your selected team has access to">
+                        <Tooltip title={
+                          currentOrgForCreateTeam 
+                            ? `Available models for "${currentOrgForCreateTeam.organization_alias}": ${modelsToPick.length > 0 ? modelsToPick.join(', ') : 'No models available'}`
+                            : "These are the models that your selected team has access to"
+                        }>
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
@@ -1298,8 +1351,18 @@ const Teams: React.FC<TeamProps> = ({
                   >
                     <Select2
                       mode="multiple"
-                      placeholder="Select models"
+                      placeholder={
+                        modelsToPick.length === 0 
+                          ? "No models available for selected organization" 
+                          : "Select models"
+                      }
                       style={{ width: "100%" }}
+                      disabled={modelsToPick.length === 0}
+                      notFoundContent={
+                        modelsToPick.length === 0 
+                          ? "No models available for this organization"
+                          : "No models found"
+                      }
                     >
                       <Select2.Option
                         key="all-proxy-models"
@@ -1532,7 +1595,17 @@ const Teams: React.FC<TeamProps> = ({
                   </Accordion>
                 </>
                 <div style={{ textAlign: "right", marginTop: "10px" }}>
-                  <Button2 htmlType="submit">Create Team</Button2>
+                  <Button2 
+                    htmlType="submit"
+                    disabled={currentOrgForCreateTeam && modelsToPick.length === 0}
+                  >
+                    Create Team
+                  </Button2>
+                  {currentOrgForCreateTeam && modelsToPick.length === 0 && (
+                    <div className="text-xs text-gray-500 mt-1 text-right">
+                      Cannot create team: No models available for selected organization
+                    </div>
+                  )}
                 </div>
               </Form>
             </Modal>
