@@ -542,7 +542,7 @@ def test_set_latency_metrics_missing_api_call_start(prometheus_logger):
     prometheus_logger.litellm_request_total_latency_metric.labels.assert_called_once()
 
 
-def test_aincrement_top_level_request_and_spend_metrics(prometheus_logger):
+def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     """
     Test the increment_top_level_request_and_spend_metrics method
 
@@ -563,15 +563,8 @@ def test_aincrement_top_level_request_and_spend_metrics(prometheus_logger):
     prometheus_logger.litellm_spend_metric = MagicMock()
 
     prometheus_logger._increment_top_level_request_and_spend_metrics(
-        None,  # end_user_id
-        "test_hash",  # user_api_key
-        "test_alias",  # user_api_key_alias
-        "gpt-3.5-turbo",  # model
-        "test_team",  # user_api_team
-        "test_team_alias",  # user_api_team_alias
-        None,  # user_id
-        0.1,  # response_cost
-        enum_values,  # enum_values
+        response_cost=0.1,
+        enum_values=enum_values,
     )
 
     prometheus_logger.litellm_requests_metric.labels.assert_called_once_with(
@@ -586,15 +579,16 @@ def test_aincrement_top_level_request_and_spend_metrics(prometheus_logger):
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
-    # The spend metric uses positional arguments in the order: end_user, hashed_api_key, api_key_alias, model, team, team_alias, user
+    # The spend metric uses keyword arguments
     prometheus_logger.litellm_spend_metric.labels.assert_called_once_with(
-        None,  # end_user
-        "test_hash",  # hashed_api_key
-        "test_alias",  # api_key_alias
-        "gpt-3.5-turbo",  # model
-        "test_team",  # team
-        "test_team_alias",  # team_alias
-        None,  # user
+        end_user=None,
+        user=None,
+        user_email=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        model="gpt-3.5-turbo",
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
