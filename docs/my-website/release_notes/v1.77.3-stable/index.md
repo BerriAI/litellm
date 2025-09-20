@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.3-stable - New Providers & Performance Boosts"
+title: "[Preview] v1.77.3-stable - Priority Based Rate Limiting"
 slug: "v1-77-3"
 date: 2025-09-21T10:00:00
 authors:
@@ -47,10 +47,8 @@ pip install litellm==1.77.3
 ## Key Highlights
 
 - **+550 RPS Performance Improvements** - Optimizations in request handling and object initialization
-- **New Provider Support** - OVHCloud AI Endpoints, CompactifAI, and PostHog observability
-- **Enhanced Bedrock Support** - Cross-region inference profiles, guardrails, and CountTokens API
-- **Tool Permission Guardrail** - Fine-grained control over tool access in function calling
-- **Anthropic Cache Token Pricing** - Accurate cost tracking for 1-hour vs 5-minute cache tokens
+- **Priority Based Rate Limiting** - Improved rate limiting for high-traffic scenarios
+
 
 ## New Models / Updated Models
 
@@ -64,30 +62,6 @@ pip install litellm==1.77.3
 | CompactifAI | Various models | Varies | Contact provider | Contact provider | Chat completions |
 | TwelveLabs | `twelvelabs/marengo-embed-2.7` | 32K | $0.12 | $0.00 | Embeddings |
 
-#### Updated Model Support
-
-**Vertex AI Anthropic Models:**
-- Added comprehensive Claude 3.7 Sonnet, Claude Opus 4, and Claude Sonnet 4 support
-- Enhanced pricing structure with cache creation and read token costs
-- Support for computer use, reasoning, and response schema features
-
-**Vercel AI Gateway Models:**
-- Extensive model catalog additions including Grok 3/4, Gemini 2.5, and various provider models
-- Standardized pricing across different model tiers
-
-**XAI Models:**
-- Complete Grok model lineup with pricing updates
-- Added reasoning support for Grok 3 Mini variants
-- Enhanced function calling and web search capabilities
-
----
-
-## Performance Improvements
-
-- **+500 RPS Performance Boost** when sending the `user` field - [PR #14616](https://github.com/BerriAI/litellm/pull/14616)
-- **+50 RPS** by removing iscoroutine from hot path - [PR #14649](https://github.com/BerriAI/litellm/pull/14649)
-- **7% reduction** in __init__ overhead - [PR #14689](https://github.com/BerriAI/litellm/pull/14689)
-- **Generic Object Pool** implementation for better resource management - [PR #14702](https://github.com/BerriAI/litellm/pull/14702)
 
 ---
 
@@ -141,6 +115,15 @@ pip install litellm==1.77.3
 - **SCIM v2** - Fix group PUSH and PUT operations for non-existent members - [PR #14581](https://github.com/BerriAI/litellm/pull/14581)
 - **Guardrail View/Edit/Delete** behavior fixes - [PR #14622](https://github.com/BerriAI/litellm/pull/14622)
 - **In-Memory Guardrail** update failures - [PR #14653](https://github.com/BerriAI/litellm/pull/14653)
+
+---
+
+## Performance Improvements
+
+- **+500 RPS Performance Boost** when sending the `user` field - [PR #14616](https://github.com/BerriAI/litellm/pull/14616)
+- **+50 RPS** by removing iscoroutine from hot path - [PR #14649](https://github.com/BerriAI/litellm/pull/14649)
+- **7% reduction** in __init__ overhead - [PR #14689](https://github.com/BerriAI/litellm/pull/14689)
+- **Generic Object Pool** implementation for better resource management - [PR #14702](https://github.com/BerriAI/litellm/pull/14702)
 
 ---
 
