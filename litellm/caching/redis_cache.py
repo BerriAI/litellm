@@ -217,11 +217,8 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
-            # Convert value to JSON string to handle complex objects like timedelta
-            if isinstance(value, (dict, list)) or hasattr(value, "__dict__"):
-                serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
-            else:
-                serialized_value = str(value)
+            # Always use JSON serialization for consistency with async method
+            serialized_value = json.dumps(value, cls=TimedeltaJSONEncoder)
             self.redis_client.set(name=key, value=serialized_value, ex=ttl)
             end_time = time.time()
             _duration = end_time - start_time
