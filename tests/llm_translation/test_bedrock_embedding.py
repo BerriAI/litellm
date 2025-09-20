@@ -78,6 +78,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             pytest.fail(f"Error occurred: {e}")
 
 
+@patch.dict(os.environ, {}, clear=True)
 def test_e2e_bedrock_embedding():
     """
     Test text embedding with TwelveLabs Marengo.
@@ -116,6 +117,7 @@ def test_e2e_bedrock_embedding():
 
 
 
+@patch.dict(os.environ, {}, clear=True)
 def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
     """
     Test image embedding with TwelveLabs Marengo.
