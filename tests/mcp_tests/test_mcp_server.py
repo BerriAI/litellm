@@ -1790,7 +1790,6 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                     assert (
                         call_args[0][1] == "Bearer zapier_token"
                     )  # server_auth_header
-                    assert call_args[0][2] == "2025-06-18"  # mcp_protocol_version
 
 
 @pytest.mark.asyncio
@@ -1873,7 +1872,6 @@ async def test_list_tool_rest_api_with_default_auth():
                     assert (
                         call_args[0][1] == "Bearer default_token"
                     )  # server_auth_header
-                    assert call_args[0][2] == "2025-06-18"  # mcp_protocol_version
 
 
 @pytest.mark.asyncio
@@ -1978,12 +1976,10 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     # First call should be for zapier server with zapier auth
                     assert calls[0][0][0] == mock_zapier_server  # server
                     assert calls[0][0][1] == "Bearer zapier_token"  # server_auth_header
-                    assert calls[0][0][2] == "2025-06-18"  # mcp_protocol_version
 
                     # Second call should be for slack server with slack auth
                     assert calls[1][0][0] == mock_slack_server  # server
                     assert calls[1][0][1] == "Bearer slack_token"  # server_auth_header
-                    assert calls[1][0][2] == "2025-06-18"  # mcp_protocol_version
 
 
 @pytest.mark.asyncio
