@@ -1,5 +1,6 @@
 import React from "react";
 import { Form, InputNumber, Select, Tooltip } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { TextInput, Textarea, SelectItem } from "@tremor/react";
 import { Button } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -150,7 +151,7 @@ export function UserEditView({
         label="Max Budget (USD)"
         name="max_budget"
       >
-        <InputNumber
+        <NumericalInput
           step={0.01}
           precision={2}
           style={{ width: "100%" }}

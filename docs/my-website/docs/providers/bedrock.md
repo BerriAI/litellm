@@ -889,6 +889,19 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
 
+### Selective Content Moderation with `guarded_text`
+
+LiteLLM supports selective content moderation using the `guarded_text` content type. This allows you to wrap only specific content that should be moderated by Bedrock Guardrails, rather than evaluating the entire conversation.
+
+**How it works:**
+- Content with `type: "guarded_text"` gets automatically wrapped in `guardrailConverseContent` blocks
+- Only the wrapped content is evaluated by Bedrock Guardrails
+- Regular content with `type: "text"` bypasses guardrail evaluation
+
+:::note
+If `guarded_text` is not used, the entire conversation history will be sent to the guardrail for evaluation, which can increase latency and costs.
+:::
+
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
 
@@ -914,6 +927,24 @@ response = completion(
         "guardrailVersion": "DRAFT",           # The version of the guardrail.
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
     },
+)
+
+# Selective guardrail usage with guarded_text - only specific content is evaluated
+response_guard = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This      document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+        }
+    ],
+    guardrailConfig={
+        "guardrailIdentifier": "gr-abc123",
+        "guardrailVersion": "DRAFT"
+    }
 )
 ```
 </TabItem>
@@ -993,7 +1024,20 @@ response = client.chat.completions.create(model="bedrock-claude-v1", messages = 
 temperature=0.7
 )
 
-print(response)
+# For adding selective guardrail usage with guarded_text
+response_guard = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+   {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+  }
+],
+temperature=0.7
+) 
+
+print(response_guard)
 ```
 </TabItem>
 </Tabs>
@@ -1777,6 +1821,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+
 ## Bedrock Embedding
 
 ### API keys
@@ -1798,11 +1843,29 @@ response = embedding(
 print(response)
 ```
 
+#### Titan V2 - encoding_format support
+```python
+from litellm import embedding
+# Float format (default)
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="float"  # Returns float array
+)
+
+# Binary format
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="base64"  # Returns base64 encoded binary
+)
+```
+
 ## Supported AWS Bedrock Embedding Models
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
-| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | `dimensions`, `encoding_format` |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/cohere_transformation.py#L18)

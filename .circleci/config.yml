@@ -1458,6 +1458,7 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
@@ -2825,8 +2826,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v20
+            nvm use v20
             
             cd ui/litellm-dashboard
             
@@ -2879,7 +2880,26 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
+      - run:
+          name: Run UI unit tests (Vitest)
+          command: |
+            # Use Node 20 (several deps require >=20)
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
       
+            cd ui/litellm-dashboard
+            npm ci || npm install
+      
+            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
+            CI=true npm run test -- --run --coverage \
+              --coverage.provider=v8 \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reportsDirectory=coverage/html
+
+
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .

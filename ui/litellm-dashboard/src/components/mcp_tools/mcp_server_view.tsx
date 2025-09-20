@@ -226,10 +226,6 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>{handleAuth(mcpServer.auth_type)}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Spec Version</Text>
-                    <div>{mcpServer.spec_version}</div>
-                  </div>
-                  <div>
                     <Text className="font-medium">Access Groups</Text>
                     <div>
                       {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (

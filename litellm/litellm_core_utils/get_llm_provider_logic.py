@@ -372,6 +372,10 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "cometapi"
         elif model.startswith("oci/"):
             custom_llm_provider = "oci"
+        elif model.startswith("compactifai/"):
+            custom_llm_provider = "compactifai"
+        elif model.startswith("ovhcloud/"):
+            custom_llm_provider = "ovhcloud"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa

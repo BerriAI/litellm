@@ -1,13 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Required, TypedDict
-
-from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
-    OpenAIModerationGuardrailConfigModel,
-)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -41,6 +37,8 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
+    TOOL_PERMISSION = "tool_permission"
+
 
 
 class Role(Enum):
@@ -381,6 +379,18 @@ class NomaGuardrailConfigModel(BaseModel):
     )
 
 
+class ToolPermissionGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Tool Permission guardrail"""
+
+    rules: Optional[List[Dict]] = Field(
+        default=None, description="List of permission rules for tool usage"
+    )
+    default_action: Optional[str] = Field(
+        default="Deny",
+        description="Default action when no rule matches (Allow or Deny)",
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -469,6 +479,7 @@ class LitellmParams(
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
+    ToolPermissionGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")

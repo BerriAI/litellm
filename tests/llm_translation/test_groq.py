@@ -6,6 +6,7 @@ import pytest
 
 # sys.path.insert(
 #     0, os.path.abspath("../..")
+# ) # noqa
 # )  # Adds the parent directory to the system path
 
 from base_llm_unit_tests import BaseLLMChatTest

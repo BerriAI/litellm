@@ -22,8 +22,11 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    calculate_cache_writing_cost,
+    generic_cost_per_token,
+)
+from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
 def test_reasoning_tokens_no_price_set():
@@ -172,6 +175,35 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
 
     print(f"prompt_cost: {prompt_cost}")
     assert prompt_cost < 0.085
+
+
+def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
+    model = "claude-3-5-haiku-20241022"
+    usage = Usage(
+        completion_tokens=90,
+        prompt_tokens=28436,
+        total_tokens=28526,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
+        prompt_tokens_details=None,
+        cache_creation_input_tokens=2000,
+    )
+
+    custom_llm_provider = "anthropic"
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    print(f"prompt_cost: {prompt_cost}")
+    assert round(prompt_cost, 3) == 0.023
 
 
 def test_string_cost_values():
@@ -356,3 +388,79 @@ def test_string_cost_values_with_threshold():
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
+def test_calculate_cache_writing_cost():
+    """Test the calculate_cache_writing_cost function with detailed cache creation token breakdown."""
+
+    # Test case 1: With cache creation token details (matching the provided input)
+    cache_creation_tokens = 14055
+    cache_creation_token_details = CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=56, ephemeral_1h_input_tokens=13999
+    )
+    cache_creation_cost_above_1hr = 6e-06
+    cache_creation_cost = 3.75e-06
+
+    result = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_token_details,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        cache_creation_cost=cache_creation_cost,
+    )
+
+    # Expected calculation:
+    # 5m tokens: 56 * 3.75e-06 = 0.00021
+    # 1h tokens: 13999 * 6e-06 = 0.083994
+    # Total: 0.00021 + 0.083994 = 0.084204
+    expected_cost = (56 * 3.75e-06) + (13999 * 6e-06)
+
+    assert round(result, 6) == round(expected_cost, 6)
+    assert round(result, 6) == 0.084204
+
+    # Test case 2: Without cache creation token details (fallback behavior)
+    cache_creation_tokens_no_details = 1000
+    cache_creation_token_details_none = None
+    cache_creation_cost_fallback = 5e-06
+
+    result_no_details = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens_no_details,
+        cache_creation_token_details=cache_creation_token_details_none,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        cache_creation_cost=cache_creation_cost_fallback,
+    )
+
+    # Expected calculation when no details: 1000 * 5e-06 = 0.005
+    expected_cost_no_details = 1000 * 5e-06
+
+    assert round(result_no_details, 6) == round(expected_cost_no_details, 6)
+    assert result_no_details == 0.005
+
+    # Test case 3: With cache creation token details but None values
+    cache_creation_token_details_partial = CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=None, ephemeral_1h_input_tokens=100
+    )
+
+    result_partial = calculate_cache_writing_cost(
+        cache_creation_tokens=500,
+        cache_creation_token_details=cache_creation_token_details_partial,
+        cache_creation_cost_above_1hr=6e-06,
+        cache_creation_cost=3e-06,
+    )
+
+    # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
+    expected_cost_partial = (0.0) + (100 * 6e-06)
+
+    assert round(result_partial, 6) == round(expected_cost_partial, 6)
+    assert round(result_partial, 6) == 0.0006
+
+    # Test case 4: Zero costs
+    result_zero = calculate_cache_writing_cost(
+        cache_creation_tokens=1000,
+        cache_creation_token_details=CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
+        ),
+        cache_creation_cost_above_1hr=0.0,
+        cache_creation_cost=0.0,
+    )
+
+    assert result_zero == 0.0

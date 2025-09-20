@@ -32,10 +32,28 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
-    long_string = "a" * 2000  # Create a string longer than MAX_STRING_LENGTH
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB (2048)
+    long_string = "a" * 3000  # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
     request_body = {"text": long_string, "normal_text": "short text"}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
-    assert len(sanitized["text"]) == 1000 + len(f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} 1000 chars)")
+    
+    # Calculate expected lengths: 35% start + 65% end + truncation message
+    start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+    total_keep = start_chars + end_chars
+    if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
+        end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+    
+    skipped_chars = len(long_string) - (start_chars + end_chars)
+    expected_truncation_message = f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+    expected_length = start_chars + len(expected_truncation_message) + end_chars
+    
+    assert len(sanitized["text"]) == expected_length
+    assert sanitized["text"].startswith("a" * start_chars)
+    assert sanitized["text"].endswith("a" * end_chars)
+    assert expected_truncation_message in sanitized["text"]
     assert sanitized["normal_text"] == "short text"
 
 
