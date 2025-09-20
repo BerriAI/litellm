@@ -30,6 +30,7 @@ from litellm.integrations.langfuse.langfuse_prompt_management import (
 from litellm.integrations.langsmith import LangsmithLogger
 from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.neatlogs import NeatlogsLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
@@ -78,6 +79,7 @@ class CustomLoggerRegistry:
         "arize_phoenix": OpenTelemetry,
         "langtrace": OpenTelemetry,
         "mlflow": MlflowLogger,
+        "neatlogs": NeatlogsLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
         "gcs_pubsub": GcsPubSubLogger,
@@ -157,7 +159,7 @@ class CustomLoggerRegistry:
             if callback_class == class_type:
                 callback_strs.append(callback_str)
         return callback_strs
-    
+
 
     @classmethod
     def get_class_type_for_custom_logger_name(
