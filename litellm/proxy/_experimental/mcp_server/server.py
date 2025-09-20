@@ -632,41 +632,37 @@ if MCP_AVAILABLE:
         import re
 
         mcp_servers_from_path: Optional[List[str]] = None
-        # Match /mcp/<servers>/<optional_path>
-        # Where <servers> can be comma-separated list of server names
+        # Match /mcp/<servers_and_maybe_path>
+        # Where servers can be comma-separated list of server names
         # Server names can contain slashes (e.g., "custom_solutions/user_123")
-        mcp_path_match = re.match(r"^/mcp/([^?#]+)(/[^?#]*)?(?:\?.*)?(?:#.*)?$", path)
+        mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
         if mcp_path_match:
-            mcp_servers_str = mcp_path_match.group(1)
-            optional_path = mcp_path_match.group(2)
+            servers_and_path = mcp_path_match.group(1)
             
-            if mcp_servers_str:
-                # First, try to split by comma for comma-separated lists
-                if ',' in mcp_servers_str:
-                    # For comma-separated lists, we need to handle the case where the last item
-                    # might include the path (e.g., "zapier,group1/tools" -> ["zapier", "group1/tools"])
-                    parts = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
-                    
-                    # If there's an optional path AND the last part contains a slash that matches the optional path,
-                    # remove the path portion from the last server name
-                    if optional_path and len(parts) > 0 and '/' in parts[-1]:
-                        last_part = parts[-1]
-                        # Check if the last part ends with the optional path
-                        if optional_path and last_part.endswith(optional_path.lstrip('/')):
-                            # Remove the path portion from the last server name
-                            parts[-1] = last_part[:-len(optional_path.lstrip('/'))]
-                    
-                    mcp_servers_from_path = parts
+            if servers_and_path:
+                # Check if it contains commas (comma-separated servers)
+                if ',' in servers_and_path:
+                    # For comma-separated, look for a path at the end
+                    # Common patterns: /tools, /chat/completions, etc.
+                    path_match = re.search(r'/([^/,]+(?:/[^/,]+)*)$', servers_and_path)
+                    if path_match:
+                        # Path found at the end, remove it from servers
+                        path_part = '/' + path_match.group(1)
+                        servers_part = servers_and_path[:-len(path_part)]
+                        mcp_servers_from_path = [s.strip() for s in servers_part.split(',') if s.strip()]
+                    else:
+                        # No path, just comma-separated servers
+                        mcp_servers_from_path = [s.strip() for s in servers_and_path.split(',') if s.strip()]
                 else:
-                    # For single server, it might be just a name or contain slashes
-                    # We need to determine where the server name ends and the path begins
-                    # This is tricky - let's use the original logic but handle comma cases differently
-                    single_server_match = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", mcp_servers_str)
+                    # Single server case - use regex approach for server/path separation
+                    # This handles cases like "custom_solutions/user_123/chat/completions"
+                    # where we want to extract "custom_solutions/user_123" as the server name
+                    single_server_match = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path)
                     if single_server_match:
                         server_name = single_server_match.group(1)
                         mcp_servers_from_path = [server_name]
                     else:
-                        mcp_servers_from_path = [mcp_servers_str]
+                        mcp_servers_from_path = [servers_and_path]
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):
