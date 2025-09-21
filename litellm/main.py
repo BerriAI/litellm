@@ -1004,7 +1004,15 @@ def completion(  # type: ignore # noqa: PLR0915
     provider_specific_header = cast(
         Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
     )
-    headers = kwargs.get("headers", None) or extra_headers
+    # Properly merge headers with priority: request headers > extra_headers > global litellm.headers
+    headers = {}
+    if litellm.headers is not None and isinstance(litellm.headers, dict):
+        headers.update(litellm.headers)
+    if extra_headers is not None and isinstance(extra_headers, dict):
+        headers.update(extra_headers)
+    request_headers = kwargs.get("headers", None)
+    if request_headers is not None and isinstance(request_headers, dict):
+        headers.update(request_headers)
 
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
@@ -1015,10 +1023,6 @@ def completion(  # type: ignore # noqa: PLR0915
     assistant_continue_message: Optional[ChatCompletionAssistantMessage] = kwargs.get(
         "assistant_continue_message", None
     )
-    if headers is None:
-        headers = {}
-    if extra_headers is not None:
-        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -1428,8 +1432,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token_provider", None
             )
 
-            headers = headers or litellm.headers
-
+            # Use the consolidated headers that were already merged at the top of the function
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
             if max_retries is not None:
@@ -1694,8 +1697,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OPENAI_API_KEY")
             )
 
-            headers = headers or litellm.headers
-
+            # Use the consolidated headers that were already merged at the top of the function
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
@@ -2411,12 +2413,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.cohere.ai/v1/generate"
             )
 
-            headers = headers or litellm.headers or {}
-            if headers is None:
-                headers = {}
-
-            if extra_headers is not None:
-                headers.update(extra_headers)
+            # Use the consolidated headers that were already merged at the top of the function
+            # No need for additional merging here as it's already done
 
             response = base_llm_http_handler.completion(
                 model=model,
