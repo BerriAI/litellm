@@ -5,7 +5,6 @@ import sys
 import httpx
 import pytest
 import respx
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -176,7 +175,7 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             else:
                 response = await acompletion(**args, client=client)
             print(response)
-        except Exception as e:
+        except Exception:
             pass
 
         mock_client.assert_called()
@@ -269,7 +268,6 @@ def test_bedrock_latency_optimized_inference():
 
 
 def test_custom_provider_with_extra_headers():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     with patch.object(
         litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
@@ -286,7 +284,6 @@ def test_custom_provider_with_extra_headers():
 
 
 def test_custom_provider_with_extra_body():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     with patch.object(
         litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
@@ -1132,52 +1129,57 @@ def test_anthropic_disable_url_suffix_env_var():
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/messages appended
             assert actual_api_base.endswith("/v1/messages")
             assert actual_api_base == "https://api.example.com/v1/messages"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should NOT append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/messages appended
             assert actual_api_base == "https://api.example.com/custom/path"
             assert not actual_api_base.endswith("/v1/messages")
@@ -1192,48 +1194,53 @@ def test_anthropic_text_disable_url_suffix_env_var():
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/complete appended
             assert actual_api_base.endswith("/v1/complete")
             assert actual_api_base == "https://api.example.com/v1/complete"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should NOT append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/complete appended
             assert actual_api_base == "https://api.example.com/custom/complete"
             assert not actual_api_base.endswith("/v1/complete")
@@ -1250,15 +1257,24 @@ def test_header_priority_and_merging():
 
     try:
         # Set global headers
-        litellm.headers = {"X-Global-Header": "global-value", "X-Shared-Header": "global"}
+        litellm.headers = {
+            "X-Global-Header": "global-value",
+            "X-Shared-Header": "global",
+        }
 
         captured_headers = {}
 
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+        ) as mock_post:
+
             def capture_headers(*args, **kwargs):
                 captured_headers.update(kwargs.get("headers", {}))
                 mock_response = MagicMock()
-                mock_response.json.return_value = {"choices": [{"message": {"content": "test"}}], "usage": {"total_tokens": 10}}
+                mock_response.json.return_value = {
+                    "choices": [{"message": {"content": "test"}}],
+                    "usage": {"total_tokens": 10},
+                }
                 mock_response.status_code = 200
                 return mock_response
 
@@ -1270,10 +1286,16 @@ def test_header_priority_and_merging():
                     model="custom/test-model",
                     messages=[{"role": "user", "content": "test"}],
                     api_base="https://example.com/api",
-                    extra_headers={"X-Extra-Header": "extra-value", "X-Shared-Header": "extra"},
-                    headers={"X-Request-Header": "request-value", "X-Shared-Header": "request"}
+                    extra_headers={
+                        "X-Extra-Header": "extra-value",
+                        "X-Shared-Header": "extra",
+                    },
+                    headers={
+                        "X-Request-Header": "request-value",
+                        "X-Shared-Header": "request",
+                    },
                 )
-            except Exception as e:
+            except Exception:
                 # Expected since we're mocking
                 pass
 
@@ -1299,10 +1321,14 @@ def test_anthropic_header_passing():
     captured_headers = {}
 
     with patch("litellm.llms.anthropic.chat.handler.HTTPHandler.post") as mock_post:
+
         def capture_headers(*args, **kwargs):
             captured_headers.update(kwargs.get("headers", {}))
             mock_response = MagicMock()
-            mock_response.json.return_value = {"content": [{"text": "test response"}], "usage": {"input_tokens": 5, "output_tokens": 5}}
+            mock_response.json.return_value = {
+                "content": [{"text": "test response"}],
+                "usage": {"input_tokens": 5, "output_tokens": 5},
+            }
             mock_response.status_code = 200
             return mock_response
 
@@ -1314,10 +1340,10 @@ def test_anthropic_header_passing():
                 messages=[{"role": "user", "content": "Hello"}],
                 extra_headers={
                     "X-API-Gateway-Key": "gateway-123",
-                    "X-Tenant-ID": "tenant-456"
-                }
+                    "X-Tenant-ID": "tenant-456",
+                },
             )
-        except Exception as e:
+        except Exception:
             # Expected since we're mocking
             pass
 
@@ -1337,7 +1363,9 @@ def test_openai_header_passing():
 
     captured_extra_headers = {}
 
-    with patch("litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_request") as mock_transform:
+    with patch(
+        "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_request"
+    ) as mock_transform:
         with patch("litellm.completion_cost") as mock_cost:
             mock_cost.return_value = 0.0
             mock_transform.return_value = {"model": "gpt-4", "messages": []}
@@ -1357,10 +1385,10 @@ def test_openai_header_passing():
                         messages=[{"role": "user", "content": "Hello"}],
                         extra_headers={
                             "X-Custom-Auth": "bearer-token",
-                            "X-Request-ID": "req-789"
-                        }
+                            "X-Request-ID": "req-789",
+                        },
                     )
-                except Exception as e:
+                except Exception:
                     # Expected since we're mocking
                     pass
 
@@ -1384,18 +1412,21 @@ def test_global_headers_functionality():
 
     try:
         # Set global headers
-        litellm.headers = {
-            "X-Company-ID": "acme-corp",
-            "X-Environment": "production"
-        }
+        litellm.headers = {"X-Company-ID": "acme-corp", "X-Environment": "production"}
 
         captured_headers = {}
 
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+        ) as mock_post:
+
             def capture_headers(*args, **kwargs):
                 captured_headers.update(kwargs.get("headers", {}))
                 mock_response = MagicMock()
-                mock_response.json.return_value = {"choices": [{"message": {"content": "test"}}], "usage": {"total_tokens": 10}}
+                mock_response.json.return_value = {
+                    "choices": [{"message": {"content": "test"}}],
+                    "usage": {"total_tokens": 10},
+                }
                 mock_response.status_code = 200
                 return mock_response
 
@@ -1405,9 +1436,9 @@ def test_global_headers_functionality():
                 litellm.completion(
                     model="custom/test-model",
                     messages=[{"role": "user", "content": "test"}],
-                    api_base="https://example.com/api"
+                    api_base="https://example.com/api",
                 )
-            except Exception as e:
+            except Exception:
                 # Expected since we're mocking
                 pass
 
