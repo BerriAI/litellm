@@ -28,9 +28,7 @@ class ResponsesToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = LiteLLMResponsesTransformationHandler()
 
-    def validate_input_kwargs(
-        self, kwargs: dict
-    ) -> ResponsesToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
@@ -77,7 +75,9 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(self, *args, **kwargs) -> Union[
+    def completion(
+        self, *args, **kwargs
+    ) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
@@ -109,9 +109,15 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        result = responses(
-            **request_data,
-        )
+        try:
+            result = responses(
+                **request_data,
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.warning(f"Responses API failed: {e}")
+            # Re-raise to let the main completion function handle fallback
+            raise e
 
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
@@ -141,9 +147,7 @@ class ResponsesToCompletionBridgeHandler:
             )
             return streamwrapper
 
-    async def acompletion(
-        self, *args, **kwargs
-    ) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -170,10 +174,16 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        result = await aresponses(
-            **request_data,
-            aresponses=True,
-        )
+        try:
+            result = await aresponses(
+                **request_data,
+                aresponses=True,
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            verbose_logger.warning(f"Responses API failed: {e}")
+            # Re-raise to let the main completion function handle fallback
+            raise e
 
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
