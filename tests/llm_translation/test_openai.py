@@ -696,7 +696,8 @@ async def test_openai_gpt5_reasoning():
         mock_bridge_completion.assert_called_once()
 
         # Verify response has expected structure
-        assert response.id == "resp_test_reasoning"
+        assert response.provider_specific_fields is not None
+        assert response.provider_specific_fields["responses_api_id"] == "resp_test_reasoning"
         assert response.choices[0].message.content == "Paris is the capital of France."
         assert response.choices[0].message.reasoning_content == "I need to recall basic geography. France is a country in Europe, and its capital city is Paris."
 
@@ -741,7 +742,8 @@ async def test_azure_gpt5_auto_routing():
         mock_bridge_acompletion.assert_called_once()
 
         # Verify response has expected structure
-        assert response.id == "resp_azure_test"
+        assert response.provider_specific_fields is not None
+        assert response.provider_specific_fields["responses_api_id"] == "resp_azure_test"
         assert response.choices[0].message.content == "Azure auto-routing is working correctly."
         assert response.choices[0].message.reasoning_content == "The user is testing Azure GPT-5 auto-routing with a complex deployment name. I should confirm that the functionality works."
 

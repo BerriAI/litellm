@@ -1394,10 +1394,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             except Exception as e:
                 verbose_logger.warning(
-                    f"Responses API failed, falling back to chat completions: {e}"
+                    f"Responses API failed for model '{model}': {e}"
                 )
-                # Clear responses mode to continue with normal chat completion flow
-                model_info["mode"] = "chat"
+                raise
 
         if custom_llm_provider == "azure":
             # azure configs

@@ -650,8 +650,8 @@ class TestResponsesAPIBridgeAutoRouting:
                 assert model_info["mode"] == "responses", f"Model {model} should be routed to responses API"
 
 
-def test_responses_api_fallback_to_chat_completions():
-    """Test that responses API failures gracefully fall back to chat completions."""
+def test_responses_api_failure_propagates():
+    """Test that responses API failures bubble up for auto-routed GPT-5 models."""
     from unittest.mock import patch
 
     from litellm.main import completion
@@ -659,19 +659,14 @@ def test_responses_api_fallback_to_chat_completions():
     with patch("litellm.completion_extras.responses_api_bridge.completion") as mock_responses_completion:
         mock_responses_completion.side_effect = Exception("Responses API unavailable")
 
-        with patch("litellm.completion") as mock_chat_completion:
-            mock_chat_completion.return_value = "chat_completion_result"
+        with pytest.raises(Exception) as exc_info:
+            completion(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "test"}],
+            )
 
-            # This should trigger auto-routing to responses API but fall back to chat
-            try:
-                completion(
-                    model="gpt-5",
-                    messages=[{"role": "user", "content": "test"}],
-                )
-                # The fallback logic should handle this gracefully
-            except Exception as e:
-                # Should not fail completely, but may continue with chat completion flow
-                pass
+        mock_responses_completion.assert_called_once()
+        assert "Responses API unavailable" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

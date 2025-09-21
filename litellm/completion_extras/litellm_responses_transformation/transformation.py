@@ -240,7 +240,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raise ValueError(f"Error in response: {raw_response.error}")
 
         choices: List[Choices] = []
-        reasoning_content = []
+        pending_reasoning_chunks: List[str] = []
         index = 0
         for item in raw_response.output:
             if isinstance(item, ResponseReasoningItem):
@@ -249,7 +249,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     for content in item.content:
                         reasoning_text = getattr(content, "text", "")
                         if reasoning_text:
-                            reasoning_content.append(reasoning_text)
+                            pending_reasoning_chunks.append(reasoning_text)
             elif isinstance(item, ResponseOutputMessage):
                 for content_item in item.content:
                     response_text = getattr(content_item, "text", "")
@@ -257,17 +257,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         role=item.role, content=response_text if response_text else ""
                     )
 
-                    # Add reasoning_content field (always add it for responses API, even if empty)
-                    setattr(
-                        msg,
-                        "reasoning_content",
-                        "\n".join(reasoning_content) if reasoning_content else None,
-                    )
+                    if pending_reasoning_chunks:
+                        setattr(
+                            msg,
+                            "reasoning_content",
+                            "\n".join(pending_reasoning_chunks),
+                        )
 
                     choices.append(
                         Choices(message=msg, finish_reason="stop", index=index)
                     )
                     index += 1
+                pending_reasoning_chunks = []
             elif isinstance(item, ResponseFunctionToolCall):
                 msg = Message(
                     content=None,
@@ -306,8 +307,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         setattr(model_response, "choices", choices)
 
         model_response.model = model
-        # Preserve the responses API ID instead of generating a new chatcmpl- ID
-        model_response.id = raw_response.id
+
+        provider_specific_fields = getattr(
+            model_response, "provider_specific_fields", None
+        ) or {}
+        provider_specific_fields.update({"responses_api_id": raw_response.id})
+        setattr(model_response, "provider_specific_fields", provider_specific_fields)
 
         setattr(
             model_response,
