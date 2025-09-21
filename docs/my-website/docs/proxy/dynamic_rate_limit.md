@@ -231,3 +231,11 @@ With the configuration above:
   }
 }
 ```
+
+### Demo Video
+
+This video walks through setting up dynamic rate limiting with priority reservation and locust tests to validate the behavior.
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/1b54b93139ee415d959402cc0629f3f7
+" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
