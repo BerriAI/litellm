@@ -50,6 +50,7 @@ litellm_settings:
     port: 6379  # The port number for the Redis cache. Required if type is "redis".
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     namespace: "litellm.caching.caching" # namespace for redis cache
+    max_connections: 100  # [OPTIONAL] Maximum number of Redis connections. Passed directly to redis-py. Increase if you see 'No connection available' errors under high load.
   
     # Optional - Redis Cluster Settings
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
