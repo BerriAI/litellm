@@ -353,6 +353,21 @@ async def test_simple_acompletion():
     assert resp.choices[0].message.content == "Hi!"
 
 
+
+def test_simple_completion_gpt_4o():
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = completion(
+        model="custom_llm/gpt-4o",
+        messages=[{"role": "user", "content": "Hello world!"}],
+    )
+
+    assert resp.choices[0].message.content == "Hi!"
+
+
+
 def test_simple_completion_streaming():
     my_custom_llm = MyCustomLLM()
     litellm.custom_provider_map = [
