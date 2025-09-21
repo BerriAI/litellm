@@ -586,9 +586,16 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
-    # The spend metric uses keyword arguments
+    # The spend metric uses keyword arguments (same as requests metric)
     prometheus_logger.litellm_spend_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        model="gpt-3.5-turbo",
+        user_email=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
