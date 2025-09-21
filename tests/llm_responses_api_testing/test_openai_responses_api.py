@@ -1508,3 +1508,93 @@ async def test_basic_openai_responses_with_websearch(stream):
             print("chunk=", json.dumps(chunk, indent=4, default=str))
     else:
         print("response=", json.dumps(response, indent=4, default=str))
+
+
+class TestGPT5AutoRoutingResponsesAPI:
+    """Test auto-routing of GPT-5 models to responses API."""
+
+    @pytest.mark.asyncio
+    async def test_auto_routed_gpt5_with_reasoning_effort(self):
+        """Test that auto-routed GPT-5 properly handles reasoning_effort parameter."""
+        # Mock at the responses bridge level instead of litellm.aresponses
+        with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.acompletion") as mock_bridge_acompletion:
+            # Mock a typical ModelResponse that would come from responses API transformation
+            from litellm.types.utils import ModelResponse, Choices, Message
+
+            mock_response = ModelResponse(
+                id="resp_auto_route_test",
+                created=int(time.time()),
+                model="gpt-5",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=Message(
+                            content="2+2 equals 4. Let me explain step by step.",
+                            role="assistant",
+                            reasoning_content="Step 1: I need to add 2 and 2. Step 2: 2 + 2 = 4."
+                        )
+                    )
+                ]
+            )
+            mock_bridge_acompletion.return_value = mock_response
+
+            # Use completion() which should auto-route GPT-5 to responses API
+            response = await litellm.acompletion(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "Solve 2+2 step by step"}],
+                reasoning_effort="high",
+            )
+
+            # Verify auto-routing worked (responses bridge was called)
+            mock_bridge_acompletion.assert_called_once()
+
+            # Verify response structure
+            assert response.id == "resp_auto_route_test"
+            assert response.choices[0].message.content == "2+2 equals 4. Let me explain step by step."
+            assert response.choices[0].message.reasoning_content == "Step 1: I need to add 2 and 2. Step 2: 2 + 2 = 4."
+
+    @pytest.mark.asyncio
+    async def test_auto_routed_azure_gpt5_with_complex_deployment(self):
+        """Test auto-routing for Azure GPT-5 with complex deployment names."""
+        # Mock at the responses bridge level for Azure
+        with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.acompletion") as mock_bridge_acompletion:
+            # Mock Azure responses API response
+            from litellm.types.utils import ModelResponse, Choices, Message
+
+            mock_response = ModelResponse(
+                id="resp_azure_complex",
+                created=int(time.time()),
+                model="gpt-5",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=Message(
+                            content="Azure deployment auto-routing successful.",
+                            role="assistant",
+                            reasoning_content="Complex deployment names are properly handled by the regex matching."
+                        )
+                    )
+                ]
+            )
+            mock_bridge_acompletion.return_value = mock_response
+
+            # Test complex Azure deployment name auto-routing
+            response = await litellm.acompletion(
+                model="azure/company-gpt-5-turbo-deployment",
+                messages=[{"role": "user", "content": "Test complex deployment"}],
+                reasoning_effort="medium",
+                api_base="https://test.openai.azure.com/",
+                api_key="fake-azure-key",
+            )
+
+            # Verify auto-routing to Azure responses API worked
+            mock_bridge_acompletion.assert_called_once()
+
+            # Verify response structure
+            assert response.id == "resp_azure_complex"
+            assert response.choices[0].message.content == "Azure deployment auto-routing successful."
+
