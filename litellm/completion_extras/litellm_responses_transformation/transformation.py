@@ -243,8 +243,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         if reasoning_text:
                             reasoning_content.append(reasoning_text)
             elif isinstance(item, ResponseOutputMessage):
-                for content in item.content:
-                    response_text = getattr(content, "text", "")
+                for content_item in item.content:
+                    response_text = getattr(content_item, "text", "")
                     msg = Message(role=item.role, content=response_text if response_text else "")
 
                     # Add reasoning_content field (always add it for responses API, even if empty)
