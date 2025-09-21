@@ -1014,3 +1014,35 @@ def test_mcp_path_based_server_segregation(monkeypatch):
 
     # The context should have mcp_servers set to ["zapier", "group1"]
     assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
+
+
+@pytest.mark.parametrize(
+    "headers,expected_result",
+    [
+        (
+            Headers(
+                {
+                    "x-litellm-api-key": "test-key",
+                    "x-mcp-github-authorization": "Bearer github-token",
+                }
+            ),
+            {"github": {"Authorization": "Bearer github-token"}},
+        ),
+        (
+            Headers(
+                {
+                    "x-litellm-api-key": "test-key",
+                    "x-mcp-github-x-api-key": "Basic base64-encoded-creds",
+                }
+            ),
+            {"github": {"x-api-key": "Basic base64-encoded-creds"}},
+        ),
+    ],
+)
+def test_get_mcp_server_auth_headers_from_headers(headers, expected_result):
+    """Test _get_mcp_server_auth_headers_from_headers method"""
+    from starlette.datastructures import Headers
+
+    headers = Headers(headers)
+    result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+    assert result == expected_result

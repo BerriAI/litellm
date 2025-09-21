@@ -361,7 +361,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
@@ -371,8 +371,8 @@ if MCP_AVAILABLE:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server (deprecated)
             mcp_servers: Optional list of server names/aliases to filter by
-            mcp_server_auth_headers: Optional dict of server-specific auth headers 
-            oauth2_headers: Optional dict of oauth2 headers 
+            mcp_server_auth_headers: Optional dict of server-specific auth headers
+            oauth2_headers: Optional dict of oauth2 headers
 
         Returns:
             List[MCPTool]: Combined list of tools from filtered servers
@@ -438,7 +438,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
@@ -505,7 +505,7 @@ if MCP_AVAILABLE:
         arguments: Optional[Dict[str, Any]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
@@ -606,7 +606,7 @@ if MCP_AVAILABLE:
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
@@ -858,7 +858,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth,
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
@@ -883,7 +883,7 @@ if MCP_AVAILABLE:
         Optional[UserAPIKeyAuth],
         Optional[str],
         Optional[List[str]],
-        Optional[Dict[str, str]],
+        Optional[Dict[str, Dict[str, str]]],
         Optional[Dict[str, str]],
     ]:
         """
