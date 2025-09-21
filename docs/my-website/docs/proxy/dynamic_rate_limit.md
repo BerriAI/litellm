@@ -101,88 +101,133 @@ This was rate limited b/c - Error code: 429 - {'error': {'message': {'error': 'K
 
 ## [BETA] Set Priority / Reserve Quota
 
-Reserve tpm/rpm capacity for projects in prod. You should use this feature when you want to reserve tpm/rpm capacity for specific projects. For example, a realtime use case should get higher priority than a different use case.
+Reserve TPM/RPM capacity for different environments or use cases. This ensures critical production workloads always have guaranteed capacity, while development or lower-priority tasks use remaining quota.
 
+**Use Cases:**
+- Production vs Development environments
+- Real-time applications vs batch processing
+- Critical services vs experimental features
 
 :::tip
 
-Reserving tpm/rpm on keys based on priority is a premium feature. Please [get an enterprise license](./enterprise.md) for it. 
+Reserving TPM/RPM on keys based on priority is a premium feature. Please [get an enterprise license](./enterprise.md) for it. 
 :::
 
-### Usage
+### How Priority Reservation Works
 
-1. Setup config.yaml
+Priority reservation allocates a percentage of your model's total TPM/RPM to specific priority levels. Keys with higher priority get guaranteed access to their reserved quota first.
 
-```yaml 
+**Example Scenario:**
+- Model has 10 RPM total capacity
+- Priority reservation: `{"prod": 0.9, "dev": 0.1}`
+- Result: Production keys get 9 RPM guaranteed, Development keys get 1 RPM guaranteed
+
+### Configuration
+
+#### 1. Setup config.yaml
+
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gpt-3.5-turbo             
     litellm_params:
       model: "gpt-3.5-turbo"       
       api_key: os.environ/OPENAI_API_KEY 
-      rpm: 100   
+      rpm: 10   # Total model capacity
 
 litellm_settings:
   callbacks: ["dynamic_rate_limiter_v3"]
-  priority_reservation: {"dev": 0, "prod": 1}
+  priority_reservation: 
+    "prod": 0.9  # 90% reserved for production (9 RPM)
+    "dev": 0.1   # 10% reserved for development (1 RPM)
 
 general_settings:
   master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
-  database_url: postgres://.. # OR set `DATABASE_URL=".."` in your .env
+  database_url: postgres://.. # OR set `DATABASE_URL=".."` in your.env
 ```
 
+**Configuration Details:**
 
-priority_reservation: 
-- Dict[str, float]
-  - str: can be any string
-  - float: from 0 to 1. Specify the % of tpm/rpm to reserve for keys of this priority.
+`priority_reservation`: Dict[str, float]
+- **Key (str)**: Priority level name (can be any string like "prod", "dev", "critical", etc.)
+- **Value (float)**: Percentage of total TPM/RPM to reserve (0.0 to 1.0)
+- **Note**: Values should sum to 1.0 or less
 
 **Start Proxy**
 
-```
+```bash
 litellm --config /path/to/config.yaml
 ```
 
-2. Create a key with that priority
+#### 2. Create Keys with Priority Levels
 
+**Production Key:**
 ```bash
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer <your-master-key>' \
+-H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
-	"metadata": {"priority": "dev"} # 👈 KEY CHANGE
+-d '{
+  "metadata": {"priority": "prod"}
 }'
 ```
 
-**Expected Response**
-
+**Development Key:**
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+  "metadata": {"priority": "dev"}
+}'
 ```
+
+**Expected Response for both:**
+```json
 {
+  "key": "sk-...",
+  "metadata": {"priority": "prod"}, // or "dev"
   ...
-  "key": "sk-.."
 }
 ```
 
+#### 3. Test Priority Allocation
 
-3. Test it!
-
+**Test Production Key (should get 9 RPM):**
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: sk-...' \ # 👈 key from step 2.
+  -H 'Authorization: Bearer sk-prod-key' \
   -d '{
-  "model": "gpt-3.5-turbo",
-  "messages": [
-      {
-      "role": "user",
-      "content": "what llm are you"
-      }
-  ],
-}'
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hello from prod"}]
+  }'
 ```
 
-**Expected Response**
-
+**Test Development Key (should get 1 RPM):**
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer sk-dev-key' \
+  -d '{
+    "model": "gpt-3.5-turbo", 
+    "messages": [{"role": "user", "content": "Hello from dev"}]
+  }'
 ```
-Key=... over available RPM=0. Model RPM=100, Active keys=None
-```
 
+### Expected Behavior
+
+With the configuration above:
+
+1. **Production keys** can make up to 9 requests per minute
+2. **Development keys** can make up to 1 request per minute  
+3. Production requests are never blocked by development usage
+
+**Rate Limit Error Example:**
+```json
+{
+  "error": {
+    "message": "Key=sk-dev-... over available RPM=0. Model RPM=10, Reserved RPM for priority 'dev'=1, Active keys=1",
+    "type": "rate_limit_exceeded",
+    "code": 429
+  }
+}
+```
