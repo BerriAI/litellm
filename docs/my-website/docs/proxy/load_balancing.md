@@ -172,6 +172,9 @@ router_settings:
   redis_host: <your redis host>
   redis_password: <your redis password>
   redis_port: 1992
+  cache_params:
+    type: redis
+    max_connections: 100  # maximum Redis connections in the pool; tune based on expected concurrency/load
 ```
 
 ## Router settings on config - routing_strategy, model_group_alias
