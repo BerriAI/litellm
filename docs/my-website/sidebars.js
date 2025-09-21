@@ -393,6 +393,7 @@ const sidebars = {
             "providers/vertex_partner",
             "providers/vertex_image",
             "providers/vertex_batch",
+            "providers/vertex_realtime",
           ]
         },
         {
