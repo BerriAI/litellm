@@ -7,7 +7,7 @@ Dynamically allocate TPM/RPM quota to api keys, based on active keys in that min
 
 1. Setup config.yaml 
 
-```yaml 
+```yaml showLineNumbers title="config.yaml"
 model_list: 
   - model_name: my-fake-model
     litellm_params:
@@ -32,7 +32,7 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```python
+```python showLineNumbers title="test.py"
 """
 - Run 2 concurrent teams calling same model
 - model has 60 TPM
@@ -118,7 +118,7 @@ model_list:
       rpm: 100   
 
 litellm_settings:
-  callbacks: ["dynamic_rate_limiter"]
+  callbacks: [""]
   priority_reservation: {"dev": 0, "prod": 1}
 
 general_settings:
