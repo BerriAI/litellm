@@ -28,7 +28,9 @@ class ResponsesToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = LiteLLMResponsesTransformationHandler()
 
-    def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(
+        self, kwargs: dict
+    ) -> ResponsesToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
@@ -115,6 +117,7 @@ class ResponsesToCompletionBridgeHandler:
             )
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.warning(f"Responses API failed: {e}")
             # Re-raise to let the main completion function handle fallback
             raise e
@@ -147,7 +150,9 @@ class ResponsesToCompletionBridgeHandler:
             )
             return streamwrapper
 
-    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(
+        self, *args, **kwargs
+    ) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -181,6 +186,7 @@ class ResponsesToCompletionBridgeHandler:
             )
         except Exception as e:
             from litellm._logging import verbose_logger
+
             verbose_logger.warning(f"Responses API failed: {e}")
             # Re-raise to let the main completion function handle fallback
             raise e
