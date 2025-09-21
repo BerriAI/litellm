@@ -21,16 +21,14 @@ import TabItem from '@theme/TabItem';
 
 ## Deploy this version
 
-:::info
-
-This release is not live yet.
-
-:::
-
 <Tabs>
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:main-v1.77.3.rc.1
 ```
 
 </TabItem>
@@ -38,6 +36,7 @@ This release is not live yet.
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
+pip install litellm==1.77.3
 ```
 
 </TabItem>
