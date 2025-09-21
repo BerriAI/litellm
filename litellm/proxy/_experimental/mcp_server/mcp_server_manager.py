@@ -40,7 +40,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPStdioConfig
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPOAuthInfo, MCPServer
 
 
 def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
@@ -131,6 +131,14 @@ class MCPServerManager:
                 "mcp_server_cost_info": _mcp_info.get("mcp_server_cost_info", None),
             }
 
+            # OAUTH INFO
+            oauth_info: MCPOAuthInfo = MCPOAuthInfo(
+                client_id=server_config.get("client_id", None),
+                client_secret=server_config.get("client_secret", None),
+                scopes=server_config.get("scopes", None),
+                authorization_url=server_config.get("authorization_url", None),
+                token_url=server_config.get("token_url", None),
+            )
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
 
@@ -184,7 +192,9 @@ class MCPServerManager:
             name_for_prefix = get_server_prefix(temp_server)
 
             # Generate stable server ID based on parameters
-            server_id = self._generate_stable_server_id(
+            server_id = server_config.get(
+                "server_id", None
+            ) or self._generate_stable_server_id(
                 server_name=server_name,
                 url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
@@ -207,6 +217,7 @@ class MCPServerManager:
                 authentication_token=server_config.get(
                     "authentication_token", server_config.get("auth_value", None)
                 ),
+                oauth_info=oauth_info,
                 mcp_info=mcp_info,
                 access_groups=server_config.get("access_groups", None),
             )
@@ -605,20 +616,26 @@ class MCPServerManager:
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
-                "user_api_key_user_id": getattr(user_api_key_auth, "user_id", None)
-                if user_api_key_auth
-                else None,
-                "user_api_key_team_id": getattr(user_api_key_auth, "team_id", None)
-                if user_api_key_auth
-                else None,
-                "user_api_key_end_user_id": getattr(
-                    user_api_key_auth, "end_user_id", None
-                )
-                if user_api_key_auth
-                else None,
-                "user_api_key_hash": getattr(user_api_key_auth, "api_key_hash", None)
-                if user_api_key_auth
-                else None,
+                "user_api_key_user_id": (
+                    getattr(user_api_key_auth, "user_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_team_id": (
+                    getattr(user_api_key_auth, "team_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_end_user_id": (
+                    getattr(user_api_key_auth, "end_user_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_hash": (
+                    getattr(user_api_key_auth, "api_key_hash", None)
+                    if user_api_key_auth
+                    else None
+                ),
             }
 
             # Create MCP request object for processing
@@ -1021,9 +1038,11 @@ class MCPServerManager:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
-                        description=_server_config.mcp_info.get("description")
-                        if _server_config.mcp_info
-                        else None,
+                        description=(
+                            _server_config.mcp_info.get("description")
+                            if _server_config.mcp_info
+                            else None
+                        ),
                         mcp_info=_server_config.mcp_info,
                         mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields

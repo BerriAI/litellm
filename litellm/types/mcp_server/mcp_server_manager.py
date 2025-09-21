@@ -14,6 +14,14 @@ class MCPInfo(TypedDict, total=False):
     mcp_server_cost_info: Optional[MCPServerCostInfo]
 
 
+class MCPOAuthInfo(BaseModel):
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    authorization_url: Optional[str] = None
+    token_url: Optional[str] = None
+
+
 class MCPServer(BaseModel):
     server_id: str
     name: str
@@ -23,6 +31,7 @@ class MCPServer(BaseModel):
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
+    oauth_info: Optional[MCPOAuthInfo] = None
     mcp_info: Optional[MCPInfo] = None
     # Stdio-specific fields
     command: Optional[str] = None

@@ -157,6 +157,9 @@ from litellm.proxy._experimental.mcp_server.server import app as mcp_app
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
+from litellm.proxy._experimental.oauth_endpoints.endpoints import (
+    router as oauth_endpoints_router,
+)
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
@@ -9507,6 +9510,7 @@ app.include_router(tag_management_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+app.include_router(oauth_endpoints_router)
 ########################################################
 # MCP Server
 ########################################################
