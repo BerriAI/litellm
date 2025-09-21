@@ -3,7 +3,10 @@ import TabItem from '@theme/TabItem';
 
 # /responses [Beta]
 
+
 LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+
+Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
 | Feature | Supported | Notes |
 |---------|-----------|--------|
