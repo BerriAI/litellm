@@ -1,9 +1,11 @@
 
 # Dynamic TPM/RPM Allocation 
 
-Prevent projects from gobbling too much tpm/rpm. You should use this feature when you want to reserve tpm/rpm capacity for specific projects. For example, a realtime use case should get higher priority than a different use case.
+Prevent projects from gobbling too much tpm/rpm.
 
 Dynamically allocate TPM/RPM quota to api keys, based on active keys in that minute. [**See Code**](https://github.com/BerriAI/litellm/blob/9bffa9a48e610cc6886fc2dce5c1815aeae2ad46/litellm/proxy/hooks/dynamic_rate_limiter.py#L125)
+
+## Quick Start Usage
 
 1. Setup config.yaml 
 
@@ -97,15 +99,17 @@ This was rate limited b/c - Error code: 429 - {'error': {'message': {'error': 'K
 ```
 
 
-#### ✨ [BETA] Set Priority / Reserve Quota
+## [BETA] Set Priority / Reserve Quota
 
-Reserve tpm/rpm capacity for projects in prod.
+Reserve tpm/rpm capacity for projects in prod. You should use this feature when you want to reserve tpm/rpm capacity for specific projects. For example, a realtime use case should get higher priority than a different use case.
+
 
 :::tip
 
 Reserving tpm/rpm on keys based on priority is a premium feature. Please [get an enterprise license](./enterprise.md) for it. 
 :::
 
+### Usage
 
 1. Setup config.yaml
 
@@ -118,7 +122,7 @@ model_list:
       rpm: 100   
 
 litellm_settings:
-  callbacks: [""]
+  callbacks: ["dynamic_rate_limiter_v3"]
   priority_reservation: {"dev": 0, "prod": 1}
 
 general_settings:
