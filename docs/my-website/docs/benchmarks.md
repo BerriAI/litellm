@@ -61,19 +61,6 @@ Each machine deploying LiteLLM had the following specs:
 ---
 
 ## Worker Processes and Performance
-
-By default, LiteLLM Proxy sets the number of worker processes equal to the number of CPU cores:
-
-```python
-num_workers = os.cpu_count()
-```
-
-This default matches the number of workers to your machine’s cores. However, this may not always guarantee optimal performance — higher worker counts can increase memory usage and may lead to overutilization of CPU resources. The best value for your setup depends on your workload and available system resources.
-
-⚠️ **Note:** In containerized environments (Kubernetes, Docker, etc.), `os.cpu_count()` will return the host machine’s total cores, not the CPU quota allocated to your container. Use `--num_workers` or `DEFAULT_NUM_WORKERS_LITELLM_PROXY` to set this explicitly.
-
-**Override Options:**
-
 - Set environment variable:
     ```sh
     DEFAULT_NUM_WORKERS_LITELLM_PROXY=1
@@ -82,6 +69,12 @@ This default matches the number of workers to your machine’s cores. However, t
     ```sh
     litellm --num_workers 1
     ```
+
+LiteLLM allows you to modify the num of workers to increase performance.
+
+ Maxing workers may not always guarantee optimal performance — higher worker counts can increase memory usage and may lead to overutilization of CPU resources, or crashing pods. The best value for your setup depends on your workload and available system resources. 
+
+⚠️ **Note:** In containerized environments (Kubernetes, Docker, etc.), `os.cpu_count()` will return the host machine’s total cores, not the CPU quota allocated to your container. 
 
 **Note:**
 Workers are not forked subprocesses. Each worker loads a complete copy of the application code, dependencies, and runtime. 
