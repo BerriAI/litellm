@@ -114,7 +114,7 @@ def process_sso_jwt_access_token(
 
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
-    request: Request, source: Optional[str] = None, key: Optional[str] = None
+    request: Request, source: Optional[str] = None, key: Optional[str] = None, existing_key: Optional[str] = None
 ):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -173,12 +173,14 @@ async def google_login(
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
+        existing_key=existing_key,
     )
 
     # Store CLI key in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
+        existing_key=existing_key,
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -590,8 +592,12 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
         # Extract the key ID from the state
         key_id = state.split(":", 1)[1]
-        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}")
-        return await cli_sso_callback(request, key=key_id)
+        
+        # Get existing_key from query parameters if provided
+        existing_key = request.query_params.get("existing_key")
+            
+        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}")
+        return await cli_sso_callback(request, key=key_id, existing_key=existing_key)
 
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -678,13 +684,59 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
-async def cli_sso_callback(request: Request, key: Optional[str] = None):
-    """CLI SSO callback - generates the key with pre-specified ID"""
-    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}")
+async def _regenerate_cli_key(existing_key: str, new_key: str) -> None:
+    """Regenerate an existing CLI key with a new token"""
+    from litellm.proxy._types import RegenerateKeyRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+    
+    verbose_proxy_logger.info(f"Regenerating existing CLI key: {existing_key}")
+    
+    admin_user_dict = UserAPIKeyAuth.get_litellm_cli_user_api_key_auth()
+    
+    regenerate_request = RegenerateKeyRequest(
+        key=existing_key,
+        new_key=new_key,
+        duration="24hr"
+    )
+    
+    await regenerate_key_fn(
+        key=existing_key,
+        data=regenerate_request,
+        user_api_key_dict=admin_user_dict
+    )
+    
+    verbose_proxy_logger.info(f"Regenerated CLI key: {new_key}")
 
+
+async def _create_new_cli_key(key: str) -> None:
+    """Create a new CLI key"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
+    
+    verbose_proxy_logger.info("Creating new CLI key")
+    
+    await generate_key_helper_fn(
+        request_type="key",
+        duration="24hr",
+        key_max_budget=litellm.max_ui_session_budget,
+        aliases={},
+        config={},
+        spend=0,
+        team_id="litellm-cli",
+        table_name="key",
+        token=key,
+    )
+    
+    verbose_proxy_logger.info(f"Created new CLI key: {key}")
+
+
+async def cli_sso_callback(request: Request, key: Optional[str] = None, existing_key: Optional[str] = None):
+    """CLI SSO callback - regenerates existing CLI key or creates new one"""
+    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}, existing_key: {existing_key}")
+
     from litellm.proxy.proxy_server import prisma_client
 
     if not key or not key.startswith("sk-"):
@@ -698,21 +750,11 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
-    # Generate a simple key for CLI usage with the pre-specified key ID
     try:
-        await generate_key_helper_fn(
-            request_type="key",
-            duration="24hr",
-            key_max_budget=litellm.max_ui_session_budget,
-            aliases={},
-            config={},
-            spend=0,
-            team_id="litellm-cli",
-            table_name="key",
-            token=key,  # Use the pre-specified key ID
-        )
-
-        verbose_proxy_logger.info(f"Generated CLI key: {key}")
+        if existing_key:
+            await _regenerate_cli_key(existing_key, key)
+        else:
+            await _create_new_cli_key(key)
 
         # Return success page
         from fastapi.responses import HTMLResponse
@@ -725,8 +767,8 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None):
         return HTMLResponse(content=html_content, status_code=200)
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error generating CLI key: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate key: {str(e)}")
+        verbose_proxy_logger.error(f"Error with CLI key: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process CLI key: {str(e)}")
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
@@ -1056,6 +1098,7 @@ class SSOAuthenticationHandler:
     def get_redirect_url_for_sso(
         request: Request,
         sso_callback_route: str,
+        existing_key: Optional[str] = None,
     ) -> str:
         """
         Get the redirect URL for SSO
@@ -1067,6 +1110,11 @@ class SSOAuthenticationHandler:
             redirect_url += sso_callback_route
         else:
             redirect_url += "/" + sso_callback_route
+            
+        # Append existing_key as query parameter if provided
+        if existing_key:
+            redirect_url += f"?existing_key={existing_key}"
+            
         return redirect_url
 
     @staticmethod
@@ -1249,7 +1297,7 @@ class SSOAuthenticationHandler:
         return team_request
 
     @staticmethod
-    def _get_cli_state(source: Optional[str], key: Optional[str]) -> Optional[str]:
+    def _get_cli_state(source: Optional[str], key: Optional[str], existing_key: Optional[str] = None) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
 
@@ -1260,11 +1308,11 @@ class SSOAuthenticationHandler:
             LITELLM_CLI_SOURCE_IDENTIFIER,
         )
 
-        return (
-            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
-            if source == LITELLM_CLI_SOURCE_IDENTIFIER and key
-            else None
-        )
+        if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
+            # Just use the key - existing_key will be passed separately via query params
+            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+        else:
+            return None
 
     @staticmethod
     async def get_redirect_response_from_openid(  # noqa: PLR0915
