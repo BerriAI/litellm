@@ -209,6 +209,7 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
         "messages": [
             {"role": "user", "content": "Hi my name id Brian"},
         ],
+        "litellm_call_id": "test-call-id",
     }
 
     with patch(
@@ -217,6 +218,13 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
             request_body = kwargs.get("json", {})
+            request_headers = kwargs.get("headers", {})
+            assert (
+                request_headers["x-aim-call-id"] == "test-call-id"
+            ), "Wrong header: x-aim-call-id"
+            assert (
+                request_headers["x-aim-gateway-key-alias"] == "test-key"
+            ), "Wrong header: x-aim-gateway-key-alias"
             if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
             elif request_body["messages"][-1]["role"] == "assistant":
@@ -229,7 +237,7 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
         data = await aim_guardrail.async_pre_call_hook(
             data=data,
             cache=DualCache(),
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
             call_type="completion",
         )
         assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
@@ -249,7 +257,9 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
             )
 
         result = await aim_guardrail.async_post_call_success_hook(
-            data=data, response=llm_response(), user_api_key_dict=UserAPIKeyAuth()
+            data=data,
+            response=llm_response(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
         assert result["choices"][0]["message"]["content"] == "Hello Brian! How are you?"
 

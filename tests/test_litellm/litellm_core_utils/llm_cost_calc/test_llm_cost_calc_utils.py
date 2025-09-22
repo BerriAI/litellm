@@ -226,7 +226,7 @@ def test_string_cost_values():
         completion_tokens=500,
         total_tokens=1500,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None
+            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(
             audio_tokens=50,
@@ -235,7 +235,6 @@ def test_string_cost_values():
             accepted_prediction_tokens=None,
             rejected_prediction_tokens=None,
         ),
-        _cache_creation_input_tokens=150,
     )
 
     # Mock get_model_info to return our mock model info
