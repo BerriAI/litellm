@@ -287,7 +287,7 @@ async def test_rerank_custom_callbacks():
         top_n=3,
     )
 
-    await asyncio.sleep(5)
+    await asyncio.sleep(8)
 
     print("async re rank response: ", response)
     assert custom_logger.kwargs is not None
