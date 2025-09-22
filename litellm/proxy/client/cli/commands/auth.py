@@ -281,6 +281,8 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
 
 def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
     """Update the API key to be associated with the selected team"""
+    import requests
+
     from litellm.proxy.client import Client
     
     client = Client(base_url=base_url, api_key=api_key)
@@ -288,6 +290,11 @@ def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
         result = client.keys.update(key=api_key, team_id=team_id)
         click.echo(f"✅ Successfully assigned key to team: {team_id}")
         return True
+    except requests.exceptions.HTTPError as e:
+        # Bubble up the response text for detailed error info
+        error_msg = e.response.text if e.response else str(e)
+        click.echo(f"❌ Error updating key with team: {error_msg}")
+        return False
     except Exception as e:
         click.echo(f"❌ Error updating key with team: {e}")
         return False
