@@ -738,19 +738,24 @@ class CommonBatchFilesUtils:
         )
         
         # Prepare the request data
-        if isinstance(data, dict):
-            import json
-            request_data = json.dumps(data)
+        method_upper = method.upper()
+        if method_upper == "GET":
+            # GET requests should be signed with an empty payload
+            request_data = ""
+            headers = {}
         else:
-            request_data = data
-        
-        # Prepare headers
-        headers = {"Content-Type": "application/json"}
+            if isinstance(data, dict):
+                import json
+                request_data = json.dumps(data)
+            else:
+                request_data = data
+            # Prepare headers for non-GET requests
+            headers = {"Content-Type": "application/json"}
         
         # Create AWS request and sign it
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
         request = AWSRequest(
-            method=method.upper(), url=endpoint_url, data=request_data, headers=headers
+            method=method_upper, url=endpoint_url, data=request_data, headers=headers
         )
         sigv4.add_auth(request)
         prepped = request.prepare()
@@ -761,22 +766,24 @@ class CommonBatchFilesUtils:
         """
         Generate a unique job name for AWS services.
         AWS services often have length limits, so this creates a concise name.
-        
+
         Args:
             model: Model name to include in the job name
             prefix: Prefix for the job name
-            
+
         Returns:
             Unique job name (≤ 63 characters for Bedrock compatibility)
         """
-        import fastuuid as uuid
+        try:
+            import fastuuid as uuid  # type: ignore
+        except Exception:
+            import uuid as uuid
         unique_id = str(uuid.uuid4())[:8]
         # Format: {prefix}-batch-{model}-{uuid}
         # Example: litellm-batch-claude-266c398e
         job_name = f"{prefix}-batch-{unique_id}"
-        
-        return job_name
 
+        return job_name
     def get_s3_bucket_and_key_from_config(
         self, 
         litellm_params: dict, 

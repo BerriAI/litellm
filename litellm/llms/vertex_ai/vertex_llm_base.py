@@ -239,6 +239,7 @@ class VertexBase:
             stream=stream,
             auth_header=None,
             url=default_api_base,
+            model=model,
         )
         return api_base
 
@@ -292,6 +293,7 @@ class VertexBase:
         stream: Optional[bool],
         auth_header: Optional[str],
         url: str,
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
@@ -301,7 +303,12 @@ class VertexBase:
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
+                # For Gemini (Google AI Studio), construct the full path like other providers
+                if model is None:
+                    raise ValueError(
+                        "Model parameter is required for Gemini custom API base URLs"
+                    )
+                url = "{}/models/{}:{}".format(api_base, model, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
@@ -373,6 +380,7 @@ class VertexBase:
             endpoint=endpoint,
             stream=stream,
             url=url,
+            model=model,
         )
 
     def _handle_reauthentication(
@@ -384,19 +392,19 @@ class VertexBase:
     ) -> Tuple[str, str]:
         """
         Handle reauthentication when credentials refresh fails.
-        
+
         This method clears the cached credentials and attempts to reload them once.
         It should only be called when "Reauthentication is needed" error occurs.
-        
+
         Args:
             credentials: The original credentials
             project_id: The project ID
             credential_cache_key: The cache key to clear
             error: The original error that triggered reauthentication
-            
+
         Returns:
             Tuple of (access_token, project_id)
-            
+
         Raises:
             The original error if reauthentication fails
         """
@@ -404,11 +412,11 @@ class VertexBase:
             f"Handling reauthentication for project_id: {project_id}. "
             f"Clearing cache and retrying once."
         )
-        
+
         # Clear the cached credentials
         if credential_cache_key in self._credentials_project_mapping:
             del self._credentials_project_mapping[credential_cache_key]
-        
+
         # Retry once with _retry_reauth=True to prevent infinite recursion
         try:
             return self.get_access_token(
@@ -438,12 +446,12 @@ class VertexBase:
         3. Check if loaded credentials have expired
         4. If expired, refresh credentials
         5. Return access token and project id
-        
+
         Args:
             credentials: The credentials to use for authentication
             project_id: The Google Cloud project ID
             _retry_reauth: Internal flag to prevent infinite recursion during reauthentication
-        
+
         Returns:
             Tuple of (access_token, project_id)
         """

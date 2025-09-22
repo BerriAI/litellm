@@ -34,8 +34,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPTransport,
     MCPTransportType,
     UserAPIKeyAuth,
@@ -70,38 +68,6 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
-def _convert_protocol_version_to_enum(
-    protocol_version: Optional[str | MCPSpecVersionType],
-) -> MCPSpecVersionType:
-    """
-    Convert string protocol version to MCPSpecVersion enum.
-
-    Args:
-        protocol_version: String protocol version, enum, or None
-
-    Returns:
-        MCPSpecVersionType: The enum value
-    """
-    if not protocol_version:
-        return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
-
-    # If it's already an MCPSpecVersion enum, return it
-    if isinstance(protocol_version, MCPSpecVersion):
-        return cast(MCPSpecVersionType, protocol_version)
-
-    # If it's a string, try to match it to enum values
-    if isinstance(protocol_version, str):
-        for version in MCPSpecVersion:
-            if version.value == protocol_version:
-                return cast(MCPSpecVersionType, version)
-
-    # If no match found, return default
-    verbose_logger.warning(
-        f"Unknown protocol version '{protocol_version}', using default"
-    )
-    return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
-
-
 class MCPServerManager:
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -113,8 +79,7 @@ class MCPServerManager:
                 "name": "zapier_mcp_server",
                 "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
                 "transport": "sse",
-                "auth_type": "api_key",
-                "spec_version": "2025-03-26"
+                "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
@@ -223,7 +188,6 @@ class MCPServerManager:
                 server_name=server_name,
                 url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
-                spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
                 alias=alias,
             )
@@ -239,8 +203,10 @@ class MCPServerManager:
                 env=server_config.get("env", None) or {},
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
-                spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
+                authentication_token=server_config.get(
+                    "authentication_token", server_config.get("auth_value", None)
+                ),
                 mcp_info=mcp_info,
                 access_groups=server_config.get("access_groups", None),
             )
@@ -284,7 +250,6 @@ class MCPServerManager:
                 server_name=getattr(mcp_server, "server_name", None),
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
-                spec_version=_convert_protocol_version_to_enum(mcp_server.spec_version),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=MCPInfo(
                     server_name=mcp_server.server_name or mcp_server.server_id,
@@ -347,7 +312,6 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
-        mcp_protocol_version: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
@@ -387,7 +351,6 @@ class MCPServerManager:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
-                    mcp_protocol_version=mcp_protocol_version,
                 )
                 list_tools_result.extend(tools)
                 verbose_logger.info(
@@ -411,7 +374,6 @@ class MCPServerManager:
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
-        protocol_version: Optional[str] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -419,17 +381,11 @@ class MCPServerManager:
         Args:
             server (MCPServer): The server configuration
             mcp_auth_header: MCP auth header to be passed to the MCP server. This is optional and will be used if provided.
-            protocol_version: Optional MCP protocol version to use. If not provided, uses server's default.
 
         Returns:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
-
-        # Convert protocol version string to enum
-        protocol_version_enum = _convert_protocol_version_to_enum(
-            protocol_version or server.spec_version
-        )
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
@@ -447,7 +403,6 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
-                protocol_version=protocol_version_enum,
             )
         else:
             # For HTTP/SSE transports
@@ -458,14 +413,12 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
-                protocol_version=protocol_version_enum,
             )
 
     async def _get_tools_from_server(
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
-        mcp_protocol_version: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -480,22 +433,18 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
-        protocol_version = (
-            mcp_protocol_version if mcp_protocol_version else server.spec_version
-        )
         client = None
 
         try:
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                protocol_version=protocol_version,
             )
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
-            
+
             prefixed_tools = self._create_prefixed_tools(tools, server)
-            
+
             return prefixed_tools
 
         except Exception as e:
@@ -527,7 +476,7 @@ class MCPServerManager:
         async def _list_tools_task():
             try:
                 await client.connect()
-                
+
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -606,7 +555,6 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
-        mcp_protocol_version: Optional[str] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
     ) -> CallToolResult:
         """
@@ -657,32 +605,54 @@ class MCPServerManager:
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
-                "user_api_key_user_id": getattr(user_api_key_auth, 'user_id', None) if user_api_key_auth else None,
-                "user_api_key_team_id": getattr(user_api_key_auth, 'team_id', None) if user_api_key_auth else None,
-                "user_api_key_end_user_id": getattr(user_api_key_auth, 'end_user_id', None) if user_api_key_auth else None,
-                "user_api_key_hash": getattr(user_api_key_auth, 'api_key_hash', None) if user_api_key_auth else None,
+                "user_api_key_user_id": getattr(user_api_key_auth, "user_id", None)
+                if user_api_key_auth
+                else None,
+                "user_api_key_team_id": getattr(user_api_key_auth, "team_id", None)
+                if user_api_key_auth
+                else None,
+                "user_api_key_end_user_id": getattr(
+                    user_api_key_auth, "end_user_id", None
+                )
+                if user_api_key_auth
+                else None,
+                "user_api_key_hash": getattr(user_api_key_auth, "api_key_hash", None)
+                if user_api_key_auth
+                else None,
             }
-            
+
             # Create MCP request object for processing
-            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
-            
+            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(
+                pre_hook_kwargs
+            )
+
             # Convert to LLM format for existing guardrail compatibility
-            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
-            
+            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+                mcp_request_obj, pre_hook_kwargs
+            )
+
             try:
                 # Use standard pre_call_hook with call_type="mcp_call"
                 modified_data = await proxy_logging_obj.pre_call_hook(
-                    user_api_key_dict=user_api_key_auth, #type: ignore
+                    user_api_key_dict=user_api_key_auth,  # type: ignore
                     data=synthetic_llm_data,
-                    call_type="mcp_call" #type: ignore
+                    call_type="mcp_call",  # type: ignore
                 )
                 if modified_data:
                     # Convert response back to MCP format and apply modifications
-                    modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
+                    modified_kwargs = (
+                        proxy_logging_obj._convert_mcp_hook_response_to_kwargs(
+                            modified_data, pre_hook_kwargs
+                        )
+                    )
                     if modified_kwargs.get("arguments") != arguments:
                         arguments = modified_kwargs["arguments"]
-                        
-            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+
+            except (
+                BlockedPiiEntityError,
+                GuardrailRaisedException,
+                HTTPException,
+            ) as e:
                 # Re-raise guardrail exceptions to properly fail the MCP call
                 verbose_logger.error(
                     f"Guardrail blocked MCP tool call pre call: {str(e)}"
@@ -703,11 +673,9 @@ class MCPServerManager:
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
-            protocol_version=mcp_protocol_version,
         )
 
         async with client:
-
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
@@ -716,9 +684,9 @@ class MCPServerManager:
             tasks = []
             if proxy_logging_obj:
                 # Create synthetic LLM data for during hook processing
-                from litellm.types.mcp import MCPDuringCallRequestObject
                 from litellm.types.llms.base import HiddenParams
-                
+                from litellm.types.mcp import MCPDuringCallRequestObject
+
                 request_obj = MCPDuringCallRequestObject(
                     tool_name=name,
                     arguments=arguments,
@@ -726,28 +694,29 @@ class MCPServerManager:
                     start_time=start_time.timestamp() if start_time else None,
                     hidden_params=HiddenParams(),
                 )
-                
+
                 during_hook_kwargs = {
                     "name": name,
                     "arguments": arguments,
                     "server_name": server_name_from_prefix,
                     "user_api_key_auth": user_api_key_auth,
                 }
-                
-                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
-                
+
+                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+                    request_obj, during_hook_kwargs
+                )
+
                 during_hook_task = asyncio.create_task(
                     proxy_logging_obj.during_call_hook(
                         user_api_key_dict=user_api_key_auth,
                         data=synthetic_llm_data,
-                        call_type="mcp_call" #type: ignore
+                        call_type="mcp_call",  # type: ignore
                     )
                 )
                 tasks.append(during_hook_task)
 
             tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
             try:
-
                 mcp_responses = await asyncio.gather(*tasks)
 
                 # If proxy_logging_obj is None, the tool call result is at index 0
@@ -836,19 +805,21 @@ class MCPServerManager:
         )
 
         verbose_logger.info("Loading MCP servers from database into registry...")
-        
+
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
         db_mcp_servers = await get_all_mcp_servers(prisma_client)
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
-        
+
         # ensure the global_mcp_server_manager is up to date with the db
         for server in db_mcp_servers:
-            verbose_logger.debug(f"Adding server to registry: {server.server_id} ({server.server_name})")
+            verbose_logger.debug(
+                f"Adding server to registry: {server.server_id} ({server.server_name})"
+            )
             self.add_update_server(server)
-        
+
         verbose_logger.info(f"Registry now contains {len(self.get_registry())} servers")
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
@@ -866,7 +837,6 @@ class MCPServerManager:
         server_name: str,
         url: str,
         transport: str,
-        spec_version: str,
         auth_type: Optional[str] = None,
         alias: Optional[str] = None,
     ) -> str:
@@ -882,7 +852,6 @@ class MCPServerManager:
             server_name: Name of the server
             url: Server URL
             transport: Transport type (sse, http, etc.)
-            spec_version: MCP spec version
             auth_type: Authentication type (optional)
             alias: Server alias (optional)
 
@@ -890,7 +859,9 @@ class MCPServerManager:
             A deterministic server ID string
         """
         # Create a string from all the identifying parameters
-        params_string = f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}|{alias or ''}"
+        params_string = (
+            f"{server_name}|{url}|{transport}|{auth_type or ''}|{alias or ''}"
+        )
 
         # Generate SHA-256 hash
         hash_object = hashlib.sha256(params_string.encode("utf-8"))
@@ -1047,11 +1018,12 @@ class MCPServerManager:
                         alias=_server_config.alias,
                         url=_server_config.url,
                         transport=_server_config.transport,
-                        spec_version=_server_config.spec_version,
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
-                        description=_server_config.mcp_info.get("description") if _server_config.mcp_info else None,
+                        description=_server_config.mcp_info.get("description")
+                        if _server_config.mcp_info
+                        else None,
                         mcp_info=_server_config.mcp_info,
                         mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields
@@ -1108,7 +1080,6 @@ class MCPServerManager:
                 description=server.description,
                 url=server.url,
                 transport=server.transport,
-                spec_version=server.spec_version,
                 auth_type=server.auth_type,
                 created_at=server.created_at,
                 created_by=server.created_by,

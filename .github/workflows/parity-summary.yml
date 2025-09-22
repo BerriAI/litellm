@@ -1,0 +1,56 @@
+name: Parity Summary (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'How many days of artifacts to summarize (approx)'
+        default: '7'
+        required: false
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v3
+      - name: Fetch last parity artifacts (approx by count)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          # Get last 20 artifacts and filter by name
+          curl -sSL -H "Authorization: Bearer ${GH_TOKEN}"             https://api.github.com/repos/${{ github.repository }}/actions/artifacts?per_page=100             | jq -r '.artifacts[] | select(.name=="parity-artifacts") | .id'             | head -n ${{ inputs.days }} > artifact_ids.txt
+          n=$(wc -l < artifact_ids.txt || true)
+          echo "Found $n parity artifacts"
+          while read -r id; do
+            [ -z "$id" ] && continue
+            curl -sSL -H "Authorization: Bearer ${GH_TOKEN}"               -H "Accept: application/vnd.github+json"               -o artifacts/${id}.zip               https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${id}/zip
+            mkdir -p artifacts/${id}
+            unzip -q artifacts/${id}.zip -d artifacts/${id}
+          done < artifact_ids.txt
+      - name: Merge JSONL and summarize
+        run: |
+          set -euo pipefail
+          find artifacts -type f -name 'parity.jsonl' -print0 | xargs -0 -I{} sh -c 'cat {} >> merged_parity.jsonl'
+          echo "Merged $(wc -l < merged_parity.jsonl) rows"
+          uv run local/scripts/parity_summarize.py --in merged_parity.jsonl --thresh 3.0 | tee parity_summary.json
+          echo "## Parity Summary" >> $GITHUB_STEP_SUMMARY
+          echo "
+
+\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          cat parity_summary.json >> $GITHUB_STEP_SUMMARY
+          echo "
+
+\`\`\`" >> $GITHUB_STEP_SUMMARY
+      - name: Upload merged summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-summary
+          path: |
+            merged_parity.jsonl
+            parity_summary.json

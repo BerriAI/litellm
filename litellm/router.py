@@ -55,6 +55,7 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -616,6 +617,15 @@ class Router:
         self.initialize_router_endpoints()
         self.apply_default_settings()
 
+        # Internal refactor flag (opt-in): legacy | extracted
+        try:
+            import os as _os
+            self._router_core_mode = (_os.getenv("LITELLM_ROUTER_CORE", "legacy").lower())
+            if self._router_core_mode not in ("legacy","extracted"):
+                self._router_core_mode = "legacy"
+        except Exception:
+            self._router_core_mode = "legacy"
+
     def apply_default_settings(self):
         """
         Apply the default settings to the router.
@@ -624,6 +634,33 @@ class Router:
         default_pre_call_checks: OptionalPreCallChecks = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
+
+    async def parallel_acompletions(self, requests, preserve_order=True, return_exceptions=True):
+        """Minimal parallel helper (experimental)."""
+        from litellm.router_utils.parallel_acompletion import _run_one
+        tasks = [asyncio.create_task(_run_one(self, req, i)) for i, req in enumerate(requests)]
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+        except Exception as e:
+            if not return_exceptions:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                raise
+            results = [None] * len(tasks)
+        # Build ordered or arrival list
+        results = [r for r in results if r is not None]
+        if preserve_order:
+            results.sort(key=lambda x: x[0])
+        class _R:
+            def __init__(self, idx, response, error):
+                self.index = idx; self.response = response; self.error = error
+        out = []
+        for idx, resp, err in results:
+            if err and not return_exceptions:
+                raise err
+            out.append(_R(idx, resp, err))
+        return out
 
     def discard(self):
         """
@@ -782,6 +819,9 @@ class Router:
         self.aget_responses = self.factory_function(
             litellm.aget_responses, call_type="aget_responses"
         )
+        self.acancel_responses = self.factory_function(
+            litellm.acancel_responses, call_type="acancel_responses"
+        )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
         )
@@ -873,7 +913,6 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
-
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
                 _callback: Optional[CustomLogger] = None
@@ -1260,53 +1299,63 @@ class Router:
 
             model_name = data["model"]
 
-            model_client = self._get_async_openai_model_client(
-                deployment=deployment,
-                kwargs=kwargs,
-            )
-            self.total_calls[model_name] += 1
+            use_extracted = getattr(self, "_router_core_mode", "legacy") == "extracted"
+            response = None
+            if use_extracted:
+                try:
+                    from litellm.router_core.transport_manager import routed_acompletion_call as _rt
+                    response = await _rt(self, deployment=deployment, data=data, messages=messages, kwargs=kwargs, parent_otel_span=parent_otel_span)
+                except Exception:
+                    use_extracted = False
+            if not use_extracted:
+                model_client = self._get_async_openai_model_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                )
+                self.total_calls[model_name] += 1
 
-            input_kwargs = {
-                **data,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
+                input_kwargs = {
+                    **data,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
 
-            _response = litellm.acompletion(**input_kwargs)
+                _response = litellm.acompletion(**input_kwargs)
 
-            logging_obj: Optional[LiteLLMLogging] = kwargs.get(
-                "litellm_logging_obj", None
-            )
+                logging_obj: Optional[LiteLLMLogging] = kwargs.get(
+                    "litellm_logging_obj", None
+                )
 
-            rpm_semaphore = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-            if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
-            ):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
+                rpm_semaphore = self._get_client(
+                    deployment=deployment,
+                    kwargs=kwargs,
+                    client_type="max_parallel_requests",
+                )
+                if rpm_semaphore is not None and isinstance(
+                    rpm_semaphore, asyncio.Semaphore
+                ):
+                    async with rpm_semaphore:
+                        """
+                        - Check rpm limits before making the call
+                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                        """
+                        await self.async_routing_strategy_pre_call_checks(
+                            deployment=deployment,
+                            logging_obj=logging_obj,
+                            parent_otel_span=parent_otel_span,
+                        )
+                        response = await _response
+                else:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment,
                         logging_obj=logging_obj,
                         parent_otel_span=parent_otel_span,
                     )
-                    response = await _response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment,
-                    logging_obj=logging_obj,
-                    parent_otel_span=parent_otel_span,
-                )
 
-                response = await _response
+                    response = await _response
+
 
             ## CHECK CONTENT FILTER ERROR ##
             if isinstance(response, ModelResponse):
@@ -1332,6 +1381,12 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
+                try:
+                    if getattr(self, "_router_core_mode", "legacy") == "extracted":
+                        from litellm.router_core.streaming_aggregator import acompletion_streaming_iterator as _agg
+                        return await _agg(self, response, messages, input_kwargs_for_streaming_fallback)
+                except Exception:
+                    pass
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
@@ -2713,7 +2768,6 @@ class Router:
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
         try:
-
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
                 deployment = await self.async_get_available_deployment(
@@ -3485,6 +3539,7 @@ class Router:
             "moderation",
             "anthropic_messages",
             "aresponses",
+            "acancel_responses",
             "responses",
             "aget_responses",
             "adelete_responses",
@@ -3578,6 +3633,7 @@ class Router:
                 )
             elif call_type in (
                 "aget_responses",
+                "acancel_responses",
                 "adelete_responses",
                 "alist_input_items",
             ):
@@ -3625,7 +3681,7 @@ class Router:
         """
         Initialize the Responses API endpoints on the router.
 
-        GET, DELETE Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
+        GET, DELETE, CANCEL Responses API Requests encode the model_id in the response_id, this function decodes the response_id and sets the model to the model_id.
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -4049,7 +4105,7 @@ class Router:
                 try:
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
-                    if inspect.iscoroutinefunction(
+                    if coroutine_checker.is_async_callable(
                         response
                     ):  # async errors are often returned as coroutines
                         response = await response
@@ -4097,7 +4153,7 @@ class Router:
         """
         model_group = kwargs.get("model")
         response = original_function(*args, **kwargs)
-        if inspect.iscoroutinefunction(response) or inspect.isawaitable(response):
+        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
@@ -4414,7 +4470,7 @@ class Router:
                 return tpm_key
 
         except Exception as e:
-            verbose_router_logger.exception(
+            verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - {}".format(
                     str(e)
                 )
@@ -4562,8 +4618,10 @@ class Router:
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
         )
-    
-    def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
+
+    def _get_metadata_variable_name_from_kwargs(
+        self, kwargs: dict
+    ) -> Literal["metadata", "litellm_metadata"]:
         """
         Helper to return what the "metadata" field should be called in the request data
 
@@ -5672,11 +5730,11 @@ class Router:
                 )
                 if supported_openai_params is None:
                     supported_openai_params = []
-                
+
                 # Get mode from database model_info if available, otherwise default to "chat"
                 db_model_info = model.get("model_info", {})
                 mode = db_model_info.get("mode", "chat")
-                
+
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
@@ -6802,7 +6860,9 @@ class Router:
             model=model,
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
-            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+            metadata_variable_name=self._get_metadata_variable_name_from_kwargs(
+                request_kwargs
+            ),
         )
 
         if len(healthy_deployments) == 0:

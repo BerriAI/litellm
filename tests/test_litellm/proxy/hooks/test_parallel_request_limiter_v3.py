@@ -39,6 +39,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
+    request_counts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
@@ -46,16 +47,17 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
         now = args_list[0]
         window_size = args_list[1]
         results = []
-        for i in range(0, len(keys), 3):
+        for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
             counter_key = keys[i + 1]
             # Simulate window expiry
             prev_window = window_starts.get(window_key)
-            prev_counter = await local_cache.async_get_cache(key=counter_key) or 0
+            prev_counter = request_counts.get(counter_key, 0)
             if prev_window is None or (now - prev_window) >= window_size:
                 # Window expired, reset
                 window_starts[window_key] = now
                 new_counter = 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=window_key, value=now, ttl=window_size
                 )
@@ -64,6 +66,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
                 )
             else:
                 new_counter = prev_counter + 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=counter_key, value=new_counter, ttl=window_size
                 )
@@ -83,7 +86,12 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
         user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
     )
 
-    # Third request should fail
+    # Third request should succeed (counter is 3, limit is 3, so 3 <= 3)
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict, cache=local_cache, data={}, call_type=""
+    )
+
+    # Fourth request should fail (counter would be 4, limit is 3, so 4 > 3)
     with pytest.raises(HTTPException) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -123,6 +131,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
+    request_counts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
@@ -130,16 +139,17 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
         now = args_list[0]
         window_size = args_list[1]
         results = []
-        for i in range(0, len(keys), 3):
+        for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
             counter_key = keys[i + 1]
             # Simulate window expiry
             prev_window = window_starts.get(window_key)
-            prev_counter = await local_cache.async_get_cache(key=counter_key) or 0
+            prev_counter = request_counts.get(counter_key, 0)
             if prev_window is None or (now - prev_window) >= window_size:
                 # Window expired, reset
                 window_starts[window_key] = now
                 new_counter = 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=window_key, value=now, ttl=window_size
                 )
@@ -148,6 +158,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch):
                 )
             else:
                 new_counter = prev_counter + 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=counter_key, value=new_counter, ttl=window_size
                 )
@@ -270,6 +281,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
 
     # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
+    request_counts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
         print(f"args: {args}, kwargs: {kwargs}")
@@ -278,16 +290,17 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         now = args_list[0]
         window_size = args_list[1]
         results = []
-        for i in range(0, len(keys), 3):
+        for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
             counter_key = keys[i + 1]
             # Simulate window expiry
             prev_window = window_starts.get(window_key)
-            prev_counter = await local_cache.async_get_cache(key=counter_key) or 0
+            prev_counter = request_counts.get(counter_key, 0)
             if prev_window is None or (now - prev_window) >= window_size:
                 # Window expired, reset
                 window_starts[window_key] = now
                 new_counter = 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=window_key, value=now, ttl=window_size
                 )
@@ -296,6 +309,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
                 )
             else:
                 new_counter = prev_counter + 1
+                request_counts[counter_key] = new_counter
                 await local_cache.async_set_cache(
                     key=counter_key, value=new_counter, ttl=window_size
                 )
@@ -355,7 +369,11 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
         counter_value is not None
     ), f"Counter value should be stored in cache for {counter_key}"
 
-    # Make another request to test rate limiting
+    # Manually increment the token counter to simulate token usage from previous call
+    # This simulates what would happen after a successful call
+    await local_cache.async_increment_cache(key=counter_key, value=15, ttl=2)  # Use up most of our 10 token limit
+    
+    # Make another request to test rate limiting - this should fail as we've consumed tokens
     with pytest.raises(HTTPException) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -959,9 +977,10 @@ async def test_async_increment_tokens_with_ttl_preservation():
     """
     import os
     import time
+
     from litellm.caching.redis_cache import RedisCache
     from litellm.types.caching import RedisPipelineIncrementOperation
-    
+
     # Skip test if Redis environment variables are not set
     redis_host = os.getenv("REDIS_HOST")
     redis_port = os.getenv("REDIS_PORT") 

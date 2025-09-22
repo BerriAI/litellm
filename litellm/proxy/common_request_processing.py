@@ -14,7 +14,10 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
+try:
+    import fastuuid as uuid  # type: ignore
+except Exception:
+    import uuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -259,6 +262,7 @@ class ProxyBaseLLMRequestProcessing:
             "_arealtime",
             "aget_responses",
             "adelete_responses",
+            "acancel_responses",
             "acreate_batch",
             "aretrieve_batch",
             "afile_content",
@@ -355,6 +359,7 @@ class ProxyBaseLLMRequestProcessing:
             "_arealtime",
             "aget_responses",
             "adelete_responses",
+            "acancel_responses",
             "atext_completion",
             "aimage_edit",
             "alist_input_items",

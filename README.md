@@ -12,6 +12,13 @@
         <br>
     </p>
 <h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">LiteLLM Proxy Server (LLM Gateway)</a> | <a href="https://docs.litellm.ai/docs/hosted" target="_blank"> Hosted Proxy (Preview)</a> | <a href="https://docs.litellm.ai/docs/enterprise"target="_blank">Enterprise Tier</a></h4>
+
+<p align="center">
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/nightly-parity-stress.yml"><img src="https://github.com/grahama1970/litellm/actions/workflows/nightly-parity-stress.yml/badge.svg" alt="Nightly Parity & Stress"></a>
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/weekly-streaming-stress.yml"><img src="https://github.com/grahama1970/litellm/actions/workflows/weekly-streaming-stress.yml/badge.svg" alt="Weekly Streaming Stress"></a>
+  <a href="https://github.com/grahama1970/litellm/actions/workflows/manual-stress.yml"><img src="https://img.shields.io/badge/Manual%20Stress-%E2%86%92-blue" alt="Manual Stress"></a>
+</p>
+
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -39,6 +46,15 @@ LiteLLM manages:
 
 [**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-providers-docs)
+
+Fork Status (our fork)
+- See `STATE_OF_PROJECT.md` for a concise, operator‑friendly status of this fork, including the router_core seam (opt‑in), extras, mini‑agent helper, validation steps, CI, and roadmap.
+
+Fork Quick Start
+- See QUICK_START.md for copy-paste examples (mini-agent, smokes, parity).
+- Mini-agent usage + troubleshooting: docs/my-website/docs/experimental/mini-agent.md
+- Project status and guardrails: STATE_OF_PROJECT.md
+
 
 🚨 **Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
 
@@ -316,6 +332,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [google AI Studio - gemini](https://docs.litellm.ai/docs/providers/gemini)          | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [mistral ai api](https://docs.litellm.ai/docs/providers/mistral)                    | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [cloudflare AI Workers](https://docs.litellm.ai/docs/providers/cloudflare_workers)  | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [CompactifAI](https://docs.litellm.ai/docs/providers/compactifai)                   | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [cohere](https://docs.litellm.ai/docs/providers/cohere)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [anthropic](https://docs.litellm.ai/docs/providers/anthropic)                       | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [empower](https://docs.litellm.ai/docs/providers/empower)                    | ✅                                                      | ✅                                                                              | ✅                                                                                  | ✅                                                                                |
@@ -345,6 +362,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [Featherless AI](https://docs.litellm.ai/docs/providers/featherless_ai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [Nebius AI Studio](https://docs.litellm.ai/docs/providers/nebius)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
 | [Heroku](https://docs.litellm.ai/docs/providers/heroku)                             | ✅                                                       | ✅                                                                               |                                                                                    |                                                                                  |                                                                              |                                                                         |
+| [OVHCloud AI Endpoints](https://docs.litellm.ai/docs/providers/ovhcloud)                             | ✅                                                       | ✅                                                                               |                                                                                    |                                                                                  |                                                                              |                                                                         |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
@@ -447,3 +465,10 @@ All these checks must pass before your PR can be merged.
 1. Navigate to `ui/litellm-dashboard`
 2. Install dependencies `npm install`
 3. Run `npm run dev` to start the dashboard
+
+
+## Operations
+- Canary runbook: local/docs/02_operational/CANARY_PARITY_PLAN.md
+- Stress testing: local/docs/02_operational/STRESS_TESTING.md
+- Parity scripts: local/scripts/router_core_parity.py, local/scripts/parity_summarize.py (use `uv run`)
+- CI (live, secrets-gated): Nightly Parity & Stress, Weekly Streaming Stress, and Manual Stress workflows (see badges above).

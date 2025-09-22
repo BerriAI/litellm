@@ -1,0 +1,78 @@
+name: Manual Stress & Parity (Workflow Dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model alias (e.g., openai/gpt-4o-mini or gemini/gemini-1.5-flash)"
+        required: false
+        default: "openai/gpt-4o-mini"
+      rounds:
+        description: "Parity rounds per run"
+        required: false
+        default: "5"
+      total:
+        description: "Stress requests total"
+        required: false
+        default: "200"
+      concurrency:
+        description: "Stress concurrency"
+        required: false
+        default: "20"
+      stream:
+        description: "Stream mode for stress (true/false)"
+        required: false
+        default: "false"
+      extracted:
+        description: "Use extracted seam for stress (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parity
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ inputs.model }}
+          PARITY_ROUNDS: ${{ inputs.rounds }}
+          PARITY_OUT: parity.jsonl
+        run: |
+          uv run local/scripts/router_core_parity.py
+      - name: Upload Parity JSONL
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-jsonl
+          path: parity.jsonl
+
+  stress:
+    runs-on: ubuntu-latest
+    needs: parity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Stress
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_DEFAULT_MODEL: ${{ inputs.model }}
+        run: |
+          EXTRA=""
+          if [ "${{ inputs.extracted }}" = "true" ]; then EXTRA="--extracted"; fi
+          if [ "${{ inputs.stream }}" = "true" ]; then EXTRA="$EXTRA --stream"; fi
+          uv run local/scripts/stress_e2e.py --model "${{ inputs.model }}" --total "${{ inputs.total }}" --concurrency "${{ inputs.concurrency }}" $EXTRA --out stress.jsonl
+      - name: Upload Stress JSONL
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-jsonl
+          path: stress.jsonl

@@ -52,14 +52,15 @@ tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
-aiohttp==3.10.11 # for network calls
+aiohttp==3.12.14 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.2.3  # for retrying requests, when litellm.num_retries set
 pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
+pondpond==1.4.1 # for object pooling
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.19
+litellm-enterprise==0.1.20

@@ -2633,7 +2633,8 @@ export const uiSpendLogsCall = async (
   user_id?: string,
   end_user?: string,
   status_filter?: string,
-  model?: string
+  model?: string,
+  keyAlias?: string
 ) => {
   try {
     // Construct base URL
@@ -2652,6 +2653,7 @@ export const uiSpendLogsCall = async (
     if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
+    if (keyAlias) queryParams.append("key_alias", keyAlias);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3268,6 +3270,7 @@ export const keyListCall = async (
     }
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
+    queryParams.append("include_created_by_keys", "true");
 
     const queryString = queryParams.toString();
     if (queryString) {
