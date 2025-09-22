@@ -1,9 +1,13 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
+
+from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+    OpenAIModerationGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -11,7 +15,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -37,8 +41,7 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
-    TOOL_PERMISSION = "tool_permission"
-
+    ZSCALER_AI_GUARD = "zscaler_ai_guard"
 
 
 class Role(Enum):
@@ -373,22 +376,6 @@ class NomaGuardrailConfigModel(BaseModel):
         default=None,
         description="If True, blocks requests on API failures. Defaults to True if not provided",
     )
-    anonymize_input: Optional[bool] = Field(
-        default=None,
-        description="If True, replaces sensitive content with anonymized version when only PII/PCI/secrets are detected. Only applies in blocking mode. Defaults to False if not provided",
-    )
-
-
-class ToolPermissionGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the Tool Permission guardrail"""
-
-    rules: Optional[List[Dict]] = Field(
-        default=None, description="List of permission rules for tool usage"
-    )
-    default_action: Optional[str] = Field(
-        default="Deny",
-        description="Default action when no rule matches (Allow or Deny)",
-    )
 
 
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
@@ -479,7 +466,6 @@ class LitellmParams(
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
-    ToolPermissionGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
