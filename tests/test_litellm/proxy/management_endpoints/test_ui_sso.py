@@ -1369,6 +1369,33 @@ class TestCLIKeyRegenerationFlow:
             
             assert "https://test.litellm.ai/sso/callback" == redirect_url
 
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_regenerate_vs_create_flow(self):
+        """Test CLI SSO callback calls regenerate_key_fn when existing_key provided, generate_key_helper_fn when not"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+        
+        mock_request = MagicMock(spec=Request)
+        
+        with patch("litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn") as mock_regenerate, \
+             patch("litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn") as mock_generate, \
+             patch("litellm.proxy._types.UserAPIKeyAuth.get_litellm_cli_user_api_key_auth"), \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Test regeneration path
+            await cli_sso_callback(mock_request, key="sk-new-123", existing_key="sk-existing-456")
+            mock_regenerate.assert_called_once()
+            mock_generate.assert_not_called()
+            
+            # Reset mocks
+            mock_regenerate.reset_mock()
+            mock_generate.reset_mock()
+            
+            # Test creation path
+            await cli_sso_callback(mock_request, key="sk-new-789", existing_key=None)
+            mock_regenerate.assert_not_called()
+            mock_generate.assert_called_once()
+
 
 class TestProcessSSOJWTAccessToken:
     """Test the process_sso_jwt_access_token helper function"""
