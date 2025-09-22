@@ -605,6 +605,23 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def handle_sap_stream(self, chunk):
+        try:
+            print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+            chunk_ = chunk.orchestration_result.choices[0]
+            text = chunk_.delta.content
+            finish_reason = chunk_.finish_reason or None
+            is_finished = finish_reason is not None
+            return {
+                "text": text,
+                "finish_reason": finish_reason,
+                "is_finished": is_finished,
+                # "prompt_tokens": 0,
+                # "completion_tokens": 0,
+            }
+        except Exception as e:
+            raise e
+
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
@@ -1220,6 +1237,12 @@ class CustomStreamWrapper:
                 self.completion_stream = self.completion_stream[chunk_size:]
             elif self.custom_llm_provider == "triton":
                 response_obj = self.handle_triton_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+            elif self.custom_llm_provider == "sap":
+                response_obj = self.handle_sap_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
