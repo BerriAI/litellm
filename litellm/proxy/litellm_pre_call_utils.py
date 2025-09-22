@@ -21,7 +21,9 @@ from litellm.proxy._types import (
 )
 
 # Cache special headers as a frozenset for O(1) lookup performance
-_SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+_SPECIAL_HEADERS_CACHE = frozenset(
+    v.value.lower() for v in SpecialHeaders._member_map_.values()
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -63,6 +65,7 @@ LITELLM_METADATA_ROUTES = (
     "responses",
     "files",
 )
+
 
 def _get_metadata_variable_name(request: Request) -> str:
     """
@@ -157,6 +160,7 @@ class KeyAndTeamLoggingSettings:
 
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+
         if (
             user_api_key_dict.team_metadata is not None
             and "logging" in user_api_key_dict.team_metadata
@@ -169,12 +173,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -234,12 +238,16 @@ def clean_headers(
     Removes litellm api key from headers
     """
     clean_headers = {}
-    litellm_key_lower = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
-    
+    litellm_key_lower = (
+        litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    )
+
     for header, value in headers.items():
         header_lower = header.lower()
         # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        if (header_lower not in _SPECIAL_HEADERS_CACHE and (litellm_key_lower is None or header_lower != litellm_key_lower)):
+        if header_lower not in _SPECIAL_HEADERS_CACHE and (
+            litellm_key_lower is None or header_lower != litellm_key_lower
+        ):
             clean_headers[header] = value
     return clean_headers
 
@@ -614,11 +622,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -847,9 +855,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata

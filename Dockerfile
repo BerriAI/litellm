@@ -41,9 +41,6 @@ RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
-
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
