@@ -44,10 +44,9 @@ def clear_token() -> None:
 
 def get_stored_api_key() -> Optional[str]:
     """Get the stored API key from token file"""
-    token_data = load_token()
-    if token_data and 'key' in token_data:
-        return token_data['key']
-    return None
+    # Use the SDK-level utility
+    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+    return get_litellm_gateway_api_key()
 
 # Polling-based authentication - no local server needed
 
