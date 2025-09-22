@@ -88,11 +88,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _create_sanitize_request(
         self, content: str, source: Literal["user_prompt", "model_response"]
     ) -> dict:
-        """Create request body for Model Armor API with correct camelCase field names."""
+        """Create request body for Model Armor API."""
         if source == "user_prompt":
-            return {"userPromptData": {"text": content}}
+            return {"user_prompt_data": {"text": content}}
         else:
-            return {"modelResponseData": {"text": content}}
+            return {"model_response_data": {"text": content}}
 
     def _extract_content_from_response(
         self, response: Union[Any, ModelResponse]
@@ -119,16 +119,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     async def make_model_armor_request(
         self,
-        content: Optional[str] = None,
-        source: Literal["user_prompt", "model_response"] = "user_prompt",
+        content: str,
+        source: Literal["user_prompt", "model_response"],
         request_data: Optional[dict] = None,
-        file_bytes: Optional[bytes] = None,
-        file_type: Optional[str] = None,
     ) -> dict:
-        """
-        Make request to Model Armor API. Supports both text and file prompt sanitization.
-        If file_bytes and file_type are provided, file prompt sanitization is performed.
-        """
+        """Make request to Model Armor API."""
         # Get access token using VertexBase auth
         access_token, resolved_project_id = await self._ensure_access_token_async(
             credentials=self.credentials,
@@ -148,14 +143,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             url = f"{endpoint}/v1/projects/{self.project_id}/locations/{self.location}/templates/{self.template_id}:sanitizeModelResponse"
 
         # Create request body
-        if file_bytes is not None and file_type is not None:
-            body = self.sanitize_file_prompt(file_bytes, file_type, source)
-        elif content is not None:
-            body = self._create_sanitize_request(content, source)
-        else:
-            raise ValueError(
-                "Either content or file_bytes and file_type must be provided."
-            )
+        body = self._create_sanitize_request(content, source)
 
         # Set headers
         headers = {
@@ -201,110 +189,57 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return await json_response
         return json_response
 
-    def sanitize_file_prompt(
-        self, file_bytes: bytes, file_type: str, source: str = "user_prompt"
-    ) -> dict:
-        """
-        Helper to build the request body for file prompt sanitization for Model Armor.
-        file_type should be one of: PLAINTEXT_UTF8, PDF, WORD_DOCUMENT, EXCEL_DOCUMENT, POWERPOINT_DOCUMENT, TXT, CSV
-        Returns the request body dict.
-        """
-        import base64
-
-        base64_data = base64.b64encode(file_bytes).decode("utf-8")
-        if source == "user_prompt":
-            return {
-                "userPromptData": {
-                    "byteItem": {"byteDataType": file_type, "byteData": base64_data}
-                }
-            }
-        else:
-            return {
-                "modelResponseData": {
-                    "byteItem": {"byteDataType": file_type, "byteData": base64_data}
-                }
-            }
-
     def _should_block_content(self, armor_response: dict) -> bool:
-        """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
+        """Check if Model Armor response indicates content should be blocked."""
+        # Check the sanitizationResult from Model Armor API
         sanitization_result = armor_response.get("sanitizationResult", {})
         filter_results = sanitization_result.get("filterResults", {})
 
-        # filterResults can be a dict (named keys) or a list (array of filter result dicts)
-        filter_result_items = []
-        if isinstance(filter_results, dict):
-            filter_result_items = [filter_results]
-        elif isinstance(filter_results, list):
-            filter_result_items = filter_results
+        # Check blocking filters (these should cause the request to be blocked)
+        # RAI (Responsible AI) filters
+        rai_results = filter_results.get("rai", {}).get("raiFilterResult", {})
+        if rai_results.get("matchState") == "MATCH_FOUND":
+            return True
 
-        for filt in filter_result_items:
-            # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
-            if filt.get("raiFilterResult", {}).get("matchState") == "MATCH_FOUND":
-                return True
-            if (
-                filt.get("piAndJailbreakFilterResult", {}).get("matchState")
-                == "MATCH_FOUND"
-            ):
-                return True
-            if (
-                filt.get("maliciousUriFilterResult", {}).get("matchState")
-                == "MATCH_FOUND"
-            ):
-                return True
-            if (
-                filt.get("csamFilterFilterResult", {}).get("matchState")
-                == "MATCH_FOUND"
-            ):
-                return True
-            if filt.get("virusScanFilterResult", {}).get("matchState") == "MATCH_FOUND":
-                return True
-            # Check sdpFilterResult for both inspectResult and deidentifyResult
-            sdp = filt.get("sdpFilterResult")
-            if sdp:
-                if sdp.get("inspectResult", {}).get("matchState") == "MATCH_FOUND":
-                    return True
-                if sdp.get("deidentifyResult", {}).get("matchState") == "MATCH_FOUND":
-                    return True
-        # Fallback dict code removed; all cases handled above
+        # Prompt injection and jailbreak filters
+        pi_jailbreak = filter_results.get("piAndJailbreakFilterResult", {})
+        if pi_jailbreak.get("matchState") == "MATCH_FOUND":
+            return True
+
+        # Malicious URI filters
+        malicious_uri = filter_results.get("maliciousUriFilterResult", {})
+        if malicious_uri.get("matchState") == "MATCH_FOUND":
+            return True
+
+        # CSAM filters
+        csam = filter_results.get("csamFilterFilterResult", {})
+        if csam.get("matchState") == "MATCH_FOUND":
+            return True
+
+        # Virus scan filters
+        virus_scan = filter_results.get("virusScanFilterResult", {})
+        if virus_scan.get("matchState") == "MATCH_FOUND":
+            return True
+
         return False
 
     def _get_sanitized_content(self, armor_response: dict) -> Optional[str]:
-        """
-        Get the sanitized content from a Model Armor response, if available.
-        Looks for sanitized text in deidentifyResult, and falls back to root-level fields if not found.
-        """
-        result = armor_response.get("sanitizationResult", {})
-        filter_results = result.get("filterResults", {})
+        """Extract sanitized content from Model Armor response."""
+        # Model Armor returns sanitized content in the sanitizationResult
+        sanitization_result = armor_response.get("sanitizationResult", {})
 
-        # filterResults can be a dict (single filter) or a list (multiple filters)
-        filters = (
-            [filter_results]
-            if isinstance(filter_results, dict)
-            else filter_results
-            if isinstance(filter_results, list)
-            else []
-        )
+        # Check for sdp structure (for deidentification)
+        filter_results = sanitization_result.get("filterResults", {})
+        sdp = filter_results.get("sdp", {}).get("sdpFilterResult")
 
-        # Prefer sanitized text from deidentifyResult if present
-        for filter_entry in filters:
-            sdp = filter_entry.get("sdpFilterResult")
-            if sdp:
-                deid = sdp.get("deidentifyResult", {})
-                sanitized = deid.get("data", {}).get("text", "")
-                # If Model Armor found something and returned a sanitized version, use it
-                if deid.get("matchState") == "MATCH_FOUND" and sanitized:
-                    return sanitized
+        if sdp is not None:
+            # Model Armor returns sanitized text under deidentifyResult in sdp
+            deidentify_result = sdp.get("deidentifyResult", {})
+            sanitized_text = deidentify_result.get("data", {}).get("text", "")
+            if deidentify_result.get("matchState") == "MATCH_FOUND" and sanitized_text:
+                return sanitized_text
 
-        # If no deidentifyResult, optionally check for inspectResult (rare, but could have findings)
-        for filter_entry in filters:
-            sdp = filter_entry.get("sdpFilterResult")
-            if sdp:
-                inspect = sdp.get("inspectResult", {})
-                # If Model Armor flagged something but didn't sanitize, return None
-                if inspect.get("matchState") == "MATCH_FOUND":
-                    return None
-
-        # Fallback: if Model Armor put sanitized text at the root, use it
+        # Fallback to checking root level
         return armor_response.get("sanitizedText") or armor_response.get("text")
 
     def _process_response(
