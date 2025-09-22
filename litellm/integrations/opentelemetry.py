@@ -141,7 +141,6 @@ class OpenTelemetry(CustomLogger):
         meter_provider: Optional[Any] = None,
         **kwargs,
     ):
-
         if config is None:
             config = OpenTelemetryConfig.from_env()
 
@@ -247,12 +246,12 @@ class OpenTelemetry(CustomLogger):
         metrics.set_meter_provider(meter_provider)
 
         self._operation_duration_histogram = meter.create_histogram(
-            name="gen_ai.client.operation.duration", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.operation.duration",  # Replace with semconv constant in otel 1.38
             description="GenAI operation duration",
             unit="s",
         )
         self._token_usage_histogram = meter.create_histogram(
-            name="gen_ai.client.token.usage", # Replace with semconv constant in otel 1.38
+            name="gen_ai.client.token.usage",  # Replace with semconv constant in otel 1.38
             description="GenAI token usage",
             unit="{token}",
         )
@@ -523,7 +522,6 @@ class OpenTelemetry(CustomLogger):
     #########################################################
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
-
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,
@@ -543,7 +541,7 @@ class OpenTelemetry(CustomLogger):
         # 4. Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic logs. 
+        # 5. Semantic logs.
         if self.config.enable_events:
             self._emit_semantic_logs(kwargs, response_obj, span)
 
@@ -646,6 +644,7 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry._logs import get_logger, LogRecord
+
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
@@ -700,7 +699,6 @@ class OpenTelemetry(CustomLogger):
                     trace_flags=parent_ctx.trace_flags,
                 )
             )
-
 
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]

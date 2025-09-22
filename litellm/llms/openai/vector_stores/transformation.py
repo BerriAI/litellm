@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+
 class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
@@ -51,8 +52,8 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             headers.update(
                 {
                     self.ASSISTANTS_HEADER_KEY: self.ASSISTANTS_HEADER_VALUE,
-            }
-        )
+                }
+            )
 
         return headers
 
@@ -76,7 +77,6 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/vector_stores"
-    
 
     def transform_search_vector_store_request(
         self,
@@ -91,27 +91,31 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         typed_request_body = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),
-            max_num_results=vector_store_search_optional_params.get("max_num_results", None),
-            ranking_options=vector_store_search_optional_params.get("ranking_options", None),
-            rewrite_query=vector_store_search_optional_params.get("rewrite_query", None),
+            max_num_results=vector_store_search_optional_params.get(
+                "max_num_results", None
+            ),
+            ranking_options=vector_store_search_optional_params.get(
+                "ranking_options", None
+            ),
+            rewrite_query=vector_store_search_optional_params.get(
+                "rewrite_query", None
+            ),
         )
 
         dict_request_body = cast(dict, typed_request_body)
         return url, dict_request_body
-    
 
-
-    def transform_search_vector_store_response(self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(
+        self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
+    ) -> VectorStoreSearchResponse:
         try:
             response_json = response.json()
-            return VectorStoreSearchResponse(
-                **response_json
-            )
+            return VectorStoreSearchResponse(**response_json)
         except Exception as e:
             raise self.get_error_class(
-                error_message=str(e), 
-                status_code=response.status_code, 
-                headers=response.headers
+                error_message=str(e),
+                status_code=response.status_code,
+                headers=response.headers,
             )
 
     def transform_create_vector_store_request(
@@ -124,28 +128,27 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         typed_request_body = VectorStoreCreateRequest(
             name=vector_store_create_optional_params.get("name", None),
             file_ids=vector_store_create_optional_params.get("file_ids", None),
-            expires_after=vector_store_create_optional_params.get("expires_after", None),
-            chunking_strategy=vector_store_create_optional_params.get("chunking_strategy", None),
+            expires_after=vector_store_create_optional_params.get(
+                "expires_after", None
+            ),
+            chunking_strategy=vector_store_create_optional_params.get(
+                "chunking_strategy", None
+            ),
             metadata=add_openai_metadata(metadata) if metadata is not None else None,
         )
 
         dict_request_body = cast(dict, typed_request_body)
         return url, dict_request_body
 
-    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(
+        self, response: httpx.Response
+    ) -> VectorStoreCreateResponse:
         try:
             response_json = response.json()
-            return VectorStoreCreateResponse(
-                **response_json
-            )
+            return VectorStoreCreateResponse(**response_json)
         except Exception as e:
             raise self.get_error_class(
-                error_message=str(e), 
-                status_code=response.status_code, 
-                headers=response.headers
+                error_message=str(e),
+                status_code=response.status_code,
+                headers=response.headers,
             )
-
-    
-
-    
-    

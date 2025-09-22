@@ -126,7 +126,7 @@ class ScimTransformations:
         for member in team.members_with_roles or []:
             if isinstance(member, dict):
                 member = Member(**member)
-            
+
             scim_members.append(
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),
@@ -161,7 +161,7 @@ class ScimTransformations:
         elif hasattr(member, "user_id"):
             return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
         return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
-    
+
     @staticmethod
     def _get_scim_member_display(member: Member) -> str:
         """

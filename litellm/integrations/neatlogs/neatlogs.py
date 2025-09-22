@@ -25,12 +25,13 @@ from litellm.types.integrations.base_health_check import IntegrationHealthCheckS
 class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
     def __init__(self, neatlogs_api_key: Optional[str] = None, **kwargs):
         try:
-
             # Get API key from parameter or environment variable
             self.api_key = neatlogs_api_key or os.getenv("NEATLOGS_API_KEY")
 
             if self.api_key is None:
-                raise Exception("NEATLOGS_API_KEY is not set. Please set the NEATLOGS_API_KEY environment variable or pass neatlogs_api_key parameter.")
+                raise Exception(
+                    "NEATLOGS_API_KEY is not set. Please set the NEATLOGS_API_KEY environment variable or pass neatlogs_api_key parameter."
+                )
 
             self.endpoint = "https://app.neatlogs.com/api/data/v2"
 
@@ -41,9 +42,10 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
             self.flush_lock = asyncio.Lock()
             self._periodic_task_started = False
             super().__init__(
-                **kwargs, flush_lock=self.flush_lock, batch_size=litellm.DEFAULT_BATCH_SIZE
+                **kwargs,
+                flush_lock=self.flush_lock,
+                batch_size=litellm.DEFAULT_BATCH_SIZE,
             )
-
 
         except Exception as e:
             verbose_logger.exception(
@@ -53,14 +55,16 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
 
     async def _ensure_periodic_task_started(self):
         """Ensure the periodic flush task is started"""
-        if not getattr(self, '_periodic_task_started', False):
+        if not getattr(self, "_periodic_task_started", False):
             try:
                 self._periodic_task = asyncio.create_task(self.periodic_flush())
                 self._periodic_task_started = True
                 verbose_logger.debug("Neatlogs: Started periodic flush task")
             except RuntimeError:
                 # Still no running event loop, skip for now
-                verbose_logger.debug("Neatlogs: No running event loop, skipping periodic task")
+                verbose_logger.debug(
+                    "Neatlogs: No running event loop, skipping periodic task"
+                )
                 pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -69,7 +73,9 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 "Neatlogs: Logging - Enters logging function for model %s", kwargs
             )
             await self._ensure_periodic_task_started()
-            await self._log_async_event(kwargs, response_obj, start_time, end_time, status="SUCCESS")
+            await self._log_async_event(
+                kwargs, response_obj, start_time, end_time, status="SUCCESS"
+            )
 
         except Exception as e:
             verbose_logger.exception(
@@ -83,7 +89,9 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 "Neatlogs: Logging - Enters logging function for model %s", kwargs
             )
             await self._ensure_periodic_task_started()
-            await self._log_async_event(kwargs, response_obj, start_time, end_time, status="FAILURE")
+            await self._log_async_event(
+                kwargs, response_obj, start_time, end_time, status="FAILURE"
+            )
 
         except Exception as e:
             verbose_logger.exception(
@@ -110,7 +118,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                     "dataDump": json.dumps(payload),
                     "projectAPIKey": self.api_key,
                     "externalTraceId": payload.get("trace_id"),
-                    "timestamp": payload.get("start_time")
+                    "timestamp": payload.get("start_time"),
                 }
                 formatted_batch.append(api_payload)
 
@@ -141,7 +149,9 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 f"Neatlogs Error sending batch API - {str(e)}\\{traceback.format_exc()}"
             )
 
-    async def _log_async_event(self, kwargs, response_obj, start_time, end_time, status):
+    async def _log_async_event(
+        self, kwargs, response_obj, start_time, end_time, status
+    ):
         payload = self.create_neatlogs_payload(
             kwargs=kwargs,
             response_obj=response_obj,
@@ -179,7 +189,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 "dataDump": json.dumps(payload),
                 "projectAPIKey": self.api_key,
                 "externalTraceId": payload.get("trace_id"),
-                "timestamp": payload.get("start_time")
+                "timestamp": payload.get("start_time"),
             }
 
             response = self.sync_client.post(
@@ -229,7 +239,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 "dataDump": json.dumps(payload),
                 "projectAPIKey": self.api_key,
                 "externalTraceId": payload.get("trace_id"),
-                "timestamp": payload.get("start_time")
+                "timestamp": payload.get("start_time"),
             }
 
             response = self.sync_client.post(
@@ -271,7 +281,12 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
 
         # Try to get completion content
         completion_content = ""
-        if status == "SUCCESS" and response_obj and response_obj.choices and response_obj.choices[0].message:
+        if (
+            status == "SUCCESS"
+            and response_obj
+            and response_obj.choices
+            and response_obj.choices[0].message
+        ):
             completion_content = response_obj.choices[0].message.content
 
         # Try to get usage info
@@ -369,7 +384,7 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
                 "dataDump": json.dumps(test_payload),
                 "projectAPIKey": self.api_key,
                 "externalTraceId": test_payload.get("trace_id"),
-                "timestamp": test_payload.get("start_time")
+                "timestamp": test_payload.get("start_time"),
             }
 
             response = await self.async_client.post(
@@ -407,5 +422,3 @@ class NeatlogsLogger(CustomBatchLogger, AdditionalLoggingUtils):
         """
 
         return None
-
-

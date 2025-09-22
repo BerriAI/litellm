@@ -3043,7 +3043,7 @@ def _get_masked_values(
                 (
                     v[: unmasked_length // 2]
                     + "*" * number_of_asterisks
-                    + v[-unmasked_length // 2:]
+                    + v[-unmasked_length // 2 :]
                 )
                 if (
                     isinstance(v, str)
@@ -3054,7 +3054,7 @@ def _get_masked_values(
                     (
                         v[: unmasked_length // 2]
                         + "*" * (len(v) - unmasked_length)
-                        + v[-unmasked_length // 2:]
+                        + v[-unmasked_length // 2 :]
                     )
                     if (isinstance(v, str) and len(v) > unmasked_length)
                     else ("*****" if isinstance(v, str) else v)
@@ -4171,16 +4171,22 @@ class StandardLoggingPayloadSetup:
 
             # Get the actual s3_path from the configured cold storage logger instance
             s3_path = ""  # default value
-            
+
             # Try to get the actual logger instance from the logger name
             try:
-                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(configured_cold_storage_logger)
-                if custom_logger and hasattr(custom_logger, 's3_path') and custom_logger.s3_path:
+                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
+                    configured_cold_storage_logger
+                )
+                if (
+                    custom_logger
+                    and hasattr(custom_logger, "s3_path")
+                    and custom_logger.s3_path
+                ):
                     s3_path = custom_logger.s3_path
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path
                 pass
-            
+
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
                 team_alias_prefix="",  # Don't split by team alias for cold storage

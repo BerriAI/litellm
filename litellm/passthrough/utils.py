@@ -38,6 +38,7 @@ class BasePassthroughUtils:
             headers = {**request_headers, **headers}
         return headers
 
+
 class CommonUtils:
     @staticmethod
     def encode_bedrock_runtime_modelid_arn(endpoint: str) -> str:
@@ -50,37 +51,36 @@ class CommonUtils:
             arn:aws:bedrock:ap-southeast-1:123456789012:application-inference-profile%2Fabdefg12334
         so that it is treated as one part of the path.
         Otherwise, the encoded endpoint will return 500 error when passed to Bedrock endpoint.
-            
+
         See the apis in https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock_Runtime.html
         for more details on the regex patterns of modelId which we use in the regex logic below.
-        
+
         Args:
             endpoint (str): The original endpoint string which may contain ARNs that contain slashes.
-            
+
         Returns:
             str: The endpoint with properly encoded ARN slashes
         """
         import re
 
         # Early exit: if no ARN detected, return unchanged
-        if 'arn:aws:' not in endpoint:
+        if "arn:aws:" not in endpoint:
             return endpoint
 
         # Handle all patterns in one go - more efficient and cleaner
         patterns = [
             # Custom model with 2 slashes (order matters - do this first)
-            (r'(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)', r'\1%2F\2%2F\3'),
-
+            (r"(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
             # All other resource types with 1 slash
-            (r'(:application-inference-profile)/', r'\1%2F'),
-            (r'(:inference-profile)/', r'\1%2F'),
-            (r'(:foundation-model)/', r'\1%2F'),
-            (r'(:imported-model)/', r'\1%2F'),
-            (r'(:provisioned-model)/', r'\1%2F'),
-            (r'(:prompt)/', r'\1%2F'),
-            (r'(:endpoint)/', r'\1%2F'),
-            (r'(:prompt-router)/', r'\1%2F'),
-            (r'(:default-prompt-router)/', r'\1%2F'),
+            (r"(:application-inference-profile)/", r"\1%2F"),
+            (r"(:inference-profile)/", r"\1%2F"),
+            (r"(:foundation-model)/", r"\1%2F"),
+            (r"(:imported-model)/", r"\1%2F"),
+            (r"(:provisioned-model)/", r"\1%2F"),
+            (r"(:prompt)/", r"\1%2F"),
+            (r"(:endpoint)/", r"\1%2F"),
+            (r"(:prompt-router)/", r"\1%2F"),
+            (r"(:default-prompt-router)/", r"\1%2F"),
         ]
 
         for pattern, replacement in patterns:

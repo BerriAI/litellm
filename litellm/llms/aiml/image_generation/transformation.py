@@ -24,19 +24,15 @@ else:
 class AimlImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://api.aimlapi.com"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
         https://api.aimlapi.com/v1/images/generations
         """
-        return [
-            "n",
-            "response_format", 
-            "size"
-        ]
-    
+        return ["n", "response_format", "size"]
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -45,7 +41,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        
+
         for k in non_default_params.keys():
             if k not in optional_params.keys():
                 if k in supported_params:
@@ -53,7 +49,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                     if k == "n":
                         optional_params["num_images"] = non_default_params[k]
                     elif k == "response_format":
-                        optional_params["output_format"] = non_default_params[k] 
+                        optional_params["output_format"] = non_default_params[k]
                     elif k == "size":
                         # Map OpenAI size format to AI/ML image_size
                         size_value = non_default_params[k]
@@ -61,7 +57,10 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                             # Handle standard OpenAI sizes like "1024x1024"
                             if "x" in size_value:
                                 width, height = map(int, size_value.split("x"))
-                                optional_params["image_size"] = {"width": width, "height": height}
+                                optional_params["image_size"] = {
+                                    "width": width,
+                                    "height": height,
+                                }
                             else:
                                 # Pass through predefined sizes
                                 optional_params["image_size"] = size_value
@@ -91,9 +90,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         Get the complete url for the request
         """
         complete_url: str = (
-            api_base 
-            or get_secret_str("AIML_API_BASE") 
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("AIML_API_BASE") or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
@@ -111,15 +108,15 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("AIML_API_KEY") or
-            get_secret_str("AIMLAPI_KEY")  # Alternative name
+            api_key
+            or get_secret_str("AIML_API_KEY")
+            or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )
         if not final_api_key:
             raise ValueError("AIML_API_KEY or AIMLAPI_KEY is not set")
-        
+
         headers["Authorization"] = f"Bearer {final_api_key}"
-        headers["Content-Type"] = "application/json"        
+        headers["Content-Type"] = "application/json"
         return headers
 
     def transform_image_generation_request(
@@ -135,10 +132,12 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
         https://api.aimlapi.com/v1/images/generations
         """
-        aiml_image_generation_request_body: AimlImageGenerationRequestParams = AimlImageGenerationRequestParams(
-            prompt=prompt,
-            model=model,
-            **optional_params,
+        aiml_image_generation_request_body: AimlImageGenerationRequestParams = (
+            AimlImageGenerationRequestParams(
+                prompt=prompt,
+                model=model,
+                **optional_params,
+            )
         )
         return dict(aiml_image_generation_request_body)
 
@@ -168,37 +167,45 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-            
+
         if not model_response.data:
             model_response.data = []
-        
+
         # AI/ML API can return images in two different formats:
         # 1. output.choices array with image_base64
         # 2. images array with url (and optional width, height, content_type)
-        
+
         if "output" in response_data and "choices" in response_data["output"]:
             for choice in response_data["output"]["choices"]:
                 if "image_base64" in choice:
-                    model_response.data.append(ImageObject(
-                        b64_json=choice["image_base64"],
-                        url=None,  # AI/ML API returns base64, not URLs
-                    ))
+                    model_response.data.append(
+                        ImageObject(
+                            b64_json=choice["image_base64"],
+                            url=None,  # AI/ML API returns base64, not URLs
+                        )
+                    )
                 elif "url" in choice:
-                    model_response.data.append(ImageObject(
-                        b64_json=None,
-                        url=choice["url"],
-                    ))
+                    model_response.data.append(
+                        ImageObject(
+                            b64_json=None,
+                            url=choice["url"],
+                        )
+                    )
         elif "images" in response_data:
             # Handle alternative format: {"images": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
             for image in response_data["images"]:
                 if "url" in image:
-                    model_response.data.append(ImageObject(
-                        b64_json=None,
-                        url=image["url"],
-                    ))
+                    model_response.data.append(
+                        ImageObject(
+                            b64_json=None,
+                            url=image["url"],
+                        )
+                    )
                 elif "image_base64" in image:
-                    model_response.data.append(ImageObject(
-                        b64_json=image["image_base64"],
-                        url=None,
-                    ))
+                    model_response.data.append(
+                        ImageObject(
+                            b64_json=image["image_base64"],
+                            url=None,
+                        )
+                    )
         return model_response

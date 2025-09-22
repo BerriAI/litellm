@@ -103,7 +103,6 @@ class AnthropicAdapter:
     def translate_completion_output_params(
         self, response: ModelResponse
     ) -> Optional[AnthropicMessagesResponse]:
-
         return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
             response=response
         )
@@ -360,10 +359,10 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tool_choice" in anthropic_message_request:
             tool_choice = anthropic_message_request["tool_choice"]
             if tool_choice:
-                new_kwargs["tool_choice"] = (
-                    self.translate_anthropic_tool_choice_to_openai(
-                        tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
-                    )
+                new_kwargs[
+                    "tool_choice"
+                ] = self.translate_anthropic_tool_choice_to_openai(
+                    tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
                 )
         ## CONVERT TOOLS
         if "tools" in anthropic_message_request:
@@ -401,7 +400,9 @@ class LiteLLMAnthropicMessagesAdapter:
                             type="tool_use",
                             id=tool_call.id,
                             name=tool_call.function.name or "",
-                            input=json.loads(tool_call.function.arguments) if tool_call.function.arguments else {},
+                            input=json.loads(tool_call.function.arguments)
+                            if tool_call.function.arguments
+                            else {},
                         )
                     )
             elif choice.message.content is not None:
@@ -454,10 +455,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
         self, choices: List[OpenAIStreamingChoice]
-    ) -> Tuple[
-        Literal["text", "tool_use"],
-        "ContentBlockContentBlockDict",
-    ]:
+    ) -> Tuple[Literal["text", "tool_use"], "ContentBlockContentBlockDict",]:
         import uuid
 
         from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
@@ -485,7 +483,6 @@ class LiteLLMAnthropicMessagesAdapter:
         Literal["text_delta", "input_json_delta"],
         Union[ContentTextBlockDelta, ContentJsonBlockDelta],
     ]:
-
         text: str = ""
         partial_json: Optional[str] = None
         for choice in choices:

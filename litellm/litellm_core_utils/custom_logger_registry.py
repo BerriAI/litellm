@@ -158,7 +158,6 @@ class CustomLoggerRegistry:
                 callback_strs.append(callback_str)
         return callback_strs
 
-
     @classmethod
     def get_class_type_for_custom_logger_name(
         cls,

@@ -175,7 +175,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 chat_completion_response=litellm_model_response,
                 responses_api_request=self.responses_api_request,
             )
-            
+
             # Encode the response ID to match non-streaming behavior
             encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=responses_api_response,
