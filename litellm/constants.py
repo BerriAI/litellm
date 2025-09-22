@@ -179,7 +179,7 @@ NON_LLM_CONNECTION_TIMEOUT = int(
     os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
-MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 1000))
+MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
@@ -805,6 +805,12 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
+BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
+    "cohere",
+    "amazon",
+    "twelvelabs",
+]
+
 BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
@@ -858,6 +864,7 @@ bedrock_embedding_models: set = set(
         "amazon.titan-embed-text-v1",
         "cohere.embed-english-v3",
         "cohere.embed-multilingual-v3",
+        "twelvelabs.marengo-embed-2-7-v1:0",
     ]
 )
 
@@ -976,6 +983,7 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
+LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
@@ -1099,3 +1107,8 @@ SENTRY_PII_DENYLIST = [
     "SMTP_SENDER_EMAIL",
     "TEST_EMAIL_ADDRESS",
 ]
+
+# CoroutineChecker cache configuration
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
+    os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
+)
