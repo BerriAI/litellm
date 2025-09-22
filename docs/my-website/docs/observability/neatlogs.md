@@ -124,7 +124,6 @@ Neatlogs captures comprehensive data for each LLM request:
 
 - **Request Details**: Model, provider, messages, parameters
 - **Response Data**: Completion text, token usage, cost
-- **Performance Metrics**: Response time, latency
 - **Error Information**: Failure reasons and stack traces
 - **Metadata**:session IDs
 
