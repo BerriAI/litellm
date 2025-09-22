@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 import orjson
@@ -51,8 +52,6 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
                     # Replace invalid surrogate pairs
-                    import re
-
                     # This regex finds incomplete surrogate pairs
                     body_str = re.sub(
                         r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str

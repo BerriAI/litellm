@@ -1,12 +1,13 @@
 """
 Unit tests for Bedrock Guardrails
 """
-
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
@@ -859,7 +860,6 @@ async def test__redact_pii_matches_comprehensive_coverage():
     )
 
     print("Comprehensive coverage redaction test passed")
-
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
