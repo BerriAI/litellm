@@ -25,6 +25,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -723,7 +724,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"]["metadata"]
+            litellm_metadata = kwargs["litellm_params"]["metadata"] | kwargs["litellm_params"]["litellm_metadata"]
             if litellm_metadata is None:
                 return
             user_api_key = litellm_metadata.get("user_api_key")
@@ -736,7 +737,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Get total tokens from response
             total_tokens = 0
-            if isinstance(response_obj, ModelResponse):
+            # spot fix for /responses api
+            if (isinstance(response_obj, ModelResponse) or isinstance(response_obj, BaseLiteLLMOpenAIResponseObject)):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
                     if rate_limit_type == "output":

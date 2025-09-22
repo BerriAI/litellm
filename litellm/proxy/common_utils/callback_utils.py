@@ -289,7 +289,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
     _litellm_params = kwargs.get("litellm_params", None) or {}
-    _metadata = _litellm_params.get("metadata", None) or {}
+    _metadata = (_litellm_params.get("metadata", {}) | _litellm_params.get("litellm_metadata", {})) or {}
     _model_group = _metadata.get("model_group", None)
     if _model_group is not None:
         return _model_group
