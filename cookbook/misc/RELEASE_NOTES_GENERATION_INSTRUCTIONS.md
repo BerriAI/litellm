@@ -4,10 +4,10 @@ This document provides comprehensive instructions for AI agents to generate rele
 
 ## Required Inputs
 
-1. **Release Version** (e.g., `v1.76.3-stable`)
+1. **Release Version** (e.g., `v1.77.3-stable`)
 2. **PR Diff/Changelog** - List of PRs with titles and contributors
 3. **Previous Version Commit Hash** - To compare model pricing changes
-4. **Reference Release Notes** - Previous release notes to follow style/format
+4. **Reference Release Notes** - Use recent stable releases (v1.76.3-stable, v1.77.2-stable) as templates for consistent formatting
 
 ## Step-by-Step Process
 
@@ -26,12 +26,12 @@ git diff <previous_commit_hash> HEAD -- model_prices_and_context_window.json
 
 ### 2. Release Notes Structure
 
-Follow this exact structure based on `docs/my-website/release_notes/v1.76.1-stable/index.md`:
+Follow this exact structure based on recent stable releases (v1.76.3-stable, v1.77.2-stable):
 
 ```markdown
 ---
-title: "v1.76.X-stable - [Key Theme]"
-slug: "v1-76-X"
+title: "v1.77.X-stable - [Key Theme]"
+slug: "v1-77-X"
 date: YYYY-MM-DDTHH:mm:ss
 authors: [standard author block]
 hide_table_of_contents: false
@@ -43,23 +43,42 @@ hide_table_of_contents: false
 ## Key Highlights
 [3-5 bullet points of major features]
 
-## Major Changes
-[Critical changes users need to know]
-
-## Performance Improvements
-[Performance-related changes]
-
 ## New Models / Updated Models
-[Detailed model tables and provider updates]
+#### New Model Support
+[Model pricing table]
+
+#### Features
+[Provider-specific features organized by provider]
+
+### Bug Fixes
+[Provider-specific bug fixes organized by provider]
+
+#### New Provider Support
+[New provider integrations]
 
 ## LLM API Endpoints
-[API-related features and fixes]
+#### Features
+[API-specific features organized by API type]
+
+#### Bugs
+[General bug fixes]
 
 ## Management Endpoints / UI
-[Admin interface and management changes]
+#### Features
+[UI and management features]
+
+#### Bugs
+[Management-related bug fixes]
 
 ## Logging / Guardrail Integrations
-[Observability and security features]
+#### Features
+[Organized by integration provider with proper doc links]
+
+#### Guardrails
+[Guardrail-specific features and fixes]
+
+#### New Integration
+[Major new integrations]
 
 ## Performance / Loadbalancing / Reliability improvements
 [Infrastructure improvements]
@@ -86,21 +105,27 @@ hide_table_of_contents: false
 **New Models/Updated Models:**
 - Extract from model_prices_and_context_window.json diff
 - Create tables with: Provider, Model, Context Window, Input Cost, Output Cost, Features
-- Group by provider
-- Note pricing corrections
-- Highlight deprecated models
+- **Structure:**
+  - `#### New Model Support` - pricing table
+  - `#### Features` - organized by provider with documentation links
+  - `### Bug Fixes` - provider-specific bug fixes
+  - `#### New Provider Support` - major new provider integrations
+- Group by provider with proper doc links: `**[Provider Name](../../docs/providers/[provider])**`
+- Use bullet points under each provider for multiple features
+- Separate features from bug fixes clearly
 
-**Provider Features:**
-- Group by provider (Gemini, OpenAI, Anthropic, etc.)
-- Link to provider docs: `../../docs/providers/[provider_name]`
-- Separate features from bug fixes
-
-**API Endpoints:**
-- Images API
-- Video Generation (if applicable)
-- Responses API
-- Passthrough endpoints
-- General chat completions
+**LLM API Endpoints:**
+- **Structure:**
+  - `#### Features` - organized by API type (Responses API, Batch API, etc.)
+  - `#### Bugs` - general bug fixes under **General** category
+- **API Categories:**
+  - Responses API
+  - Batch API  
+  - CountTokens API
+  - Images API
+  - Video Generation (if applicable)
+  - General (miscellaneous improvements)
+- Use proper documentation links for each API type
 
 **UI/Management:**
 - Authentication changes
@@ -108,11 +133,19 @@ hide_table_of_contents: false
 - Team management
 - Key management
 
-**Integrations:**
-- Logging providers (Datadog, Braintrust, etc.)
-- Guardrails
-- Cost tracking
-- Observability
+**Logging / Guardrail Integrations:**
+- **Structure:**
+  - `#### Features` - organized by integration provider with proper doc links
+  - `#### Guardrails` - guardrail-specific features and fixes
+  - `#### New Integration` - major new integrations
+- **Integration Categories:**
+  - **[DataDog](../../docs/proxy/logging#datadog)** - group all DataDog-related changes
+  - **[Langfuse](../../docs/proxy/logging#langfuse)** - Langfuse-specific features
+  - **[Prometheus](../../docs/proxy/logging#prometheus)** - monitoring improvements
+  - **[PostHog](../../docs/observability/posthog)** - observability integration
+  - Other logging providers with proper doc links
+- Use bullet points under each provider for multiple features
+- Separate logging features from guardrails clearly
 
 ### 4. Documentation Linking Strategy
 
@@ -211,10 +244,41 @@ This release has a known issue...
 :::
 ```
 
-**Provider Features:**
+**Provider Features (New Models / Updated Models section):**
 ```markdown
+#### Features
+
 - **[Provider Name](../../docs/providers/provider)**
     - Feature description - [PR #XXXXX](link)
+    - Another feature description - [PR #YYYYY](link)
+```
+
+**API Features (LLM API Endpoints section):**
+```markdown
+#### Features
+
+- **[API Name](../../docs/api_path)**
+    - Feature description - [PR #XXXXX](link)
+    - Another feature - [PR #YYYYY](link)
+- **General**
+    - Miscellaneous improvements - [PR #ZZZZZ](link)
+```
+
+**Integration Features (Logging / Guardrail Integrations section):**
+```markdown
+#### Features
+
+- **[Integration Name](../../docs/proxy/logging#integration)**
+    - Feature description - [PR #XXXXX](link)
+    - Bug fix description - [PR #YYYYY](link)
+```
+
+**Bug Fixes Pattern:**
+```markdown
+### Bug Fixes
+
+- **[Provider/Component Name](../../docs/providers/provider)**
+    - Bug fix description - [PR #XXXXX](link)
 ```
 
 ### 10. Missing Documentation Check

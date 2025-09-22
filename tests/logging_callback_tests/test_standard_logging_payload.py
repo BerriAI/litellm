@@ -132,6 +132,7 @@ def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
         ("user_api_key_team_id", "test_team_id"),
         ("user_api_key_user_id", "test_user_id"),
         ("user_api_key_team_alias", "test_team_alias"),
+        ("user_api_key_spend", 10.50),
         ("spend_logs_metadata", {"key": "value"}),
         ("requester_ip_address", "127.0.0.1"),
         ("requester_metadata", {"user_agent": "test_agent"}),

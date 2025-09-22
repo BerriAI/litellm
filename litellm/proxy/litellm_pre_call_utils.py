@@ -21,7 +21,9 @@ from litellm.proxy._types import (
 )
 
 # Cache special headers as a frozenset for O(1) lookup performance
-_SPECIAL_HEADERS_CACHE = frozenset(v.value.lower() for v in SpecialHeaders._member_map_.values())
+_SPECIAL_HEADERS_CACHE = frozenset(
+    v.value.lower() for v in SpecialHeaders._member_map_.values()
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -63,6 +65,7 @@ LITELLM_METADATA_ROUTES = (
     "responses",
     "files",
 )
+
 
 def _get_metadata_variable_name(request: Request) -> str:
     """
@@ -157,6 +160,7 @@ class KeyAndTeamLoggingSettings:
 
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+
         if (
             user_api_key_dict.team_metadata is not None
             and "logging" in user_api_key_dict.team_metadata
@@ -234,12 +238,16 @@ def clean_headers(
     Removes litellm api key from headers
     """
     clean_headers = {}
-    litellm_key_lower = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
-    
+    litellm_key_lower = (
+        litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    )
+
     for header, value in headers.items():
         header_lower = header.lower()
         # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        if (header_lower not in _SPECIAL_HEADERS_CACHE and (litellm_key_lower is None or header_lower != litellm_key_lower)):
+        if header_lower not in _SPECIAL_HEADERS_CACHE and (
+            litellm_key_lower is None or header_lower != litellm_key_lower
+        ):
             clean_headers[header] = value
     return clean_headers
 
@@ -562,6 +570,8 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
+            user_api_key_spend=user_api_key_dict.spend,
+            user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
@@ -569,6 +579,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
+            user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
         )
         return user_api_key_logged_metadata
 
