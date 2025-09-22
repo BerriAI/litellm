@@ -308,6 +308,65 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Request Metadata
+
+Attach metadata to Bedrock requests for logging and cost attribution.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    requestMetadata={
+        "cost_center": "engineering",
+        "user_id": "user123"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      requestMetadata:
+        cost_center: "engineering"
+```
+
+**Set on request**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-v1",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "requestMetadata": {"cost_center": "engineering"}
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Function Calling / Tool calling
 
 LiteLLM supports tool calling via Bedrock's Converse and Invoke API's.
