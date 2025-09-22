@@ -790,6 +790,7 @@ async def cli_sso_callback(request: Request, key: Optional[str] = None, existing
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
 async def cli_poll_key(key_id: str):
     """CLI polling endpoint - checks if key exists in DB"""
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.proxy_server import prisma_client
 
     if not key_id.startswith("sk-"):
@@ -809,10 +810,11 @@ async def cli_poll_key(key_id: str):
         key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
             where={"token": hashed_token}
         )
+        key_obj: LiteLLM_VerificationToken = cast(LiteLLM_VerificationToken, key_obj)
 
         if key_obj:
             verbose_proxy_logger.info(f"CLI key found: {key_id}")
-            return {"status": "ready", "key": key_id}
+            return {"status": "ready", "key": key_id, "user_id": key_obj.user_id}
         else:
             return {"status": "pending"}
 
