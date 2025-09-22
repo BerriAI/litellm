@@ -1068,6 +1068,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
         (
             response_1.usage.prompt_tokens
             - response_1.usage.prompt_tokens_details.cached_tokens
+            - response_1.usage.prompt_tokens_details.cache_creation_tokens
         )
         * _model_info["input_cost_per_token"]
         + (response_1.usage.prompt_tokens_details.cached_tokens or 0)

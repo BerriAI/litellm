@@ -45,7 +45,10 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
-from litellm.types.utils import CompletionTokensDetailsWrapper
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    CompletionTokensDetailsWrapper,
+)
 from litellm.types.utils import Message as LitellmMessage
 from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 from litellm.utils import (
@@ -820,12 +823,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         web_search_requests: Optional[int] = None
         if (
             "cache_creation_input_tokens" in _usage
             and _usage["cache_creation_input_tokens"] is not None
         ):
             cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+            prompt_tokens += cache_creation_input_tokens
         if (
             "cache_read_input_tokens" in _usage
             and _usage["cache_read_input_tokens"] is not None
@@ -841,8 +846,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     int, _usage["server_tool_use"]["web_search_requests"]
                 )
 
+        if "cache_creation" in _usage and _usage["cache_creation"] is not None:
+            cache_creation_token_details = CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=_usage["cache_creation"].get(
+                    "ephemeral_5m_input_tokens"
+                ),
+                ephemeral_1h_input_tokens=_usage["cache_creation"].get(
+                    "ephemeral_1h_input_tokens"
+                ),
+            )
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
+            cache_creation_tokens=cache_read_input_tokens,
+            cache_creation_token_details=cache_creation_token_details,
         )
         completion_token_details = (
             CompletionTokensDetailsWrapper(

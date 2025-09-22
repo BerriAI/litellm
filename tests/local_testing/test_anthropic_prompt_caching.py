@@ -320,7 +320,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
                             random_id
                         )
                         * 400,
-                        "cache_control": {"type": "ephemeral"},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
             },
@@ -331,7 +331,7 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
                     {
                         "type": "text",
                         "text": "What are the key terms and conditions in this agreement?",
-                        "cache_control": {"type": "ephemeral"},
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
                     }
                 ],
             },
