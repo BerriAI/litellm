@@ -108,7 +108,16 @@ async def llm_passthrough_factory_proxy_route(
 
     # Construct the full target URL using httpx
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    # Join paths correctly by removing trailing/leading slashes as needed
+    if not base_url.path or base_url.path == "/":
+        # If base URL has no path, just use the new path
+        updated_url = base_url.copy_with(path=encoded_endpoint)
+    else:
+        # Otherwise, combine the paths
+        base_path = base_url.path.rstrip("/")
+        clean_path = encoded_endpoint.lstrip("/")
+        full_path = f"{base_path}/{clean_path}"
+        updated_url = base_url.copy_with(path=full_path)
 
     # Add or update query parameters
     provider_api_key = passthrough_endpoint_router.get_credentials(
@@ -130,7 +139,11 @@ async def llm_passthrough_factory_proxy_route(
     is_streaming_request = False
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
+        if "multipart/form-data" not in request.headers.get("content-type", ""):
+            _request_body = await request.json()
+        else:
+            _request_body = dict(request._form)
+        
         if _request_body.get("stream"):
             is_streaming_request = True
 
