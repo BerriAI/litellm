@@ -1,30 +1,22 @@
-import json
 import urllib
-from typing import Any, Callable, Optional, Union, List, Dict
-import time
+from typing import List, Dict
 import httpx
-from functools import cached_property
+
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,
-    get_async_httpx_client,
+    HTTPHandler
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper, get_secret
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 from ...base import BaseLLM
-from .transformation import GenAIHubOrchestrationConfig
-
 
 from typing import Callable
 
 from typing import Optional, TYPE_CHECKING, Union
-from types import ModuleType
 
 # Type checking block for optional imports
 if TYPE_CHECKING:
@@ -39,6 +31,12 @@ try:
 except ImportError as err:
     GenAIHubProxyClient = None  # type: ignore
     _gen_ai_hub_import_error = err
+
+try:
+    import httpcore  # type: ignore
+except Exception:
+    httpcore = None
+
 
 class OptionalDependencyError(ImportError):
     """Custom error for missing optional dependencies."""
@@ -140,8 +138,25 @@ class GenAIHubOrchestration(BaseLLM):
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+
+        async def _safe_async_iter():
+            iterator = response.__aiter__() if hasattr(response, "__aiter__") else None
+            try:
+                if iterator is None:
+                    async for chunk in response:
+                        yield chunk
+                else:
+                    while True:
+                        try:
+                            chunk = await iterator.__anext__()
+                            yield chunk
+                        except StopAsyncIteration:
+                            break
+            except Exception as e:
+                raise
+
         return CustomStreamWrapper(
-                completion_stream=response,
+                completion_stream=_safe_async_iter(),
                 model=model,
                 logging_obj=logging_obj,
                 custom_llm_provider='sap',
@@ -206,8 +221,19 @@ class GenAIHubOrchestration(BaseLLM):
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
             raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+
+        def _safe_iter():
+            it = iter(response)
+            while True:
+                try:
+                    yield next(it)
+                except StopIteration:
+                    break
+                except Exception as e:
+                    raise
+
         return CustomStreamWrapper(
-                completion_stream=response,
+                completion_stream=_safe_iter(),
                 model=model,
                 logging_obj=logging_obj,
                 custom_llm_provider='sap',
