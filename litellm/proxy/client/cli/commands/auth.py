@@ -64,12 +64,19 @@ def login(ctx: click.Context):
     
     base_url = ctx.obj["base_url"]
     
+    # Check if we have an existing key to regenerate
+    existing_key = get_stored_api_key()
+    
     # Generate unique key ID for this login session
     key_id = f"sk-{str(uuid.uuid4())}"
     
     try:
         # Construct SSO login URL with CLI source and pre-generated key
         sso_url = f"{base_url}/sso/key/generate?source={LITELLM_CLI_SOURCE_IDENTIFIER}&key={key_id}"
+        
+        # If we have an existing key, include it so the server can regenerate it
+        if existing_key:
+            sso_url += f"&existing_key={existing_key}"
         
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
