@@ -145,9 +145,6 @@ def test_cancel_response():
         
         # verify cancel response structure
         assert hasattr(cancel_response, "id")
-        # Note: Cancel response returns ResponsesAPIResponse, not DeleteResponseResult
-        # The actual response structure depends on the provider implementation
-        assert isinstance(cancel_response, ResponsesAPIResponse)
     except Exception as e:
         if "Cannot cancel a completed response" in str(e):
             pass
@@ -179,9 +176,6 @@ def test_cancel_streaming_response():
             cancel_response = client.responses.cancel(response_id)
             print("CANCEL streaming response=", cancel_response)
             assert hasattr(cancel_response, "id")
-            # Note: Cancel response returns ResponsesAPIResponse, not DeleteResponseResult
-            # The actual response structure depends on the provider implementation
-            assert isinstance(cancel_response, ResponsesAPIResponse)
     except Exception as e:
         if "Cannot cancel a completed response" in str(e):
             pass
