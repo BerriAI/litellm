@@ -142,7 +142,7 @@ async def llm_passthrough_factory_proxy_route(
         if "multipart/form-data" not in request.headers.get("content-type", ""):
             _request_body = await request.json()
         else:
-            _request_body = dict(request._form)
+            _request_body = await get_form_data(request)
         
         if _request_body.get("stream"):
             is_streaming_request = True
