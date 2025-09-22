@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.services import ServiceTypes
 
@@ -138,7 +139,7 @@ class RedisCache(BaseCache):
             self.redis_flush_size = redis_flush_size
         self.redis_version = "Unknown"
         try:
-            if not inspect.iscoroutinefunction(self.redis_client):
+            if not coroutine_checker.is_async_callable(self.redis_client):
                 self.redis_version = self.redis_client.info()["redis_version"]  # type: ignore
         except Exception:
             pass

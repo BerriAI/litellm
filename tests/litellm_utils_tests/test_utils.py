@@ -2376,3 +2376,12 @@ def test_delta_tool_calls_sequential_indices():
     # Verify tool call details are preserved
     assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
     assert delta.tool_calls[1].function.name == "get_weather_precise"
+
+def test_completion_with_no_model():
+    """
+    Ensure error is raised when no model is provided
+    """
+    # test on empty
+    with pytest.raises(TypeError):
+        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
+        

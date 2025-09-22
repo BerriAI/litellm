@@ -2462,6 +2462,9 @@ async def list_keys(
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
     ),
+    include_created_by_keys: bool = Query(
+        False, description="Include keys created by the user"
+    ),
     sort_by: Optional[str] = Query(
         default=None,
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
@@ -2524,6 +2527,7 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
         )
@@ -2601,6 +2605,7 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
 ) -> KeyListResponseObject:
@@ -2649,6 +2654,10 @@ async def _list_key_helper(
 
     if user_condition:
         or_conditions.append(user_condition)
+
+    # Add condition for created by keys if provided
+    if include_created_by_keys and user_id:
+        or_conditions.append({"created_by": user_id})
 
     # Add condition for admin team keys if provided
     if admin_team_ids:
