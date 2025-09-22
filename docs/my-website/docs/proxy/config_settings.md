@@ -690,6 +690,8 @@ router_settings:
 | PILLAR_API_KEY | API key for Pillar API Guardrails
 | PILLAR_ON_FLAGGED_ACTION | Action to take when content is flagged ('block' or 'monitor')
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
+| POSTHOG_API_KEY | API key for PostHog analytics integration
+| POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
@@ -770,3 +772,4 @@ router_settings:
 | WEBHOOK_URL | URL for receiving webhooks from external services
 | SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run |
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000 |
+| COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000 |

@@ -359,7 +359,7 @@ async def test_gemini_custom_api_base_proxy_integration():
     vertex_base = VertexBase()
     
     # Test case 1: Custom API base for Gemini
-    custom_api_base = "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta"
+    custom_api_base = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
     model = "gemini-2.5-flash-lite"
     endpoint = "generateContent"
     
@@ -433,7 +433,7 @@ async def test_gemini_proxy_config_with_custom_api_base():
         "litellm_params": {
             "model": "gemini/*",
             "api_key": "dummy-key-for-testing",
-            "api_base": "https://proxy.zapier.com/generativelanguage.googleapis.com/v1beta"
+            "api_base": "https://proxy.example.com/generativelanguage.googleapis.com/v1beta"
         }
     }
     

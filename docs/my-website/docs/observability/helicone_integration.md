@@ -237,7 +237,10 @@ litellm.metadata = {
 }
 ```
 
-### Session Tracking and Tracing
+</TabItem>
+</Tabs>
+
+## Session Tracking and Tracing
 
 Track multi-step and agentic LLM interactions using session IDs and paths:
 
