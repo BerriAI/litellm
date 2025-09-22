@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 
 import httpx
+import os
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
