@@ -1247,6 +1247,129 @@ class TestCustomUISSO:
                     assert result.status_code == 303
 
 
+class TestCLIKeyRegenerationFlow:
+    """Test the end-to-end CLI key regeneration flow"""
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_regenerate_existing_key(self):
+        """Test CLI SSO callback regenerating an existing key"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        # Mock request
+        mock_request = MagicMock(spec=Request)
+        
+        # Test data
+        existing_key = "sk-existing-key-123"
+        new_key = "sk-new-key-456"
+        
+        # Mock the regenerate helper function
+        with patch("litellm.proxy.management_endpoints.ui_sso._regenerate_cli_key") as mock_regenerate, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Act
+            result = await cli_sso_callback(
+                request=mock_request,
+                key=new_key,
+                existing_key=existing_key
+            )
+            
+            # Assert
+            mock_regenerate.assert_called_once_with(existing_key, new_key)
+            assert result.status_code == 200
+            assert "Success" in result.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_create_new_key(self):
+        """Test CLI SSO callback creating a new key when no existing key provided"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        # Mock request
+        mock_request = MagicMock(spec=Request)
+        
+        # Test data
+        new_key = "sk-new-key-789"
+        
+        # Mock the create helper function
+        with patch("litellm.proxy.management_endpoints.ui_sso._create_new_cli_key") as mock_create, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Act
+            result = await cli_sso_callback(
+                request=mock_request,
+                key=new_key,
+                existing_key=None
+            )
+            
+            # Assert
+            mock_create.assert_called_once_with(new_key)
+            assert result.status_code == 200
+            assert "Success" in result.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_routes_to_cli_with_existing_key(self):
+        """Test that auth_callback properly routes CLI requests and preserves existing_key parameter"""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        # Mock request with existing_key query parameter
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params.get.return_value = "sk-existing-cli-key-123"
+        
+        # CLI state
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456"
+        
+        # Mock the CLI callback
+        with patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback:
+            mock_cli_callback.return_value = MagicMock()
+            
+            # Act
+            await auth_callback(request=mock_request, state=cli_state)
+            
+            # Assert
+            mock_cli_callback.assert_called_once_with(
+                mock_request,
+                key="sk-new-session-key-456",
+                existing_key="sk-existing-cli-key-123"
+            )
+
+    def test_get_redirect_url_preserves_existing_key(self):
+        """Test that redirect URL generation preserves existing_key parameter"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.litellm.ai/"
+        
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
+            # Test with existing_key
+            redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+                request=mock_request,
+                sso_callback_route="sso/callback",
+                existing_key="sk-existing-123"
+            )
+            
+            assert "https://test.litellm.ai/sso/callback?existing_key=sk-existing-123" == redirect_url
+
+    def test_get_redirect_url_without_existing_key(self):
+        """Test that redirect URL generation works without existing_key parameter"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.litellm.ai/"
+        
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
+            # Test without existing_key
+            redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+                request=mock_request,
+                sso_callback_route="sso/callback"
+            )
+            
+            assert "https://test.litellm.ai/sso/callback" == redirect_url
+
+
 class TestProcessSSOJWTAccessToken:
     """Test the process_sso_jwt_access_token helper function"""
 
