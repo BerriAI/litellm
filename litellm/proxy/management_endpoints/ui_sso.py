@@ -993,19 +993,50 @@ class SSOAuthenticationHandler:
                 # or a cryptographicly signed state that we can verify stateless
                 # For simplification we are using a static state, this is not perfect but some
                 # SSO providers do not allow stateless verification
-                redirect_params = {}
-                state = os.getenv("GENERIC_CLIENT_STATE", None)
-
-                if state:
-                    redirect_params["state"] = state
-                elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
+                redirect_params = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=state,
+                    generic_authorization_endpoint=generic_authorization_endpoint
+                )
+                
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
         )
+
+    @staticmethod
+    def _get_generic_sso_redirect_params(
+        state: Optional[str] = None, 
+        generic_authorization_endpoint: Optional[str] = None
+    ) -> dict:
+        """
+        Get redirect parameters for Generic SSO with proper state priority handling.
+        
+        Priority order:
+        1. CLI state (if provided)
+        2. GENERIC_CLIENT_STATE environment variable
+        3. Generated UUID for Okta (if Okta endpoint detected)
+        
+        Args:
+            state: Optional state parameter (e.g., CLI state)
+            generic_authorization_endpoint: Authorization endpoint URL
+            
+        Returns:
+            dict: Redirect parameters for SSO login
+        """
+        redirect_params = {}
+        
+        if state:
+            # CLI state takes priority
+            # the litellm proxy cli sends the "state" parameter to the proxy server for auth. We should maintain the state parameter for the cli if it is provided
+            redirect_params["state"] = state
+        else:
+            generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
+            if generic_client_state:
+                redirect_params["state"] = generic_client_state
+            elif generic_authorization_endpoint and "okta" in generic_authorization_endpoint:
+                redirect_params["state"] = uuid.uuid4().hex  # set state param for okta - required
+
+        return redirect_params
 
     @staticmethod
     def should_use_sso_handler(
