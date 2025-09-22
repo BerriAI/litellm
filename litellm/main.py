@@ -2395,43 +2395,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "cohere":
-            cohere_key = (
-                api_key
-                or litellm.cohere_key
-                or get_secret("COHERE_API_KEY")
-                or get_secret("CO_API_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("COHERE_API_BASE")
-                or "https://api.cohere.ai/v1/generate"
-            )
-
-            # Use the consolidated headers that were already merged at the top of the function
-            # No need for additional merging here as it's already done
-
-            response = base_llm_http_handler.completion(
-                model=model,
-                stream=stream,
-                messages=messages,
-                acompletion=acompletion,
-                api_base=api_base,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                custom_llm_provider="cohere",
-                timeout=timeout,
-                headers=headers,
-                encoding=encoding,
-                api_key=cohere_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-                client=client,
-            )
-        elif custom_llm_provider == "cohere_chat":
+        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -2447,12 +2411,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.cohere.ai/v1/chat"
             )
 
-            headers = headers or litellm.headers or {}
-            if headers is None:
-                headers = {}
-
-            if extra_headers is not None:
-                headers.update(extra_headers)
+            # Use the consolidated headers that were already merged at the top of the function
+            # No need for additional merging here as it's already done
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -4177,10 +4137,8 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
-                headers = {}
+            # Use the consolidated headers that were already merged at the top of the function
+            # No need for additional merging here as it's already done
 
             response = base_llm_http_handler.embedding(
                 model=model,
