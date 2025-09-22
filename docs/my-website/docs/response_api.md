@@ -81,6 +81,43 @@ print(retrieved_response)
 # retrieved_response = await litellm.aget_responses(response_id=response_id)
 ```
 
+#### CANCEL a Response
+You can cancel an in-progress response (if supported by the provider):
+
+```python showLineNumbers title="Cancel Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Cancel the response by ID
+cancel_response = litellm.cancel_responses(
+    response_id=response_id
+)
+
+print(cancel_response)
+
+# For async usage
+# cancel_response = await litellm.acancel_responses(response_id=response_id)
+```
+
+
+**REST API:**
+```bash
+curl -X POST http://localhost:4000/v1/responses/response_id/cancel \
+    -H "Authorization: Bearer sk-1234"
+```
+
+This will attempt to cancel the in-progress response with the given ID.
+**Note:** Not all providers support response cancellation. If unsupported, an error will be raised.
+
 #### DELETE a Response
 ```python showLineNumbers title="Delete Response by ID"
 import litellm
