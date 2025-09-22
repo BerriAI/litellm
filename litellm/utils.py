@@ -59,12 +59,6 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
-# Import cached imports utilities
-from litellm.litellm_core_utils.cached_imports import (
-    get_coroutine_checker,
-    get_litellm_logging_class,
-    get_set_callbacks,
-)
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -86,6 +80,13 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
+)
+
+# Import cached imports utilities
+from litellm.litellm_core_utils.cached_imports import (
+    get_coroutine_checker,
+    get_litellm_logging_class,
+    get_set_callbacks,
 )
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
@@ -227,7 +228,6 @@ from typing import (
     cast,
     get_args,
 )
-
 
 from openai import OpenAIError as OriginalError
 
@@ -6408,6 +6408,8 @@ def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
     litellm_params: Optional[LiteLLM_Params] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
 ) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
@@ -6415,11 +6417,24 @@ def get_valid_models(
     Args:
         check_provider_endpoint: If True, will check the provider's endpoint for valid models.
         custom_llm_provider: If provided, will only check the provider's endpoint for valid models.
+        api_key: If provided, will use the API key to get valid models.
+        api_base: If provided, will use the API base to get valid models.
     Returns:
         A list of valid LLMs
     """
 
     try:
+        ################################
+        # init litellm_params 
+        #################################
+        if litellm_params is None:
+            litellm_params = LiteLLM_Params(model="")
+        if api_key is not None:
+            litellm_params.api_key = api_key
+        if api_base is not None:
+            litellm_params.api_base = api_base
+        #################################
+        
         check_provider_endpoint = (
             check_provider_endpoint or litellm.check_provider_endpoint
         )
