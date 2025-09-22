@@ -971,8 +971,9 @@ async def test_create_group_with_nonexistent_users_creates_users(mocker):
     
     # Mock created users return values
     def mock_new_user_side_effect(data):
-        from litellm.proxy._types import LiteLLM_UserTable
-        return LiteLLM_UserTable(
+        from litellm.proxy._types import NewUserResponse
+        return NewUserResponse(
+            key="sk-test-key-" + data.user_id,  # Required field from GenerateKeyResponse
             user_id=data.user_id,
             user_email=data.user_email,
             metadata=data.metadata,
@@ -1121,8 +1122,9 @@ async def test_update_group_with_nonexistent_users_creates_users(mocker):
     
     # Mock created users return values
     def mock_new_user_side_effect(data):
-        from litellm.proxy._types import LiteLLM_UserTable
-        return LiteLLM_UserTable(
+        from litellm.proxy._types import NewUserResponse
+        return NewUserResponse(
+            key="sk-test-key-" + data.user_id,  # Required field from GenerateKeyResponse
             user_id=data.user_id,
             user_email=data.user_email,
             metadata=data.metadata,

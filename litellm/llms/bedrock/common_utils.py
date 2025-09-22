@@ -738,19 +738,24 @@ class CommonBatchFilesUtils:
         )
         
         # Prepare the request data
-        if isinstance(data, dict):
-            import json
-            request_data = json.dumps(data)
+        method_upper = method.upper()
+        if method_upper == "GET":
+            # GET requests should be signed with an empty payload
+            request_data = ""
+            headers = {}
         else:
-            request_data = data
-        
-        # Prepare headers
-        headers = {"Content-Type": "application/json"}
+            if isinstance(data, dict):
+                import json
+                request_data = json.dumps(data)
+            else:
+                request_data = data
+            # Prepare headers for non-GET requests
+            headers = {"Content-Type": "application/json"}
         
         # Create AWS request and sign it
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
         request = AWSRequest(
-            method=method.upper(), url=endpoint_url, data=request_data, headers=headers
+            method=method_upper, url=endpoint_url, data=request_data, headers=headers
         )
         sigv4.add_auth(request)
         prepped = request.prepare()

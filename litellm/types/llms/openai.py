@@ -723,6 +723,7 @@ ValidUserMessageContentTypes = [
     "input_audio",
     "audio_url",
     "document",
+    "guarded_text",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.

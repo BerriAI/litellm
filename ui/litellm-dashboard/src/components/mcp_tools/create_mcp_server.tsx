@@ -372,25 +372,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <Form.Item
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
-                  MCP Version
-                  <Tooltip title="Select the MCP specification version your server supports">
-                    <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                  </Tooltip>
-                </span>
-              }
-              name="spec_version"
-              rules={[{ required: true, message: "Please select a spec version" }]}
-            >
-              <Select placeholder="Select MCP version" className="rounded-lg" size="large">
-                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
                   MCP Access Groups
                   <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />

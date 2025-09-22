@@ -3120,6 +3120,7 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
+  model_info: Record<string, any>,
   mode: string
 ) => {
   try {
@@ -3141,6 +3142,7 @@ export const testConnectionRequest = async (
       },
       body: JSON.stringify({
         litellm_params: litellm_params,
+        model_info: model_info,
         mode: mode,
       }),
     });
@@ -3270,6 +3272,7 @@ export const keyListCall = async (
     }
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
+    queryParams.append("include_created_by_keys", "true");
 
     const queryString = queryParams.toString();
     if (queryString) {

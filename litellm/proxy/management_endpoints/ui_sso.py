@@ -76,6 +76,42 @@ else:
 router = APIRouter()
 
 
+def process_sso_jwt_access_token(
+    access_token_str: Optional[str],
+    sso_jwt_handler: Optional[JWTHandler],
+    result: Union[OpenID, dict, None],
+) -> None:
+    """
+    Process SSO JWT access token and extract team IDs if available.
+
+    This function decodes the JWT access token and extracts team IDs using the
+    sso_jwt_handler, then sets the team_ids attribute on the result object.
+
+    Args:
+        access_token_str: The JWT access token string
+        sso_jwt_handler: SSO-specific JWT handler for team ID extraction
+        result: The SSO result object to update with team IDs
+    """
+    if access_token_str and sso_jwt_handler and result:
+        import jwt
+
+        access_token_payload = jwt.decode(
+            access_token_str, options={"verify_signature": False}
+        )
+
+        # Handle both dict and object result types
+        if isinstance(result, dict):
+            result_team_ids: Optional[List[str]] = result.get("team_ids", [])
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                result["team_ids"] = team_ids
+        else:
+            result_team_ids = getattr(result, "team_ids", []) if result else []
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                setattr(result, "team_ids", team_ids)
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def google_login(
     request: Request, source: Optional[str] = None, key: Optional[str] = None
@@ -193,7 +229,7 @@ def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
-):
+) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
     )
@@ -226,6 +262,7 @@ def generic_response_convertor(
 
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
+
     return CustomOpenID(
         id=response.get(generic_user_id_attribute_name),
         display_name=response.get(generic_user_display_name_attribute_name),
@@ -340,6 +377,10 @@ async def get_generic_sso_response(
             params={"include_client_id": generic_include_client_id},
             headers=additional_generic_sso_headers_dict,
         )
+
+        access_token_str: Optional[str] = generic_sso.access_token
+        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
+
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
@@ -612,6 +653,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
         )
+
     elif generic_client_id is not None:
         result, received_response = await get_generic_sso_response(
             request=request,

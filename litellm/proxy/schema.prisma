@@ -171,7 +171,6 @@ model LiteLLM_MCPServerTable {
   description  String?
   url          String?
   transport    String         @default("sse")
-  spec_version String         @default("2025-03-26")
   auth_type    String?        
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?

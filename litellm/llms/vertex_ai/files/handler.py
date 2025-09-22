@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, Coroutine, Optional, Union
+import urllib.parse
+from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
@@ -9,7 +10,12 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
     GCSLoggingConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.openai import CreateFileRequest, OpenAIFileObject
+from litellm.types.llms.openai import (
+    CreateFileRequest,
+    FileContentRequest,
+    HttpxBinaryResponseContent,
+    OpenAIFileObject,
+)
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 from .transformation import VertexAIJsonlFilesTransformation
@@ -98,6 +104,139 @@ class VertexAIFilesHandler(GCSBucketBase):
                 self.async_create_file(
                     create_file_data=create_file_data,
                     api_base=api_base,
+                    vertex_credentials=vertex_credentials,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    timeout=timeout,
+                    max_retries=max_retries,
+                )
+            )
+
+    def _extract_bucket_and_object_from_file_id(self, file_id: str) -> Tuple[str, str]:
+        """
+        Extract bucket name and object path from URL-encoded file_id.
+
+        Expected format: gs%3A%2F%2Fbucket-name%2Fpath%2Fto%2Ffile
+        Which decodes to: gs://bucket-name/path/to/file
+
+        Returns:
+            tuple: (bucket_name, url_encoded_object_path)
+            - bucket_name: "bucket-name"
+            - url_encoded_object_path: "path%2Fto%2Ffile"
+        """
+        decoded_path = urllib.parse.unquote(file_id)
+
+        if decoded_path.startswith("gs://"):
+            full_path = decoded_path[5:]  # Remove 'gs://' prefix
+        else:
+            full_path = decoded_path
+
+        if "/" in full_path:
+            bucket_name, object_path = full_path.split("/", 1)
+        else:
+            bucket_name = full_path
+            object_path = ""
+
+        encoded_object_path = urllib.parse.quote(object_path, safe="")
+
+        return bucket_name, encoded_object_path
+
+    async def afile_content(
+        self,
+        file_content_request: FileContentRequest,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+    ) -> HttpxBinaryResponseContent:
+        """
+        Download file content from GCS bucket for VertexAI files.
+
+        Args:
+            file_content_request: Contains file_id (URL-encoded GCS path)
+            vertex_credentials: VertexAI credentials
+            vertex_project: VertexAI project ID
+            vertex_location: VertexAI location
+            timeout: Request timeout
+            max_retries: Max retry attempts
+
+        Returns:
+            HttpxBinaryResponseContent: Binary content wrapped in compatible response format
+        """
+        file_id = file_content_request.get("file_id")
+        if not file_id:
+            raise ValueError("file_id is required in file_content_request")
+
+        bucket_name, encoded_object_path = self._extract_bucket_and_object_from_file_id(
+            file_id
+        )
+
+        download_kwargs = {
+            "standard_callback_dynamic_params": {"gcs_bucket_name": bucket_name}
+        }
+
+        file_content = await self.download_gcs_object(
+            object_name=encoded_object_path, **download_kwargs
+        )
+
+        if file_content is None:
+            decoded_path = urllib.parse.unquote(file_id)
+            raise ValueError(f"Failed to download file from GCS: {decoded_path}")
+
+        decoded_path = urllib.parse.unquote(file_id)
+        mock_response = httpx.Response(
+            status_code=200,
+            content=file_content,
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request(method="GET", url=decoded_path),
+        )
+
+        return HttpxBinaryResponseContent(response=mock_response)
+
+    def file_content(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+    ) -> Union[
+        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
+    ]:
+        """
+        Download file content from GCS bucket for VertexAI files.
+        Supports both sync and async operations.
+
+        Args:
+            _is_async: Whether to run asynchronously
+            file_content_request: Contains file_id (URL-encoded GCS path)
+            api_base: API base (unused for GCS operations)
+            vertex_credentials: VertexAI credentials
+            vertex_project: VertexAI project ID
+            vertex_location: VertexAI location
+            timeout: Request timeout
+            max_retries: Max retry attempts
+
+        Returns:
+            HttpxBinaryResponseContent or Coroutine: Binary content wrapped in compatible response format
+        """
+        if _is_async:
+            return self.afile_content(
+                file_content_request=file_content_request,
+                vertex_credentials=vertex_credentials,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+        else:
+            return asyncio.run(
+                self.afile_content(
+                    file_content_request=file_content_request,
                     vertex_credentials=vertex_credentials,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
