@@ -33,19 +33,15 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Custom handling for DashScope messages:
-        - For Qwen-VL models: preserve multimodal content
-        - For other models: convert content list to string
+        Standardize message format for DashScope API.
+        Ensures each message has required 'role' and 'content' fields.
         """
         transformed_messages = []
         for message in messages:
-            if isinstance(message.get("content"), list):
-                transformed_messages.append(message)
-            else:
-                transformed_messages.append({
-                    "role": message["role"],
-                    "content": message.get("content", "")
-                })
+            transformed_messages.append({
+                "role": message["role"],
+                "content": message.get("content", "")
+            })
         messages = transformed_messages
             
         if is_async:
