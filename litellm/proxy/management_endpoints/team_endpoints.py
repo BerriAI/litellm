@@ -383,6 +383,19 @@ async def new_team(  # noqa: PLR0915
                         "error": f"Team id = {data.team_id} already exists. Please use a different team id."
                     },
                 )
+            
+        # If max_budget is not explicitly provided in the request,
+        # check for a default value in the proxy configuration.
+        if data.max_budget is None:
+            if (
+                isinstance(litellm.default_team_settings, list)
+                and len(litellm.default_team_settings) > 0
+                and isinstance(litellm.default_team_settings[0], dict)
+            ):
+                default_settings = litellm.default_team_settings[0]
+                default_budget = default_settings.get("max_budget")
+                if default_budget is not None:
+                    data.max_budget = default_budget
 
         if (
             user_api_key_dict.user_role is None
