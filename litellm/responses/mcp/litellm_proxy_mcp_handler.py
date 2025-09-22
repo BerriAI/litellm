@@ -97,7 +97,6 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_auth_header=None,
             mcp_servers=mcp_servers,
             mcp_server_auth_headers=None,
-            mcp_protocol_version=None,
         )
 
     @staticmethod

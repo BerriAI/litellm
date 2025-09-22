@@ -67,6 +67,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
@@ -116,6 +117,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "logfire",
     "literalai",
     "dynamic_rate_limiter",
+    "dynamic_rate_limiter_v3",
     "langsmith",
     "prometheus",
     "otel",
@@ -1032,7 +1034,6 @@ from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config

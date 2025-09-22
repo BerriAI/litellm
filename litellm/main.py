@@ -1004,7 +1004,15 @@ def completion(  # type: ignore # noqa: PLR0915
     provider_specific_header = cast(
         Optional[ProviderSpecificHeader], kwargs.get("provider_specific_header", None)
     )
-    headers = kwargs.get("headers", None) or extra_headers
+    # Properly merge headers with priority: request headers > extra_headers > global litellm.headers
+    headers = {}
+    if litellm.headers is not None and isinstance(litellm.headers, dict):
+        headers.update(litellm.headers)
+    if extra_headers is not None and isinstance(extra_headers, dict):
+        headers.update(extra_headers)
+    request_headers = kwargs.get("headers", None)
+    if request_headers is not None and isinstance(request_headers, dict):
+        headers.update(request_headers)
 
     ensure_alternating_roles: Optional[bool] = kwargs.get(
         "ensure_alternating_roles", None
@@ -1015,10 +1023,6 @@ def completion(  # type: ignore # noqa: PLR0915
     assistant_continue_message: Optional[ChatCompletionAssistantMessage] = kwargs.get(
         "assistant_continue_message", None
     )
-    if headers is None:
-        headers = {}
-    if extra_headers is not None:
-        headers.update(extra_headers)
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -1427,8 +1431,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 "azure_ad_token_provider", None
             )
 
-            headers = headers or litellm.headers
-
+            # Use the consolidated headers that were already merged at the top of the function
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
             if max_retries is not None:
@@ -1693,8 +1696,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("OPENAI_API_KEY")
             )
 
-            headers = headers or litellm.headers
-
+            # Use the consolidated headers that were already merged at the top of the function
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
@@ -2393,47 +2395,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "cohere":
-            cohere_key = (
-                api_key
-                or litellm.cohere_key
-                or get_secret("COHERE_API_KEY")
-                or get_secret("CO_API_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("COHERE_API_BASE")
-                or "https://api.cohere.ai/v1/generate"
-            )
-
-            headers = headers or litellm.headers or {}
-            if headers is None:
-                headers = {}
-
-            if extra_headers is not None:
-                headers.update(extra_headers)
-
-            response = base_llm_http_handler.completion(
-                model=model,
-                stream=stream,
-                messages=messages,
-                acompletion=acompletion,
-                api_base=api_base,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                custom_llm_provider="cohere",
-                timeout=timeout,
-                headers=headers,
-                encoding=encoding,
-                api_key=cohere_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-                client=client,
-            )
-        elif custom_llm_provider == "cohere_chat":
+        elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -2449,12 +2411,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 or "https://api.cohere.ai/v1/chat"
             )
 
-            headers = headers or litellm.headers or {}
-            if headers is None:
-                headers = {}
-
-            if extra_headers is not None:
-                headers.update(extra_headers)
+            # Use the consolidated headers that were already merged at the top of the function
+            # No need for additional merging here as it's already done
 
             response = base_llm_http_handler.completion(
                 model=model,
@@ -3842,7 +3800,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[Any, Any, EmbeddingResponse]:
     ...
 
 
@@ -3868,7 +3826,7 @@ def embedding(
     *,
     aembedding: Literal[False] = False,
     **kwargs,
-) -> EmbeddingResponse: 
+) -> EmbeddingResponse:
     ...
 
 # fmt: on
@@ -4179,10 +4137,8 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
-                headers = {}
+            # Use the consolidated headers that were already merged at the top of the function
+            # No need for additional merging here as it's already done
 
             response = base_llm_http_handler.embedding(
                 model=model,

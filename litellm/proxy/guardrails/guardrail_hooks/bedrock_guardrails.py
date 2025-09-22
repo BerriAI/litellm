@@ -24,7 +24,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    log_guardrail_information,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -111,6 +110,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
+        self.guardrail_provider = "bedrock"
 
         # store kwargs as optional_params
         self.optional_params = kwargs
@@ -372,6 +372,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Add guardrail information to request trace
         #########################################################
         self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider=self.guardrail_provider,
             guardrail_json_response=response.json(),
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(
@@ -403,6 +404,39 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return bedrock_guardrail_response
 
+    def _check_bedrock_response_for_exception(self, response) -> bool:
+        """
+        Return True if the Bedrock ApplyGuardrail response indicates an exception.
+
+        Works with real httpx.Response objects and MagicMock responses used in tests.
+        """
+        payload = None
+
+        try:
+            json_method = getattr(response, "json", None)
+            if callable(json_method):
+                payload = json_method()
+        except Exception:
+            payload = None
+
+        if payload is None:
+            try:
+                raw = getattr(response, "content", None)
+                if isinstance(raw, (bytes, bytearray)):
+                    payload = json.loads(raw.decode("utf-8"))
+                else:
+                    text = getattr(response, "text", None)
+                    if isinstance(text, str):
+                        payload = json.loads(text)
+            except Exception:
+                # Can't parse -> assume no explicit Exception marker
+                return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        return "Exception" in payload.get("Output", {}).get("__type", "")
+
     def _get_bedrock_guardrail_response_status(
         self, response: httpx.Response
     ) -> Literal["success", "failure"]:
@@ -410,6 +444,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Get the status of the bedrock guardrail response.
         """
         if response.status_code == 200:
+            if self._check_bedrock_response_for_exception(response):
+                return "failure"
             return "success"
         return "failure"
 
@@ -516,7 +552,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
-    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,

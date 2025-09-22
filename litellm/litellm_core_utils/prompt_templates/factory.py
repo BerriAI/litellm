@@ -3123,9 +3123,9 @@ class BedrockConverseMessagesProcessor:
                                 _part = BedrockContentBlock(text=element["text"])
                                 _parts.append(_part)
                             elif element["type"] == "guarded_text":
-                                # Wrap guarded_text in guardrailConverseContent block
+                                # Wrap guarded_text in guardContent block
                                 _part = BedrockContentBlock(
-                                    guardrailConverseContent={"text": element["text"]}
+                                    guardContent={"text": {"text": element["text"]}}
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "image_url":
@@ -3504,9 +3504,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _part = BedrockContentBlock(text=element["text"])
                             _parts.append(_part)
                         elif element["type"] == "guarded_text":
-                            # Wrap guarded_text in guardrailConverseContent block
+                            # Wrap guarded_text in guardContent block
                             _part = BedrockContentBlock(
-                                guardrailConverseContent={"text": element["text"]}
+                                guardContent={"text": {"text": element["text"]}}
                             )
                             _parts.append(_part)
                         elif element["type"] == "image_url":

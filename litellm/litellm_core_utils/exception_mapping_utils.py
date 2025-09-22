@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
     APIConnectionError,
@@ -556,7 +557,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="anthropic",
                     )
-                elif "overloaded_error" in error_str:
+                elif "overloaded_error" in error_str or "Overloaded" in error_str:
                     exception_mapping_worked = True
                     raise InternalServerError(
                         message="AnthropicError - {}".format(error_str),
@@ -762,7 +763,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         error_str += "XXXXXXX" + '"'
 
                     raise AuthenticationError(
-                        message=f"{custom_llm_provider}Exception: Authentication Error - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception: Authentication Error - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=getattr(original_exception, "response", None),
@@ -771,14 +772,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif "model's maximum context limit" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"{custom_llm_provider}Exception: Context Window Error - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception: Context Window Error - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"{custom_llm_provider}Exception: Rate Limit Errror - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception: Rate Limit Errror - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=getattr(original_exception, "response", None),
@@ -789,14 +790,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
-                        message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                         llm_provider=custom_llm_provider,
                         model=model,
                     )
                 elif "model_no_support_for_function" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                     )
@@ -804,7 +805,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise litellm.InternalServerError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
@@ -814,28 +815,28 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     ):
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -846,7 +847,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     ):
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -854,7 +855,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -862,7 +863,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -870,7 +871,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     elif original_exception.status_code == 504:  # gateway timeout error
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
@@ -1168,9 +1169,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             exception_status_code=original_exception.status_code,
                         )
             elif (
-                custom_llm_provider == "vertex_ai"
-                or custom_llm_provider == "vertex_ai_beta"
-                or custom_llm_provider == "gemini"
+                custom_llm_provider == LlmProviders.VERTEX_AI
+                or custom_llm_provider == LlmProviders.VERTEX_AI_BETA
+                or custom_llm_provider == LlmProviders.GEMINI
             ):
                 if (
                     "Vertex AI API has not been used in project" in error_str
@@ -1178,9 +1179,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"litellm.BadRequestError: VertexAIException - {error_str}",
+                        message=f"litellm.BadRequestError: {custom_llm_provider}Exception - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         response=httpx.Response(
                             status_code=400,
                             request=httpx.Request(
@@ -1193,7 +1194,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"VertexException - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
@@ -1203,9 +1204,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
-                        message=f"litellm.InternalServerError: VertexAIException - {error_str}",
+                        message=f"litellm.InternalServerError: {custom_llm_provider}Exception - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         response=httpx.Response(
                             status_code=500,
                             content=str(original_exception),
@@ -1216,7 +1217,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif "API key not valid." in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"{custom_llm_provider}Exception - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
                         litellm_debug_info=extra_information,
@@ -1224,9 +1225,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif "403" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
-                        message=f"VertexAIException BadRequestError - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         response=httpx.Response(
                             status_code=403,
                             request=httpx.Request(
@@ -1243,9 +1244,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message=f"VertexAIException ContentPolicyViolationError - {error_str}",
+                        message=f"{custom_llm_provider.capitalize()}Exception ContentPolicyViolationError - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         litellm_debug_info=extra_information,
                         response=httpx.Response(
                             status_code=400,
@@ -1264,9 +1265,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"litellm.RateLimitError: VertexAIException - {error_str}",
+                        message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         litellm_debug_info=extra_information,
                         response=httpx.Response(
                             status_code=429,
@@ -1282,18 +1283,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
-                        message=f"litellm.InternalServerError: VertexAIException - {error_str}",
+                        message=f"litellm.InternalServerError: {custom_llm_provider}Exception - {error_str}",
                         model=model,
-                        llm_provider="vertex_ai",
+                        llm_provider=custom_llm_provider,
                         litellm_debug_info=extra_information,
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise BadRequestError(
-                            message=f"VertexAIException BadRequestError - {error_str}",
+                            message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
                             model=model,
-                            llm_provider="vertex_ai",
+                            llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                             response=httpx.Response(
                                 status_code=400,
@@ -1306,21 +1307,35 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"VertexAIException - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
+                        )
+                    if original_exception.status_code == 403:
+                        exception_mapping_worked = True
+                        raise PermissionDeniedError(
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
+                            llm_provider=custom_llm_provider,
+                            model=model,
+                            response=httpx.Response(
+                                status_code=403,
+                                request=httpx.Request(
+                                    method="POST",
+                                    url="https://cloud.google.com/vertex-ai/",
+                                ),
+                            ),
                         )
                     if original_exception.status_code == 404:
                         exception_mapping_worked = True
                         raise NotFoundError(
-                            message=f"VertexAIException - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
                     if original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
-                            message=f"VertexAIException - {original_exception.message}",
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
@@ -1328,9 +1343,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"litellm.RateLimitError: VertexAIException - {error_str}",
+                            message=f"litellm.RateLimitError: {custom_llm_provider.capitalize()}Exception - {error_str}",
                             model=model,
-                            llm_provider="vertex_ai",
+                            llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                             response=httpx.Response(
                                 status_code=429,
@@ -1343,9 +1358,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise litellm.InternalServerError(
-                            message=f"VertexAIException InternalServerError - {error_str}",
+                            message=f"{custom_llm_provider.capitalize()}Exception InternalServerError - {error_str}",
                             model=model,
-                            llm_provider="vertex_ai",
+                            llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
                             response=httpx.Response(
                                 status_code=500,
@@ -1353,71 +1368,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                                 request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                             ),
                         )
-                    if original_exception.status_code == 503:
+                    if original_exception.status_code == 502:
                         exception_mapping_worked = True
-                        raise ServiceUnavailableError(
-                            message=f"VertexAIException - {original_exception.message}",
+                        raise APIConnectionError(
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                             llm_provider=custom_llm_provider,
                             model=model,
                         )
-            elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-                if "503 Getting metadata" in error_str:
-                    # auth errors look like this
-                    # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
-                    exception_mapping_worked = True
-                    raise BadRequestError(
-                        message="GeminiException - Invalid api key",
-                        model=model,
-                        llm_provider="palm",
-                        response=getattr(original_exception, "response", None),
-                    )
-                if (
-                    "504 Deadline expired before operation could complete." in error_str
-                    or "504 Deadline Exceeded" in error_str
-                ):
-                    exception_mapping_worked = True
-                    raise Timeout(
-                        message=f"GeminiException - {original_exception.message}",
-                        model=model,
-                        llm_provider="palm",
-                        exception_status_code=original_exception.status_code,
-                    )
-                if "400 Request payload size exceeds" in error_str:
-                    exception_mapping_worked = True
-                    raise ContextWindowExceededError(
-                        message=f"GeminiException - {error_str}",
-                        model=model,
-                        llm_provider="palm",
-                        response=getattr(original_exception, "response", None),
-                    )
-                if (
-                    "500 An internal error has occurred." in error_str
-                    or "list index out of range" in error_str
-                ):
-                    exception_mapping_worked = True
-                    raise APIError(
-                        status_code=getattr(original_exception, "status_code", 500),
-                        message=f"GeminiException - {original_exception.message}",
-                        llm_provider="palm",
-                        model=model,
-                        request=httpx.Response(
-                            status_code=429,
-                            request=httpx.Request(
-                                method="POST",
-                                url=" https://cloud.google.com/vertex-ai/",
-                            ),
-                        ),
-                    )
-                if hasattr(original_exception, "status_code"):
-                    if original_exception.status_code == 400:
+                    if original_exception.status_code == 503:
                         exception_mapping_worked = True
-                        raise BadRequestError(
-                            message=f"GeminiException - {error_str}",
+                        raise ServiceUnavailableError(
+                            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
+                            llm_provider=custom_llm_provider,
                             model=model,
-                            llm_provider="palm",
-                            response=getattr(original_exception, "response", None),
                         )
-                # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
             elif custom_llm_provider == "cloudflare":
                 if "Authentication error" in error_str:
                     exception_mapping_worked = True
@@ -1444,6 +1408,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 ):
                     exception_mapping_worked = True
                     raise AuthenticationError(
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model,
+                        response=getattr(original_exception, "response", None),
+                    )
+                elif "invalid type: parameter" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                         model=model,

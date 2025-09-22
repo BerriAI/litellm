@@ -100,7 +100,6 @@ if MCP_AVAILABLE:
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
-            mcp_protocol_version=None,
         )
         dumped_tools = [dict(tool) for tool in tools]
 

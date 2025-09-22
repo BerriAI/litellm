@@ -351,6 +351,7 @@ class CustomGuardrail(CustomLogger):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         masked_entity_count: Optional[Dict[str, int]] = None,
+        guardrail_provider: Optional[str] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -361,6 +362,7 @@ class CustomGuardrail(CustomLogger):
 
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
+            guardrail_provider=guardrail_provider,
             guardrail_mode=(
                 GuardrailMode(**self.event_hook.model_dump())  # type: ignore
                 if isinstance(self.event_hook, Mode)

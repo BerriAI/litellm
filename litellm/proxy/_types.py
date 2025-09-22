@@ -28,8 +28,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.mcp import (
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPTransport,
     MCPTransportType,
 )
@@ -917,7 +915,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -949,7 +946,6 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -984,7 +980,6 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     description: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType
-    spec_version: MCPSpecVersionType
     auth_type: Optional[MCPAuthType] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None

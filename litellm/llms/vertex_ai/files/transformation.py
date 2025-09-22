@@ -283,7 +283,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     openai_jsonl_content
                 )
             )
-            return json.dumps(vertex_jsonl_content)
+            return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
         else:
