@@ -2,17 +2,9 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration  `/completion`
 """
 
-from typing import List, Optional, Tuple, Union, Dict
+from typing import List, Optional, Union, Dict
 from dataclasses import asdict
 from pydantic import BaseModel
-
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-)
 
 
 from litellm.types.utils import ModelResponse, Usage
@@ -159,19 +151,16 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         obj['model'] = llm_response.model
         obj["usage"] = Usage(**asdict(llm_response.usage))
         return ModelResponse.model_validate(obj)
-    
 
 
-import json
-
-def remove_keys(dictionary, keys_to_remove):
-    if isinstance(dictionary, dict):
-        return {
-            key: remove_keys(value, keys_to_remove)
-            for key, value in dictionary.items()
-            if key not in keys_to_remove
-        }
-    elif isinstance(dictionary, list):
-        return [remove_keys(item, keys_to_remove) for item in dictionary]
-    else:
-        return dictionary
+# def remove_keys(dictionary, keys_to_remove):
+#     if isinstance(dictionary, dict):
+#         return {
+#             key: remove_keys(value, keys_to_remove)
+#             for key, value in dictionary.items()
+#             if key not in keys_to_remove
+#         }
+#     elif isinstance(dictionary, list):
+#         return [remove_keys(item, keys_to_remove) for item in dictionary]
+#     else:
+#         return dictionary
