@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_parsed_body,
     _safe_set_request_parsed_body,
     get_form_data,
+    handle_metadata_dict_from_req,
 )
 from litellm.proxy._types import ProxyException
 
@@ -285,3 +286,30 @@ async def test_get_form_data():
     # Note: In a real MultiDict, both values would be present
     # But in our mock dictionary the second value overwrites the first
     assert "segment" in result["timestamp_granularities"]
+
+
+def test_no_metadata_key():
+    input_data = {"other_key": "value"}
+    result = handle_metadata_dict_from_req(input_data)
+    assert result, input_data
+
+def test_metadata_is_none():
+    input_data = {"metadata": None}
+    result = handle_metadata_dict_from_req(input_data)
+    assert result, input_data
+
+def test_valid_json_string():
+    input_data = {"metadata": '{"key": "value"}'}
+    expected = {"metadata": {"key": "value"}}
+    result = handle_metadata_dict_from_req(input_data)
+    assert result, expected
+
+
+@patch("litellm.proxy.common_utils.http_parsing_utils.verbose_proxy_logger.error")
+def test_invalid_json_string(mock_logger_error):
+    invalid_json = '{"key": "value"'
+    input_data = {"metadata": invalid_json}
+    result = handle_metadata_dict_from_req(input_data)
+    assert result["metadata"] == invalid_json
+    mock_logger_error.assert_called_once()
+    assert "metadata" in result

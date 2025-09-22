@@ -253,7 +253,9 @@ def handle_metadata_dict_from_req(parsed_form_data):
                 and isinstance(parsed_form_data["metadata"], str)):
             parsed_form_data["metadata"] = json.loads(parsed_form_data["metadata"])
 
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        verbose_proxy_logger.error(
+            "Handle error metadata dict from_req : %s", (str(e))
+        )
 
     return parsed_form_data
