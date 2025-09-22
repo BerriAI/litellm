@@ -286,6 +286,9 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
+        ## cloudrift
+        elif model.startswith("cloudrift/"):
+            custom_llm_provider = "cloudrift"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"

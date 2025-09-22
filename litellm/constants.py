@@ -243,6 +243,7 @@ LITELLM_CHAT_PROVIDERS = [
     "cohere",
     "cohere_chat",
     "clarifai",
+    "cloudrift",
     "anthropic",
     "anthropic_text",
     "replicate",
