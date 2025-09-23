@@ -543,6 +543,7 @@ async def test_get_user_info_from_db():
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd"
 
 
+@pytest.mark.asyncio
 async def test_get_user_info_from_db_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
