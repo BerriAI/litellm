@@ -26,6 +26,7 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
+    SUPERAGENT = "superagent"
     HIDE_SECRETS = "hide-secrets"
     AIM = "aim"
     PANGEA = "pangea"
@@ -248,6 +249,17 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
     )
+    
+    
+class SuperagentConfigModel(BaseModel):
+    """Configuration parameters for the Superagent guardrail"""
+
+    api_key: Optional[str] = Field(
+        default=None, description="API key for the Superagent service"
+    )
+    api_base: Optional[str] = Field(
+        default=None, description="Base URL for the Superagent service API"
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
@@ -461,6 +473,29 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     model: Optional[str] = Field(
         default=None,
         description="Optional field if guardrail requires a 'model' parameter",
+    )
+
+    superagent_api_base: Optional[str] = Field(
+        default=None, description="Override the SuperAgent guardrail API endpoint"
+    )
+    superagent_api_key: Optional[str] = Field(
+        default=None, description="API key used to call the SuperAgent guardrail"
+    )
+    superagent_system_prompt: Optional[str] = Field(
+        default=None,
+        description="Custom system prompt for the SuperAgent classifier",
+    )
+    superagent_temperature: Optional[float] = Field(
+        default=None,
+        description="Temperature parameter for the SuperAgent classifier request",
+    )
+    superagent_top_p: Optional[float] = Field(
+        default=None,
+        description="top_p sampling parameter for the SuperAgent classifier request",
+    )
+    superagent_max_tokens: Optional[int] = Field(
+        default=None,
+        description="max_tokens value for the SuperAgent classifier request",
     )
 
     # Model Armor params
