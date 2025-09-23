@@ -546,6 +546,7 @@ const sidebars = {
       items: [
         "set_keys",
         "completion/token_usage",
+        "sdk/headers",
         "sdk_custom_pricing",
         "embedding/async_embedding",
         "embedding/moderation",

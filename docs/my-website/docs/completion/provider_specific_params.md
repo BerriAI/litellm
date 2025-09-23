@@ -423,7 +423,7 @@ model_list:
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "llama-3-8b-instruct",
   "messages": [
     {
@@ -431,8 +431,9 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
       "content": "What'\''s the weather like in Boston today?"
     }
   ],
-  "adapater_id": "my-special-adapter-id" # 👈 PROVIDER-SPECIFIC PARAM
-  }'
+  "adapater_id": "my-special-adapter-id"
+}'
+```
 
 ## Provider-Specific Metadata Parameters
 
@@ -483,4 +484,3 @@ response = litellm.completion(
 
 </TabItem>
 </Tabs>
-```
