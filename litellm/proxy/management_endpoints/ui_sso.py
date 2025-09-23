@@ -1402,7 +1402,7 @@ class SSOAuthenticationHandler:
             user_custom_sso,
         )
         from litellm.proxy.utils import get_prisma_client_or_throw
-        from litellm.types.proxy.ui_sso import ParsedOpenIDResult, ReturnedUITokenObject
+        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
         prisma_client = get_prisma_client_or_throw(
             "Prisma client is None, connect a database to your proxy"

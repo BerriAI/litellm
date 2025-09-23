@@ -281,7 +281,6 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
 
 def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
     """Update the API key to be associated with the selected team"""
-    import requests
 
     from litellm.proxy.client import Client
     
@@ -307,8 +306,6 @@ def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
 def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
     import uuid
-
-    import requests
 
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
