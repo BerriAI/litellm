@@ -87,10 +87,14 @@ class MCPClient:
                 if not self.stdio_config:
                     raise ValueError("stdio_config is required for stdio transport")
 
+                # Prepare environment with authentication if provided
+                env = self.stdio_config.get("env", {}).copy()
+                env.update(self._get_auth_env_vars())
+
                 server_params = StdioServerParameters(
                     command=self.stdio_config.get("command", ""),
                     args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {}),
+                    env=env,
                 )
 
                 self._transport_ctx = stdio_client(server_params)
@@ -186,9 +190,7 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        headers = {
-            "MCP-Protocol-Version": "2025-06-18"
-        }
+        headers = {"MCP-Protocol-Version": "2025-06-18"}
 
         if self._mcp_auth_value:
             if self.auth_type == MCPAuth.bearer_token:
@@ -201,6 +203,30 @@ class MCPClient:
                 headers["Authorization"] = self._mcp_auth_value
 
         return headers
+
+    def _get_auth_env_vars(self) -> dict:
+        """Generate authentication environment variables for stdio transport."""
+        env_vars = {}
+
+        if self._mcp_auth_value:
+            # Always set the auth token
+            env_vars["MCP_AUTH_TOKEN"] = self._mcp_auth_value
+
+            # Set auth type if available
+            if self.auth_type:
+                env_vars["MCP_AUTH_TYPE"] = self.auth_type.value
+
+                # Set type-specific environment variables for compatibility
+                if self.auth_type == MCPAuth.bearer_token:
+                    env_vars["MCP_BEARER_TOKEN"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.api_key:
+                    env_vars["MCP_API_KEY"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.basic:
+                    env_vars["MCP_BASIC_AUTH"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.authorization:
+                    env_vars["MCP_AUTHORIZATION"] = self._mcp_auth_value
+
+        return env_vars
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
