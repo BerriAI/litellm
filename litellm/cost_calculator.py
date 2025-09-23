@@ -330,7 +330,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return openai_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -351,6 +353,7 @@ def cost_per_token(  # noqa: PLR0915
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
+
         return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
@@ -663,7 +666,7 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
-        
+
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
