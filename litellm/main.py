@@ -3615,7 +3615,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 async_fn=acompletion, stream=stream, custom_llm=custom_handler
             )
 
-            headers = headers or litellm.headers
+            headers = headers or litellm.headers or {}
 
             ## CALL FUNCTION
             response = handler_fn(

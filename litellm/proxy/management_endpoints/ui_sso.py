@@ -810,7 +810,7 @@ async def cli_poll_key(key_id: str):
         key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
             where={"token": hashed_token}
         )
-        key_obj: LiteLLM_VerificationToken = cast(LiteLLM_VerificationToken, key_obj)
+        key_obj = cast(LiteLLM_VerificationToken, key_obj)
 
         if key_obj:
             verbose_proxy_logger.info(f"CLI key found: {key_id}")
@@ -1503,7 +1503,7 @@ class SSOAuthenticationHandler:
         ## CHECK IF ROLE ALLOWED TO USE PROXY ##
         is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
         if is_admin_only_access:
-            has_access = has_admin_ui_access(user_role)
+            has_access = has_admin_ui_access(user_role or "")
             if not has_access:
                 raise HTTPException(
                     status_code=401,
