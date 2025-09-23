@@ -818,7 +818,7 @@ async def _cache_management_object(
     # Always store as a plain dict for consistent retrieval
     await user_api_key_cache.async_set_cache(
         key=key,
-        value=value.model_dump(),
+        value=value,
         ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
@@ -1122,7 +1122,9 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj = await user_api_key_cache.async_get_cache(key=key)
+    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
+        key=key
+    )
 
     if cached_key_obj is not None:
         if isinstance(cached_key_obj, dict):
@@ -1186,13 +1188,12 @@ async def get_org_object(
         )
 
     # check if in cache
-    cached_org_obj = await user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
+    cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
             return LiteLLM_OrganizationTable(**cached_org_obj)
         elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
             return cached_org_obj
-        
     # else, check db
     try:
         response = await prisma_client.db.litellm_organizationtable.find_unique(
