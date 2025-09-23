@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
+from .._uuid import uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
