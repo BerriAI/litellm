@@ -1,6 +1,11 @@
 import Image from '@theme/IdealImage';
 
 # Enterprise
+
+:::info
+✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
+:::
+
 For companies that need SSO, user management and professional support for LiteLLM Proxy
 
 :::info
