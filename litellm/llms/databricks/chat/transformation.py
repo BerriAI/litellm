@@ -91,6 +91,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        #https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models
         self.foundational_models = [
             "databricks-gpt-oss-120b",
             "databricks-gpt-oss-20b",
