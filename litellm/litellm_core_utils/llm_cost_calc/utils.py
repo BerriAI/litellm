@@ -4,7 +4,7 @@
 from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
