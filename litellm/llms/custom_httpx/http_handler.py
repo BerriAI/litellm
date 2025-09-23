@@ -915,7 +915,7 @@ class HTTPHandler:
         if litellm.force_ipv4:
             return HTTPTransport(local_address="0.0.0.0")
         else:
-            return None
+            return getattr(litellm, 'sync_transport', None)
 
 
 def get_async_httpx_client(
