@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
@@ -231,6 +231,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    requestMetadata: Optional[Dict[str, str]]
 
 
 class RequestObject(CommonRequestObject, total=False):

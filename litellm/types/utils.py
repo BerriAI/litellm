@@ -122,9 +122,13 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
+    input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
+    input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
+    cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -142,6 +146,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: Optional[float]
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
+    output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
+    output_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -757,10 +763,12 @@ class Delta(OpenAIObject):
             self.function_call = function_call
         if tool_calls is not None and isinstance(tool_calls, list):
             self.tool_calls = []
+            current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
                     if tool_call.get("index", None) is None:
-                        tool_call["index"] = 0
+                        tool_call["index"] = current_index
+                        current_index += 1
                     self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
                 elif isinstance(tool_call, ChatCompletionDeltaToolCall):
                     self.tool_calls.append(tool_call)
@@ -2395,6 +2403,7 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
 
 
@@ -2579,6 +2588,12 @@ class SpecialEnums(Enum):
     LITELLM_MANAGED_BATCH_COMPLETE_STR = "litellm_proxy;model_id:{};llm_batch_id:{}"
 
     LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR = "litellm_proxy;model_id:{};generic_response_id:{}"  # generic implementation of 'managed batches' - used for finetuning and any future work.
+
+
+class ServiceTier(Enum):
+    """Enum for service tier types used in cost calculations."""
+    FLEX = "flex"
+    PRIORITY = "priority"
 
 
 LLMResponseTypes = Union[
