@@ -1915,6 +1915,22 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
+    
+    @classmethod
+    def get_litellm_cli_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for the litellm internal health check service account.
+
+        This is used to track number of requests/spend for health check calls.
+        """
+        from litellm.constants import LITTELM_CLI_SERVICE_ACCOUNT_NAME
+
+        return cls(
+            api_key=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+            team_id=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+            key_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+            team_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+        )
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):

@@ -87,6 +87,7 @@ def show_commands():
         ("chat", "Interactive chat with models"),
         ("http", "Make HTTP requests to the proxy"),
         ("keys", "Manage API keys"),
+        ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
         ("version", "Show version information"),
         ("help", "Show this help message"),
