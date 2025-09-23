@@ -109,8 +109,6 @@ curl http://0.0.0.0:4000/rerank \
 
 ## **Supported Providers**
 
-#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
-
 | Provider    | Link to Usage      |
 |-------------|--------------------|
 | Cohere (v1 + v2 clients)      |   [Usage](#quick-start)                 |
