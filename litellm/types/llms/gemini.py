@@ -221,3 +221,9 @@ class GeminiImageGenerationPrediction(TypedDict):
 class GeminiImageGenerationResponse(TypedDict):
     """Complete response body from Gemini image generation API"""
     predictions: List[GeminiImageGenerationPrediction]
+
+class GeminiThinkingParam(TypedDict, total=False):
+    """Parameters for Gemini thinking"""
+    type: Literal["enabled"]
+    budget_tokens: int
+    include_thoughts: bool

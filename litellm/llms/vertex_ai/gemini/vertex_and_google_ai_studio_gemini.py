@@ -42,8 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.types.llms.anthropic import AnthropicThinkingParam
-from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+from litellm.types.llms.gemini import BidiGenerateContentServerMessage, GeminiThinkingParam
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionResponseMessage,
@@ -474,7 +473,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _map_thinking_param(
-        thinking_param: AnthropicThinkingParam,
+        thinking_param: GeminiThinkingParam,
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
         thinking_budget = thinking_param.get("budget_tokens")
@@ -630,7 +629,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "thinking":
                 optional_params["thinkingConfig"] = (
                     VertexGeminiConfig._map_thinking_param(
-                        cast(AnthropicThinkingParam, value)
+                        cast(GeminiThinkingParam, value)
                     )
                 )
             elif param == "modalities" and isinstance(value, list):
