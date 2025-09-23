@@ -75,6 +75,7 @@ const sidebars = {
       type: "category",
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
       items: [
+        "integrations/letta",
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/litellm_gemini_cli",
@@ -132,7 +133,6 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-        "proxy/enterprise",
         "proxy/management_cli",
         {
           type: "category",
@@ -154,11 +154,9 @@ const sidebars = {
             "proxy/token_auth",
             "proxy/service_accounts",
             "proxy/access_control",
-            "proxy/cli_sso",
-            "proxy/custom_auth",
             "proxy/ip_address",
             "proxy/email",
-            "proxy/multiple_admins",
+            "proxy/custom_auth",
           ],
         },
         {
@@ -171,30 +169,6 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Admin UI",
-          items: [
-            "proxy/ui",
-            "proxy/admin_ui_sso",
-            "proxy/custom_root_ui",
-            "proxy/model_hub",
-            "proxy/self_serve",
-            "proxy/public_teams",
-            "tutorials/scim_litellm",
-            "proxy/custom_sso",
-            "proxy/ui_credentials",
-            "proxy/ui/bulk_edit_users",
-            {
-              type: "category",
-              label: "UI Logs",
-              items: [
-                "proxy/ui_logs",
-                "proxy/ui_logs_sessions"
-              ]
-            }
-          ],
-        },
-        {
-          type: "category",
           label: "Spend Tracking",
           items: ["proxy/cost_tracking", "proxy/custom_pricing", "proxy/billing",],
         },
@@ -202,6 +176,47 @@ const sidebars = {
           type: "category",
           label: "Budgets + Rate Limits",
           items: ["proxy/users", "proxy/temporary_budget_increase", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
+        },
+        {
+          type: "category",
+          label: "Enterprise Features",
+          items: [
+            "proxy/enterprise",
+            {
+              type: "category",
+              label: "Admin UI",
+              items: [
+                "proxy/ui",
+                "proxy/admin_ui_sso",
+                "proxy/custom_root_ui",
+                "proxy/model_hub",
+                "proxy/self_serve",
+                "proxy/public_teams",
+                "proxy/ui_credentials",
+                "proxy/ui/bulk_edit_users",
+                {
+                  type: "category",
+                  label: "UI Logs",
+                  items: [
+                    "proxy/ui_logs",
+                    "proxy/ui_logs_sessions"
+                  ]
+                }
+              ],
+            },
+            {
+              type: "category",
+              label: "SSO & Identity Management",
+              items: [
+                "proxy/cli_sso",
+                "proxy/admin_ui_sso",
+                "proxy/custom_sso",
+                "tutorials/scim_litellm",
+                "tutorials/msft_sso",
+                "proxy/multiple_admins",
+              ],
+            },
+          ],
         },
         {
           type: "link",
@@ -250,6 +265,25 @@ const sidebars = {
         slug: "/supported_endpoints",
       },
       items: [
+        "anthropic_unified",
+        "apply_guardrail",
+        "assistants",
+        {
+          type: "category",
+          label: "/audio",
+          "items": [
+            "audio_transcription",
+            "text_to_speech",
+          ]
+        },
+        {
+          type: "category",
+          label: "/batches",
+          items: [
+            "batches",
+            "proxy/managed_batches",
+          ]
+        },
         {
           type: "category",
           label: "/chat/completions",
@@ -266,11 +300,23 @@ const sidebars = {
             "completion/http_handler_config",
           ],
         },
-        "response_api",
-        "text_completion",
         "embedding/supported_embedding",
-        "anthropic_unified",
-        "mcp",
+        {
+          type: "category",
+          label: "/files",
+          items: [
+            "files_endpoints",
+            "proxy/litellm_managed_files",
+          ],
+        },
+        {
+          type: "category",
+          label: "/fine_tuning",
+          items: [
+            "fine_tuning",
+            "proxy/managed_finetuning",
+          ]
+        },
         "generateContent",
         {
           type: "category",
@@ -281,21 +327,8 @@ const sidebars = {
             "image_variations",
           ]
         },
-        {
-          type: "category",
-          label: "/audio",
-          "items": [
-            "audio_transcription",
-            "text_to_speech",
-          ]
-        },
-        {
-          type: "category",
-          label: "/vector_stores",
-          items: [
-            "vector_stores/search",
-          ]
-        },
+        "mcp",
+        "moderation",
         {
           type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
@@ -314,36 +347,17 @@ const sidebars = {
             "proxy/pass_through",
           ],
         },
-        "rerank",
-        "assistants",
-
-        {
-          type: "category",
-          label: "/files",
-          items: [
-            "files_endpoints",
-            "proxy/litellm_managed_files",
-          ],
-        },
-        {
-          type: "category",
-          label: "/batches",
-          items: [
-            "batches",
-            "proxy/managed_batches",
-          ]
-        },
         "realtime",
+        "rerank",
+        "response_api",
+        "text_completion",
         {
           type: "category",
-          label: "/fine_tuning",
+          label: "/vector_stores",
           items: [
-            "fine_tuning",
-            "proxy/managed_finetuning",
+            "vector_stores/search",
           ]
         },
-        "moderation",
-        "apply_guardrail",
       ],
     },
     {
