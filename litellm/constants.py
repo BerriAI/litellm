@@ -812,6 +812,7 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 ]
 
 BEDROCK_CONVERSE_MODELS = [
+    "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
