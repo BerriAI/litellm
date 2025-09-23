@@ -874,13 +874,17 @@ Vertex AI will return a response containing the `name` of the cached content. Th
 
 #### 3. Use the Cached Content
 
-Use the `name` from the response as `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
+Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
 
 <Tabs>
 <TabItem value="proxy" label="PROXY">
 
-```json
-{
+```bash
+
+curl http://0.0.0.0:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
     "cachedContent": "projects/545201925769/locations/us-central1/cachedContents/4511135542628319232",
     "model": "gemini-2.5-flash",
     "messages": [
@@ -889,8 +893,9 @@ Use the `name` from the response as `cached_content` in subsequent API calls to 
             "content": "what is the book about?"
         }
     ]
-}
+  }'
 ```
+
 </TabItem>
 
 
