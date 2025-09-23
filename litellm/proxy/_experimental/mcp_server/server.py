@@ -662,7 +662,7 @@ if MCP_AVAILABLE:
                         server_name = single_server_match.group(1)
                         mcp_servers_from_path = [server_name]
                     else:
-                        mcp_servers_from_path = [mcp_servers_str]
+                        mcp_servers_from_path = [servers_and_path]
         return mcp_servers_from_path
 
     async def extract_mcp_auth_context(scope, path):
