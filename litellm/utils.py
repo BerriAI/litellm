@@ -59,12 +59,6 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
-# Import cached imports utilities
-from litellm.litellm_core_utils.cached_imports import (
-    get_coroutine_checker,
-    get_litellm_logging_class,
-    get_set_callbacks,
-)
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -86,6 +80,13 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
+)
+
+# Import cached imports utilities
+from litellm.litellm_core_utils.cached_imports import (
+    get_coroutine_checker,
+    get_litellm_logging_class,
+    get_set_callbacks,
 )
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
@@ -227,7 +228,6 @@ from typing import (
     cast,
     get_args,
 )
-
 
 from openai import OpenAIError as OriginalError
 
@@ -527,9 +527,6 @@ def get_dynamic_callbacks(
     return returned_callbacks
 
 
-
-
-
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -551,9 +548,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -793,7 +790,7 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        logging_obj = get_litellm_logging_class()( # Victim for object pool
+        logging_obj = get_litellm_logging_class()(  # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
             stream=stream,
@@ -1302,9 +1299,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -3153,10 +3150,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3284,16 +3281,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4386,9 +4383,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -4874,16 +4871,24 @@ def _get_model_info_helper(  # noqa: PLR0915
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
-                input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
-                input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
+                input_cost_per_token_flex=_model_info.get(
+                    "input_cost_per_token_flex", None
+                ),
+                input_cost_per_token_priority=_model_info.get(
+                    "input_cost_per_token_priority", None
+                ),
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
                 ),
-                cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
-                cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
+                cache_read_input_token_cost_flex=_model_info.get(
+                    "cache_read_input_token_cost_flex", None
+                ),
+                cache_read_input_token_cost_priority=_model_info.get(
+                    "cache_read_input_token_cost_priority", None
+                ),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -4908,8 +4913,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
-                output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
-                output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
+                output_cost_per_token_flex=_model_info.get(
+                    "output_cost_per_token_flex", None
+                ),
+                output_cost_per_token_priority=_model_info.get(
+                    "output_cost_per_token_priority", None
+                ),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),
@@ -6900,7 +6909,10 @@ class ProviderConfigManager:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
             return litellm.OpenAITextCompletionConfig()
-        elif litellm.LlmProviders.COHERE_CHAT == provider or litellm.LlmProviders.COHERE == provider:
+        elif (
+            litellm.LlmProviders.COHERE_CHAT == provider
+            or litellm.LlmProviders.COHERE == provider
+        ):
             return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
