@@ -751,3 +751,58 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── no events when only metrics enabled ─────────────────────────────────
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
+
+    def test_get_span_name_with_generation_name(self):
+        """Test _get_span_name returns generation_name when present"""
+        otel = OpenTelemetry()
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "generation_name": "custom_span"
+                }
+            }
+        }
+        result = otel._get_span_name(kwargs)
+        self.assertEqual(result, "custom_span")
+
+    def test_get_span_name_without_generation_name(self):
+        """Test _get_span_name returns default when generation_name missing"""
+        from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME
+
+        otel = OpenTelemetry()
+        kwargs = {"litellm_params": {"metadata": {}}}
+        result = otel._get_span_name(kwargs)
+        self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
+
+    @patch('litellm.turn_off_message_logging', False)
+    def test_maybe_log_raw_request_creates_span(self):
+        """Test _maybe_log_raw_request creates span when logging enabled"""
+        from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+
+        mock_tracer.start_span.assert_called_once()
+        self.assertEqual(mock_tracer.start_span.call_args[1]['name'], RAW_REQUEST_SPAN_NAME)
+
+    @patch('litellm.turn_off_message_logging', True)
+    def test_maybe_log_raw_request_skips_when_logging_disabled(self):
+        """Test _maybe_log_raw_request skips when logging disabled"""
+        otel = OpenTelemetry()
+        mock_tracer = MagicMock()
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+
+        kwargs = {"litellm_params": {"metadata": {}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+
+        mock_tracer.start_span.assert_not_called()
