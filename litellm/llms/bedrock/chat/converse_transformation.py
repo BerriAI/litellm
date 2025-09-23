@@ -200,8 +200,8 @@ class AmazonConverseConfig(BaseConfig):
                 llm_provider="bedrock",
             )
 
-        key_pattern = re.compile(r'^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$')
-        value_pattern = re.compile(r'^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$')
+        key_pattern = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$")
+        value_pattern = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$")
 
         for key, value in metadata.items():
             if not isinstance(key, str):
@@ -762,7 +762,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-    def _prepare_request_params(self, optional_params: dict, model: str) -> tuple[dict, dict, dict]:
+    def _prepare_request_params(
+        self, optional_params: dict, model: str
+    ) -> Tuple[dict, dict, dict]:
         """Prepare and separate request parameters."""
         inference_params = copy.deepcopy(optional_params)
         supported_converse_params = list(
@@ -797,7 +799,13 @@ class AmazonConverseConfig(BaseConfig):
 
         return inference_params, additional_request_params, request_metadata
 
-    def _process_tools_and_beta(self, original_tools: list, model: str, headers: Optional[dict], additional_request_params: dict) -> tuple[List[ToolBlock], list]:
+    def _process_tools_and_beta(
+        self,
+        original_tools: list,
+        model: str,
+        headers: Optional[dict],
+        additional_request_params: dict,
+    ) -> Tuple[List[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: List[ToolBlock] = []
 
@@ -871,12 +879,16 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = self._prepare_request_params(optional_params, model)
+        inference_params, additional_request_params, request_metadata = (
+            self._prepare_request_params(optional_params, model)
+        )
 
         original_tools = inference_params.pop("tools", [])
 
         # Process tools and collect beta values
-        bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(original_tools, model, headers, additional_request_params)
+        bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
+            original_tools, model, headers, additional_request_params
+        )
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
@@ -1157,9 +1169,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1174,9 +1184,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1297,9 +1307,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
 
         if message is not None:
             (
@@ -1312,12 +1322,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         if (
             json_mode is True

@@ -121,15 +121,13 @@ class MCPServerManager:
         for server_name, server_config in mcp_servers_config.items():
             validate_mcp_server_name(server_name)
             _mcp_info: Dict[str, Any] = server_config.get("mcp_info", None) or {}
-            # Convert Dict[str, Any] to MCPInfo properly
-            mcp_info: MCPInfo = {
-                "server_name": _mcp_info.get("server_name", server_name),
-                "description": _mcp_info.get(
-                    "description", server_config.get("description", None)
-                ),
-                "logo_url": _mcp_info.get("logo_url", None),
-                "mcp_server_cost_info": _mcp_info.get("mcp_server_cost_info", None),
-            }
+            # Preserve all custom fields from config while setting defaults for core fields
+            mcp_info: MCPInfo = _mcp_info.copy()
+            # Set default values for core fields if not present
+            if "server_name" not in mcp_info:
+                mcp_info["server_name"] = server_name
+            if "description" not in mcp_info and server_config.get("description"):
+                mcp_info["description"] = server_config.get("description")
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
@@ -243,6 +241,14 @@ class MCPServerManager:
             name_for_prefix = (
                 mcp_server.alias or mcp_server.server_name or mcp_server.server_id
             )
+            # Preserve all custom fields from database while setting defaults for core fields
+            mcp_info: MCPInfo = _mcp_info.copy()
+            # Set default values for core fields if not present
+            if "server_name" not in mcp_info:
+                mcp_info["server_name"] = mcp_server.server_name or mcp_server.server_id
+            if "description" not in mcp_info and mcp_server.description:
+                mcp_info["description"] = mcp_server.description
+
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=name_for_prefix,
@@ -251,11 +257,7 @@ class MCPServerManager:
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
-                mcp_info=MCPInfo(
-                    server_name=mcp_server.server_name or mcp_server.server_id,
-                    description=mcp_server.description,
-                    mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
-                ),
+                mcp_info=mcp_info,
                 # Stdio-specific fields
                 command=getattr(mcp_server, "command", None),
                 args=getattr(mcp_server, "args", None) or [],
@@ -419,6 +421,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
+        add_prefix: bool = True,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -443,9 +446,11 @@ class MCPServerManager:
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
 
-            prefixed_tools = self._create_prefixed_tools(tools, server)
+            prefixed_or_original_tools = self._create_prefixed_tools(
+                tools, server, add_prefix=add_prefix
+            )
 
-            return prefixed_tools
+            return prefixed_or_original_tools
 
         except Exception as e:
             verbose_logger.warning(
@@ -514,7 +519,7 @@ class MCPServerManager:
             return []
 
     def _create_prefixed_tools(
-        self, tools: List[MCPTool], server: MCPServer
+        self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
     ) -> List[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -532,14 +537,16 @@ class MCPServerManager:
         for tool in tools:
             prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
 
-            prefixed_tool = MCPTool(
-                name=prefixed_name,
+            name_to_use = prefixed_name if add_prefix else tool.name
+
+            tool_obj = MCPTool(
+                name=name_to_use,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
             )
-            prefixed_tools.append(prefixed_tool)
+            prefixed_tools.append(tool_obj)
 
-            # Update tool to server mapping with both original and prefixed names
+            # Update tool to server mapping for resolution (support both forms)
             self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
