@@ -286,7 +286,7 @@ def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
     
     client = Client(base_url=base_url, api_key=api_key)
     try:
-        result = client.keys.update(key=api_key, team_id=team_id)
+        client.keys.update(key=api_key, team_id=team_id)
         click.echo(f"✅ Successfully assigned key to team: {team_id}")
         return True
     except requests.exceptions.HTTPError as e:
