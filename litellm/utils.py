@@ -3275,6 +3275,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "openrouter"
             and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
+            and custom_llm_provider != "wandb"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -4446,6 +4447,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+    # wandb
+    elif llm_provider == "wandb":
+        api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
     return api_key
 
 
@@ -5530,6 +5534,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "wandb":
+            if "WANDB_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("WANDB_API_KEY")
         elif custom_llm_provider == "dashscope":
             if "DASHSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5644,6 +5653,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif model in litellm.wandb_models:
+            if "WANDB_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("WANDB_API_KEY")
 
     def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
@@ -7061,6 +7075,8 @@ class ProviderConfigManager:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.NEBIUS == provider:
             return litellm.NebiusConfig()
+        elif litellm.LlmProviders.WANDB == provider:
+            return litellm.WandbConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
