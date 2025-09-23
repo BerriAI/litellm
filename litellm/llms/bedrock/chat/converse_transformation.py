@@ -102,6 +102,61 @@ class AmazonConverseConfig(BaseConfig):
             "performanceConfig": PerformanceConfigBlock,
         }
 
+    @staticmethod
+    def _convert_consecutive_user_messages_to_guarded_text(
+        messages: List[AllMessageValues], optional_params: dict
+    ) -> List[AllMessageValues]:
+        """
+        Convert consecutive user messages at the end to guarded_text type if guardrailConfig is present
+        and no guarded_text is already present in those messages.
+        """
+        # Check if guardrailConfig is present
+        if "guardrailConfig" not in optional_params:
+            return messages
+
+        # Find all consecutive user messages at the end
+        consecutive_user_message_indices = []
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                consecutive_user_message_indices.append(i)
+            else:
+                break
+
+        if not consecutive_user_message_indices:
+            return messages
+
+        # Process each consecutive user message
+        messages_copy = copy.deepcopy(messages)
+        for user_message_index in consecutive_user_message_indices:
+            user_message = messages_copy[user_message_index]
+            content = user_message.get("content", [])
+
+            if isinstance(content, list):
+                has_guarded_text = any(
+                    isinstance(item, dict) and item.get("type") == "guarded_text"
+                    for item in content
+                )
+                if has_guarded_text:
+                    continue  # Skip this message if it already has guarded_text
+
+                # Convert text elements to guarded_text
+                new_content = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        new_item = {"type": "guarded_text", "text": item["text"]}  # type: ignore
+                        new_content.append(new_item)
+                    else:
+                        new_content.append(item)
+
+                messages_copy[user_message_index]["content"] = new_content  # type: ignore
+            elif isinstance(content, str):
+                # If content is a string, convert it to guarded_text
+                messages_copy[user_message_index]["content"] = [  # type: ignore
+                    {"type": "guarded_text", "text": content}  # type: ignore
+                ]
+
+        return messages_copy
+
     @classmethod
     def get_config(cls):
         return {
@@ -120,6 +175,77 @@ class AmazonConverseConfig(BaseConfig):
             and v is not None
         }
 
+    def _validate_request_metadata(self, metadata: dict) -> None:
+        """
+        Validate requestMetadata according to AWS Bedrock Converse API constraints.
+
+        Constraints:
+        - Maximum of 16 items
+        - Keys: 1-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{1,256}
+        - Values: 0-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{0,256}
+        """
+        import re
+
+        if not isinstance(metadata, dict):
+            raise litellm.exceptions.BadRequestError(
+                message="requestMetadata must be a dictionary",
+                model="bedrock",
+                llm_provider="bedrock",
+            )
+
+        if len(metadata) > 16:
+            raise litellm.exceptions.BadRequestError(
+                message="requestMetadata can contain a maximum of 16 items",
+                model="bedrock",
+                llm_provider="bedrock",
+            )
+
+        key_pattern = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$")
+        value_pattern = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$")
+
+        for key, value in metadata.items():
+            if not isinstance(key, str):
+                raise litellm.exceptions.BadRequestError(
+                    message="requestMetadata keys must be strings",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
+            if not isinstance(value, str):
+                raise litellm.exceptions.BadRequestError(
+                    message="requestMetadata values must be strings",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
+            if len(key) == 0 or len(key) > 256:
+                raise litellm.exceptions.BadRequestError(
+                    message="requestMetadata key length must be 1-256 characters",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
+            if len(value) > 256:
+                raise litellm.exceptions.BadRequestError(
+                    message="requestMetadata value length must be 0-256 characters",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
+            if not key_pattern.match(key):
+                raise litellm.exceptions.BadRequestError(
+                    message=f"requestMetadata key '{key}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
+            if not value_pattern.match(value):
+                raise litellm.exceptions.BadRequestError(
+                    message=f"requestMetadata value '{value}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
+                    model="bedrock",
+                    llm_provider="bedrock",
+                )
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
 
@@ -133,6 +259,7 @@ class AmazonConverseConfig(BaseConfig):
             "top_p",
             "extra_headers",
             "response_format",
+            "requestMetadata",
         ]
 
         if (
@@ -442,6 +569,10 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                         value
                     )
+            if param == "requestMetadata":
+                if value is not None and isinstance(value, dict):
+                    self._validate_request_metadata(value)  # type: ignore
+                    optional_params["requestMetadata"] = value
 
         # Only update thinking tokens for non-GPT-OSS models
         if "gpt-oss" not in model:
@@ -631,34 +762,10 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
-    def _transform_request_helper(
-        self,
-        model: str,
-        system_content_blocks: List[SystemContentBlock],
-        optional_params: dict,
-        messages: Optional[List[AllMessageValues]] = None,
-        headers: Optional[dict] = None,
-    ) -> CommonRequestObject:
-        ## VALIDATE REQUEST
-        """
-        Bedrock doesn't support tool calling without `tools=` param specified.
-        """
-        if (
-            "tools" not in optional_params
-            and messages is not None
-            and has_tool_call_blocks(messages)
-        ):
-            if litellm.modify_params:
-                optional_params["tools"] = add_dummy_tool(
-                    custom_llm_provider="bedrock_converse"
-                )
-            else:
-                raise litellm.UnsupportedParamsError(
-                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
-                    model="",
-                    llm_provider="bedrock",
-                )
-
+    def _prepare_request_params(
+        self, optional_params: dict, model: str
+    ) -> Tuple[dict, dict, dict]:
+        """Prepare and separate request parameters."""
         inference_params = copy.deepcopy(optional_params)
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
@@ -671,6 +778,11 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
+
+        # Extract requestMetadata before processing other parameters
+        request_metadata = inference_params.pop("requestMetadata", None)
+        if request_metadata is not None:
+            self._validate_request_metadata(request_metadata)
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -685,9 +797,16 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
-        original_tools = inference_params.pop("tools", [])
+        return inference_params, additional_request_params, request_metadata
 
-        # Initialize bedrock_tools
+    def _process_tools_and_beta(
+        self,
+        original_tools: list,
+        model: str,
+        headers: Optional[dict],
+        additional_request_params: dict,
+    ) -> Tuple[List[ToolBlock], list]:
+        """Process tools and collect anthropic_beta values."""
         bedrock_tools: List[ToolBlock] = []
 
         # Collect anthropic_beta values from user headers
@@ -729,6 +848,48 @@ class AmazonConverseConfig(BaseConfig):
                     seen.add(beta)
             additional_request_params["anthropic_beta"] = unique_betas
 
+        return bedrock_tools, anthropic_beta_list
+
+    def _transform_request_helper(
+        self,
+        model: str,
+        system_content_blocks: List[SystemContentBlock],
+        optional_params: dict,
+        messages: Optional[List[AllMessageValues]] = None,
+        headers: Optional[dict] = None,
+    ) -> CommonRequestObject:
+        ## VALIDATE REQUEST
+        """
+        Bedrock doesn't support tool calling without `tools=` param specified.
+        """
+        if (
+            "tools" not in optional_params
+            and messages is not None
+            and has_tool_call_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params["tools"] = add_dummy_tool(
+                    custom_llm_provider="bedrock_converse"
+                )
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+                    model="",
+                    llm_provider="bedrock",
+                )
+
+        # Prepare and separate parameters
+        inference_params, additional_request_params, request_metadata = (
+            self._prepare_request_params(optional_params, model)
+        )
+
+        original_tools = inference_params.pop("tools", [])
+
+        # Process tools and collect beta values
+        bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
+            original_tools, model, headers, additional_request_params
+        )
+
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
@@ -758,6 +919,10 @@ class AmazonConverseConfig(BaseConfig):
         if bedrock_tool_config is not None:
             data["toolConfig"] = bedrock_tool_config
 
+        # Request Metadata (top-level field)
+        if request_metadata is not None:
+            data["requestMetadata"] = request_metadata
+
         return data
 
     async def _async_transform_request(
@@ -769,6 +934,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
         ## TRANSFORMATION ##
 
         _data: CommonRequestObject = self._transform_request_helper(
@@ -820,6 +990,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
+
+        # Convert last user message to guarded_text if guardrailConfig is present
+        messages = self._convert_consecutive_user_messages_to_guarded_text(
+            messages, optional_params
+        )
 
         _data: CommonRequestObject = self._transform_request_helper(
             model=model,
@@ -994,9 +1169,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1011,9 +1184,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1134,9 +1307,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
 
         if message is not None:
             (
@@ -1149,12 +1322,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         if (
             json_mode is True

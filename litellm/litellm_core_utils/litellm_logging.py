@@ -138,6 +138,7 @@ from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
+from ..integrations.posthog import PostHogLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
@@ -193,7 +194,6 @@ _in_memory_loggers: List[Any] = []
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
-posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
@@ -3068,7 +3068,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
     """
     Globally sets the callback client
     """
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, slack_app, alerts_channel, traceloopLogger, athinaLogger, heliconeLogger, supabaseClient, lunaryLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, logfireLogger, dynamoLogger, s3Logger, dataDogLogger, prometheusLogger, greenscaleLogger, openMeterLogger, deepevalLogger
 
     try:
         for callback in callback_list:
@@ -3107,19 +3107,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
                 add_breadcrumb = sentry_sdk_instance.add_breadcrumb
-            elif callback == "posthog":
-                try:
-                    from posthog import Posthog
-                except ImportError:
-                    print_verbose("Package 'posthog' is missing. Installing it...")
-                    subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "posthog"]
-                    )
-                    from posthog import Posthog
-                posthog = Posthog(
-                    project_api_key=os.environ.get("POSTHOG_API_KEY"),
-                    host=os.environ.get("POSTHOG_API_URL"),
-                )
             elif callback == "slack":
                 try:
                     from slack_bolt import App
@@ -3214,6 +3201,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _openmeter_logger = OpenMeterLogger()
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
+        elif logging_integration == "posthog":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PostHogLogger):
+                    return callback  # type: ignore
+
+            _posthog_logger = PostHogLogger()
+            _in_memory_loggers.append(_posthog_logger)
+            return _posthog_logger  # type: ignore
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
 
@@ -3449,6 +3444,30 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj)
             return dynamic_rate_limiter_obj  # type: ignore
+        elif logging_integration == "dynamic_rate_limiter_v3":
+            from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+                _PROXY_DynamicRateLimitHandlerV3,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
+                    return callback  # type: ignore
+
+            if internal_usage_cache is None:
+                raise Exception(
+                    "Internal Error: Cache cannot be empty - internal_usage_cache={}".format(
+                        internal_usage_cache
+                    )
+                )
+
+            dynamic_rate_limiter_obj_v3 = _PROXY_DynamicRateLimitHandlerV3(
+                internal_usage_cache=internal_usage_cache
+            )
+
+            if llm_router is not None and isinstance(llm_router, litellm.Router):
+                dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
+            _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
+            return dynamic_rate_limiter_obj_v3  # type: ignore
         elif logging_integration == "langtrace":
             if "LANGTRACE_API_KEY" not in os.environ:
                 raise ValueError("LANGTRACE_API_KEY not found in environment variables")
@@ -3712,6 +3731,14 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, _PROXY_DynamicRateLimitHandler):
                     return callback  # type: ignore
+        elif logging_integration == "dynamic_rate_limiter_v3":
+            from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+                _PROXY_DynamicRateLimitHandlerV3,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
+                    return callback  # type: ignore
 
         elif logging_integration == "langtrace":
             from litellm.integrations.opentelemetry import OpenTelemetry
@@ -3910,22 +3937,25 @@ class StandardLoggingPayloadSetup:
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
             user_api_key_alias=None,
+            user_api_key_spend=None,
+            user_api_key_max_budget=None,
+            user_api_key_budget_reset_at=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
             user_api_key_user_email=None,
+            user_api_key_end_user_id=None,
+            user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
             requester_metadata=None,
-            user_api_key_end_user_id=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
             mcp_tool_call_metadata=mcp_tool_call_metadata,
             vector_store_request_metadata=vector_store_request_metadata,
             usage_object=usage_object,
             requester_custom_headers=None,
-            user_api_key_request_route=None,
             cold_storage_object_key=None,
         )
         if isinstance(metadata, dict):
@@ -4588,14 +4618,10 @@ def get_standard_logging_metadata(
         cold_storage_object_key=None,
     )
     if isinstance(metadata, dict):
-        # Filter the metadata dictionary to include only the specified keys
-        clean_metadata = StandardLoggingMetadata(
-            **{  # type: ignore
-                key: metadata[key]
-                for key in StandardLoggingMetadata.__annotations__.keys()
-                if key in metadata
-            }
-        )
+        # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
+        for key in StandardLoggingMetadata.__annotations__.keys():
+            if key in metadata:
+                clean_metadata[key] = metadata[key]  # type: ignore
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):

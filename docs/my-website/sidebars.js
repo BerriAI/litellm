@@ -201,7 +201,7 @@ const sidebars = {
         {
           type: "category",
           label: "Budgets + Rate Limits",
-          items: ["proxy/users", "proxy/temporary_budget_increase", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/customers"],
+          items: ["proxy/users", "proxy/temporary_budget_increase", "proxy/rate_limit_tiers", "proxy/team_budgets", "proxy/dynamic_rate_limit", "proxy/customers"],
         },
         {
           type: "link",
@@ -392,6 +392,7 @@ const sidebars = {
             "providers/vertex",
             "providers/vertex_partner",
             "providers/vertex_image",
+            "providers/vertex_batch",
           ]
         },
         {
@@ -411,6 +412,7 @@ const sidebars = {
           label: "Bedrock",
           items: [
             "providers/bedrock",
+            "providers/bedrock_embedding",
             "providers/bedrock_agents",
             "providers/bedrock_batches",
             "providers/bedrock_vector_store",
@@ -522,6 +524,7 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
+        "proxy/veo_video_generation",
 
       ]
     },
@@ -543,6 +546,7 @@ const sidebars = {
       items: [
         "set_keys",
         "completion/token_usage",
+        "sdk/headers",
         "sdk_custom_pricing",
         "embedding/async_embedding",
         "embedding/moderation",
