@@ -24,7 +24,7 @@ def main():
         print("❌ No CLI token found. Please run 'litellm-proxy login' first.")
         return
     
-    print(f"✅ Found CLI token: {api_key[:20]}...")
+    print("✅ Found CLI token.")
 
     available_models = litellm.get_valid_models(
         check_provider_endpoint=True,
