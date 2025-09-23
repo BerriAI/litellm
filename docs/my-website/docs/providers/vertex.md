@@ -45,7 +45,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 ## COMPLETION CALL 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   vertex_credentials=vertex_credentials_json
 )
@@ -69,7 +69,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
   vertex_credentials=vertex_credentials_json
 )
@@ -189,7 +189,7 @@ print(json.loads(completion.choices[0].message.content))
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: gemini-pro
+  - model_name: gemini-2.5-pro
     litellm_params:
       model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
@@ -222,7 +222,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-  "model": "gemini-pro",
+  "model": "gemini-2.5-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
     ],
@@ -274,7 +274,7 @@ except JSONSchemaValidationError as e:
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: gemini-pro
+  - model_name: gemini-2.5-pro
     litellm_params:
       model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
@@ -295,7 +295,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-  "model": "gemini-pro",
+  "model": "gemini-2.5-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
     ],
@@ -403,7 +403,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-pro",
+    model="gemini-2.5-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
     tools=[{"googleSearch": {}}],
 )
@@ -418,7 +418,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gemini-pro",
+    "model": "gemini-2.5-pro",
     "messages": [
       {"role": "user", "content": "Who won the world cup?"}
     ],
@@ -539,7 +539,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-pro",
+    model="gemini-2.5-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
     tools=[{"enterpriseWebSearch": {}}],
 )
@@ -554,7 +554,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gemini-pro",
+    "model": "gemini-2.5-pro",
     "messages": [
       {"role": "user", "content": "Who won the world cup?"}
     ],
@@ -847,7 +847,7 @@ import litellm
 litellm.vertex_project = "hardy-device-38811" # Your Project ID
 litellm.vertex_location = "us-central1"  # proj location
 
-response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+response = litellm.completion(model="gemini-2.5-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
 ```
 
 ## Usage with LiteLLM Proxy Server
@@ -888,9 +888,9 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
     vertex_location: "us-central1" # proj location
 
   model_list: 
-    -model_name: team1-gemini-pro
+    -model_name: team1-gemini-2.5-pro
     litellm_params: 
-      model: gemini-pro
+      model: gemini-2.5-pro
   ```
 
   </TabItem>
@@ -917,7 +917,7 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
   )
 
   response = client.chat.completions.create(
-      model="team1-gemini-pro",
+      model="team1-gemini-2.5-pro",
       messages = [
           {
               "role": "user",
@@ -937,7 +937,7 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
       --header 'Authorization: Bearer sk-1234' \
       --header 'Content-Type: application/json' \
       --data '{
-      "model": "team1-gemini-pro",
+      "model": "team1-gemini-2.5-pro",
       "messages": [
           {
           "role": "user",
@@ -987,7 +987,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
   vertex_credentials=vertex_credentials_json,
   vertex_project="my-special-project", 
@@ -1051,7 +1051,7 @@ In certain use-cases you may need to make calls to the models and pass [safety s
 
 ```python
 response = completion(
-    model="vertex_ai/gemini-pro", 
+    model="vertex_ai/gemini-2.5-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
     safety_settings=[
         {
@@ -1165,7 +1165,7 @@ litellm.vertex_ai_safety_settings = [
         },
     ]
 response = completion(
-    model="vertex_ai/gemini-pro", 
+    model="vertex_ai/gemini-2.5-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
 )
 ```
@@ -1224,7 +1224,7 @@ litellm.vertex_location = "us-central1 # Your Location
 ## Gemini Pro
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-2.5-pro   | `completion('gemini-2.5-pro', messages)`, `completion('vertex_ai/gemini-2.5-pro', messages)` |
 
 ## Fine-tuned Models
 
@@ -1319,7 +1319,7 @@ curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro-vision   | `completion('gemini-pro-vision', messages)`, `completion('vertex_ai/gemini-pro-vision', messages)`|
+| gemini-2.5-pro-vision   | `completion('gemini-2.5-pro-vision', messages)`, `completion('vertex_ai/gemini-2.5-pro-vision', messages)`|
 
 ## Gemini 1.5 Pro (and Vision)
 | Model Name       | Function Call                        |
@@ -1333,7 +1333,7 @@ curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 
 #### Using Gemini Pro Vision
 
-Call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
+Call `gemini-2.5-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
 
 LiteLLM Supports the following image types passed in `url`
 - Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
@@ -1351,7 +1351,7 @@ LiteLLM Supports the following image types passed in `url`
 import litellm
 
 response = litellm.completion(
-  model = "vertex_ai/gemini-pro-vision",
+  model = "vertex_ai/gemini-2.5-pro-vision",
   messages=[
       {
           "role": "user",
@@ -1389,7 +1389,7 @@ image_path = "cached_logo.jpg"
 # Getting the base64 string
 base64_image = encode_image(image_path)
 response = litellm.completion(
-    model="vertex_ai/gemini-pro-vision",
+    model="vertex_ai/gemini-2.5-pro-vision",
     messages=[
         {
             "role": "user",
@@ -1445,7 +1445,7 @@ tools = [
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
 response = completion(
-    model="vertex_ai/gemini-pro-vision",
+    model="vertex_ai/gemini-2.5-pro-vision",
     messages=messages,
     tools=tools,
 )
