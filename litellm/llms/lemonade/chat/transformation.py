@@ -42,6 +42,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         functions: Optional[list] = None,
         logit_bias: Optional[dict] = None,
         max_completion_tokens: Optional[int] = None,
+        max_tokens: Optional[int] = None,
         n: Optional[int] = None,
         presence_penalty: Optional[int] = None,
         stop: Optional[Union[str, list]] = None,
