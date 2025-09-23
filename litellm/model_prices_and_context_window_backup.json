@@ -21441,6 +21441,35 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "xai/grok-4-fast-reasoning": {
+        "litellm_provider": "xai",
+        "max_input_tokens": 2e6,
+        "max_output_tokens": 2e6,
+        "max_tokens": 2e6,
+        "mode": "chat",
+        "input_cost_per_token": 0.2e-06,
+        "output_cost_per_token": 0.5e-06,
+        "cache_read_input_token_cost": 0.05e-06,
+        "source": "https://docs.x.ai/docs/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "xai/grok-4-fast-non-reasoning": {
+        "litellm_provider": "xai",
+        "max_input_tokens": 2e6,
+        "max_output_tokens": 2e6,
+        "cache_read_input_token_cost": 0.05e-06,
+        "max_tokens": 2e6,
+        "mode": "chat",
+        "input_cost_per_token": 0.2e-06,
+        "output_cost_per_token": 0.5e-06,
+        "source": "https://docs.x.ai/docs/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "xai/grok-4-0709": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
