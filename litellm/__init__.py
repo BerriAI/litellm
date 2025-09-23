@@ -1343,5 +1343,8 @@ disable_hf_tokenizer_download: Optional[bool] = (
 )
 global_disable_no_log_param: bool = False
 
+### CLI UTILITIES ###
+from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
