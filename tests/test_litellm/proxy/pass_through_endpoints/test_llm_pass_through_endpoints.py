@@ -19,6 +19,8 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
+    llm_passthrough_factory_proxy_route,
+    vllm_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     bedrock_llm_proxy_route,
@@ -914,3 +916,119 @@ class TestBedrockLLMProxyRoute:
             # For regular models, model should be just the model ID
             assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
             assert result == "success"
+
+
+class TestLLMPassthroughFactoryProxyRoute:
+    @pytest.mark.asyncio
+    async def test_llm_passthrough_factory_proxy_route_success(self):
+        from litellm.types.utils import LlmProviders
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.json = AsyncMock(return_value={"stream": False})
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.utils.ProviderConfigManager.get_provider_model_info"
+        ) as mock_get_provider, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
+        ) as mock_get_creds, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_provider_config = MagicMock()
+            mock_provider_config.get_api_base.return_value = "https://example.com/v1"
+            mock_provider_config.validate_environment.return_value = {
+                "x-api-key": "dummy"
+            }
+            mock_get_provider.return_value = mock_provider_config
+            mock_get_creds.return_value = "dummy"
+
+            mock_endpoint_func = AsyncMock(return_value="success")
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await llm_passthrough_factory_proxy_route(
+                custom_llm_provider=LlmProviders.VLLM,
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            assert result == "success"
+            mock_get_provider.assert_called_once_with(
+                provider=litellm.LlmProviders(LlmProviders.VLLM), model=None
+            )
+            mock_get_creds.assert_called_once_with(
+                custom_llm_provider=LlmProviders.VLLM, region_name=None
+            )
+            mock_create_route.assert_called_once_with(
+                endpoint="/chat/completions",
+                target="https://example.com/v1/chat/completions",
+                custom_headers={"x-api-key": "dummy"},
+            )
+            mock_endpoint_func.assert_awaited_once()
+
+
+class TestVLLMProxyRoute:
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "stream": False},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch("litellm.proxy.proxy_server.llm_router")
+    async def test_vllm_proxy_route_with_router_model(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_is_router.assert_called_once()
+        mock_llm_router.allm_passthrough_route.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "other-model"},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=False,
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.llm_passthrough_factory_proxy_route"
+    )
+    async def test_vllm_proxy_route_fallback_to_factory(
+        self, mock_factory_route, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_factory_route.return_value = "factory_success"
+
+        result = await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert result == "factory_success"
+        mock_factory_route.assert_awaited_once()

@@ -136,10 +136,12 @@ def _get_tags_from_request_kwargs(
     if request_kwargs is None:
         return []
     if metadata_variable_name in request_kwargs:
-        metadata = request_kwargs[metadata_variable_name]
-        return metadata.get("tags", [])
+        metadata = request_kwargs[metadata_variable_name] or {}
+        tags = metadata.get("tags", [])
+        return tags if tags is not None else []
     elif "litellm_params" in request_kwargs:
-        litellm_params = request_kwargs["litellm_params"]
-        _metadata = litellm_params.get(metadata_variable_name, {})
-        return _metadata.get("tags", [])
+        litellm_params = request_kwargs["litellm_params"] or {}
+        _metadata = litellm_params.get(metadata_variable_name, {}) or {}
+        tags = _metadata.get("tags", [])
+        return tags if tags is not None else []
     return []

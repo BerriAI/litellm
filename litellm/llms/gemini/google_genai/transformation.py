@@ -121,7 +121,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         default_headers = {
             "Content-Type": "application/json",
         }
-        gemini_api_key = self._get_google_ai_studio_api_key(dict(litellm_params or {}))
+        # Use the passed api_key first, then fall back to litellm_params and environment
+        gemini_api_key = api_key or self._get_google_ai_studio_api_key(dict(litellm_params or {}))
         if gemini_api_key is not None:
             default_headers[self.XGOOGLE_API_KEY] = gemini_api_key
         if headers is not None:

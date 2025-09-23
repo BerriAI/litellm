@@ -84,11 +84,14 @@ def test_e2e_bedrock_embedding():
     Validates that the transformation properly extracts embedding data from TwelveLabs response format.
     """
     print("Testing text embedding...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+
     litellm._turn_on_debug()
     response = litellm.embedding(
         model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
         input=["Hello world from LiteLLM with TwelveLabs Marengo!"],
-        aws_region_name="us-east-1"
     )
     
     # Validate response structure
@@ -114,7 +117,9 @@ def test_e2e_bedrock_embedding():
     
     print(f"Text embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
-
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
 
 def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
     """
@@ -122,6 +127,8 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
     Validates that the transformation properly extracts embedding data from TwelveLabs response format for images.
     """
     print("Testing image embedding...")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
     litellm._turn_on_debug()
     
     # Load duck.png and convert to base64
@@ -163,3 +170,6 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
         
         print(f"Image embedding successful! Vector size: {len(embedding_obj.embedding)}, Response: {response}")
 
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name

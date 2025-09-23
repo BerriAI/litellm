@@ -423,7 +423,7 @@ model_list:
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--D '{
+-d '{
   "model": "llama-3-8b-instruct",
   "messages": [
     {
@@ -431,6 +431,56 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
       "content": "What'\''s the weather like in Boston today?"
     }
   ],
-  "adapater_id": "my-special-adapter-id" # 👈 PROVIDER-SPECIFIC PARAM
-  }'
+  "adapater_id": "my-special-adapter-id"
+}'
 ```
+
+## Provider-Specific Metadata Parameters
+
+| Provider | Parameter | Use Case |
+|----------|-----------|----------|
+| **AWS Bedrock** | `requestMetadata` | Cost attribution, logging |
+| **Gemini/Vertex AI** | `labels` | Resource labeling |
+| **Anthropic** | `metadata` | User identification |
+
+<Tabs>
+<TabItem value="bedrock" label="AWS Bedrock">
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello!"}],
+    requestMetadata={"cost_center": "engineering"}
+)
+```
+
+</TabItem>
+<TabItem value="gemini" label="Gemini/Vertex AI">
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="vertex_ai/gemini-pro",
+    messages=[{"role": "user", "content": "Hello!"}],
+    labels={"environment": "production"}
+)
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="anthropic/claude-3-sonnet-20240229",
+    messages=[{"role": "user", "content": "Hello!"}],
+    metadata={"user_id": "user123"}
+)
+```
+
+</TabItem>
+</Tabs>

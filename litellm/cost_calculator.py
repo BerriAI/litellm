@@ -148,6 +148,8 @@ def cost_per_token(  # noqa: PLR0915
     ### CALL TYPE ###
     call_type: CallTypesLiteral = "completion",
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> Tuple[float, float]:  # type: ignore
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -278,6 +280,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
             )
 
         return prompt_cost, completion_cost
@@ -327,7 +330,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block)
+        return openai_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
@@ -348,6 +353,7 @@ def cost_per_token(  # noqa: PLR0915
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
+
         return dashscope_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
@@ -606,6 +612,8 @@ def completion_cost(  # noqa: PLR0915
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -658,6 +666,10 @@ def completion_cost(  # noqa: PLR0915
             completion_response=completion_response
         )
         rerank_billed_units: Optional[RerankBilledUnits] = None
+
+        # Extract service_tier from optional_params if not provided directly
+        if service_tier is None and optional_params is not None:
+            service_tier = optional_params.get("service_tier")
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,
@@ -909,6 +921,7 @@ def completion_cost(  # noqa: PLR0915
                     call_type=cast(CallTypesLiteral, call_type),
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
+                    service_tier=service_tier,
                 )
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
@@ -1003,6 +1016,8 @@ def response_cost_calculator(
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    ### SERVICE TIER ###
+    service_tier: Optional[str] = None,  # for OpenAI service tier pricing
 ) -> float:
     """
     Returns
@@ -1036,6 +1051,7 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                service_tier=service_tier,
             )
         return response_cost
     except Exception as e:

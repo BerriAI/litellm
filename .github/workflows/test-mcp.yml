@@ -1,0 +1,48 @@
+name: LiteLLM MCP Tests (folder - tests/mcp_tests)
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Thank You Message
+      run: |
+        echo "### 🙏 Thank you for contributing to LiteLLM!" >> $GITHUB_STEP_SUMMARY
+        echo "Your PR is being tested now. We appreciate your help in making LiteLLM better!" >> $GITHUB_STEP_SUMMARY
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+
+    - name: Install dependencies
+      run: |
+        poetry install --with dev,proxy-dev --extras "proxy semantic-router"
+        poetry run pip install "pytest==7.3.1"
+        poetry run pip install "pytest-retry==1.6.3"
+        poetry run pip install "pytest-cov==5.0.0"
+        poetry run pip install "pytest-asyncio==0.21.1"
+        poetry run pip install "respx==0.22.0"
+        poetry run pip install "pydantic==2.10.2"
+        poetry run pip install "mcp==1.10.1"
+        poetry run pip install pytest-xdist
+
+    - name: Setup litellm-enterprise as local package
+      run: |
+        cd enterprise
+        python -m pip install -e .
+        cd ..
+
+    - name: Run MCP tests
+      run: |
+        poetry run pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5

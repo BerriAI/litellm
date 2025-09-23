@@ -2328,6 +2328,54 @@ def test_get_whitelisted_models():
     print("whitelisted_models written to whitelisted_bedrock_models.txt")
 
 
+def test_delta_tool_calls_sequential_indices():
+    """
+    Test that multiple tool calls without explicit indices receive sequential indices.
+
+    When providers don't include index fields in tool calls, the Delta class
+    should automatically assign sequential indices (0, 1, 2, ...) instead of
+    defaulting all tool calls to index=0.
+    """
+    import json
+    from litellm.types.utils import Delta
+
+    # Simulate tool calls from streaming responses without explicit indices
+    tool_calls_without_indices = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "get_weather_for_dallas",
+                "arguments": json.dumps({})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        },
+        {
+            "id": "call_2",
+            "function": {
+                "name": "get_weather_precise",
+                "arguments": json.dumps({"location": "Dallas, TX"})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        }
+    ]
+
+    # Create Delta object as LiteLLM would when processing streaming response
+    delta = Delta(
+        content=None,
+        tool_calls=tool_calls_without_indices
+    )
+
+    # Verify tool calls have sequential indices
+    assert delta.tool_calls is not None, "Tool calls should not be None"
+    assert len(delta.tool_calls) == 2
+    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+
+    # Verify tool call details are preserved
+    assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
+    assert delta.tool_calls[1].function.name == "get_weather_precise"
 
 def test_completion_with_no_model():
     """

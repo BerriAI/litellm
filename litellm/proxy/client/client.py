@@ -1,11 +1,12 @@
 from typing import Optional
 
-from .http_client import HTTPClient
-from .models import ModelsManagementClient
-from .model_groups import ModelGroupsManagementClient
 from .chat import ChatClient
-from .keys import KeysManagementClient
 from .credentials import CredentialsManagementClient
+from .http_client import HTTPClient
+from .keys import KeysManagementClient
+from .model_groups import ModelGroupsManagementClient
+from .models import ModelsManagementClient
+from .teams import TeamsManagementClient
 
 
 class Client:
@@ -36,3 +37,4 @@ class Client:
         self.chat = ChatClient(base_url=self._base_url, api_key=self._api_key)
         self.keys = KeysManagementClient(base_url=self._base_url, api_key=self._api_key)
         self.credentials = CredentialsManagementClient(base_url=self._base_url, api_key=self._api_key)
+        self.teams = TeamsManagementClient(base_url=self._base_url, api_key=self._api_key)
