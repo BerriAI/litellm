@@ -1547,7 +1547,7 @@ class SSOAuthenticationHandler:
             user_id=cast(str, user_id),
             key=key,
             user_email=user_email,
-            user_role=user_role,
+            user_role=user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
             login_method="sso",
             premium_user=premium_user,
             auth_header_name=general_settings.get(
