@@ -1342,7 +1342,7 @@ description = "Python bindings to Rust's UUID library."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"perf\""
+markers = "extra == \"proxy\""
 files = [
     {file = "fastuuid-0.12.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:22a900ef0956aacf862b460e20541fdae2d7c340594fe1bd6fdcb10d5f0791a9"},
     {file = "fastuuid-0.12.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0302f5acf54dc75de30103025c5a95db06d6c2be36829043a0aa16fc170076bc"},
@@ -6747,12 +6747,11 @@ type = ["pytest-mypy"]
 caching = ["diskcache"]
 extra-proxy = ["azure-identity", "azure-keyvault-secrets", "google-cloud-iam", "google-cloud-kms", "prisma", "redisvl", "resend"]
 mlflow = ["mlflow"]
-perf = ["fastuuid"]
-proxy = ["PyJWT", "apscheduler", "azure-identity", "azure-storage-blob", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "gunicorn", "litellm-enterprise", "litellm-proxy-extras", "mcp", "orjson", "polars", "pynacl", "python-multipart", "pyyaml", "rich", "rq", "uvicorn", "uvloop", "websockets"]
+proxy = ["PyJWT", "apscheduler", "azure-identity", "azure-storage-blob", "backoff", "boto3", "cryptography", "fastapi", "fastapi-sso", "fastuuid", "gunicorn", "litellm-enterprise", "litellm-proxy-extras", "mcp", "orjson", "polars", "pynacl", "python-multipart", "pyyaml", "rich", "rq", "uvicorn", "uvloop", "websockets"]
 semantic-router = ["semantic-router"]
 utils = ["numpydoc"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "608a9e7680b4109b938a642007a80cc8e8fa57142b614a17b9e9723c8380b2cd"
+content-hash = "75004c6a23b70be86622fa417fd0d62fa3843e6e61c8dff8507ae5c967b7205d"
