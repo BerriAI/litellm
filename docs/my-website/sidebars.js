@@ -112,6 +112,7 @@ const sidebars = {
           label: "Setup & Deployment",
           items: [
             "proxy/quick_start",
+            "proxy/user_onboarding",
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
