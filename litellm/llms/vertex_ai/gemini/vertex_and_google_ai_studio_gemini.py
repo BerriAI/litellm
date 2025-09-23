@@ -478,12 +478,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> GeminiThinkingConfig:
         thinking_enabled = thinking_param.get("type") == "enabled"
         thinking_budget = thinking_param.get("budget_tokens")
+        thinking_include_thoughts = thinking_param.get("include_thoughts", True)
 
         params: GeminiThinkingConfig = {}
         if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
             thinking_budget
         ):
-            params["includeThoughts"] = True
+            params["includeThoughts"] = thinking_include_thoughts
         if thinking_budget is not None and isinstance(thinking_budget, int):
             params["thinkingBudget"] = thinking_budget
         return params
