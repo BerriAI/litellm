@@ -13,7 +13,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     """
     Azure AI Foundry FLUX image edit config
 
-    Supports FLUX models including FLUX-1.1-pro and FLUX-1-kontext-pro for image editing.
+    Supports FLUX models including FLUX-1-kontext-pro for image editing.
 
     Azure AI Foundry FLUX models handle image editing through the /images/edits endpoint,
     same as standard Azure OpenAI models. The request format uses multipart/form-data
@@ -28,11 +28,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
-        Uses Api-Key header format like Azure OpenAI
-
-        Azure AI Foundry uses the same authentication format as Azure OpenAI:
-        - Header: Api-Key (not Authorization Bearer)
-        - Endpoint: /openai/deployments/{model}/images/edits (for image editing)
+        Uses Api-Key header format
         """
         api_key = AzureFoundryModelInfo.get_api_key(api_key)
 
