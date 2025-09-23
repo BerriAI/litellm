@@ -7532,6 +7532,12 @@ class ProviderConfigManager:
             )
 
             return RecraftImageEditConfig()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.image_edit import (
+                get_azure_ai_image_edit_config,
+            )
+
+            return get_azure_ai_image_edit_config(model)
         elif LlmProviders.LITELLM_PROXY == provider:
             from litellm.llms.litellm_proxy.image_edit.transformation import (
                 LiteLLMProxyImageEditConfig,
