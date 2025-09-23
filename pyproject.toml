@@ -93,6 +93,7 @@ proxy = [
     "litellm-enterprise",
     "rich",
     "polars",
+    "fastuuid",
 ]
 
 extra_proxy = [
@@ -115,7 +116,6 @@ semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
 
-perf = ["fastuuid"]
 
 [tool.isort]
 profile = "black"
