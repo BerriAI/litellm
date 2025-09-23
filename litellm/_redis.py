@@ -34,7 +34,7 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    include_args = ["url", "redis_connect_func", "gcp_service_account", "gcp_ssl_ca_certs"]
+    include_args = ["url", "redis_connect_func", "gcp_service_account", "gcp_ssl_ca_certs", "ssl_certfile", "ssl_keyfile", "ssl_ca_certs"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
 
