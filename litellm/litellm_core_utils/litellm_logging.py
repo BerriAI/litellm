@@ -26,7 +26,7 @@ from typing import (
     cast,
 )
 
-import fastuuid as uuid
+from .._uuid import uuid
 from httpx import Response
 from pydantic import BaseModel
 
