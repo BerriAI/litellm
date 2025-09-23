@@ -76,6 +76,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.logging_only = True
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
         super().__init__(**kwargs)
+        self.guardrail_provider = "presidio"
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
@@ -369,6 +370,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             else:
                 guardrail_json_response = exception_str
             self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
                 guardrail_json_response=guardrail_json_response,
                 request_data=request_data,
                 guardrail_status=status,
@@ -675,5 +677,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Update the guardrails litellm params in memory
         """
+        super().update_in_memory_litellm_params(litellm_params)
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config

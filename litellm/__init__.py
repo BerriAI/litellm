@@ -60,6 +60,7 @@ from litellm.constants import (
     empower_models,
     together_ai_models,
     baseten_models,
+    WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
     open_ai_embedding_models,
@@ -67,6 +68,7 @@ from litellm.constants import (
     bedrock_embedding_models,
     known_tokenizer_config,
     BEDROCK_INVOKE_PROVIDERS_LITERAL,
+    BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_CONVERSE_MODELS,
     DEFAULT_MAX_TOKENS,
     DEFAULT_SOFT_BUDGET,
@@ -116,6 +118,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "logfire",
     "literalai",
     "dynamic_rate_limiter",
+    "dynamic_rate_limiter_v3",
     "langsmith",
     "prometheus",
     "otel",
@@ -147,6 +150,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vector_store_pre_call_hook",
     "dotprompt",
     "cloudzero",
+    "posthog",
 ]
 configured_cold_storage_logger: Optional[
     _custom_logger_compatible_callbacks_literal
@@ -239,6 +243,7 @@ novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
@@ -521,6 +526,7 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
+wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
 
@@ -737,6 +743,8 @@ def add_known_models():
             oci_models.add(key)
         elif value.get("litellm_provider") == "volcengine":
             volcengine_models.add(key)
+        elif value.get("litellm_provider") == "wandb":
+            wandb_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud":
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
@@ -835,6 +843,7 @@ model_list = list(
     | heroku_models
     | vercel_ai_gateway_models
     | volcengine_models
+    | wandb_models
     | ovhcloud_models
 )
 
@@ -917,6 +926,7 @@ models_by_provider: dict = {
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,
+    "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
 }
 
@@ -1044,7 +1054,6 @@ from .llms.databricks.chat.transformation import DatabricksConfig
 from .llms.databricks.embed.transformation import DatabricksEmbeddingConfig
 from .llms.predibase.chat.transformation import PredibaseConfig
 from .llms.replicate.chat.transformation import ReplicateConfig
-from .llms.cohere.completion.transformation import CohereTextConfig as CohereConfig
 from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.cohere.rerank.transformation import CohereRerankConfig
 from .llms.cohere.rerank_v2.transformation import CohereRerankV2Config
@@ -1257,6 +1266,7 @@ from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.wandb.chat.transformation import WandbConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig

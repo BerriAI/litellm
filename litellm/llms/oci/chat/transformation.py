@@ -378,7 +378,7 @@ class OCIChatConfig(BaseConfig):
             or not oci_compartment_id
         ):
             raise Exception(
-                "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, "
+                "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
                 "and at least one of oci_key or oci_key_file."
             )
 
