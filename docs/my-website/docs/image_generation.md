@@ -279,6 +279,8 @@ print(f"response: {response}")
 
 ## Supported Providers
 
+#### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
 | Provider | Documentation Link |
 |----------|-------------------|
 | OpenAI | [OpenAI Image Generation →](./providers/openai) |

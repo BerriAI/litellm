@@ -67,6 +67,23 @@ asyncio.run(completion())
 - `async_post_call_success_hook` - Access user data + modify responses
 - `async_pre_call_hook` - Modify requests before sending
 
+### Example: Modifying the Response in async_post_call_success_hook
+
+You can use `async_post_call_success_hook` to add custom headers or metadata to the response before it is returned to the client. For example:
+
+```python
+async def async_post_call_success_hook(data, user_api_key_dict, response):
+    # Add a custom header to the response
+    additional_headers = getattr(response, "_hidden_params", {}).get("additional_headers", {}) or {}
+    additional_headers["x-litellm-custom-header"] = "my-value"
+    if not hasattr(response, "_hidden_params"):
+        response._hidden_params = {}
+    response._hidden_params["additional_headers"] = additional_headers
+    return response
+```
+
+This allows you to inject custom metadata or headers into the response for downstream consumers. You can use this pattern to pass information to clients, proxies, or observability tools.
+
 ## Callback Functions
 If you just want to log on a specific event (e.g. on input) - you can use callback functions. 
 
