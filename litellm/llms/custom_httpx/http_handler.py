@@ -167,7 +167,7 @@ class AsyncHTTPHandler:
         concurrent_limit=1000,
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
-        existing_session: Optional["ClientSession"] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -176,7 +176,7 @@ class AsyncHTTPHandler:
             concurrent_limit=concurrent_limit,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
-            existing_session=existing_session,
+            shared_session=shared_session,
         )
         self.client_alias = client_alias
 
@@ -186,7 +186,7 @@ class AsyncHTTPHandler:
         concurrent_limit: int,
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
-        existing_session: Optional["ClientSession"] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
@@ -202,7 +202,7 @@ class AsyncHTTPHandler:
         transport = AsyncHTTPHandler._create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-            existing_session=existing_session,
+            shared_session=shared_session,
         )
 
         return httpx.AsyncClient(
@@ -528,7 +528,7 @@ class AsyncHTTPHandler:
     def _create_async_transport(
         ssl_context: Optional[ssl.SSLContext] = None,
         ssl_verify: Optional[bool] = None,
-        existing_session: Optional["ClientSession"] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
@@ -551,7 +551,7 @@ class AsyncHTTPHandler:
             return AsyncHTTPHandler._create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
-                existing_session=existing_session,
+                shared_session=shared_session,
             )
 
         #########################################################
@@ -619,7 +619,7 @@ class AsyncHTTPHandler:
     def _create_aiohttp_transport(
         ssl_verify: Optional[bool] = None,
         ssl_context: Optional[ssl.SSLContext] = None,
-        existing_session: Optional["ClientSession"] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> LiteLLMAiohttpTransport:
         """
         Creates an AiohttpTransport with RequestNotRead error handling
@@ -644,12 +644,12 @@ class AsyncHTTPHandler:
 
         verbose_logger.debug("Creating AiohttpTransport...")
 
-        # Use existing session if provided and valid
-        if existing_session is not None and not existing_session.closed:
+        # Use shared session if provided and valid
+        if shared_session is not None and not shared_session.closed:
             verbose_logger.debug(
-                f"SHARED SESSION: Reusing existing ClientSession (ID: {id(existing_session)})"
+                f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
             )
-            return LiteLLMAiohttpTransport(client=existing_session)
+            return LiteLLMAiohttpTransport(client=shared_session)
 
         # Create new session only if none provided or existing one is invalid
         verbose_logger.debug(
@@ -941,7 +941,7 @@ class HTTPHandler:
 def get_async_httpx_client(
     llm_provider: Union[LlmProviders, httpxSpecialProvider],
     params: Optional[dict] = None,
-    existing_session: Optional["ClientSession"] = None,
+    shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
     """
     Retrieves the async HTTP client from the cache
@@ -963,12 +963,12 @@ def get_async_httpx_client(
         return _cached_client
 
     if params is not None:
-        params["existing_session"] = existing_session
+        params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**params)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0),
-            existing_session=existing_session,
+            shared_session=shared_session,
         )
 
     litellm.in_memory_llm_clients_cache.set_cache(

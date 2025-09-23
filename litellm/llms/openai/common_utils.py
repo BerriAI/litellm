@@ -214,7 +214,7 @@ class BaseOpenAILLM:
                 if isinstance(ssl_config, ssl.SSLContext)
                 else None,
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-                existing_session=shared_session,
+                shared_session=shared_session,
             ),
             follow_redirects=True,
         )
