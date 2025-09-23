@@ -246,7 +246,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
                 params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                existing_session=shared_session,
+                shared_session=shared_session,
             )
         else:
             async_httpx_client = client
