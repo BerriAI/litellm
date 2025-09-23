@@ -18,7 +18,7 @@ def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_sec
         return "cost_per_token"
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, service_tier: Optional[str] = None) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -31,7 +31,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     ## CALCULATE INPUT COST
     return generic_cost_per_token(
-        model=model, usage=usage, custom_llm_provider="openai"
+        model=model, usage=usage, custom_llm_provider="openai", service_tier=service_tier
     )
     # ### Non-cached text tokens
     # non_cached_text_tokens = usage.prompt_tokens
