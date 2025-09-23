@@ -271,17 +271,11 @@ class VertexBase:
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
-        VertexAI only supports ContextCaching on v1beta1
-
         use this helper to decide if request should be sent to v1 or v1beta1
 
-        Returns v1beta1 if context caching is enabled
-        Returns v1 in all other cases
+        Returns true if any beta feature is enabled
+        Returns false in all other cases
         """
-        if "cached_content" in optional_params:
-            return True
-        if "CachedContent" in optional_params:
-            return True
         return False
 
     def _check_custom_proxy(
