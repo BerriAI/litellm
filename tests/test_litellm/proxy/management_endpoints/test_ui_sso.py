@@ -1275,7 +1275,7 @@ class TestCLIKeyRegenerationFlow:
             )
             
             # Assert
-            mock_regenerate.assert_called_once_with(existing_key, new_key)
+            mock_regenerate.assert_called_once_with(existing_key=existing_key, new_key=new_key, user_id=None)
             assert result.status_code == 200
             assert "Success" in result.body.decode()
 
