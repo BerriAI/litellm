@@ -26,7 +26,7 @@ from typing import (
     cast,
 )
 
-from .._uuid import uuid
+from litellm._uuid import uuid
 from httpx import Response
 from pydantic import BaseModel
 

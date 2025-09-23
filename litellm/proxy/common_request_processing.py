@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-from .._uuid import uuid
+from litellm._uuid import uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status

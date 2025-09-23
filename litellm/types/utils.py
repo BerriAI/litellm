@@ -13,7 +13,7 @@ from typing import (
     Union,
 )
 
-from .._uuid import uuid
+from litellm._uuid import uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore

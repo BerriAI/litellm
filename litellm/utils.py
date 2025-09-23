@@ -40,7 +40,7 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
-from ._uuid import uuid
+from litellm._uuid import uuid
 import httpx
 import openai
 import tiktoken
