@@ -18,6 +18,9 @@ LiteLLM provides image editing functionality that maps to OpenAI's `/images/edit
 | Supported LiteLLM Proxy Versions | 1.71.1+ | |
 | Supported LLM providers | **OpenAI** | Currently only `openai` is supported |
 
+ #### ⚡️See all supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
+
+
 ## Usage
 
 ### LiteLLM Python SDK
