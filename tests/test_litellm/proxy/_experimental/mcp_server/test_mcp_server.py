@@ -294,9 +294,9 @@ async def test_concurrent_initialize_session_managers():
     """Test that concurrent calls to initialize_session_managers don't cause race conditions."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
-            initialize_session_managers,
-            _SESSION_MANAGERS_INITIALIZED,
             _INITIALIZATION_LOCK,
+            _SESSION_MANAGERS_INITIALIZED,
+            initialize_session_managers,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -374,15 +374,15 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     conflicts with an access group name (e.g., "group").
     """
     try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from litellm.proxy._experimental.mcp_server.server import (
             _get_mcp_servers_in_path,
             _get_tools_from_mcp_servers,
         )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport, MCPSpecVersion
     except ImportError:
         pytest.skip("MCP server not available")
 

@@ -186,7 +186,9 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        headers = {}
+        headers = {
+            "MCP-Protocol-Version": "2025-06-18"
+        }
 
         if self._mcp_auth_value:
             if self.auth_type == MCPAuth.bearer_token:

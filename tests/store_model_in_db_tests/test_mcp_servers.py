@@ -12,8 +12,6 @@ from starlette import status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPTransportType,
     MCPTransport,
     NewMCPServerRequest,
