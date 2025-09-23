@@ -543,6 +543,7 @@ async def test_get_user_info_from_db():
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd"
 
 
+@pytest.mark.asyncio
 async def test_get_user_info_from_db_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -1275,7 +1276,7 @@ class TestCLIKeyRegenerationFlow:
             )
             
             # Assert
-            mock_regenerate.assert_called_once_with(existing_key, new_key)
+            mock_regenerate.assert_called_once_with(existing_key=existing_key, new_key=new_key, user_id=None)
             assert result.status_code == 200
             assert "Success" in result.body.decode()
 
@@ -1303,7 +1304,7 @@ class TestCLIKeyRegenerationFlow:
             )
             
             # Assert
-            mock_create.assert_called_once_with(new_key)
+            mock_create.assert_called_once_with(key=new_key, user_id=None)
             assert result.status_code == 200
             assert "Success" in result.body.decode()
 
@@ -1320,8 +1321,17 @@ class TestCLIKeyRegenerationFlow:
         # CLI state
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456"
         
-        # Mock the CLI callback
-        with patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback:
+        # Mock the CLI callback and required proxy server components
+        mock_result = {"user_id": "test-user", "email": "test@example.com"}
+        
+        with patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.proxy_server.master_key", "test-master-key"), \
+             patch("litellm.proxy.proxy_server.general_settings", {}), \
+             patch("litellm.proxy.proxy_server.jwt_handler", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-google-id"}, clear=True), \
+             patch("litellm.proxy.management_endpoints.ui_sso.GoogleSSOHandler.get_google_callback_response", return_value=mock_result):
             mock_cli_callback.return_value = MagicMock()
             
             # Act
@@ -1329,9 +1339,10 @@ class TestCLIKeyRegenerationFlow:
             
             # Assert
             mock_cli_callback.assert_called_once_with(
-                mock_request,
+                request=mock_request,
                 key="sk-new-session-key-456",
-                existing_key="sk-existing-cli-key-123"
+                existing_key="sk-existing-cli-key-123",
+                result=mock_result
             )
 
     def test_get_redirect_url_preserves_existing_key(self):
