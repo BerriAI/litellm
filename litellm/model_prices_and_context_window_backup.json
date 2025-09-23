@@ -16900,6 +16900,20 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "openrouter/x-ai/grok-4-fast:free": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 2000000,
+        "max_output_tokens": 30000,
+        "max_tokens": 2000000,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "source": "https://openrouter.ai/x-ai/grok-4-fast:free",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_web_search": false
+    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
         "litellm_provider": "ovhcloud",
