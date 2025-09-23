@@ -805,7 +805,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         headers: Optional[dict],
         additional_request_params: dict,
-    ) -> tuple[List[ToolBlock], list]:
+    ) -> Tuple[List[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: List[ToolBlock] = []
 
