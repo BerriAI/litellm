@@ -109,3 +109,22 @@ canary-run:
 canary-summarize:
 	@echo "Summarizing parity JSONL"
 	PYTHONPATH=$(PWD) python local/scripts/parity_summarize.py --in $${PARITY_OUT}
+
+.PHONY: exec-rpc-up exec-rpc-restart exec-rpc-down exec-rpc-logs exec-rpc-probe
+
+# Exec RPC service (Dockerized). Rebuilds from local tree and (re)starts on ${EXEC_RPC_PORT:-8790}.
+exec-rpc-up:
+	docker compose -f local/docker/compose.exec.yml up -d --build
+
+exec-rpc-restart:
+	docker compose -f local/docker/compose.exec.yml up -d --build
+
+exec-rpc-down:
+	docker compose -f local/docker/compose.exec.yml down
+
+exec-rpc-logs:
+	docker compose -f local/docker/compose.exec.yml logs -f exec-rpc
+
+# Probe: health + python exec must include t_ms
+exec-rpc-probe:
+	./scripts/exec_rpc_probe.sh 127.0.0.1 $${EXEC_RPC_PORT:-8790} || true

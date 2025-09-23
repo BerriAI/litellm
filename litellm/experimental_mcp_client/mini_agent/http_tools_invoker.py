@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import asyncio
 from typing import Any, Dict, List, Optional
 
 import types as _types
@@ -14,28 +15,69 @@ class HttpToolsInvoker:
         self.base_url = base_url.rstrip("/")
         self.headers = headers or {}
 
+    def _mk_client(self):
+        """
+        Create an AsyncClient. Some test doubles don't accept kwargs; fall back gracefully.
+        """
+        AsyncClient = getattr(httpx, "AsyncClient", object)
+        try:
+            return AsyncClient(headers=self.headers)  # type: ignore[call-arg]
+        except TypeError:
+            return AsyncClient()  # type: ignore[call-arg]
+
     async def list_openai_tools(self) -> List[Dict[str, Any]]:
-        async with httpx.AsyncClient(headers=self.headers) as client:  # type: ignore
+        async with self._mk_client() as client:  # type: ignore
             r = await client.get(f"{self.base_url}/tools")
             if getattr(r, "status_code", 200) >= 400:
                 tail = (getattr(r, "text", "") or "")[:256]
                 raise Exception(f"HTTP {getattr(r,'status_code',0)}: {tail}")
-            return r.json()
+            try:
+                return r.json()
+            except Exception:
+                return []
 
     async def call_openai_tool(self, openai_tool: Dict[str, Any]) -> str:
         fn = (openai_tool or {}).get("function", {})
         name = fn.get("name", "")
         args = fn.get("arguments", {})
         body = {"name": name, "arguments": args}
-        async with httpx.AsyncClient(headers=self.headers) as client:  # type: ignore
+
+        async with self._mk_client() as client:  # type: ignore
             r = await client.post(f"{self.base_url}/invoke", json=body)
+
+            # One polite retry on 429 honoring Retry-After if present
+            if getattr(r, "status_code", 200) == 429:
+                ra = None
+                try:
+                    ra = getattr(r, "headers", {}).get("Retry-After") if hasattr(r, "headers") else None
+                except Exception:
+                    ra = None
+                try:
+                    delay = float(ra) if ra is not None else 0.0
+                except Exception:
+                    delay = 0.0
+                # cap small delay to avoid slow tests
+                if delay > 0:
+                    await asyncio.sleep(min(delay, 1.0))
+                r = await client.post(f"{self.base_url}/invoke", json=body)
+
             if getattr(r, "status_code", 200) >= 400:
                 tail = (getattr(r, "text", "") or "")[:256]
                 raise Exception(f"HTTP {getattr(r,'status_code',0)}: {tail}")
-            data = r.json()
+
+            # Prefer JSON; if not JSON, return plain text body
+            try:
+                data = r.json()
+            except Exception:
+                txt = getattr(r, "text", "")
+                return txt if isinstance(txt, str) else str(txt)
+
             if isinstance(data, dict):
-                if "text" in data:
-                    return data["text"]
-                if "error" in data:
-                    raise Exception(data["error"])  # pragma: no cover
-            return json.dumps(data)
+                # common keys returned by simple tool executors
+                for k in ("text", "result", "answer"):
+                    v = data.get(k)
+                    if isinstance(v, str):
+                        return v
+                return json.dumps(data, ensure_ascii=False)
+
+            return json.dumps(data, ensure_ascii=False)

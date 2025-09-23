@@ -34,3 +34,44 @@ async def run_parallel_requests(router, requests, preserve_order=True, return_ex
     if preserve_order:
         results.sort(key=lambda x: x[0])
     return results
+
+
+# --- Results container and gather helper for tests ---
+@dataclass
+class ParallelResult:
+    index: int
+    request: RouterParallelRequest
+    response: Any | None
+    exception: Exception | None
+
+async def gather_parallel_acompletions(
+    router,
+    requests: List[RouterParallelRequest],
+    *,
+    concurrency: int | None = None,
+    preserve_order: bool = True,
+) -> List[ParallelResult]:
+    """
+    Test helper: run multiple acompletions concurrently and return rich result objects.
+
+    - concurrency: optional max in-flight limit (uses a semaphore when provided)
+    - preserve_order: when True, results are sorted by the original request index
+    """
+    sem = asyncio.Semaphore(concurrency) if concurrency and concurrency > 0 else None
+
+    async def _do_one(i: int, req: RouterParallelRequest) -> ParallelResult:
+        try:
+            if sem:
+                async with sem:
+                    resp = await router.acompletion(model=req.model, messages=req.messages, **req.kwargs)
+            else:
+                resp = await router.acompletion(model=req.model, messages=req.messages, **req.kwargs)
+            return ParallelResult(index=i, request=req, response=resp, exception=None)
+        except Exception as e:
+            return ParallelResult(index=i, request=req, response=None, exception=e)
+
+    tasks = [asyncio.create_task(_do_one(i, req)) for i, req in enumerate(requests)]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    if preserve_order:
+        results.sort(key=lambda r: r.index)
+    return results

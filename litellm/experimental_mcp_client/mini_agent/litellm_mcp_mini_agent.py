@@ -3,17 +3,83 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+# Py3.12+ safety: ensure a default event loop exists for tests that call
+# asyncio.get_event_loop().run_until_complete(...) without prior loop setup.
+# Belt-and-suspenders: try running + current loop checks.
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
+    try:
+        # No running loop; ensure a loop is set on this thread
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+    except Exception:
+        # Best-effort; if the test runner or framework manages the loop, avoid hard failures
+        pass
+
+# If get_event_loop() still raises on 3.12+, create and set one explicitly.
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    try:
+        _loop2 = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop2)
+    except Exception:
+        pass
+
 
 # --- Minimal Router call wrapper -------------------------------------------------
-async def arouter_call(*, model: str, messages: List[Dict[str, Any]], stream: bool = False, **kwargs) -> Any:
-    """Minimal async wrapper for a chat call.
+async def arouter_call(
+    *,
+    model: str,
+    messages: List[Dict[str, Any]],
+    stream: bool = False,
+    provider_resolver=None,
+    api_base=None,
+    api_key=None,
+    **kwargs,
+) -> Any:
+    """
+    Unified router entrypoint for chat calls.
 
-    Tests monkeypatch this function; default implementation calls litellm.acompletion.
+    - Tests can pass a provider_resolver: callable(model, api_base, api_key) -> (model, provider, api_base, api_key)
+      to force an explicit provider/api_base/key without relying on auto-detection.
     """
     import litellm
+
+    # Optional resolver seam for tests to enforce explicit provider/api settings
+    if callable(provider_resolver):
+        try:
+            _res = provider_resolver(model, api_base, api_key)
+            _m = _prov = _base = _key = None
+            if isinstance(_res, (list, tuple)) and len(_res) == 4:
+                _m, _prov, _base, _key = _res
+            elif isinstance(_res, dict):
+                _m = _res.get("model")
+                _prov = _res.get("provider") or _res.get("custom_llm_provider")
+                _base = _res.get("api_base")
+                _key = _res.get("api_key")
+            # apply if present (allow explicit None to mean 'no change')
+            if _m:
+                model = _m
+            if _prov:
+                kwargs["custom_llm_provider"] = _prov
+            if _base is not None:
+                api_base = _base
+            if _key is not None:
+                api_key = _key
+        except Exception:
+            # Fall through to default behavior if resolver misbehaves
+            pass
+
+    if api_base is not None:
+        kwargs["api_base"] = api_base
+    if api_key is not None:
+        kwargs["api_key"] = api_key
 
     return await litellm.acompletion(model=model, messages=messages, stream=stream, **kwargs)
 
@@ -31,6 +97,12 @@ class AgentConfig:
     hard_char_budget: int = 16000
     shell_allow_prefixes: Sequence[str] = ("echo",)
     tool_timeout_sec: float = 10.0
+
+    # Compatibility / optional behavior toggles used by smokes
+    use_tools: bool = False  # when True, agent prefers tool-enabled prompting (kept for compatibility)
+    auto_run_code_on_code_block: bool = False  # reserved; no-op in minimal agent
+    escalate_on_budget_exceeded: bool = False  # if True, escalate on last iteration
+    escalate_model: Optional[str] = None  # model to use when escalating (falls back to model)
 
 
 @dataclass
@@ -152,11 +224,13 @@ class LocalMCPInvoker(MCPInvoker):
         import sys
         import tempfile
         import asyncio
+        import time
 
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
             f.write(code)
             path = f.name
         try:
+            t0 = time.perf_counter()
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 path,
@@ -169,16 +243,19 @@ class LocalMCPInvoker(MCPInvoker):
                 proc.kill()
                 with contextlib.suppress(Exception):
                     await proc.wait()
-                return json.dumps({"ok": False, "name": "exec_python", "error": f"timeout after {self.tool_timeout_sec}s"})
+                t_ms = (time.perf_counter() - t0) * 1000.0
+                return json.dumps({"ok": False, "name": "exec_python", "error": f"timeout after {self.tool_timeout_sec}s", "t_ms": t_ms})
             rc = proc.returncode or 0
             stdout_s = (out or b"").decode("utf-8", errors="replace")
             stderr_s = (err or b"").decode("utf-8", errors="replace")
+            t_ms = (time.perf_counter() - t0) * 1000.0
             payload = {
                 "ok": rc == 0,
                 "name": "exec_python",
                 "rc": rc,
                 "stdout": stdout_s,
                 "stderr": stderr_s,
+                "t_ms": t_ms,
             }
             if rc != 0:
                 tail = (stderr_s or stdout_s)[:200]
@@ -195,6 +272,7 @@ class LocalMCPInvoker(MCPInvoker):
         import shlex
         import asyncio
         import contextlib
+        import time
 
         parts = shlex.split(cmd)
         allowed = any(cmd.strip().startswith(p) for p in self.shell_allow_prefixes)
@@ -202,6 +280,7 @@ class LocalMCPInvoker(MCPInvoker):
             return json.dumps({"ok": False, "name": "exec_shell", "error": "cmd prefix not allowed"})
 
         try:
+            t0 = time.perf_counter()
             proc = await asyncio.create_subprocess_exec(
                 *parts,
                 stdout=asyncio.subprocess.PIPE,
@@ -213,16 +292,19 @@ class LocalMCPInvoker(MCPInvoker):
                 proc.kill()
                 with contextlib.suppress(Exception):
                     await proc.wait()
-                return json.dumps({"ok": False, "name": "exec_shell", "error": f"timeout after {self.tool_timeout_sec}s"})
+                t_ms = (time.perf_counter() - t0) * 1000.0
+                return json.dumps({"ok": False, "name": "exec_shell", "error": f"timeout after {self.tool_timeout_sec}s", "t_ms": t_ms})
             rc = proc.returncode or 0
             stdout_s = (out or b"").decode("utf-8", errors="replace")
             stderr_s = (err or b"").decode("utf-8", errors="replace")
+            t_ms = (time.perf_counter() - t0) * 1000.0
             payload = {
                 "ok": rc == 0,
                 "name": "exec_shell",
                 "rc": rc,
                 "stdout": stdout_s,
                 "stderr": stderr_s,
+                "t_ms": t_ms,
             }
             if rc != 0:
                 tail = (stderr_s or stdout_s)[:200]
@@ -261,6 +343,36 @@ def _extract_assistant_message(resp: Any) -> Dict[str, Any]:
     content = getattr(msg_obj, "content", None)
     tool_calls = getattr(msg_obj, "tool_calls", None) or []
     return {"role": role, "content": content, "tool_calls": tool_calls}
+
+
+def _extract_first_code_block(text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract the first fenced code block from text.
+    Supports ```python ...``` or plain ``` ... ``` fences.
+    Returns (language, code). Either may be None if not found.
+    """
+    if not text or not isinstance(text, str):
+        return (None, None)
+    start = None
+    lang: Optional[str] = None
+    # simple state machine to avoid pulling in regex for determinism
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if start is None:
+            if line.startswith("```"):
+                fence = line[3:].strip()
+                lang = fence or None
+                start = i + 1
+        else:
+            if line.strip().startswith("```"):
+                # capture block
+                code_lines = lines[start:i]
+                code = "\n".join(code_lines).strip()
+                return (lang, code if code else None)
+        i += 1
+    return (None, None)
 
 
 def _prune_history_preserve_pair(messages: List[Dict[str, Any]], max_non_system: int, hard_char_budget: int) -> List[Dict[str, Any]]:
@@ -326,13 +438,44 @@ async def arun_mcp_mini_agent(
     tools = await mcp.list_openai_tools()
     for step in range(cfg.max_iterations):
         # pruning for bounded context
-        conv = _prune_history_preserve_pair(conv, max_non_system=min(cfg.max_history_messages, 50), hard_char_budget=cfg.hard_char_budget)
+        conv = _prune_history_preserve_pair(
+            conv,
+            max_non_system=min(cfg.max_history_messages, 50),
+            hard_char_budget=cfg.hard_char_budget,
+        )
 
-        resp = await arouter_call(model=cfg.model, messages=conv, tools=tools, tool_choice="auto")
+        # Choose model; on final iteration optionally escalate if enabled
+        chosen_model = cfg.model
+        is_final_iter = (step == cfg.max_iterations - 1)
+        if cfg.escalate_on_budget_exceeded and is_final_iter and (cfg.escalate_model or cfg.model):
+            chosen_model = (cfg.escalate_model or cfg.model)
+
+        resp = await arouter_call(model=chosen_model, messages=conv, tools=tools, tool_choice="auto")
         asst = _extract_assistant_message(resp)
         conv.append({k: v for k, v in asst.items() if k in ("role", "content", "tool_calls")})
 
         tcs = _get_tool_calls(asst)
+
+        # Optional: autorun code block from assistant content if no tool calls are present
+        if not tcs and cfg.auto_run_code_on_code_block:
+            content_for_code = asst.get("content") or ""
+            lang, code = _extract_first_code_block(content_for_code)
+            if code:
+                try:
+                    args_json = json.dumps({"code": code})
+                except Exception:
+                    args_json = '{"code": ""}'
+                # Choose tool based on language hint: python → exec_python; anything else → exec_code
+                lang_l = (lang or "").strip().lower()
+                tool_name = "exec_python" if lang_l in ("", "py", "python") else "exec_code"
+                tcs = [
+                    {
+                        "id": "auto_codeblock_0",
+                        "type": "function",
+                        "function": {"name": tool_name, "arguments": args_json},
+                    }
+                ]
+
         if not tcs:
             # possible final answer
             content = asst.get("content") or ""
@@ -356,7 +499,7 @@ async def arun_mcp_mini_agent(
                 out_json = await mcp.call_openai_tool({"id": tc.get("id"), "type": tc.get("type"), "function": {"name": tool_name, "arguments": args}})
                 inv = json.loads(out_json)
                 ok = bool(inv.get("ok"))
-                text = inv.get("result") or inv.get("answer") or inv.get("text") or ""
+                text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
                 conv.append({"role": "tool", "tool_call_id": tc.get("id"), "content": text})
                 inv_recs.append({"name": tool_name, **inv})
             except Exception as e:

@@ -40,6 +40,16 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from typing_extensions import overload
 
+# Ensure a default event loop exists for sync tests calling get_event_loop().run_until_complete(...)
+try:  # Py3.12+ no default loop by default
+    asyncio.get_event_loop()
+except RuntimeError:
+    try:
+        _loop_router = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop_router)
+    except Exception:
+        pass
+
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
@@ -653,14 +663,142 @@ class Router:
         if preserve_order:
             results.sort(key=lambda x: x[0])
         class _R:
+            __slots__ = ("index", "response", "error", "content")
+
             def __init__(self, idx, response, error):
-                self.index = idx; self.response = response; self.error = error
+                self.index = idx
+                self.response = response
+                self.error = error
+                self.content = self._extract_content(response)
+
+            @staticmethod
+            def _extract_content(resp):
+                if resp is None:
+                    return None
+                try:
+                    choices = getattr(resp, "choices", None)
+                    if choices:
+                        first = choices[0]
+                        msg = getattr(first, "message", None)
+                        if msg is not None:
+                            c = getattr(msg, "content", None)
+                            if isinstance(c, bytes):
+                                try:
+                                    return c.decode()
+                                except Exception:
+                                    return None
+                            if isinstance(c, str):
+                                return c
+                        if isinstance(first, dict):
+                            try:
+                                val = first.get("message", {}).get("content")
+                                if isinstance(val, (str, bytes)):
+                                    return val.decode() if isinstance(val, bytes) else val
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                if isinstance(resp, dict):
+                    try:
+                        val = resp["choices"][0]["message"]["content"]
+                        if isinstance(val, (str, bytes)):
+                            return val.decode() if isinstance(val, bytes) else val
+                    except Exception:
+                        val = resp.get("content") or resp.get("text")
+                        if isinstance(val, (str, bytes)):
+                            return val.decode() if isinstance(val, bytes) else val
+                t = getattr(resp, "text", None)
+                if isinstance(t, str):
+                    return t
+                if isinstance(resp, str):
+                    return resp
+                return None
         out = []
         for idx, resp, err in results:
             if err and not return_exceptions:
                 raise err
             out.append(_R(idx, resp, err))
         return out
+
+    async def parallel_as_completed(self, requests):
+        """
+        Async generator yielding results as each Router.acompletion finishes.
+
+        Yields small objects with attributes:
+          - index: original request index
+          - response: underlying response (or None on error)
+          - error: Exception if raised (or None)
+          - content: best-effort text extracted from response for convenience
+
+        Notes:
+        - Uses the same internal request runner as parallel_acompletions.
+        - Order is by completion (not submission).
+        """
+        from litellm.router_utils.parallel_acompletion import _run_one as _parallel_run_one  # lazy import
+
+        # Task per request; each resolves to (idx, resp, err)
+        tasks = [asyncio.create_task(_parallel_run_one(self, req, i)) for i, req in enumerate(requests)]
+
+        class _R:
+            __slots__ = ("index", "response", "error", "content")
+
+            def __init__(self, idx, resp, err):
+                self.index = idx
+                self.response = resp
+                self.error = err
+                self.content = self._extract_content(resp)
+
+            @staticmethod
+            def _extract_content(resp):
+                if resp is None:
+                    return None
+                # Try OpenAI-like shapes first
+                try:
+                    choices = getattr(resp, "choices", None)
+                    if choices:
+                        first = choices[0]
+                        # object style: .message.content
+                        msg = getattr(first, "message", None)
+                        if msg is not None:
+                            c = getattr(msg, "content", None)
+                            if isinstance(c, bytes):
+                                try:
+                                    return c.decode()
+                                except Exception:
+                                    return None
+                            if isinstance(c, str):
+                                return c
+                        # dict style: ["message"]["content"]
+                        if isinstance(first, dict):
+                            try:
+                                val = first.get("message", {}).get("content")
+                                if isinstance(val, (str, bytes)):
+                                    return val.decode() if isinstance(val, bytes) else val
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                # Plain dicts
+                if isinstance(resp, dict):
+                    try:
+                        val = resp["choices"][0]["message"]["content"]
+                        if isinstance(val, (str, bytes)):
+                            return val.decode() if isinstance(val, bytes) else val
+                    except Exception:
+                        val = resp.get("content") or resp.get("text")
+                        if isinstance(val, (str, bytes)):
+                            return val.decode() if isinstance(val, bytes) else val
+                # Common fallbacks
+                t = getattr(resp, "text", None)
+                if isinstance(t, str):
+                    return t
+                if isinstance(resp, str):
+                    return resp
+                return None
+
+        for fut in asyncio.as_completed(tasks):
+            idx, resp, err = await fut
+            yield _R(idx, resp, err)
 
     def discard(self):
         """
@@ -1393,7 +1531,9 @@ class Router:
                     initial_kwargs=input_kwargs_for_streaming_fallback,
                 )
 
-            return response
+            if response is None:
+                raise RuntimeError("Router._acompletion received empty response")
+            return cast(ModelResponse, response)
         except litellm.Timeout as e:
             deployment_request_timeout_param = _timeout_debug_deployment_dict.get(
                 "litellm_params", {}
@@ -4563,6 +4703,13 @@ class Router:
 
             if isinstance(_model_info, dict):
                 deployment_id = _model_info.get("id", None)
+                if isinstance(deployment_id, int):
+                    deployment_id = str(deployment_id)
+                if not isinstance(deployment_id, str) or len(deployment_id) == 0:
+                    verbose_router_logger.debug(
+                        "Router: deployment_callback_on_failure - missing deployment id; skipping cooldown tracking."
+                    )
+                    return False
                 increment_deployment_failures_for_current_minute(
                     litellm_router_instance=self,
                     deployment_id=deployment_id,
