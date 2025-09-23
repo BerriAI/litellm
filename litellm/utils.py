@@ -4874,12 +4874,16 @@ def _get_model_info_helper(  # noqa: PLR0915
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
+                input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
                 ),
+                cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
+                cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -4904,6 +4908,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
+                output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),
