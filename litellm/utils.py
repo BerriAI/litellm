@@ -40,7 +40,6 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
-from litellm._uuid import uuid
 import httpx
 import openai
 import tiktoken
@@ -59,12 +58,7 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
-# Import cached imports utilities
-from litellm.litellm_core_utils.cached_imports import (
-    get_coroutine_checker,
-    get_litellm_logging_class,
-    get_set_callbacks,
-)
+from litellm._uuid import uuid
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -227,7 +221,6 @@ from typing import (
     cast,
     get_args,
 )
-
 
 from openai import OpenAIError as OriginalError
 
