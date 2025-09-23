@@ -815,11 +815,9 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-    # Always store as a plain dict for consistent retrieval
+
     await user_api_key_cache.async_set_cache(
-        key=key,
-        value=value,
-        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
 
@@ -1131,7 +1129,6 @@ async def get_key_object(
             return UserAPIKeyAuth(**cached_key_obj)
         elif isinstance(cached_key_obj, UserAPIKeyAuth):
             return cached_key_obj
-
 
     if check_cache_only:
         raise Exception(
