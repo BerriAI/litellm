@@ -15,6 +15,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
+from litellm.types.utils import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 try:
@@ -218,19 +219,19 @@ def test_throws_if_api_base_or_api_key_not_set_without_databricks_sdk(
 
     err_msg = ["the Databricks base URL and API key are not set", "Missing API Key"]
 
+    # Clear any existing environment variables first
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+
     if set_base:
         monkeypatch.setenv(
             "DATABRICKS_API_BASE",
             "https://my.workspace.cloud.databricks.com/serving-endpoints",
         )
-        monkeypatch.delenv(
-            "DATABRICKS_API_KEY",
-        )
+        # DATABRICKS_API_KEY is already cleared above
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", "dapimykey")
-        monkeypatch.delenv(
-            "DATABRICKS_API_BASE",
-        )
+        # DATABRICKS_API_BASE is already cleared above
 
     with pytest.raises(BadRequestError) as exc:
         litellm.completion(
@@ -681,34 +682,449 @@ class TestDatabricksCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
         pytest.skip("Databricks is openai compatible")
 
 
+def mock_foundational_model_response(model_name: str = "databricks-claude-3-7-sonnet") -> Dict[str, Any]:
+    """Mock response for foundational models"""
+    return {
+        "id": "chatcmpl_foundational_123",
+        "object": "chat.completion",
+        "created": 1726285449,
+        "model": model_name,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! I'm a foundational model assistant.",
+                    "function_call": None,
+                    "tool_calls": None,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 10,
+            "completion_tokens_details": None,
+            "total_tokens": 25,
+            "prompt_tokens_details": None,
+        },
+        "system_fingerprint": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "foundational_model,expected_model_name",
+    [
+        ("databricks/databricks-claude-3-7-sonnet", "databricks-claude-3-7-sonnet"),
+        ("databricks/databricks-claude-opus-4", "databricks-claude-opus-4"),
+        ("databricks/databricks-gpt-oss-120b", "databricks-gpt-oss-120b"),
+        ("databricks/databricks-llama-4-maverick", "databricks-llama-4-maverick"),
+        ("databricks/databricks-gemma-3-12b", "databricks-gemma-3-12b"),
+        ("databricks/databricks-meta-llama-3-3-70b-instruct", "databricks-meta-llama-3-3-70b-instruct"),
+    ],
+)
+def test_foundational_model_url_routing_sync(monkeypatch, foundational_model, expected_model_name):
+    """Test that foundational models use /invocations endpoint instead of /chat/completions"""
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_foundational_model_response(expected_model_name)
+
+    messages = [{"role": "user", "content": "Hello foundational model!"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model=foundational_model,
+            messages=messages,
+            client=sync_handler,
+            temperature=0.7,
+        )
+
+        # Verify response is valid
+        assert response is not None
+        # The model field in the response should match what's returned from the API
+        assert response.model == expected_model_name
+
+        # Verify the URL uses /invocations for foundational models
+        expected_url = f"{base_url}/serving-endpoints/{expected_model_name}/invocations"
+        assert mock_post.call_args.kwargs["url"] == expected_url
+
+        # Verify the model name is stripped of databricks/ prefix
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert actual_data["model"] == expected_model_name
+
+        # Verify other parameters are passed correctly
+        assert actual_data["messages"] == messages
+        assert actual_data["temperature"] == 0.7
+
+
+@pytest.mark.parametrize(
+    "foundational_model,expected_model_name",
+    [
+        ("databricks/databricks-claude-3-7-sonnet", "databricks-claude-3-7-sonnet"),
+        ("databricks/databricks-claude-sonnet-4", "databricks-claude-sonnet-4"),
+        ("databricks/databricks-claude-opus-4", "databricks-claude-opus-4"),
+    ],
+)
+def test_foundational_model_url_routing_async(monkeypatch, foundational_model, expected_model_name):
+    """Test that foundational models use /invocations endpoint for async calls"""
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    async_handler = AsyncHTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_foundational_model_response(expected_model_name)
+
+    messages = [{"role": "user", "content": "Hello async foundational model!"}]
+
+    with patch.object(AsyncHTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = asyncio.run(
+            litellm.acompletion(
+                model=foundational_model,
+                messages=messages,
+                client=async_handler,
+                max_tokens=100,
+            )
+        )
+
+        # Verify response is valid
+        assert response is not None
+        # The model field in the response should match what's returned from the API
+        assert response.model == expected_model_name
+
+        # Verify the URL uses /invocations for foundational models
+        expected_url = f"{base_url}/serving-endpoints/{expected_model_name}/invocations"
+        assert mock_post.call_args.kwargs["url"] == expected_url
+
+        # Verify the model name is stripped of databricks/ prefix
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert actual_data["model"] == expected_model_name
+        assert actual_data["max_tokens"] == 100
+
+
+def mock_foundational_model_streaming_response_chunks() -> List[str]:
+    """Mock streaming response chunks for foundational models"""
+    return [
+        json.dumps(
+            {
+                "id": "chatcmpl_foundational_stream_123",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "databricks-claude-3-7-sonnet",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": None,
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 15,
+                    "completion_tokens": 1,
+                    "total_tokens": 16,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_foundational_stream_123",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "databricks-claude-3-7-sonnet",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": " from foundational"},
+                        "finish_reason": None,
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 15,
+                    "completion_tokens": 2,
+                    "total_tokens": 17,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_foundational_stream_123",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "databricks-claude-3-7-sonnet",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": " model!"},
+                        "finish_reason": "stop",
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 15,
+                    "completion_tokens": 3,
+                    "total_tokens": 18,
+                },
+            }
+        ),
+    ]
+
+
+def mock_foundational_model_streaming_response() -> MagicMock:
+    """Mock HTTP handler streaming response for foundational models"""
+    mock_stream_chunks = mock_foundational_model_streaming_response_chunks()
+
+    def mock_iter_lines():
+        for chunk in mock_stream_chunks:
+            for line in chunk.splitlines():
+                yield line
+
+    mock_response = MagicMock()
+    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.status_code = 200
+
+    return mock_response
+
+
+def test_foundational_model_streaming_sync(monkeypatch):
+    """Test streaming with foundational models using sync HTTP handler"""
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    messages = [{"role": "user", "content": "Stream from foundational model"}]
+    mock_response = mock_foundational_model_streaming_response()
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response_stream: CustomStreamWrapper = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            stream=True,
+            temperature=0.5,
+        )
+
+        response = list(response_stream)
+
+        # Verify streaming response content
+        assert len(response) == 4  # 3 chunks + final chunk
+        assert "databricks-claude-3-7-sonnet" in str(response)
+        assert "foundational" in str(response)
+
+        # Verify URL uses /invocations for foundational model
+        expected_url = f"{base_url}/serving-endpoints/databricks-claude-3-7-sonnet/invocations"
+        assert mock_post.call_args.kwargs["url"] == expected_url
+        assert mock_post.call_args.kwargs["stream"] == True
+
+        # Verify request data
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert actual_data["model"] == "databricks-claude-3-7-sonnet"
+        assert actual_data["stream"] == True
+        assert actual_data["temperature"] == 0.5
+
+
+def test_foundational_model_with_tools_claude(monkeypatch):
+    """Test that Claude foundational models handle tool calling correctly"""
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+
+    # Mock response with tool call
+    tool_call_response = {
+        "id": "chatcmpl_tool_123",
+        "object": "chat.completion",
+        "created": 1726285449,
+        "model": "databricks-claude-3-7-sonnet",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco"}'
+                            }
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 20,
+            "total_tokens": 70,
+        },
+    }
+    mock_response.json.return_value = tool_call_response
+
+    messages = [{"role": "user", "content": "What's the weather in San Francisco?"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "City name"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            tools=tools,
+            client=sync_handler,
+        )
+
+        # Verify response is not None
+        assert response is not None
+
+        # Verify URL uses /invocations for foundational model
+        expected_url = f"{base_url}/serving-endpoints/databricks-claude-3-7-sonnet/invocations"
+        assert mock_post.call_args.kwargs["url"] == expected_url
+
+        # Verify request data includes tools
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert actual_data["model"] == "databricks-claude-3-7-sonnet"
+        assert "tools" in actual_data
+        assert len(actual_data["tools"]) == 1
+        assert actual_data["tools"][0]["function"]["name"] == "get_weather"
+
+
+def test_foundational_model_parameter_validation(monkeypatch):
+    """Test that foundational models accept all supported parameters"""
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_foundational_model_response("databricks-gpt-oss-120b")
+
+    messages = [{"role": "user", "content": "Test all parameters"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-gpt-oss-120b",
+            messages=messages,
+            client=sync_handler,
+            max_tokens=150,
+            temperature=0.8,
+            top_p=0.9,
+            stop=["END", "STOP"],
+            n=1,
+            custom_param="should_be_passed_through",
+        )
+
+        # Verify response
+        assert response is not None
+
+        # Verify URL uses /invocations
+        expected_url = f"{base_url}/serving-endpoints/databricks-gpt-oss-120b/invocations"
+        assert mock_post.call_args.kwargs["url"] == expected_url
+
+        # Verify all parameters are passed correctly
+        actual_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert actual_data["model"] == "databricks-gpt-oss-120b"
+        assert actual_data["max_tokens"] == 150
+        assert actual_data["temperature"] == 0.8
+        assert actual_data["top_p"] == 0.9
+        assert actual_data["stop"] == ["END", "STOP"]
+        assert actual_data["n"] == 1
+        assert actual_data["custom_param"] == "should_be_passed_through"
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_databricks_embeddings(sync_mode):
+async def test_databricks_embeddings(sync_mode, monkeypatch):
     import openai
+    from unittest.mock import Mock, patch
+    import httpx
+
+    # Set up environment variables
+    base_url = "https://my.workspace.cloud.databricks.com"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    # Mock response for embeddings
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "object": "list",
+        "data": [
+            {
+                "object": "embedding",
+                "index": 0,
+                "embedding": [0.1, 0.2, 0.3] * 100  # Make it longer to simulate real embedding
+            }
+        ],
+        "model": "databricks-bge-large-en",
+        "usage": {
+            "prompt_tokens": 5,
+            "total_tokens": 5
+        }
+    }
 
     try:
         litellm.set_verbose = True
         litellm.drop_params = True
 
-        if sync_mode:
-            response = litellm.embedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
-        else:
-            response = await litellm.aembedding(
-                model="databricks/databricks-bge-large-en",
-                input=["good morning from litellm"],
-                instruction="Represent this sentence for searching relevant passages:",
-            )
+        # Mock both sync and async HTTP handlers
+        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", return_value=mock_response), \
+             patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", return_value=mock_response):
 
-        print(f"response: {response}")
+            if sync_mode:
+                response = litellm.embedding(
+                    model="databricks/databricks-bge-large-en",
+                    input=["good morning from litellm"],
+                    instruction="Represent this sentence for searching relevant passages:",
+                )
+            else:
+                response = await litellm.aembedding(
+                    model="databricks/databricks-bge-large-en",
+                    input=["good morning from litellm"],
+                    instruction="Represent this sentence for searching relevant passages:",
+                )
 
-        openai.types.CreateEmbeddingResponse.model_validate(
-            response.model_dump(), strict=True
-        )
-        # stubbed endpoint is setup to return this
-        # assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+            print(f"response: {response}")
+
+            openai.types.CreateEmbeddingResponse.model_validate(
+                response.model_dump(), strict=True
+            )
+            # Verify response structure
+            assert len(response.data) == 1
+            assert len(response.data[0]["embedding"]) > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

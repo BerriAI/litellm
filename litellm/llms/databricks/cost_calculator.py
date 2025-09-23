@@ -53,6 +53,42 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         "llama-2-70b-chat"
     ):
         base_model = "databricks-llama-2-70b-chat"
+    elif model.startswith("databricks/databricks-claude-sonnet-4") or model.startswith(
+        "databricks-claude-sonnet-4"
+    ):
+        base_model = "databricks/databricks-claude-sonnet-4"
+    elif model.startswith("databricks/databricks-gpt-oss-120b") or model.startswith(
+        "databricks-gpt-oss-120b"
+    ):
+        base_model = "databricks/databricks-gpt-oss-120b"
+    elif model.startswith("databricks/databricks-gpt-oss-20b") or model.startswith(
+        "databricks-gpt-oss-20b"
+    ):
+        base_model = "databricks/databricks-gpt-oss-20b"
+    elif model.startswith("databricks/databricks-claude-3-7-sonnet") or model.startswith(
+        "databricks-claude-3-7-sonnet"
+    ):
+        base_model = "databricks/databricks-claude-3-7-sonnet"
+    elif model.startswith("databricks/databricks-llama-4-maverick") or model.startswith(
+        "databricks-llama-4-maverick"
+    ):
+        base_model = "databricks/databricks-llama-4-maverick"
+    elif model.startswith("databricks/databricks-gemma-3-12b") or model.startswith(
+        "databricks-gemma-3-12b"
+    ):
+        base_model = "databricks/databricks-gemma-3-12b"
+    elif model.startswith("databricks/databricks-claude-opus-4") or model.startswith(
+        "databricks-claude-opus-4"
+    ):
+        base_model = "databricks/databricks-claude-opus-4"
+    elif model.startswith("databricks/databricks-meta-llama-3-3-70b-instruct") or model.startswith(
+        "databricks-meta-llama-3-3-70b-instruct"
+    ):
+        base_model = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    elif model.startswith("databricks/databricks-gte-large-en") or model.startswith(
+        "databricks-gte-large-en"
+    ):
+        base_model = "databricks/databricks-gte-large-en"
     ## GET MODEL INFO
     model_info = get_model_info(model=base_model, custom_llm_provider="databricks")
 

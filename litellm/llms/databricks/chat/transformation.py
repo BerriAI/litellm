@@ -91,6 +91,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        self.foundational_models = [
+            "databricks-gpt-oss-120b",
+            "databricks-gpt-oss-20b",
+            "databricks-claude-3-7-sonnet",
+            "databricks-claude-sonnet-4",
+            "databricks-llama-4-maverick",
+            "databricks-gemma-3-12b",
+            "databricks-claude-opus-4",
+            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gte-large-en"
+        ]
 
     @classmethod
     def get_config(cls):
@@ -144,8 +155,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stream: Optional[bool] = None,
     ) -> str:
         api_base = self._get_api_base(api_base)
-        complete_url = f"{api_base}/chat/completions"
-        return complete_url
+         # Ensure /serving-endpoints is included
+        if not api_base.endswith("/serving-endpoints"):
+                api_base = f"{api_base.rstrip('/')}/serving-endpoints"
+        if model in self.foundational_models:
+            return f"{api_base}/{model}/invocations"
+        return f"{api_base}/chat/completions"
 
     def get_supported_openai_params(self, model: Optional[str] = None) -> list:
         return [
