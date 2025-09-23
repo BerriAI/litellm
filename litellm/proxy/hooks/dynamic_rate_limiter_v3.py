@@ -40,7 +40,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     def _get_priority_weight(self, priority: Optional[str]) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
-        weight: float = 1.0
+        weight: float = litellm.priority_reservation_settings.default_priority
         if (
             litellm.priority_reservation is None
             or priority not in litellm.priority_reservation
