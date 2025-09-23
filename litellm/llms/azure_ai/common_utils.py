@@ -29,6 +29,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         api_version = (
             api_version
             or litellm.api_version
+            or get_secret_str("AZURE_API_VERSION")
             or get_secret_str("AZURE_AI_API_VERSION")
         )
         return api_version
