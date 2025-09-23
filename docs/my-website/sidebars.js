@@ -383,6 +383,7 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ai_img",
+            "providers/azure_ai_img_edit",
           ]
         },
         {
