@@ -314,6 +314,15 @@ def image_generation(  # noqa: PLR0915
                 "Content-Type": "application/json",
                 "api-key": api_key,
             }
+
+            if api_key is None and azure_ad_token_provider is not None:
+                azure_ad_token = azure_ad_token_provider()
+                if azure_ad_token:
+                    default_headers.pop(
+                        "api-key", None
+                    )
+                    default_headers["Authorization"] = f"Bearer {azure_ad_token}"
+
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
