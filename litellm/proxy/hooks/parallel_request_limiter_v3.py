@@ -700,22 +700,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return "total"  # default to total
         return specified_rate_limit_type
 
-    def _get_metadata_variable_name_from_kwargs(
-            self, kwargs: dict
-        ) -> Literal["metadata", "litellm_metadata"]:
-            """
-            Helper to return what the "metadata" field should be called in the request data
-
-            - New endpoints return `litellm_metadata`
-            - Old endpoints return `metadata`
-
-            Context:
-            - LiteLLM used `metadata` as an internal field for storing metadata
-            - OpenAI then started using this field for their metadata
-            - LiteLLM is now moving to using `litellm_metadata` for our metadata
-            """
-            return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
@@ -724,7 +708,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
-            get_model_group_from_litellm_kwargs
+            get_model_group_from_litellm_kwargs,
+            get_metadata_variable_name_from_kwargs
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import ModelResponse, Usage
@@ -740,7 +725,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"].get(self._get_metadata_variable_name_from_kwargs(kwargs), {})
+            litellm_metadata = kwargs["litellm_params"].get(get_metadata_variable_name_from_kwargs(kwargs), {})
             if litellm_metadata is None:
                 return
             user_api_key = litellm_metadata.get("user_api_key")
