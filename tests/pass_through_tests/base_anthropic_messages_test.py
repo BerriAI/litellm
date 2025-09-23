@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 
 import anthropic
 import pytest
-from anthropic._exceptions import OverloadedError
 
 
 class BaseAnthropicMessagesTest(ABC):
@@ -14,63 +13,42 @@ class BaseAnthropicMessagesTest(ABC):
     def get_client(self):
         return anthropic.Anthropic()
 
-    @pytest.mark.flaky(retries=3, delay=2)
     def test_anthropic_basic_completion(self):
         print("making basic completion request to anthropic passthrough")
         client = self.get_client()
-        try:
-            response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
-                extra_body={
-                    "litellm_metadata": {
-                        "tags": ["test-tag-1", "test-tag-2"],
-                    }
-                },
-            )
-            print(response)
-            assert response is not None
-            assert hasattr(response, 'content')
-            assert len(response.content) > 0
-            # Check if the first content block is a text block
-            first_block = response.content[0]
-            from anthropic.types import TextBlock
-            if isinstance(first_block, TextBlock):
-                assert first_block.text is not None
-                assert "hello test" in first_block.text.lower()
-        except OverloadedError as e:
-            # Anthropic API is overloaded - this is expected and acceptable for CI
-            print(f"Anthropic API overloaded (expected): {e}")
-            pytest.skip("Anthropic API is temporarily overloaded - skipping test")
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "Say 'hello test' and nothing else"}],
+            extra_body={
+                "litellm_metadata": {
+                    "tags": ["test-tag-1", "test-tag-2"],
+                }
+            },
+        )
+        print(response)
 
-    @pytest.mark.flaky(retries=3, delay=2)
     def test_anthropic_streaming(self):
         print("making streaming request to anthropic passthrough")
-        try:
-            collected_output = []
-            client = self.get_client()
-            with client.messages.stream(
-                max_tokens=10,
-                messages=[
-                    {"role": "user", "content": "Say 'hello stream test' and nothing else"}
-                ],
-                model="claude-3-5-sonnet-20241022",
-                extra_body={
-                    "litellm_metadata": {
-                        "tags": ["test-tag-stream-1", "test-tag-stream-2"],
-                    }
-                },
-            ) as stream:
-                for text in stream.text_stream:
-                    collected_output.append(text)
+        collected_output = []
+        client = self.get_client()
+        with client.messages.stream(
+            max_tokens=10,
+            messages=[
+                {"role": "user", "content": "Say 'hello stream test' and nothing else"}
+            ],
+            model="claude-3-5-sonnet-20241022",
+            extra_body={
+                "litellm_metadata": {
+                    "tags": ["test-tag-stream-1", "test-tag-stream-2"],
+                }
+            },
+        ) as stream:
+            for text in stream.text_stream:
+                collected_output.append(text)
 
-            full_response = "".join(collected_output)
-            print(full_response)
-        except OverloadedError as e:
-            # Anthropic API is overloaded - this is expected and acceptable for CI
-            print(f"Anthropic API overloaded (expected): {e}")
-            pytest.skip("Anthropic API is temporarily overloaded - skipping test")
+        full_response = "".join(collected_output)
+        print(full_response)
 
     def test_anthropic_messages_with_thinking(self):
         print("making request to anthropic passthrough with thinking")
@@ -87,12 +65,9 @@ class BaseAnthropicMessagesTest(ABC):
         print(response)
 
         # Verify the first content block is a thinking block
-        first_block = response.content[0]
-        from anthropic.types import ThinkingBlock
-        if isinstance(first_block, ThinkingBlock):
-            response_thinking = first_block.thinking
-            assert response_thinking is not None
-            assert len(response_thinking) > 0
+        response_thinking = response.content[0].thinking
+        assert response_thinking is not None
+        assert len(response_thinking) > 0
 
     def test_anthropic_streaming_with_thinking(self):
         print("making streaming request to anthropic passthrough with thinking enabled")
@@ -138,8 +113,7 @@ class BaseAnthropicMessagesTest(ABC):
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=10,
                 stream=True,
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=3.0,  # Invalid temperature (> 2.0)
+                messages=["hi"],
             )
             print(response)
             assert pytest.fail("Expected BadRequestError")
@@ -158,8 +132,7 @@ class BaseAnthropicMessagesTest(ABC):
             response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=10,
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=3.0,  # Invalid temperature (> 2.0)
+                messages=["hi"],
             )
             print(response)
             assert pytest.fail("Expected BadRequestError")

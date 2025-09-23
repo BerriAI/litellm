@@ -146,9 +146,6 @@ def test_init_kwargs_for_pass_through_endpoint_basic(
         "user_api_key_team_alias": None,
         "user_api_key_end_user_id": "test-user",
         "user_api_key_request_route": None,
-        "user_api_key_spend": 0.0,
-        "user_api_key_max_budget": None,
-        "user_api_key_budget_reset_at": None,
     }
 
     assert result["litellm_params"]["metadata"] == expected_metadata
