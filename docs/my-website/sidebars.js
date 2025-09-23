@@ -402,6 +402,7 @@ const sidebars = {
           items: [
             "providers/azure_ai",
             "providers/azure_ai_img",
+            "providers/azure_ai_img_edit",
           ]
         },
         {
@@ -576,6 +577,8 @@ const sidebars = {
         "budget_manager",
         "caching/all_caches",
         "completion/token_usage",
+        "sdk/headers",
+        "sdk_custom_pricing",
         "embedding/async_embedding",
         "embedding/moderation",
         "migration",
