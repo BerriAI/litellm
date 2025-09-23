@@ -2328,7 +2328,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         "tag_Service_web_app_v1": "false",
     }
     """
-    import re
 
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
