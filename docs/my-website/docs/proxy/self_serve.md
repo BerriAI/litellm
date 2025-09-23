@@ -227,7 +227,7 @@ export PROXY_LOGOUT_URL="https://www.google.com"
 <Image img={require('../../img/ui_logout.png')}  style={{ width: '400px', height: 'auto' }} />
 
 
-### Set max budget for internal users 
+### Set default max budget for internal users 
 
 Automatically apply budget per internal user when they sign up. By default the table will be checked every 10 minutes, for users to reset. To modify this, [see this](./users.md#reset-budgets)
 
@@ -238,6 +238,10 @@ litellm_settings:
 ```
 
 This sets a max budget of $10 USD for internal users when they sign up. 
+
+You can also manage these settings visually in the UI:
+
+<Image img={require('../../img/default_user_settings_admin_ui.png')}  style={{ width: '700px', height: 'auto' }} />
 
 This budget only applies to personal keys created by that user - seen under `Default Team` on the UI. 
 

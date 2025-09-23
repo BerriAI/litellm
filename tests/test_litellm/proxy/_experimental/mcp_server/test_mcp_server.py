@@ -102,7 +102,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=True):
         if server.name == "working_server":
             # Working server returns tools
             tool1 = MagicMock()
@@ -184,7 +184,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=True):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
 
@@ -448,3 +448,121 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     assert (
         called_servers[0].server_id == specific_server.server_id
     ), "Should have contacted the specific server alias, not the group."
+
+
+@pytest.mark.asyncio
+async def test_list_tools_single_server_unprefixed_names():
+    """When only one MCP server is allowed, list tools should return unprefixed names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # One allowed server
+    server = MagicMock()
+    server.server_id = "server1"
+    server.name = "Zapier MCP"
+    server.alias = "zapier"
+
+    # Mock manager: allow just one server and return a tool based on add_prefix flag
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_server_by_id = (
+        lambda server_id: server if server_id == "server1" else None
+    )
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, add_prefix=False
+    ):
+        tool = MagicMock()
+        tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should be unprefixed since only one server is allowed
+    assert len(tools) == 1
+    assert tools[0].name == "toolA"
+
+
+@pytest.mark.asyncio
+async def test_list_tools_multiple_servers_prefixed_names():
+    """When multiple MCP servers are allowed, list tools should return prefixed names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # Two allowed servers
+    server1 = MagicMock()
+    server1.server_id = "server1"
+    server1.name = "Zapier MCP"
+    server1.alias = "zapier"
+
+    server2 = MagicMock()
+    server2.server_id = "server2"
+    server2.name = "Jira MCP"
+    server2.alias = "jira"
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(
+        return_value=["server1", "server2"]
+    )
+    mock_manager.get_mcp_server_by_id = (
+        lambda server_id: server1 if server_id == "server1" else server2
+    )
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, add_prefix=True
+    ):
+        tool = MagicMock()
+        # When multiple servers, add_prefix should be True -> prefixed names
+        tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should be prefixed since multiple servers are allowed
+    names = sorted([t.name for t in tools])
+    assert names == ["jira-toolA", "zapier-toolA"]
