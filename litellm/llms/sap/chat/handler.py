@@ -4,10 +4,7 @@ import httpx
 
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
-    HTTPHandler
-)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.types.utils import ModelResponse
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -20,13 +17,20 @@ from typing import Optional, TYPE_CHECKING, Union
 
 # Type checking block for optional imports
 if TYPE_CHECKING:
-    from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient, temporary_headers_addition
+    from gen_ai_hub.proxy.gen_ai_hub_proxy import (
+        GenAIHubProxyClient,
+        temporary_headers_addition,
+    )
     from gen_ai_hub.orchestration.exceptions import OrchestrationError
 
 # Try to import the optional module
 try:
-    from gen_ai_hub.proxy.gen_ai_hub_proxy import GenAIHubProxyClient, temporary_headers_addition
+    from gen_ai_hub.proxy.gen_ai_hub_proxy import (
+        GenAIHubProxyClient,
+        temporary_headers_addition,
+    )
     from gen_ai_hub.orchestration.exceptions import OrchestrationError
+
     _gen_ai_hub_import_error = None
 except ImportError as err:
     GenAIHubProxyClient = None  # type: ignore
@@ -40,6 +44,7 @@ except Exception:
 
 class OptionalDependencyError(ImportError):
     """Custom error for missing optional dependencies."""
+
     pass
 
 
@@ -70,18 +75,14 @@ class GenAIHubOrchestrationError(Exception):
             self.response = httpx.Response(
                 status_code=status_code, request=self.request
             )
-        super().__init__(
-            self.message
-        )
-
+        super().__init__(self.message)
 
 
 class GenAIHubOrchestration(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
-        self._client: Optional['GenAIHubProxyClient'] = None
+        self._client: Optional["GenAIHubProxyClient"] = None
         self._orchestration_client = None
-
 
     def _ensure_gen_ai_hub_installed(self) -> None:
         """Ensure the gen-ai-hub package is available."""
@@ -97,12 +98,15 @@ class GenAIHubOrchestration(BaseLLM):
         self._ensure_gen_ai_hub_installed()
         from gen_ai_hub.orchestration.service import OrchestrationService
 
-        if GenAIHubProxyClient is None:  # This should never happen due to _ensure_dependency
-            raise RuntimeError("GenAIHubProxyClient is None despite passing dependency check")
+        if (
+            GenAIHubProxyClient is None
+        ):  # This should never happen due to _ensure_dependency
+            raise RuntimeError(
+                "GenAIHubProxyClient is None despite passing dependency check"
+            )
         if not self._orchestration_client:
             self._orchestration_client = OrchestrationService(proxy_client=self._client)
         return self._orchestration_client
-
 
     def encode_model_id(self, model_id: str) -> str:
         """
@@ -113,7 +117,6 @@ class GenAIHubOrchestration(BaseLLM):
             str: The double-encoded model ID.
         """
         return urllib.parse.quote(model_id, safe="")  # type: ignore
-
 
     async def _async_streaming(
         self,
@@ -137,7 +140,9 @@ class GenAIHubOrchestration(BaseLLM):
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
-            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+            raise GenAIHubOrchestrationError(
+                status_code=408, message="Timeout error occurred."
+            )
 
         async def _safe_async_iter():
             iterator = response.__aiter__() if hasattr(response, "__aiter__") else None
@@ -156,13 +161,13 @@ class GenAIHubOrchestration(BaseLLM):
                 raise
 
         return CustomStreamWrapper(
-                completion_stream=_safe_async_iter(),
-                model=model,
-                logging_obj=logging_obj,
-                custom_llm_provider='sap',
-                stream_options={},
-                make_call=None,
-            )
+            completion_stream=_safe_async_iter(),
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider="sap",
+            stream_options={},
+            make_call=None,
+        )
 
     async def _async_completion(
         self,
@@ -186,7 +191,9 @@ class GenAIHubOrchestration(BaseLLM):
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
-            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+            raise GenAIHubOrchestrationError(
+                status_code=408, message="Timeout error occurred."
+            )
         return litellm.GenAIHubOrchestrationConfig()._transform_response(
             model=model,
             response=response,
@@ -220,7 +227,9 @@ class GenAIHubOrchestration(BaseLLM):
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
-            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+            raise GenAIHubOrchestrationError(
+                status_code=408, message="Timeout error occurred."
+            )
 
         def _safe_iter():
             it = iter(response)
@@ -233,13 +242,13 @@ class GenAIHubOrchestration(BaseLLM):
                     raise
 
         return CustomStreamWrapper(
-                completion_stream=_safe_iter(),
-                model=model,
-                logging_obj=logging_obj,
-                custom_llm_provider='sap',
-                stream_options={},
-                make_call=None,
-            )
+            completion_stream=_safe_iter(),
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider="sap",
+            stream_options={},
+            make_call=None,
+        )
 
     def _complete(
         self,
@@ -263,7 +272,9 @@ class GenAIHubOrchestration(BaseLLM):
         except OrchestrationError as err:
             raise GenAIHubOrchestrationError(status_code=err.code, message=err.message)
         except httpx.TimeoutException:
-            raise GenAIHubOrchestrationError(status_code=408, message="Timeout error occurred.")
+            raise GenAIHubOrchestrationError(
+                status_code=408, message="Timeout error occurred."
+            )
         return litellm.GenAIHubOrchestrationConfig()._transform_response(
             model=model,
             response=response,
@@ -275,23 +286,24 @@ class GenAIHubOrchestration(BaseLLM):
             encoding=encoding,
         )
 
-    def completion(self,
-                   model: str,
-                   messages: List[Dict[str, str]],
-                   model_response: ModelResponse,
-                   print_verbose: Callable,
-                   encoding,
-                   logging_obj: LiteLLMLoggingObject,
-                   optional_params: dict,
-                   acompletion: bool,
-                   headers: Optional[Dict] = None,
-                   timeout: Optional[Union[float, httpx.Timeout]] = None,
-                   litellm_params: Optional[Dict]=None,
-                   logger_fn=None,
-                   extra_headers: Optional[dict] = None,
-                   client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
-                   **kwargs):
-
+    def completion(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj: LiteLLMLoggingObject,
+        optional_params: dict,
+        acompletion: bool,
+        headers: Optional[Dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        litellm_params: Optional[Dict] = None,
+        logger_fn=None,
+        extra_headers: Optional[dict] = None,
+        client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+        **kwargs
+    ):
         headers = {} or headers
         stream = optional_params.pop("stream", None)
 
@@ -302,7 +314,7 @@ class GenAIHubOrchestration(BaseLLM):
             litellm_params=litellm_params,
         )
         ## COMPLETION CALL
-            ## LOGGING
+        ## LOGGING
         logging_obj.pre_call(
             input=messages,
             api_key="",
@@ -312,7 +324,6 @@ class GenAIHubOrchestration(BaseLLM):
                 "headers": self.orchestration_client.proxy_client.request_header,
             },
         )
-
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion and not stream:
