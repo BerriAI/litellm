@@ -281,12 +281,12 @@ def prompt_team_selection_fallback(teams: List[Dict[str, Any]]) -> Optional[Dict
 
 def update_key_with_team(base_url: str, api_key: str, team_id: str) -> bool:
     """Update the API key to be associated with the selected team"""
-
+    from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.client import Client
     
     client = Client(base_url=base_url, api_key=api_key)
     try:
-        client.keys.update(key=api_key, team_id=team_id)
+        client.keys.update(key=api_key, team_id=team_id, models=[SpecialModelNames.all_team_models.value])
         click.echo(f"✅ Successfully assigned key to team: {team_id}")
         return True
     except requests.exceptions.HTTPError as e:
