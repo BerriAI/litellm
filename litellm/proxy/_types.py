@@ -787,6 +787,14 @@ class GenerateKeyRequest(KeyRequestBase):
         default=LiteLLMKeyType.DEFAULT,
         description="Type of key that determines default allowed routes.",
     )
+    auto_rotate: Optional[bool] = Field(
+        default=False,
+        description="Whether this key should be automatically rotated"
+    )
+    rotation_interval: Optional[str] = Field(
+        default=None,
+        description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True"
+    )
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -1634,30 +1642,21 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
 
 class KeyRotationSettings(LiteLLMPydanticObjectBase):
     """
-    Settings for automated key rotation
+    Global settings for automated key rotation system
     """
-    rotation_frequency: str = Field(
-        default="90d",
-        description="How often to check for keys needing rotation (e.g., '1d', '7d', '30d')"
+    enabled: bool = Field(
+        default=True,
+        description="Enable the key rotation background job"
     )
-    rotation_days: str = Field(
-        default="90d", 
-        description="When to rotate keys before expiry (e.g., '7d', '30d', '90d')"
+    check_frequency: str = Field(
+        default="1d",
+        description="How often to check for keys needing rotation (e.g., '1h', '6h', '1d')"
     )
-    
-    def is_enabled(self) -> bool:
-        """Key rotation is enabled if these fields are configured"""
-        return True
-    
-    def get_rotation_seconds(self) -> int:
-        """Get rotation interval in seconds using existing duration_parser"""
-        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        return duration_in_seconds(self.rotation_days)
     
     def get_check_frequency_seconds(self) -> int:
         """Get how often to check for rotations in seconds"""
         from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        return duration_in_seconds(self.rotation_frequency)
+        return duration_in_seconds(self.check_frequency)
 
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
@@ -1832,6 +1831,9 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     last_rotation_at: Optional[datetime] = None  # When the key was last rotated
     rotation_count: Optional[int] = 0  # Number of times key has been rotated
+    auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
+    rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
+    next_rotation_at: Optional[datetime] = None  # When this key should next be rotated
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1961,6 +1963,23 @@ class UserAPIKeyAuth(
             team_id=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             key_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+        )
+    
+    @classmethod
+    def get_litellm_internal_jobs_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for internal LiteLLM jobs like key rotation.
+
+        This is used to track actions performed by automated system jobs.
+        """
+        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+
+        return cls(
+            api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_id="system",
+            key_alias=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_alias="system",
+            user_id="system",
         )
 
 
