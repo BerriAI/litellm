@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Lemonade
 
-Lemonade is an OpenAI-compatible AI provider that offers local language model inference on AMD Ryzen AI models. The provider supports standard chat completions with full OpenAI API compatibility.
+[Lemonade Server](https://lemonade-server.ai/) is an OpenAI-compatible local language model inference provider optimized for AMD GPUs and NPUs. The `lemonade` litellm provider supports standard chat completions with full OpenAI API compatibility.
 
 | Property | Details |
 |-------|-------|
