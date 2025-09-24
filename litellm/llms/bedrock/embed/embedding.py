@@ -151,9 +151,12 @@ class BedrockEmbedding(BaseAWSLLM):
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
         return response.json()
-    
+
     def _transform_response(
-        self, response_list: List[dict], model: str, provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+        self,
+        response_list: List[dict],
+        model: str,
+        provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     ) -> Optional[EmbeddingResponse]:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -177,9 +180,8 @@ class BedrockEmbedding(BaseAWSLLM):
             returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
                 response_list=response_list, model=model
             )
-        
-        
-        ########################################################## 
+
+        ##########################################################
         # Validate returned response
         ##########################################################
         if returned_response is None:

@@ -566,26 +566,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 for i, status in enumerate(response["statuses"]):
                     if status["code"] == "OVER_LIMIT":
                         descriptor = descriptors[floor(i / 2)]
-                        
+
                         # Calculate reset time (window_start + window_size)
                         now = datetime.now().timestamp()
                         reset_time = now + self.window_size  # Conservative estimate
-                        reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
-                        
+                        reset_time_formatted = datetime.fromtimestamp(
+                            reset_time
+                        ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
                         # Handle negative remaining values more gracefully
-                        remaining_display = max(0, status['limit_remaining'])
-                        
+                        remaining_display = max(0, status["limit_remaining"])
+
                         # Create detailed error message
-                        rate_limit_type = status['rate_limit_type']
-                        current_limit = status['current_limit']
-                        
+                        rate_limit_type = status["rate_limit_type"]
+                        current_limit = status["current_limit"]
+
                         detail = (
                             f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
                             f"Limit type: {rate_limit_type}. "
                             f"Current limit: {current_limit}, Remaining: {remaining_display}. "
                             f"Limit resets at: {reset_time_formatted}"
                         )
-                        
+
                         raise HTTPException(
                             status_code=429,
                             detail=detail,
@@ -709,7 +711,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
-            get_metadata_variable_name_from_kwargs
+            get_metadata_variable_name_from_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import ModelResponse, Usage
@@ -725,7 +727,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"].get(get_metadata_variable_name_from_kwargs(kwargs), {})
+            litellm_metadata = kwargs["litellm_params"].get(
+                get_metadata_variable_name_from_kwargs(kwargs), {}
+            )
             if litellm_metadata is None:
                 return
             user_api_key = litellm_metadata.get("user_api_key")
@@ -739,7 +743,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Get total tokens from response
             total_tokens = 0
             # spot fix for /responses api
-            if (isinstance(response_obj, ModelResponse) or isinstance(response_obj, BaseLiteLLMOpenAIResponseObject)):
+            if isinstance(response_obj, ModelResponse) or isinstance(
+                response_obj, BaseLiteLLMOpenAIResponseObject
+            ):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
                     if rate_limit_type == "output":
@@ -853,11 +859,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             litellm_metadata = kwargs["litellm_params"]["metadata"]
-            user_api_key = litellm_metadata.get("user_api_key") if litellm_metadata else None
+            user_api_key = (
+                litellm_metadata.get("user_api_key") if litellm_metadata else None
+            )
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             if user_api_key:

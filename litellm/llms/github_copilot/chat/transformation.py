@@ -89,7 +89,7 @@ class GithubCopilotConfig(OpenAIConfig):
         For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
         """
         from litellm.utils import supports_reasoning
-        
+
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
 
@@ -120,7 +120,7 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Check if any message contains vision content (images).
         Returns True if any message has content with vision-related types, otherwise False.
-        
+
         Checks for:
         - image_url content type (OpenAI format)
         - Content items with type 'image_url'

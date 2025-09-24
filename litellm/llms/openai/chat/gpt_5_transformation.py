@@ -38,7 +38,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         ]
 
         return [
-            param for param in base_gpt_series_params if param not in non_supported_params
+            param
+            for param in base_gpt_series_params
+            if param not in non_supported_params
         ]
 
     def map_openai_params(
