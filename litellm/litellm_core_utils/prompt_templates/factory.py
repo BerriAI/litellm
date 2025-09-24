@@ -229,7 +229,7 @@ def ollama_pt(
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_str += convert_content_list_to_str(messages[msg_i])
-        
+
             tool_calls = messages[msg_i].get("tool_calls")
             ollama_tool_calls = []
             if tool_calls:
@@ -237,7 +237,7 @@ def ollama_pt(
                     call_id: str = call["id"]
                     function_name: str = call["function"]["name"]
                     arguments = json.loads(call["function"]["arguments"])
-        
+
                     ollama_tool_calls.append(
                         {
                             "id": call_id,
@@ -248,14 +248,13 @@ def ollama_pt(
                             },
                         }
                     )
-        
+
             if ollama_tool_calls:
                 assistant_content_str += (
                     f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
                 )
-        
-            msg_i += 1
 
+            msg_i += 1
 
         if assistant_content_str:
             prompt += f"### Assistant:\n{assistant_content_str}\n\n"
