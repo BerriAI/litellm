@@ -76,7 +76,7 @@ def get_project_number(project_id: str) -> Optional[str]:
         from litellm._logging import verbose_logger
 
         verbose_logger.warning(
-            f"Could not retrieve project number for {project_id}: {e}"
+            f"Could not retrieve project number [project_id=REDACTED]: {e}"
         )
         return None
 
