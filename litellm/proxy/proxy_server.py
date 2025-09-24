@@ -35,13 +35,13 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.utils import load_credentials_from_list
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
 )
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -3802,9 +3802,10 @@ class ProxyStartupEvent:
         cls, scheduler: AsyncIOScheduler
     ):
         """
-        Initialize the spend tracking background jobs
+        Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
         2. Prometheus Background Job
+        3. Key Rotation Background Job
 
         Args:
             scheduler: The scheduler to add the background jobs to
@@ -3828,6 +3829,35 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
+
+        ########################################################
+        # Key Rotation Background Job
+        ########################################################
+        key_rotation_settings = getattr(litellm, 'key_rotation_settings', None)
+        if key_rotation_settings and key_rotation_settings.enabled:
+            from litellm.proxy.common_utils.key_rotation import KeyRotationManager
+
+            # Get prisma_client from global scope
+            global prisma_client
+            if prisma_client is not None:
+                key_rotation_manager = KeyRotationManager(
+                    prisma_client=prisma_client,
+                    settings=key_rotation_settings
+                )
+                
+                # Schedule based on rotation_frequency
+                check_interval_seconds = key_rotation_settings.get_check_frequency_seconds()
+                
+                scheduler.add_job(
+                    key_rotation_manager.process_rotations,
+                    "interval",
+                    seconds=check_interval_seconds,
+                    id="key_rotation_job"
+                )
+                
+                verbose_proxy_logger.info(f"Key rotation scheduled every {key_rotation_settings.rotation_frequency}")
+            else:
+                verbose_proxy_logger.warning("Key rotation enabled but prisma_client is None - skipping key rotation setup")
 
     @classmethod
     async def _setup_prisma_client(
