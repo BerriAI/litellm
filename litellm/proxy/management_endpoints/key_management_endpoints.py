@@ -1558,32 +1558,21 @@ def _check_model_access_group(
     return True
 
 
-def add_key_rotation_fields(
-    key_data: Dict[str, Any], 
-    auto_rotate: Optional[bool], 
-    rotation_interval: Optional[str]
-) -> None:
+def _calculate_next_rotation_time(rotation_interval: str) -> datetime:
     """
-    Helper function to add rotation fields to key data if auto_rotate is enabled.
+    Calculate the next rotation timestamp based on rotation interval.
     
     Args:
-        key_data: Dictionary containing key data to be updated
-        auto_rotate: Whether auto rotation is enabled for this key (can be None)
         rotation_interval: String representing rotation interval (e.g., "30d", "1w")
-    
-    Updates key_data in-place with rotation fields if auto_rotate is enabled.
+        
+    Returns:
+        datetime: The next rotation timestamp in UTC
     """
-    if auto_rotate and rotation_interval:
-        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        
-        interval_seconds = duration_in_seconds(rotation_interval)
-        next_rotation_at = datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
-        
-        key_data.update({
-            "auto_rotate": auto_rotate,
-            "rotation_interval": rotation_interval,
-            "next_rotation_at": next_rotation_at
-        })
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    
+    interval_seconds = duration_in_seconds(rotation_interval)
+    return datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
+
 
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
@@ -1749,7 +1738,12 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         }
         
         # Add rotation fields if auto_rotate is enabled
-        add_key_rotation_fields(key_data=key_data, auto_rotate=auto_rotate, rotation_interval=rotation_interval)
+        if auto_rotate and rotation_interval:
+            key_data.update({
+                "auto_rotate": auto_rotate,
+                "rotation_interval": rotation_interval,
+                "next_rotation_at": _calculate_next_rotation_time(rotation_interval)
+            })
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
