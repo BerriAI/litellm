@@ -3833,21 +3833,28 @@ class ProxyStartupEvent:
         ########################################################
         # Key Rotation Background Job
         ########################################################
-        key_rotation_settings = getattr(litellm, 'key_rotation_settings', None)
-        if key_rotation_settings and key_rotation_settings.enabled:
-            from litellm.proxy.common_utils.key_rotation import KeyRotationManager
+        key_rotation_settings_dict = litellm.key_rotation_settings or {}
+        print(f"key_rotation_settings_dict: {key_rotation_settings_dict}")
+        pydantic_key_rotation_settings = KeyRotationSettings(
+            enabled=key_rotation_settings_dict.get("enabled", False),
+            check_frequency=key_rotation_settings_dict.get("check_frequency", "1s")
+        )
+        if pydantic_key_rotation_settings and pydantic_key_rotation_settings.enabled:
+            from litellm.proxy.common_utils.key_rotation_manager import (
+                KeyRotationManager,
+            )
 
             # Get prisma_client from global scope
             global prisma_client
             if prisma_client is not None:
                 key_rotation_manager = KeyRotationManager(
                     prisma_client=prisma_client,
-                    settings=key_rotation_settings
+                    settings=pydantic_key_rotation_settings
                 )
                 
                 # Schedule based on rotation_frequency
-                check_interval_seconds = key_rotation_settings.get_check_frequency_seconds()
-                
+                check_interval_seconds = pydantic_key_rotation_settings.get_check_frequency_seconds()
+                verbose_proxy_logger.info(f"Key rotation background job scheduled every {pydantic_key_rotation_settings.check_frequency}")
                 scheduler.add_job(
                     key_rotation_manager.process_rotations,
                     "interval",
@@ -3855,7 +3862,6 @@ class ProxyStartupEvent:
                     id="key_rotation_job"
                 )
                 
-                verbose_proxy_logger.info(f"Key rotation scheduled every {key_rotation_settings.rotation_frequency}")
             else:
                 verbose_proxy_logger.warning("Key rotation enabled but prisma_client is None - skipping key rotation setup")
 
