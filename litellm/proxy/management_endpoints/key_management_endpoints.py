@@ -1558,6 +1558,33 @@ def _check_model_access_group(
     return True
 
 
+def add_key_rotation_fields(
+    key_data: Dict[str, Any], 
+    auto_rotate: Optional[bool], 
+    rotation_interval: Optional[str]
+) -> None:
+    """
+    Helper function to add rotation fields to key data if auto_rotate is enabled.
+    
+    Args:
+        key_data: Dictionary containing key data to be updated
+        auto_rotate: Whether auto rotation is enabled for this key (can be None)
+        rotation_interval: String representing rotation interval (e.g., "30d", "1w")
+    
+    Updates key_data in-place with rotation fields if auto_rotate is enabled.
+    """
+    if auto_rotate and rotation_interval:
+        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+        
+        interval_seconds = duration_in_seconds(rotation_interval)
+        next_rotation_at = datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
+        
+        key_data.update({
+            "auto_rotate": auto_rotate,
+            "rotation_interval": rotation_interval,
+            "next_rotation_at": next_rotation_at
+        })
+
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1611,6 +1638,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
+    auto_rotate: Optional[bool] = None,
+    rotation_interval: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1718,6 +1747,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
+        
+        # Add rotation fields if auto_rotate is enabled
+        add_key_rotation_fields(key_data=key_data, auto_rotate=auto_rotate, rotation_interval=rotation_interval)
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
