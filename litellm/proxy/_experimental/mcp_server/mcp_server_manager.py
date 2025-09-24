@@ -421,7 +421,6 @@ class MCPServerManager:
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
-        add_prefix: bool = True,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -446,11 +445,9 @@ class MCPServerManager:
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
 
-            prefixed_or_original_tools = self._create_prefixed_tools(
-                tools, server, add_prefix=add_prefix
-            )
+            prefixed_tools = self._create_prefixed_tools(tools, server)
 
-            return prefixed_or_original_tools
+            return prefixed_tools
 
         except Exception as e:
             verbose_logger.warning(
@@ -519,7 +516,7 @@ class MCPServerManager:
             return []
 
     def _create_prefixed_tools(
-        self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
+        self, tools: List[MCPTool], server: MCPServer
     ) -> List[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -537,16 +534,14 @@ class MCPServerManager:
         for tool in tools:
             prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
 
-            name_to_use = prefixed_name if add_prefix else tool.name
-
-            tool_obj = MCPTool(
-                name=name_to_use,
+            prefixed_tool = MCPTool(
+                name=prefixed_name,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
             )
-            prefixed_tools.append(tool_obj)
+            prefixed_tools.append(prefixed_tool)
 
-            # Update tool to server mapping for resolution (support both forms)
+            # Update tool to server mapping with both original and prefixed names
             self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
