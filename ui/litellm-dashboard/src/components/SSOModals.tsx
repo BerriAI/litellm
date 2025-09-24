@@ -186,21 +186,21 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
-      // Clear all SSO settings by sending empty values
+      // Clear all SSO settings
       const clearSettings = {
-        google_client_id: '',
-        google_client_secret: '',
-        microsoft_client_id: '',
-        microsoft_client_secret: '',
-        microsoft_tenant: '',
-        generic_client_id: '',
-        generic_client_secret: '',
-        generic_authorization_endpoint: '',
-        generic_token_endpoint: '',
-        generic_userinfo_endpoint: '',
-        proxy_base_url: '',
-        user_email: '',
-        sso_provider: '',
+        google_client_id: null,
+        google_client_secret: null,
+        microsoft_client_id: null,
+        microsoft_client_secret: null,
+        microsoft_tenant: null,
+        generic_client_id: null,
+        generic_client_secret: null,
+        generic_authorization_endpoint: null,
+        generic_token_endpoint: null,
+        generic_userinfo_endpoint: null,
+        proxy_base_url: null,
+        user_email: null,
+        sso_provider: null,
       };
 
       await updateSSOSettings(accessToken, clearSettings);

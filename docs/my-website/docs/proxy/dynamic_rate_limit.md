@@ -139,6 +139,8 @@ litellm_settings:
   priority_reservation: 
     "prod": 0.9  # 90% reserved for production (9 RPM)
     "dev": 0.1   # 10% reserved for development (1 RPM)
+  priority_reservation_settings:
+    default_priority: 0  # Weight (0%) assigned to keys without explicit priority metadata
 
 general_settings:
   master_key: sk-1234 # OR set `LITELLM_MASTER_KEY=".."` in your .env
@@ -151,6 +153,9 @@ general_settings:
 - **Key (str)**: Priority level name (can be any string like "prod", "dev", "critical", etc.)
 - **Value (float)**: Percentage of total TPM/RPM to reserve (0.0 to 1.0)
 - **Note**: Values should sum to 1.0 or less
+
+`priority_reservation_settings`: Object (Optional)
+- **default_priority (float)**: Weight/percentage (0.0 to 1.0) assigned to API keys that have no priority metadata set (defaults to 0.5)
 
 **Start Proxy**
 
@@ -178,6 +183,14 @@ curl -X POST 'http://0.0.0.0:4000/key/generate' \
 -d '{
   "metadata": {"priority": "dev"}
 }'
+```
+
+**Key Without Priority (uses default_priority weight):**
+```bash
+curl -X POST 'http://0.0.0.0:4000/key/generate' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{}'
 ```
 
 **Expected Response for both:**
@@ -217,9 +230,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 With the configuration above:
 
-1. **Production keys** can make up to 9 requests per minute
-2. **Development keys** can make up to 1 request per minute  
-3. Production requests are never blocked by development usage
+1. **Production keys** can make up to 9 requests per minute (90% of 10 RPM)
+2. **Development keys** can make up to 1 request per minute (10% of 10 RPM)
+3. **Keys without explicit priority** get the default_priority weight (0 = 0%), which allocates 0 requests per minute (0% of 10 RPM)
+4. Named priorities in `priority_reservation` and keys with `default_priority` operate independently
 
 **Rate Limit Error Example:**
 ```json
