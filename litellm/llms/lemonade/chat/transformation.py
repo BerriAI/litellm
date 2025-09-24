@@ -16,7 +16,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelInfoBase
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -64,6 +64,44 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    def get_model_info(self, model: str) -> ModelInfoBase:
+        if model.startswith("lemonade/"):
+            model = model.split("/", 1)[1]
+        api_base = get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000"
+
+        # Getting the list of models from lemonade to verify the model exists
+        try:
+            response = litellm.module_level_client.get(
+                url=f"{api_base}/api/v1/models",
+            )
+        except Exception as e:
+            raise Exception(
+                f"LemonadeError: Error getting model info for {model}. Set Lemonade API Base via `LEMONADE_API_BASE` environment variable. Error: {e}"
+            )
+
+        # Making sure the model exists in lemonade
+        model_found = False
+        model_list = response.json().get("data", [])
+        for model_iter in model_list:
+            if model_iter['id'] == model:
+                model_found = True
+                break
+
+        if not model_found:
+            raise ValueError(
+                f"LemonadeError: Model {model} not found. Available models: {[m['id'] for m in model_list]}"
+            )
+
+        # Returning the model if it was found in lemonade. Currently there is no mechanism to report
+        # if the model supports function calling or the max tokens so we leave those out
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="lemonade",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
