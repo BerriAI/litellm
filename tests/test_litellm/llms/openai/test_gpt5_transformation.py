@@ -14,9 +14,11 @@ def config() -> OpenAIConfig:
 def gpt5_config() -> OpenAIGPT5Config:
     return OpenAIGPT5Config()
 
+
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
+
 
 def test_gpt5_maps_max_tokens(config: OpenAIConfig):
     params = config.map_openai_params(
@@ -76,7 +78,9 @@ def test_gpt5_codex_model_detection(gpt5_config: OpenAIGPT5Config):
 def test_gpt5_codex_supports_reasoning_effort(config: OpenAIConfig):
     """Test that GPT-5-Codex supports reasoning_effort parameter."""
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-codex")
-    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-codex-latest")
+    assert "reasoning_effort" in config.get_supported_openai_params(
+        model="gpt-5-codex-latest"
+    )
 
 
 def test_gpt5_codex_maps_max_tokens(config: OpenAIConfig):
@@ -113,7 +117,10 @@ def test_gpt5_codex_temperature_drop(config: OpenAIConfig):
 
 def test_gpt5_codex_temperature_error(config: OpenAIConfig):
     """Test that GPT-5-Codex raises error for unsupported temperature when drop_params=False."""
-    with pytest.raises(litellm.utils.UnsupportedParamsError, match="gpt-5 models \\(including gpt-5-codex\\)"):
+    with pytest.raises(
+        litellm.utils.UnsupportedParamsError,
+        match="gpt-5 models \\(including gpt-5-codex\\)",
+    ):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
             optional_params={},
@@ -121,7 +128,10 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
             drop_params=False,
         )
 
-    with pytest.raises(litellm.utils.UnsupportedParamsError, match="gpt-5 models \\(including gpt-5-codex\\)"):
+    with pytest.raises(
+        litellm.utils.UnsupportedParamsError,
+        match="gpt-5 models \\(including gpt-5-codex\\)",
+    ):
         config.map_openai_params(
             non_default_params={"temperature": 0.5},
             optional_params={},
@@ -143,11 +153,19 @@ def test_gpt5_codex_temperature_one_allowed(config: OpenAIConfig):
 
 def test_gpt5_codex_unsupported_params_drop(config: OpenAIConfig):
     """Test that GPT-5-Codex drops unsupported parameters."""
-    unsupported_params = ["top_p", "presence_penalty", "frequency_penalty", "logprobs", "top_logprobs"]
+    unsupported_params = [
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "logprobs",
+        "top_logprobs",
+    ]
 
     for param in unsupported_params:
         assert param not in config.get_supported_openai_params(model="gpt-5-codex")
-        assert param not in config.get_supported_openai_params(model="gpt-5-codex-latest")
+        assert param not in config.get_supported_openai_params(
+            model="gpt-5-codex-latest"
+        )
 
 
 def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
@@ -155,7 +173,9 @@ def test_gpt5_codex_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
     supported_params = gpt5_config.get_supported_openai_params(model="gpt-5-codex")
     assert "tool_choice" in supported_params
 
-    supported_params = gpt5_config.get_supported_openai_params(model="gpt-5-codex-latest")
+    supported_params = gpt5_config.get_supported_openai_params(
+        model="gpt-5-codex-latest"
+    )
     assert "tool_choice" in supported_params
 
 

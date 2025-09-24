@@ -11,7 +11,9 @@ def config() -> AzureOpenAIGPT5Config:
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
-    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt5_series/my-deployment")
+    assert "reasoning_effort" in config.get_supported_openai_params(
+        model="gpt5_series/my-deployment"
+    )
 
 
 def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
@@ -59,7 +61,9 @@ def test_azure_gpt5_codex_model_detection(config: AzureOpenAIGPT5Config):
 def test_azure_gpt5_codex_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5-Codex supports reasoning_effort parameter."""
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-codex")
-    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt5_series/gpt-5-codex")
+    assert "reasoning_effort" in config.get_supported_openai_params(
+        model="gpt5_series/gpt-5-codex"
+    )
 
 
 def test_azure_gpt5_codex_maps_max_tokens(config: AzureOpenAIGPT5Config):
