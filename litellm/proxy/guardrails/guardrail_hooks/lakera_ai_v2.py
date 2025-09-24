@@ -7,7 +7,6 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
