@@ -63,7 +63,13 @@
                     "output": 10,
                     "unit": "TOKENS",
                     "totalCost": 0.00018
-                }
+                },
+                "usageDetails": {
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "input": 10,
+                        "output": 10
+                    }
             },
             "timestamp": "2025-05-26T21:13:16.797156Z"
         }
