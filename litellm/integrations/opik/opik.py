@@ -192,9 +192,22 @@ class OpikLogger(CustomBatchLogger):
 
         # Extract opik metadata
         litellm_opik_metadata = litellm_params_metadata.get("opik", {})
+        
+        # Use standard_logging_object to create metadata and input/output data
+        standard_logging_object = kwargs.get("standard_logging_object", None)
+        if standard_logging_object is None:
+            verbose_logger.debug(
+                "OpikLogger skipping event; no standard_logging_object found"
+            )
+            return []
+
+        # Update litellm_opik_metadata with opik metadata from requester
+        litellm_opik_metadata.update(standard_logging_object.get("metadata", {}).get("requester_metadata", {}).get("opik", {}))
+
         verbose_logger.debug(
             f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}"
         )
+        
         project_name = litellm_opik_metadata.get("project_name", self.opik_project_name)
 
         # Extract trace_id and parent_span_id
@@ -208,19 +221,36 @@ class OpikLogger(CustomBatchLogger):
         else:
             trace_id = None
             parent_span_id = None
+            
         # Create Opik tags
         opik_tags = litellm_opik_metadata.get("tags", [])
         if kwargs.get("custom_llm_provider"):
             opik_tags.append(kwargs["custom_llm_provider"])
+        # Create thread id
+        thread_id = litellm_opik_metadata.get("thread_id", None)
 
-        # Use standard_logging_object to create metadata and input/output data
-        standard_logging_object = kwargs.get("standard_logging_object", None)
-        if standard_logging_object is None:
-            verbose_logger.debug(
-                "OpikLogger skipping event; no standard_logging_object found"
-            )
-            return []
+        # Override with any opik_ headers from proxy request
+        proxy_headers = (_litellm_params.get("proxy_server_request", {}).get("headers", {}) or {})
+        for key, value in proxy_headers.items():
+            if key.startswith("opik_"):
+                param_key = key.replace("opik_", "", 1)
+                if param_key == "project_name" and value:
+                    project_name = value
+                elif param_key == "thread_id" and value:
+                    thread_id = value
+                elif param_key == "trace_id" and value:
+                    trace_id = value
+                elif param_key == "parent_span_id" and value:
+                    parent_span_id = value
+                elif param_key == "tags" and value:
+                    try:
+                        parsed_tags = json.loads(value)
+                        if isinstance(parsed_tags, list):
+                            opik_tags.extend(parsed_tags)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
+        
         # Create input and output data
         input_data = standard_logging_object.get("messages", {})
         output_data = standard_logging_object.get("response", {})
@@ -298,6 +328,7 @@ class OpikLogger(CustomBatchLogger):
                     "output": output_data,
                     "metadata": metadata,
                     "tags": opik_tags,
+                    "thread_id": thread_id,
                 }
             )
 
@@ -319,6 +350,7 @@ class OpikLogger(CustomBatchLogger):
                 "output": output_data,
                 "metadata": metadata,
                 "tags": opik_tags,
+                "thread_id": thread_id,
                 "usage": usage,
             }
         )
