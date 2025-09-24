@@ -1632,6 +1632,34 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     }
 
 
+class KeyRotationSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for automated key rotation
+    """
+    rotation_frequency: str = Field(
+        default="90d",
+        description="How often to check for keys needing rotation (e.g., '1d', '7d', '30d')"
+    )
+    rotation_days: str = Field(
+        default="90d", 
+        description="When to rotate keys before expiry (e.g., '7d', '30d', '90d')"
+    )
+    
+    def is_enabled(self) -> bool:
+        """Key rotation is enabled if these fields are configured"""
+        return True
+    
+    def get_rotation_seconds(self) -> int:
+        """Get rotation interval in seconds using existing duration_parser"""
+        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+        return duration_in_seconds(self.rotation_days)
+    
+    def get_check_frequency_seconds(self) -> int:
+        """Get how often to check for rotations in seconds"""
+        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+        return duration_in_seconds(self.rotation_frequency)
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -1802,6 +1830,8 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    last_rotation_at: Optional[datetime] = None  # When the key was last rotated
+    rotation_count: Optional[int] = 0  # Number of times key has been rotated
 
     model_config = ConfigDict(protected_namespaces=())
 
