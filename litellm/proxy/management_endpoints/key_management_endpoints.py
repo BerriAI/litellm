@@ -2644,7 +2644,10 @@ async def _list_key_helper(
     if team_id and isinstance(team_id, str):
         user_condition["team_id"] = team_id
     if key_alias and isinstance(key_alias, str):
-        user_condition["key_alias"] = key_alias
+        user_condition["key_alias"] = {
+            "contains": key_alias,
+            "mode": "insensitive",  # Case-insensitive search
+        }
     if exclude_team_id and isinstance(exclude_team_id, str):
         user_condition["team_id"] = {"not": exclude_team_id}
     if organization_id and isinstance(organization_id, str):
