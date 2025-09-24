@@ -30,7 +30,9 @@ class AmazonTitanV2Config:
     normalize: Optional[bool] = None
     dimensions: Optional[int] = None
 
-    def __init__(self, normalize: Optional[bool] = None, dimensions: Optional[int] = None) -> None:
+    def __init__(
+        self, normalize: Optional[bool] = None, dimensions: Optional[int] = None
+    ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
@@ -57,7 +59,9 @@ class AmazonTitanV2Config:
     def get_supported_openai_params(self) -> List[str]:
         return ["dimensions", "encoding_format"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: dict, optional_params: dict
+    ) -> dict:
         for k, v in non_default_params.items():
             if k == "dimensions":
                 optional_params["dimensions"] = v
@@ -73,10 +77,14 @@ class AmazonTitanV2Config:
                     optional_params["embeddingTypes"] = ["float"]
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
+    def _transform_request(
+        self, input: str, inference_params: dict
+    ) -> AmazonTitanV2EmbeddingRequest:
         return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)  # type: ignore
 
-    def _transform_response(self, response_list: List[dict], model: str) -> EmbeddingResponse:
+    def _transform_response(
+        self, response_list: List[dict], model: str
+    ) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: List[Embedding] = []
@@ -88,12 +96,16 @@ class AmazonTitanV2Config:
             # Otherwise, use float data from embeddingsByType or fallback to embedding field
             embedding_data: Union[List[float], List[int]]
 
-            if ("embeddingsByType" in _parsed_response and
-                "binary" in _parsed_response["embeddingsByType"]):
+            if (
+                "embeddingsByType" in _parsed_response
+                and "binary" in _parsed_response["embeddingsByType"]
+            ):
                 # Use binary data if available (for encoding_format="base64")
                 embedding_data = _parsed_response["embeddingsByType"]["binary"]
-            elif ("embeddingsByType" in _parsed_response and
-                  "float" in _parsed_response["embeddingsByType"]):
+            elif (
+                "embeddingsByType" in _parsed_response
+                and "float" in _parsed_response["embeddingsByType"]
+            ):
                 # Use float data from embeddingsByType
                 embedding_data = _parsed_response["embeddingsByType"]["float"]
             elif "embedding" in _parsed_response:

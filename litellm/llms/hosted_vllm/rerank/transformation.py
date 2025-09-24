@@ -75,7 +75,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         """
         if max_chunks_per_doc is not None:
             raise ValueError("Hosted VLLM does not support max_chunks_per_doc")
-            
+
         return OptionalRerankParams(
             query=query,
             documents=documents,
@@ -116,7 +116,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             raise ValueError("query is required for Hosted VLLM rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
-        
+
         rerank_request = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
@@ -153,12 +153,16 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
+        return HostedVLLMRerankError(
+            message=error_message, status_code=status_code, headers=headers
+        )
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
         usage_data = response.get("usage", {})
-        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
+        _billed_units = RerankBilledUnits(
+            total_tokens=usage_data.get("total_tokens", 0)
+        )
         _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
         rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
@@ -199,4 +203,4 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             id=response.get("id") or str(uuid.uuid4()),
             results=rerank_results,
             meta=rerank_meta,
-        ) 
+        )

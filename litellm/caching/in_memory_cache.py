@@ -114,7 +114,7 @@ class InMemoryCache(BaseCache):
 
         """
         current_time = time.time()
-        
+
         # Step 1: Remove expired items
         expired_keys = [key for key, ttl in self.ttl_dict.items() if current_time > ttl]
         for key in expired_keys:
@@ -124,8 +124,10 @@ class InMemoryCache(BaseCache):
         if len(self.cache_dict) >= self.max_size_in_memory:
             # Sort by expiration time (earliest first) and evict until we're under the limit
             items_by_expiration = sorted(self.ttl_dict.items(), key=lambda x: x[1])
-            keys_to_evict = items_by_expiration[:len(self.cache_dict) - self.max_size_in_memory + 1]
-            
+            keys_to_evict = items_by_expiration[
+                : len(self.cache_dict) - self.max_size_in_memory + 1
+            ]
+
             for key, _ in keys_to_evict:
                 self._remove_key(key)
 
@@ -150,7 +152,7 @@ class InMemoryCache(BaseCache):
         # Handle the edge case where max_size_in_memory is 0
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
-            
+
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()

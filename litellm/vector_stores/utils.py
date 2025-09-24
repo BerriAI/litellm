@@ -48,4 +48,3 @@ class VectorStoreRequestUtils:
         }
 
         return cast(VectorStoreCreateOptionalRequestParams, filtered_params)
-

@@ -80,14 +80,16 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 model=resolved_model,
             )
 
-            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
+            async_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.BEDROCK
+            )
 
             response = await async_client.post(
-                    endpoint_url,
-                    headers=signed_headers,
-                    data=signed_body,
-                    timeout=30.0,
-                )
+                endpoint_url,
+                headers=signed_headers,
+                data=signed_body,
+                timeout=30.0,
+            )
 
             verbose_logger.debug(f"Response status: {response.status_code}")
 
