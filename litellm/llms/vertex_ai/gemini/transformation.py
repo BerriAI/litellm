@@ -537,7 +537,11 @@ def sync_transform_request_body(
             logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+        cached_content = None
+        if "cached_content" in optional_params:
+            cached_content = optional_params.pop("cached_content")
+        elif "cachedContent" in optional_params:
+            cached_content = optional_params.pop("cachedContent")
 
     return _transform_request_body(
         messages=messages,
@@ -584,7 +588,11 @@ async def async_transform_request_body(
             logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+        cached_content = None
+        if "cached_content" in optional_params:
+            cached_content = optional_params.pop("cached_content")
+        elif "cachedContent" in optional_params:
+            cached_content = optional_params.pop("cachedContent")
 
     return _transform_request_body(
         messages=messages,
@@ -649,5 +657,3 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
-
-

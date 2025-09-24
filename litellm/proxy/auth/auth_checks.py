@@ -469,7 +469,6 @@ async def get_end_user_object(
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
-        # Convert cached dict to LiteLLM_EndUserTable instance
         return_obj = LiteLLM_EndUserTable(**cached_user_obj)
         check_in_budget(end_user_obj=return_obj)
         return return_obj
@@ -527,10 +526,7 @@ async def get_team_membership(
     # check if in cache
     cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_membership_obj is not None:
-        if isinstance(cached_membership_obj, dict):
-            return LiteLLM_TeamMembership(**cached_membership_obj)
-        elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
-            return cached_membership_obj
+        return LiteLLM_TeamMembership(**cached_membership_obj)
 
     # else, check db
     try:
@@ -542,8 +538,8 @@ async def get_team_membership(
         if response is None:
             return None
 
-        # save the team membership object to cache
-        await user_api_key_cache.async_set_cache(key=_key, value=response)
+        # save the team membership object to cache (store as dict)
+        await user_api_key_cache.async_set_cache(key=_key, value=response.dict())
 
         _response = LiteLLM_TeamMembership(**response.dict())
 
@@ -819,8 +815,9 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
+
     await user_api_key_cache.async_set_cache(
-        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
 
