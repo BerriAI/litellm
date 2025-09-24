@@ -13,7 +13,6 @@ from .transformation import SagemakerChatConfig
 
 
 class SagemakerChatHandler(BaseAWSLLM):
-
     def _load_credentials(
         self,
         optional_params: dict,
@@ -128,7 +127,6 @@ class SagemakerChatHandler(BaseAWSLLM):
         headers: dict = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ):
-
         # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
         credentials, aws_region_name = self._load_credentials(optional_params)
         inference_params = deepcopy(optional_params)

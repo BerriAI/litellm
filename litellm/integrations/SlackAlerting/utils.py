@@ -5,6 +5,7 @@ Utils used for slack alerting
 import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+import litellm
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
@@ -69,7 +70,12 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    # do nothing for now
+    if "langfuse" not in litellm.logging_callback_manager._get_all_callbacks():
+        return None
+    #########################################################
+    # Only run if langfuse is added as a callback
+    #########################################################
+
     if (
         request_data is not None
         and request_data.get("litellm_logging_obj", None) is not None
@@ -82,11 +88,12 @@ async def _add_langfuse_trace_id_to_alert(
             if trace_id is not None:
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
-
-        _langfuse_object = litellm_logging_obj._get_callback_object(
+        #########################################################
+        langfuse_object = litellm_logging_obj._get_callback_object(
             service_name="langfuse"
         )
-        if _langfuse_object is not None:
-            base_url = _langfuse_object.Langfuse.base_url
+        if langfuse_object is not None:
+            base_url = langfuse_object.Langfuse.base_url
             return f"{base_url}/trace/{trace_id}"
+
     return None

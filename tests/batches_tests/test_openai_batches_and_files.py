@@ -15,12 +15,14 @@ sys.path.insert(
 
 import logging
 import time
+import asyncio
 
 import pytest
 from typing import Optional
 import litellm
 from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
+import openai
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -146,12 +148,24 @@ async def test_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(result)
 
-    # Cancel Batch
-    cancel_batch_response = await litellm.acancel_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider=provider,
-    )
-    print("cancel_batch_response=", cancel_batch_response)
+    # Cancel Batch - handle race condition where batch may already be completed
+    try:
+        cancel_batch_response = await litellm.acancel_batch(
+            batch_id=create_batch_response.id,
+            custom_llm_provider=provider,
+        )
+        print("cancel_batch_response=", cancel_batch_response)
+    except openai.ConflictError as e:
+        # Only allow to pass if it's specifically the "batch already completed" error
+        if "Cannot cancel a batch with status 'completed'" in str(e):
+            print(f"Batch already completed, cannot cancel: {e}")
+        else:
+            # Re-raise other ConflictError types
+            raise
+    except Exception as e:
+        # Re-raise any other unexpected errors
+        print(f"Unexpected error during batch cancellation: {e}")
+        raise
 
     pass
 
@@ -355,12 +369,24 @@ async def test_async_create_batch(provider):
     with open(result_file_name, "wb") as file:
         file.write(file_content.content)
 
-    # Cancel Batch
-    cancel_batch_response = await litellm.acancel_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider=provider,
-    )
-    print("cancel_batch_response=", cancel_batch_response)
+    # Cancel Batch - handle race condition where batch may already be completed
+    try:
+        cancel_batch_response = await litellm.acancel_batch(
+            batch_id=create_batch_response.id,
+            custom_llm_provider=provider,
+        )
+        print("cancel_batch_response=", cancel_batch_response)
+    except openai.ConflictError as e:
+        # Only allow to pass if it's specifically the "batch already completed" error
+        if "Cannot cancel a batch with status 'completed'" in str(e):
+            print(f"Batch already completed, cannot cancel: {e}")
+        else:
+            # Re-raise other ConflictError types
+            raise
+    except Exception as e:
+        # Re-raise any other unexpected errors
+        print(f"Unexpected error during batch cancellation: {e}")
+        raise
 
     if random.randint(1, 3) == 1:
         print("Running random cleanup of Azure files and models...")
@@ -423,25 +449,35 @@ mock_vertex_batch_response = {
 
 
 @pytest.mark.asyncio
-async def test_avertex_batch_prediction():
-    with patch(
+async def test_avertex_batch_prediction(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    client = AsyncHTTPHandler()
+
+    async def mock_side_effect(*args, **kwargs):
+        print("args", args, "kwargs", kwargs)
+        url = kwargs.get("url", "")
+        if "files" in url:
+            mock_response.json.return_value = mock_file_response
+        elif "batch" in url:
+            mock_response.json.return_value = mock_vertex_batch_response
+            mock_response.status_code = 200
+        return mock_response
+
+    with patch.object(
+        client, "post", side_effect=mock_side_effect
+    ) as mock_post, patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    ) as mock_global_post:
         # Configure mock responses
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
 
         # Set up different responses for different API calls
-        async def mock_side_effect(*args, **kwargs):
-            url = kwargs.get("url", "")
-            if "files" in url:
-                mock_response.json.return_value = mock_file_response
-            elif "batch" in url:
-                mock_response.json.return_value = mock_vertex_batch_response
-                mock_response.status_code = 200
-            return mock_response
-
+        
         mock_post.side_effect = mock_side_effect
+        mock_global_post.side_effect = mock_side_effect
 
         # load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -455,6 +491,7 @@ async def test_avertex_batch_prediction():
             file=open(file_path, "rb"),
             purpose="batch",
             custom_llm_provider="vertex_ai",
+            client=client
         )
         print("Response from creating file=", file_obj)
 

@@ -1,13 +1,45 @@
-from typing import Optional
+from typing import List, Optional
 
 import httpx
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ProviderSpecificModelInfo
 
 
 class XAIModelInfo(BaseLLMModelInfo):
+    def get_provider_info(
+        self,
+        model: str,
+    ) -> Optional[ProviderSpecificModelInfo]:
+        """
+        Default values all models of this provider support.
+        """
+        return {
+            "supports_web_search": True,
+        }
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        # Ensure Content-Type is set to application/json
+        if "content-type" not in headers and "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+
+        return headers
+
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
         return api_base or get_secret_str("XAI_API_BASE") or "https://api.x.ai"
@@ -22,7 +54,7 @@ class XAIModelInfo(BaseLLMModelInfo):
 
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> list[str]:
+    ) -> List[str]:
         api_base = self.get_api_base(api_base)
         api_key = self.get_api_key(api_key)
         if api_base is None or api_key is None:

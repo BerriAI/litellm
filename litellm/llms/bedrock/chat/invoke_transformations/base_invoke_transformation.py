@@ -74,6 +74,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -117,63 +118,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
-    ) -> dict:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id = optional_params.get("aws_access_key_id", None)
-        aws_session_token = optional_params.get("aws_session_token", None)
-        aws_role_name = optional_params.get("aws_role_name", None)
-        aws_session_name = optional_params.get("aws_session_name", None)
-        aws_profile_name = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
-        aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params, model=model
-        )
-
-        credentials: Credentials = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-        )
-
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-        if headers is not None:
-            headers = {"Content-Type": "application/json", **headers}
-        else:
-            headers = {"Content-Type": "application/json"}
-
-        request = AWSRequest(
-            method="POST",
-            url=api_base,
-            data=json.dumps(request_data),
+    ) -> Tuple[dict, Optional[bytes]]:
+        return self._sign_request(
+            service_name="bedrock",
             headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
         )
-        sigv4.add_auth(request)
-
-        request_headers_dict = dict(request.headers)
-        if (
-            headers is not None and "Authorization" in headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
-        return request_headers_dict
 
     def transform_request(
         self,
@@ -225,18 +185,20 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            return litellm.AmazonAnthropicClaude3Config().transform_request(
+            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
+            
+            return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
@@ -311,7 +273,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         try:
             completion_response = raw_response.json()
         except Exception:
@@ -334,7 +295,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
-                return litellm.AmazonAnthropicClaude3Config().transform_response(
+                return litellm.AmazonAnthropicClaudeConfig().transform_response(
                     model=model,
                     raw_response=raw_response,
                     model_response=model_response,
@@ -366,10 +327,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = completion_response["outputs"][0]["text"]
-                model_response.choices[0].finish_reason = completion_response[
-                    "outputs"
-                ][0]["stop_reason"]
+                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
@@ -442,6 +400,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -453,7 +412,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return BedrockError(status_code=status_code, message=error_message)
 
     @track_llm_api_timing()
-    def get_async_custom_stream_wrapper(
+    async def get_async_custom_stream_wrapper(
         self,
         model: str,
         custom_llm_provider: str,
@@ -464,6 +423,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         streaming_response = CustomStreamWrapper(
             completion_stream=None,
@@ -498,6 +458,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
+        signed_json_body: Optional[bytes] = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -509,6 +470,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 api_base=api_base,
                 headers=headers,
                 data=json.dumps(data),
+                signed_json_body=signed_json_body,
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,

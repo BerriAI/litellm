@@ -12,8 +12,7 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk update && \
-    apk add --no-cache gcc python3-dev openssl openssl-dev
+RUN apk add --no-cache gcc python3-dev openssl openssl-dev
 
 
 RUN pip install --upgrade pip && \
@@ -42,9 +41,6 @@ RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
 RUN pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
-
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -52,8 +48,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk update && \
-    apk add --no-cache openssl
+RUN apk add --no-cache openssl tzdata
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -67,6 +62,9 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Install semantic_router and aurelio-sdk using script
+RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
+
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh
@@ -74,7 +72,10 @@ RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
+RUN apk add --no-cache supervisor
+COPY docker/supervisord.conf /etc/supervisord.conf
+
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 CMD ["--port", "4000"]

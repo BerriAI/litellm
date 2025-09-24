@@ -6,6 +6,10 @@ import Image from '@theme/IdealImage';
 - Reject data before making llm api calls / before returning the response 
 - Enforce 'user' param for all openai endpoint calls
 
+:::tip
+**Understanding Callback Hooks?** Check out our [Callback Management Guide](../observability/callback_management.md) to understand the differences between proxy-specific hooks like `async_pre_call_hook` and general logging hooks like `async_log_success_event`.
+:::
+
 See a complete example with our [parallel request rate limiter](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py)
 
 ## Quick Start
@@ -18,7 +22,8 @@ This function is called just before a litellm completion call is made, and allow
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
-from typing import Optional, Literal
+from litellm.types.utils import ModelResponseStream
+from typing import Any, AsyncGenerator, Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -44,7 +49,8 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         self, 
         request_data: dict,
         original_exception: Exception, 
-        user_api_key_dict: UserAPIKeyAuth
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         pass
 
@@ -71,7 +77,7 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
     ):
         pass
 
-    aasync def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,

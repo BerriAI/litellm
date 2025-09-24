@@ -132,6 +132,7 @@ def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
         ("user_api_key_team_id", "test_team_id"),
         ("user_api_key_user_id", "test_user_id"),
         ("user_api_key_team_alias", "test_team_alias"),
+        ("user_api_key_spend", 10.50),
         ("spend_logs_metadata", {"key": "value"}),
         ("requester_ip_address", "127.0.0.1"),
         ("requester_metadata", {"user_agent": "test_agent"}),
@@ -326,6 +327,48 @@ def test_get_final_response_obj():
     finally:
         # Reset litellm.turn_off_message_logging to its original value
         litellm.turn_off_message_logging = False
+
+
+def test_get_standard_logging_payload_trace_id():
+    """Test _get_standard_logging_payload_trace_id with different input scenarios"""
+    # Test case 1: When litellm_trace_id is provided in litellm_params
+    from unittest.mock import MagicMock
+    
+    # Create a mock Logging object
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+    
+    # Test when litellm_trace_id is in litellm_params
+    litellm_params = {"litellm_trace_id": "dynamic-trace-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "dynamic-trace-id"
+    
+    # Test case 2: When litellm_trace_id is not provided in litellm_params
+    litellm_params = {}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "default-trace-id"
+    
+    # Test case 3: When litellm_params is None
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params={}
+    )
+    assert result == "default-trace-id"
+    
+    # Test case 4: When litellm_trace_id in params is not a string
+    litellm_params = {"litellm_trace_id": 12345}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj,
+        litellm_params=litellm_params
+    )
+    assert result == "12345"
+    assert isinstance(result, str)
 
 
 def test_truncate_standard_logging_payload():

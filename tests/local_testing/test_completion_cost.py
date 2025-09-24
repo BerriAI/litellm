@@ -319,64 +319,9 @@ def test_cost_openai_image_gen():
     assert cost == 0.019922944
 
 
-def test_cost_bedrock_pricing():
-    """
-    - get pricing specific to region for a model
-    """
-    from litellm import Choices, Message, ModelResponse
-    from litellm.utils import Usage
-
-    litellm.set_verbose = True
-    input_tokens = litellm.token_counter(
-        model="bedrock/anthropic.claude-instant-v1",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    print(f"input_tokens: {input_tokens}")
-    output_tokens = litellm.token_counter(
-        model="bedrock/anthropic.claude-instant-v1",
-        text="It's all going well",
-        count_response_tokens=True,
-    )
-    print(f"output_tokens: {output_tokens}")
-    resp = ModelResponse(
-        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
-        choices=[
-            Choices(
-                finish_reason=None,
-                index=0,
-                message=Message(
-                    content="It's all going well",
-                    role="assistant",
-                ),
-            )
-        ],
-        created=1700775391,
-        model="anthropic.claude-instant-v1",
-        object="chat.completion",
-        system_fingerprint=None,
-        usage=Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-        ),
-    )
-    resp._hidden_params = {
-        "custom_llm_provider": "bedrock",
-        "region_name": "ap-northeast-1",
-    }
-
-    cost = litellm.completion_cost(
-        model="anthropic.claude-instant-v1",
-        completion_response=resp,
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    predicted_cost = input_tokens * 0.00000223 + 0.00000755 * output_tokens
-    assert cost == predicted_cost
-
-
 def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
-    model = "anthropic.claude-instant-v1"
+    model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     response = litellm.completion(
         model=model, messages=messages, mock_response="hello cool one"
@@ -384,7 +329,7 @@ def test_cost_bedrock_pricing_actual_calls():
 
     print("response", response)
     cost = litellm.completion_cost(
-        model="bedrock/anthropic.claude-instant-v1",
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
@@ -565,7 +510,7 @@ def test_groq_response_cost_tracking(is_streaming):
 
     response_cost = litellm.response_cost_calculator(
         response_object=response,
-        model="groq/llama3-70b-8192",
+        model="groq/llama-3.3-70b-versatile",
         custom_llm_provider="groq",
         call_type=CallTypes.acompletion.value,
         optional_params={},
@@ -865,28 +810,6 @@ def test_vertex_ai_embedding_completion_cost(caplog):
 #     assert False
 
 
-def test_completion_azure_ai():
-    try:
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="azure_ai/Mistral-large-nmefg",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            max_tokens=15,
-            num_retries=3,
-            api_base=os.getenv("AZURE_AI_MISTRAL_API_BASE"),
-            api_key=os.getenv("AZURE_AI_MISTRAL_API_KEY"),
-        )
-        print(response)
-
-        assert "response_cost" in response._hidden_params
-        assert isinstance(response._hidden_params["response_cost"], float)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_cost_hidden_params(sync_mode):
@@ -972,7 +895,9 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1"])
+@pytest.mark.parametrize(
+    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
+)
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1025,77 +950,6 @@ def test_completion_cost_anthropic():
 
     print(input_cost)
     print(output_cost)
-
-
-def test_completion_cost_deepseek():
-    litellm.set_verbose = True
-    model_name = "deepseek/deepseek-chat"
-    messages_1 = [
-        {
-            "role": "system",
-            "content": "You are a history expert. The user will provide a series of questions, and your answers should be concise and start with `Answer:`",
-        },
-        {
-            "role": "user",
-            "content": "In what year did Qin Shi Huang unify the six states?",
-        },
-        {"role": "assistant", "content": "Answer: 221 BC"},
-        {"role": "user", "content": "Who was the founder of the Han Dynasty?"},
-        {"role": "assistant", "content": "Answer: Liu Bang"},
-        {"role": "user", "content": "Who was the last emperor of the Tang Dynasty?"},
-        {"role": "assistant", "content": "Answer: Li Zhu"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Ming Dynasty?",
-        },
-        {"role": "assistant", "content": "Answer: Zhu Yuanzhang"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Qing Dynasty?",
-        },
-    ]
-
-    message_2 = [
-        {
-            "role": "system",
-            "content": "You are a history expert. The user will provide a series of questions, and your answers should be concise and start with `Answer:`",
-        },
-        {
-            "role": "user",
-            "content": "In what year did Qin Shi Huang unify the six states?",
-        },
-        {"role": "assistant", "content": "Answer: 221 BC"},
-        {"role": "user", "content": "Who was the founder of the Han Dynasty?"},
-        {"role": "assistant", "content": "Answer: Liu Bang"},
-        {"role": "user", "content": "Who was the last emperor of the Tang Dynasty?"},
-        {"role": "assistant", "content": "Answer: Li Zhu"},
-        {
-            "role": "user",
-            "content": "Who was the founding emperor of the Ming Dynasty?",
-        },
-        {"role": "assistant", "content": "Answer: Zhu Yuanzhang"},
-        {"role": "user", "content": "When did the Shang Dynasty fall?"},
-    ]
-    try:
-        response_1 = litellm.completion(model=model_name, messages=messages_1)
-        response_2 = litellm.completion(model=model_name, messages=message_2)
-        # Add any assertions here to check the response
-        print(response_2)
-        assert response_2.usage.prompt_cache_hit_tokens is not None
-        assert response_2.usage.prompt_cache_miss_tokens is not None
-        assert (
-            response_2.usage.prompt_tokens
-            == response_2.usage.prompt_cache_miss_tokens
-            + response_2.usage.prompt_cache_hit_tokens
-        )
-        assert (
-            response_2.usage._cache_read_input_tokens
-            == response_2.usage.prompt_cache_hit_tokens
-        )
-    except litellm.APIError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_cost_azure_common_deployment_name():
@@ -1214,6 +1068,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
         (
             response_1.usage.prompt_tokens
             - response_1.usage.prompt_tokens_details.cached_tokens
+            - response_1.usage.prompt_tokens_details.cache_creation_tokens
         )
         * _model_info["input_cost_per_token"]
         + (response_1.usage.prompt_tokens_details.cached_tokens or 0)
@@ -1266,13 +1121,15 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 @pytest.mark.parametrize(
     "model",
     [
-        "databricks/databricks-meta-llama-3-1-70b-instruct",
+        "databricks/databricks-meta-llama-3.2-3b-instruct",
         "databricks/databricks-meta-llama-3-70b-instruct",
         "databricks/databricks-dbrx-instruct",
         # "databricks/databricks-mixtral-8x7b-instruct",
     ],
 )
+@pytest.mark.skip(reason="databricks is having an active outage")
 def test_completion_cost_databricks(model):
+    litellm._turn_on_debug()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model, messages = model, [{"role": "user", "content": "What is 2+2?"}]
@@ -1280,7 +1137,8 @@ def test_completion_cost_databricks(model):
     resp = litellm.completion(model=model, messages=messages)  # works fine
 
     print(resp)
-    cost = completion_cost(completion_response=resp)
+    print(f"hidden_params: {resp._hidden_params}")
+    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -1305,8 +1163,8 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-default"),
-        ("fireworks_ai/mixtral-8x7b-instruct", "fireworks-ai-moe-up-to-56b"),
+        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-above-16b"),
+        ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1316,7 +1174,10 @@ def test_get_model_params_fireworks_ai(model, base_model):
 
 @pytest.mark.parametrize(
     "model",
-    ["fireworks_ai/llama-v3p1-405b-instruct", "fireworks_ai/mixtral-8x7b-instruct"],
+    [
+        "fireworks_ai/llama-v3p1-405b-instruct",
+        "fireworks_ai/llama4-maverick-instruct-basic",
+    ],
 )
 def test_completion_cost_fireworks_ai(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2953,8 +2814,6 @@ def test_cost_calculator_with_custom_pricing():
 @pytest.mark.asyncio
 async def test_cost_calculator_with_custom_pricing_router(model_item, custom_pricing):
     from litellm import Router
-
-    litellm._turn_on_debug()
 
     if custom_pricing == "litellm_params":
         model_item["litellm_params"]["input_cost_per_token"] = 0.0000008

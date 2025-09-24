@@ -21,7 +21,6 @@ Features:
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
-    - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
     - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
     - ✅ [Key Rotations](./virtual_keys.md#-key-rotations)
@@ -29,7 +28,6 @@ Features:
     - ✅ [Team Based Logging](./team_logging.md) - Allow each team to use their own Langfuse Project / custom callbacks
     - ✅ [Disable Logging for a Team](./team_logging.md#disable-logging-for-a-team) - Switch off all logging for a team/project (GDPR Compliance)
 - **Spend Tracking & Data Exports**
-    - ✅ [Tracking Spend for Custom Tags](#tracking-spend-for-custom-tags)
     - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
     - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
@@ -43,472 +41,28 @@ Features:
     - ✅ [Public Model Hub](#public-model-hub)
     - ✅ [Custom Email Branding](./email.md#customizing-email-branding)
 
-## Audit Logs
 
-Store Audit logs for **Create, Update Delete Operations** done on `Teams` and `Virtual Keys`
+### Blocking web crawlers
 
-**Step 1** Switch on audit Logs 
-```shell
-litellm_settings:
-  store_audit_logs: true
+To block web crawlers from indexing the proxy server endpoints, set the `block_robots` setting to `true` in your `litellm_config.yaml` file.
+
+```yaml showLineNumbers title="litellm_config.yaml"
+general_settings:
+  block_robots: true
 ```
 
-Start the litellm proxy with this config
+#### How it works
 
-**Step 2** Test it - Create a Team
+When this is enabled, the `/robots.txt` endpoint will return a 200 status code with the following content:
 
-```shell
-curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "max_budget": 2
-    }'
-```
-
-**Step 3** Expected Log
-
-```json
-{
- "id": "e1760e10-4264-4499-82cd-c08c86c8d05b",
- "updated_at": "2024-06-06T02:10:40.836420+00:00",
- "changed_by": "109010464461339474872",
- "action": "created",
- "table_name": "LiteLLM_TeamTable",
- "object_id": "82e725b5-053f-459d-9a52-867191635446",
- "before_value": null,
- "updated_values": {
-   "team_id": "82e725b5-053f-459d-9a52-867191635446",
-   "admins": [],
-   "members": [],
-   "members_with_roles": [
-     {
-       "role": "admin",
-       "user_id": "109010464461339474872"
-     }
-   ],
-   "max_budget": 2.0,
-   "models": [],
-   "blocked": false
- }
-}
-```
-
-
-## Tracking Spend for Custom Tags
-
-Requirements: 
-
-- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
-
-#### Usage - /chat/completions requests with request tags 
-
-
-<Tabs>
-<TabItem value="key" label="Set on Key">
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "metadata": {
-        "tags": ["tag1", "tag2", "tag3"]
-    }
-}
-
-'
-```
-
-</TabItem>
-<TabItem value="team" label="Set on Team">
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/team/new' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "metadata": {
-        "tags": ["tag1", "tag2", "tag3"]
-    }
-}
-
-'
-```
-
-</TabItem>
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"] # 👈 Key Change
-        }
-    }
-)
-
-print(response)
-```
-</TabItem>
-
-
-<TabItem value="openai js" label="OpenAI JS">
-
-```js
-const openai = require('openai');
-
-async function runOpenAI() {
-  const client = new openai.OpenAI({
-    apiKey: 'sk-1234',
-    baseURL: 'http://0.0.0.0:4000'
-  });
-
-  try {
-    const response = await client.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'user',
-          content: "this is a test request, write a short poem"
-        },
-      ],
-      metadata: {
-        tags: ["model-anthropic-claude-v2.1", "app-ishaan-prod"] // 👈 Key Change
-      }
-    });
-    console.log(response);
-  } catch (error) {
-    console.log("got this exception from server");
-    console.error(error);
-  }
-}
-
-// Call the asynchronous function
-runOpenAI();
-```
-</TabItem>
-
-<TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {"tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]}
-}'
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"]
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-#### Viewing Spend per tag
-
-#### `/spend/tags` Request Format 
-```shell
-curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
-```
-
-#### `/spend/tags`Response Format
-```shell
-[
-  {
-    "individual_request_tag": "model-anthropic-claude-v2.1",
-    "log_count": 6,
-    "total_spend": 0.000672
-  },
-  {
-    "individual_request_tag": "app-ishaan-local",
-    "log_count": 4,
-    "total_spend": 0.000448
-  },
-  {
-    "individual_request_tag": "app-ishaan-prod",
-    "log_count": 2,
-    "total_spend": 0.000224
-  }
-]
-
-```
-
-
-## Tracking Spend with custom metadata
-
-Requirements: 
-
-- Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
-
-#### Usage - /chat/completions requests with special spend logs metadata 
-
-
-<Tabs>
-<TabItem value="key" label="Set on Key">
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "metadata": {
-      "spend_logs_metadata": {
-          "hello": "world"
-      }
-    }
-}
-
-'
-```
-
-</TabItem>
-<TabItem value="team" label="Set on Team">
-
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/team/new' \
--H 'Authorization: Bearer sk-1234' \
--H 'Content-Type: application/json' \
--d '{
-    "metadata": {
-      "spend_logs_metadata": {
-          "hello": "world"
-      }
-    }
-}
-
-'
-```
-
-</TabItem>
-
-<TabItem value="openai" label="OpenAI Python v1.0.0+">
-
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "spend_logs_metadata": {
-                "hello": "world"
-            }
-        }
-    }
-)
-
-print(response)
-```
-</TabItem>
-
-
-<TabItem value="openai js" label="OpenAI JS">
-
-```js
-const openai = require('openai');
-
-async function runOpenAI() {
-  const client = new openai.OpenAI({
-    apiKey: 'sk-1234',
-    baseURL: 'http://0.0.0.0:4000'
-  });
-
-  try {
-    const response = await client.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'user',
-          content: "this is a test request, write a short poem"
-        },
-      ],
-      metadata: {
-        spend_logs_metadata: { // 👈 Key Change
-            hello: "world"
-        }
-      }
-    });
-    console.log(response);
-  } catch (error) {
-    console.log("got this exception from server");
-    console.error(error);
-  }
-}
-
-// Call the asynchronous function
-runOpenAI();
-```
-</TabItem>
-
-<TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {
-        "spend_logs_metadata": {
-            "hello": "world"
-        }
-    }
-}'
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "spend_logs_metadata": {
-                "hello": "world"
-            }
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
-
-
-#### Viewing Spend w/ custom metadata
-
-#### `/spend/logs` Request Format 
-
-```bash
-curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm
--H "Authorization: Bearer sk-1234"
-```
-
-#### `/spend/logs` Response Format
-```bash
-[
-    {
-        "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
-        "call_type": "acompletion",
-        "metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
-            "user_api_key_alias": null,
-            "spend_logs_metadata": { # 👈 LOGGED CUSTOM METADATA
-                "hello": "world"
-            },
-            "user_api_key_team_id": null,
-            "user_api_key_user_id": "116544810872468347480",
-            "user_api_key_team_alias": null
-        },
-    }
-]
+```shell showLineNumbers title="robots.txt"
+User-agent: *
+Disallow: /
 ```
 
 
 
-## Enforce Required Params for LLM Requests
+### Required Params for LLM Requests
 Use this when you want to enforce all requests to include certain params. Example you need all requests to include the `user` and `["metadata]["generation_name"]` params.
 
 
@@ -629,7 +183,7 @@ Expected Response
 
 
 
-## Control available public, private routes
+### Control available public, private routes
 
 **Restrict certain endpoints of proxy**
 
@@ -691,7 +245,7 @@ curl --request POST \
 <TabItem value="admin_only_routes" label="Test `admin_only_routes`">
 
 
-**Successfull Request**
+**Successful Request**
 
 ```shell
 curl --location 'http://0.0.0.0:4000/key/generate' \
@@ -729,7 +283,7 @@ curl --location 'http://0.0.0.0:4000/key/generate' \
 <TabItem value="allowed_routes" label="Test `allowed_routes`">
 
 
-**Successfull Request**
+**Successful Request**
 
 ```shell
 curl http://localhost:4000/chat/completions \
@@ -772,11 +326,44 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
 
 </TabItem>
 
-
-
-
-
 </Tabs>
+
+## Spend Tracking
+
+#### Viewing Spend per tag
+
+#### `/spend/tags` Request Format 
+```shell
+curl -X GET "http://0.0.0.0:4000/spend/tags" \
+-H "Authorization: Bearer sk-1234"
+```
+
+#### `/spend/tags`Response Format
+```shell
+[
+  {
+    "individual_request_tag": "model-anthropic-claude-v2.1",
+    "log_count": 6,
+    "total_spend": 0.000672
+  },
+  {
+    "individual_request_tag": "app-ishaan-local",
+    "log_count": 4,
+    "total_spend": 0.000448
+  },
+  {
+    "individual_request_tag": "app-ishaan-prod",
+    "log_count": 2,
+    "total_spend": 0.000224
+  }
+]
+```
+
+:::tip
+For comprehensive spend tracking features including budgets, alerts, and detailed analytics, check out [Spend Tracking](https://docs.litellm.ai/docs/proxy/cost_tracking).
+
+:::
+
 
 ## Guardrails - Secret Detection/Redaction
 ❓ Use this to REDACT API Keys, Secrets sent in requests to an LLM. 

@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple
+
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -14,7 +16,6 @@ class PromptManagementClient(TypedDict):
 
 
 class PromptManagementBase(ABC):
-
     @property
     @abstractmethod
     def integration_name(self) -> str:
@@ -34,6 +35,8 @@ class PromptManagementBase(ABC):
         prompt_id: str,
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         pass
 
@@ -50,11 +53,16 @@ class PromptManagementBase(ABC):
         prompt_variables: Optional[dict],
         client_messages: List[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
+
         compiled_prompt_client = self._compile_prompt_helper(
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
         )
 
         try:
@@ -80,14 +88,15 @@ class PromptManagementBase(ABC):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-    ) -> Tuple[
-        str,
-        List[AllMessageValues],
-        dict,
-    ]:
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Prompt Management Base class")
         if not self.should_run_prompt_management(
             prompt_id=prompt_id, dynamic_callback_params=dynamic_callback_params
         ):
@@ -98,6 +107,8 @@ class PromptManagementBase(ABC):
             prompt_variables=prompt_variables,
             client_messages=messages,
             dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
         )
 
         completed_messages = prompt_template["completed_messages"] or messages

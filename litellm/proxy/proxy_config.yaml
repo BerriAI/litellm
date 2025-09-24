@@ -1,9 +1,25 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-general_settings:
-  allow_requests_on_db_unavailable: True
+      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      #########################################################
+      ########## batch specific params ########################
+      s3_bucket_name: litellm-proxy
+      s3_region_name: us-west-2
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV
+    model_info: 
+      mode: batch
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+      api_key: os.environ/GEMINI_API_KEY

@@ -6,7 +6,7 @@ authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
     url: https://www.linkedin.com/in/krish-d/
-    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1743638400&v=beta&t=39KOXMUFedvukiWWVPHf3qI45fuQD7lNglICwN31DrI
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8
   - name: Ishaan Jaffer
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
@@ -57,7 +57,7 @@ Here's a Demo Instance to test changes:
 2. Bedrock Claude - fix tool calling transformation on invoke route. [Get Started](../../docs/providers/bedrock#usage---function-calling--tool-calling)
 3. Bedrock Claude - response_format support for claude on invoke route. [Get Started](../../docs/providers/bedrock#usage---structured-output--json-mode)
 4. Bedrock - pass `description` if set in response_format. [Get Started](../../docs/providers/bedrock#usage---structured-output--json-mode)
-5. Bedrock - Fix passing response_format: {"type": "text"}. [PR](https://github.com/BerriAI/litellm/commit/c84b489d5897755139aa7d4e9e54727ebe0fa540)
+5. Bedrock - Fix passing response_format: `{"type": "text"}`. [PR](https://github.com/BerriAI/litellm/commit/c84b489d5897755139aa7d4e9e54727ebe0fa540)
 6. OpenAI - Handle sending image_url as str to openai. [Get Started](https://docs.litellm.ai/docs/completion/vision)
 7. Deepseek - return 'reasoning_content' missing on streaming. [Get Started](https://docs.litellm.ai/docs/reasoning_content)
 8. Caching - Support caching on reasoning content. [Get Started](https://docs.litellm.ai/docs/proxy/caching)

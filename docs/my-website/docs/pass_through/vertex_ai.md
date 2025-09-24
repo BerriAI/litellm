@@ -13,6 +13,15 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |
 
+## Supported Endpoints
+
+LiteLLM supports 2 vertex ai passthrough routes:
+
+1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
+2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
+
+## How to use
+
 Just replace `https://REGION-aiplatform.googleapis.com` with `LITELLM_PROXY_BASE_URL/vertex_ai`
 
 LiteLLM supports 3 flows for calling Vertex AI endpoints via pass-through:
@@ -107,7 +116,7 @@ curl \
 <TabItem value="curl" label="curl">
 
 ```bash
-curl http://localhost:4000/vertex_ai/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-central1/publishers/google/models/${MODEL_ID}:generateContent \
   -H "Content-Type: application/json" \
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{
@@ -213,7 +222,7 @@ curl http://localhost:4000/vertex-ai/v1/projects/${PROJECT_ID}/locations/us-cent
 
 LiteLLM Proxy Server supports two methods of authentication to Vertex AI:
 
-1. Pass Vertex Credetials client side to proxy server
+1. Pass Vertex Credentials client side to proxy server
 
 2. Set Vertex AI credentials on proxy server
 

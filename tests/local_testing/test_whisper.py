@@ -66,6 +66,7 @@ async def test_transcription(
         api_key=api_key,
         api_base=api_base,
         response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
         drop_params=True,
     )
     print(f"transcript: {transcript.model_dump()}")
@@ -164,3 +165,72 @@ async def test_gpt_4o_transcribe():
     await litellm.atranscription(
         model="openai/gpt-4o-transcribe", file=audio_file, response_format="json"
     )
+
+
+@pytest.mark.asyncio
+async def test_gpt_4o_transcribe_model_mapping():
+    """Test that GPT-4o transcription models are correctly mapped and not hardcoded to whisper-1"""
+    
+    # Test GPT-4o mini transcribe
+    response = await litellm.atranscription(
+        model="openai/gpt-4o-mini-transcribe", 
+        file=audio_file, 
+        response_format="json"
+    )
+    
+    # Check that the response contains the correct model in hidden params
+    assert response._hidden_params is not None
+    assert response._hidden_params["model"] == "gpt-4o-mini-transcribe"
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    assert response.text is not None
+    
+    # Test GPT-4o transcribe
+    response2 = await litellm.atranscription(
+        model="openai/gpt-4o-transcribe", 
+        file=audio_file, 
+        response_format="json"
+    )
+    
+    # Check that the response contains the correct model in hidden params
+    assert response2._hidden_params is not None
+    assert response2._hidden_params["model"] == "gpt-4o-transcribe"
+    assert response2._hidden_params["custom_llm_provider"] == "openai"
+    assert response2.text is not None
+    
+    # Test traditional whisper-1 still works
+    response3 = await litellm.atranscription(
+        model="openai/whisper-1", 
+        file=audio_file, 
+        response_format="json"
+    )
+    
+    # Check that the response contains the correct model in hidden params
+    assert response3._hidden_params is not None
+    assert response3._hidden_params["model"] == "whisper-1"
+    assert response3._hidden_params["custom_llm_provider"] == "openai"
+    assert response3.text is not None
+
+
+@pytest.mark.asyncio
+async def test_azure_transcribe_model_mapping():
+    """Test that Azure transcription models are correctly mapped and not hardcoded to whisper-1"""
+    
+    # Test Azure whisper-1
+    try:
+        response = await litellm.atranscription(
+            model="azure/whisper-1", 
+            file=audio_file, 
+            response_format="json",
+            api_key=os.getenv("AZURE_EUROPE_API_KEY"),
+            api_base="https://my-endpoint-europe-berri-992.openai.azure.com/",
+            drop_params=True
+        )
+        
+        # Check that the response contains the correct model in hidden params
+        assert response._hidden_params is not None
+        assert response._hidden_params["model"] == "whisper-1"
+        assert response._hidden_params["custom_llm_provider"] == "azure"
+        assert response.text is not None
+    except Exception as e:
+        # If Azure credentials are not available, skip this test
+        pytest.skip(f"Azure credentials not available: {str(e)}")

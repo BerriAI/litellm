@@ -3,6 +3,7 @@ Opik Logger that logs LLM events to an Opik server
 """
 
 import asyncio
+from datetime import timezone
 import json
 import traceback
 from typing import Dict, List
@@ -185,7 +186,6 @@ class OpikLogger(CustomBatchLogger):
     def _create_opik_payload(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
     ) -> List[Dict]:
-
         # Get metadata
         _litellm_params = kwargs.get("litellm_params", {}) or {}
         litellm_params_metadata = _litellm_params.get("metadata", {}) or {}
@@ -292,8 +292,8 @@ class OpikLogger(CustomBatchLogger):
                     "project_name": project_name,
                     "id": trace_id,
                     "name": trace_name,
-                    "start_time": start_time.isoformat() + "Z",
-                    "end_time": end_time.isoformat() + "Z",
+                    "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "input": input_data,
                     "output": output_data,
                     "metadata": metadata,
@@ -313,8 +313,8 @@ class OpikLogger(CustomBatchLogger):
                 "parent_span_id": parent_span_id,
                 "name": span_name,
                 "type": "llm",
-                "start_time": start_time.isoformat() + "Z",
-                "end_time": end_time.isoformat() + "Z",
+                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "input": input_data,
                 "output": output_data,
                 "metadata": metadata,

@@ -7,7 +7,7 @@ import httpx  # type: ignore
 from openai import APITimeoutError, AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
-from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.custom_httpx.http_handler import (
@@ -125,22 +125,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key, azure_ad_token, azure_ad_token_provider):
-        headers = {
-            "content-type": "application/json",
-        }
-        if api_key is not None:
-            headers["api-key"] = api_key
-        elif azure_ad_token is not None:
-            if azure_ad_token.startswith("oidc/"):
-                azure_ad_token = get_azure_ad_token_from_oidc(azure_ad_token)
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
-        elif azure_ad_token_provider is not None:
-            azure_ad_token = azure_ad_token_provider()
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
-
-        return headers
-
     def make_sync_azure_openai_chat_completion_request(
         self,
         azure_client: AzureOpenAI,
@@ -242,9 +226,18 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     azure_ad_token_provider=azure_ad_token_provider,
                     acompletion=acompletion,
                     client=client,
+                    litellm_params=litellm_params,
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
+            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                data = litellm.AzureOpenAIGPT5Config().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers or {},
+                )
             else:
                 data = litellm.AzureOpenAIConfig().transform_request(
                     model=model,
@@ -654,7 +647,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> EmbeddingResponse:
         response = None
         try:
-
             openai_aclient = self.get_azure_openai_client(
                 api_version=api_version,
                 api_base=api_base,
@@ -787,10 +779,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_response = getattr(e, "response", None)
+            error_text = str(e)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
+                error_text = error_response.text
             raise AzureOpenAIError(
-                status_code=status_code, message=str(e), headers=error_headers
+                status_code=status_code, message=error_text, headers=error_headers
             )
 
     async def make_async_azure_httpx_request(
@@ -835,7 +829,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-
             api_base = modify_url(
                 original_url=api_base, new_path="/openai/images/generations:submit"
             )
@@ -859,7 +852,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             await response.aread()
 
-            timeout_secs: int = 120
+            timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
                 raise Exception(
@@ -867,7 +860,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-
                     raise AzureOpenAIError(
                         status_code=408, message="Operation polling timed out."
                     )
@@ -935,7 +927,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 "2023-10-01-preview",
             ]
         ):  # CREATE + POLL for azure dall-e-2 calls
-
             api_base = modify_url(
                 original_url=api_base, new_path="/openai/images/generations:submit"
             )
@@ -959,7 +950,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             response.read()
 
-            timeout_secs: int = 120
+            timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
                 raise Exception(
@@ -1199,7 +1190,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
-
         max_retries = optional_params.pop("max_retries", 2)
 
         if aspeech is not None and aspeech is True:
@@ -1253,7 +1243,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client=None,
         litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
-
         azure_client: AsyncAzureOpenAI = self.get_azure_openai_client(
             api_base=api_base,
             api_version=api_version,

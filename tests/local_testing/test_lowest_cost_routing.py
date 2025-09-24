@@ -31,7 +31,7 @@ async def test_get_available_deployments():
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "groq/llama3-8b-8192"},
+            "litellm_params": {"model": "groq/llama-3.1-8b-instant"},
             "model_info": {"id": "groq-llama"},
         },
     ]
@@ -60,7 +60,7 @@ async def test_get_available_deployments_custom_price():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "input_cost_per_token": 0.00003,
                 "output_cost_per_token": 0.00003,
             },
@@ -182,7 +182,7 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "groq/llama3-8b-8192"},
+            "litellm_params": {"model": "groq/llama-3.1-8b-instant"},
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]

@@ -4,9 +4,10 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.caching import DualCache
@@ -152,9 +153,11 @@ class HumanloopLogger(CustomLogger):
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[
         str,
         List[AllMessageValues],
@@ -163,6 +166,9 @@ class HumanloopLogger(CustomLogger):
         humanloop_api_key = dynamic_callback_params.get(
             "humanloop_api_key"
         ) or get_secret_str("HUMANLOOP_API_KEY")
+
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for Humanloop integration")
 
         if humanloop_api_key is None:
             return super().get_chat_completion_prompt(

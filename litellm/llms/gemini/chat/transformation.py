@@ -1,12 +1,15 @@
-from typing import Dict, List, Optional
+from typing import List, Optional, cast
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    convert_url_to_base64,
+)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
+from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -66,8 +69,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    def is_model_gemini_audio_model(self, model: str) -> bool:
+        return "tts" in model
+
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return [
+        supported_params = [
             "temperature",
             "top_p",
             "max_tokens",
@@ -81,30 +87,23 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "modalities",
+            "parallel_tool_calls",
+            "web_search_options",
         ]
-
-    def map_openai_params(
-        self,
-        non_default_params: Dict,
-        optional_params: Dict,
-        model: str,
-        drop_params: bool,
-    ) -> Dict:
-
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
-        return super().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=drop_params,
-        )
+        if supports_reasoning(model):
+            supported_params.append("reasoning_effort")
+            supported_params.append("thinking")
+        if self.is_model_gemini_audio_model(model):
+            supported_params.append("audio")
+        return supported_params
 
     def _transform_messages(
         self, messages: List[AllMessageValues]
     ) -> List[ContentType]:
         """
-        Google AI Studio Gemini does not support image urls in messages.
+        Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
+        Convert them to base64 data instead.
         """
         for message in messages:
             _message_content = message.get("content")
@@ -129,4 +128,16 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                                     image_obj
                                 )
                             )
+                    elif element.get("type") == "file":
+                        file_element = cast(ChatCompletionFileObject, element)
+                        file_id = file_element["file"].get("file_id")
+                        if file_id and ("http://" in file_id or "https://" in file_id):
+                            # Convert HTTP/HTTPS file URL to base64 data
+                            try:
+                                base64_data = convert_url_to_base64(file_id)
+                                file_element["file"]["file_data"] = base64_data  # type: ignore
+                                file_element["file"].pop("file_id", None)  # type: ignore
+                            except Exception:
+                                # If conversion fails, leave as is and let the API handle it
+                                pass
         return _gemini_convert_messages_with_history(messages=messages)

@@ -22,8 +22,7 @@ import litellm
     "model, provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-instant-v1", "bedrock"),
-        ("azure/chatgpt-v-2", "azure"),
+        ("azure/chatgpt-v-3", "azure"),
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -77,7 +76,7 @@ def test_bedrock_timeout():
     litellm.set_verbose = True
     try:
         response = litellm.completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             timeout=0.01,
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
         )
@@ -104,7 +103,7 @@ def test_hanging_request_azure():
                 {
                     "model_name": "azure-gpt",
                     "litellm_params": {
-                        "model": "azure/chatgpt-v-2",
+                        "model": "azure/gpt-4o-new-test",
                         "api_base": os.environ["AZURE_API_BASE"],
                         "api_key": os.environ["AZURE_API_KEY"],
                     },
@@ -158,7 +157,7 @@ def test_hanging_request_openai():
                 {
                     "model_name": "azure-gpt",
                     "litellm_params": {
-                        "model": "azure/chatgpt-v-2",
+                        "model": "azure/chatgpt-v-3",
                         "api_base": os.environ["AZURE_API_BASE"],
                         "api_key": os.environ["AZURE_API_KEY"],
                     },

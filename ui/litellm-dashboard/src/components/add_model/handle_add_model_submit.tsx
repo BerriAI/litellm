@@ -1,8 +1,9 @@
 import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model, testConnectionRequest } from "../networking";
+import { modelCreateCall, Model } from "../networking";
 import React, { useState } from 'react';
 import ConnectionErrorDisplay from './model_connection_test';
+import NotificationManager from "../molecules/notifications_manager";
 
 export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
@@ -34,6 +35,7 @@ export const prepareModelAddRequest = async (
       }
 
       // Create a deployment for each mapping
+      const deployments = [];
       for (const mapping of modelMappings) {
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
@@ -59,7 +61,7 @@ export const prepareModelAddRequest = async (
             continue;
           }
           // Skip the custom_pricing and pricing_model fields as they're only used for UI control
-          if (key === 'custom_pricing' || key === 'pricing_model') {
+          if (key === 'custom_pricing' || key === 'pricing_model' || key === 'cache_control') {
             continue;
           }
           if (key == "model_name") {
@@ -80,6 +82,9 @@ export const prepareModelAddRequest = async (
           else if (key === "team_id") {
             modelInfoObj["team_id"] = value;
           }
+          else if (key === "model_access_group") {
+            modelInfoObj["access_groups"] = value;
+          }
           else if (key == "mode") {
             console.log("placing mode in modelInfo")
             modelInfoObj["mode"] = value;
@@ -96,9 +101,8 @@ export const prepareModelAddRequest = async (
               try {
                 litellmExtraParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -113,9 +117,8 @@ export const prepareModelAddRequest = async (
               try {
                 modelInfoParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -142,10 +145,12 @@ export const prepareModelAddRequest = async (
           }
         }
 
-        return { litellmParamsObj, modelInfoObj, modelName };
+        deployments.push({ litellmParamsObj, modelInfoObj, modelName });
       }
+
+      return deployments;
     } catch (error) {
-      message.error("Failed to create model: " + error, 10);
+      NotificationManager.fromBackend("Failed to create model: " + error);
     }
   };
 
@@ -156,27 +161,30 @@ export const handleAddModelSubmit = async (
     callback?: () => void,
   ) => {
     try {
-      const result = await prepareModelAddRequest(values, accessToken, form);
+      const deployments = await prepareModelAddRequest(values, accessToken, form);
       
-      if (!result) {
-        return; // Exit if preparation failed
+      if (!deployments || deployments.length === 0) {
+        return; // Exit if preparation failed or no deployments
       }
       
-      const { litellmParamsObj, modelInfoObj, modelName } = result;
-      
-      const new_model: Model = {
-        model_name: modelName,
-        litellm_params: litellmParamsObj,
-        model_info: modelInfoObj,
-      };
-      
-      const response: any = await modelCreateCall(accessToken, new_model);
-      console.log(`response for model create call: ${response["data"]}`);
+      // Create each deployment
+      for (const deployment of deployments) {
+        const { litellmParamsObj, modelInfoObj, modelName } = deployment;
+        
+        const new_model: Model = {
+          model_name: modelName,
+          litellm_params: litellmParamsObj,
+          model_info: modelInfoObj,
+        };
+        
+        const response: any = await modelCreateCall(accessToken, new_model);
+        console.log(`response for model create call: ${response["data"]}`);
+      }
       
       callback && callback();
       form.resetFields();
     } catch (error) {
-      message.error("Failed to add model: " + error, 10);
+      NotificationManager.fromBackend("Failed to add model: " + error);
     }
   };
 

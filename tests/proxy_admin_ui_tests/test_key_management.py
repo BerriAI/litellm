@@ -53,7 +53,6 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
@@ -81,7 +80,6 @@ from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
@@ -93,6 +91,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -661,6 +660,7 @@ def test_team_key_generation_team_member_check():
             team_member=Member(role="admin", user_id="test_user_id"),
         ),
         data=GenerateKeyRequest(),
+        route=KeyManagementRoutes.KEY_GENERATE,
     )
 
     team_table = LiteLLM_TeamTableCachedObj(
@@ -679,6 +679,7 @@ def test_team_key_generation_team_member_check():
                 team_member=Member(role="user", user_id="test_user_id"),
             ),
             data=GenerateKeyRequest(),
+            route=KeyManagementRoutes.KEY_GENERATE,
         )
 
 
@@ -739,13 +740,26 @@ def test_key_generation_required_params_check(
 
     if expected_result:
         if key_type == "team_key":
-            assert _team_key_generation_check(team_table, user_api_key_dict, input_data)
+            assert _team_key_generation_check(
+                team_table=team_table,
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
         elif key_type == "personal_key":
-            assert _personal_key_generation_check(user_api_key_dict, input_data)
+            assert _personal_key_generation_check(
+                user_api_key_dict=user_api_key_dict,
+                data=input_data,
+            )
     else:
         if key_type == "team_key":
             with pytest.raises(HTTPException):
-                _team_key_generation_check(team_table, user_api_key_dict, input_data)
+                _team_key_generation_check(
+                    team_table=team_table,
+                    user_api_key_dict=user_api_key_dict,
+                    data=input_data,
+                    route=KeyManagementRoutes.KEY_GENERATE,
+                )
         elif key_type == "personal_key":
             with pytest.raises(HTTPException):
                 _personal_key_generation_check(user_api_key_dict, input_data)
@@ -974,6 +988,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 2, "Should return exactly 2 keys"
@@ -989,6 +1004,7 @@ async def test_list_key_helper(prisma_client):
         user_id=test_user_id,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 3, "Should return exactly 3 keys for test user"
@@ -1001,6 +1017,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=test_team_id,
         key_alias=None,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 2, "Should return exactly 2 keys for test team"
@@ -1013,6 +1030,7 @@ async def test_list_key_helper(prisma_client):
         user_id=None,
         team_id=None,
         key_alias=test_key_alias,
+        key_hash=None,
         organization_id=None,
     )
     assert len(result["keys"]) == 1, "Should return exactly 1 key with test alias"
@@ -1025,6 +1043,7 @@ async def test_list_key_helper(prisma_client):
         user_id=test_user_id,
         team_id=None,
         key_alias=None,
+        key_hash=None,
         return_full_object=True,
         organization_id=None,
     )
@@ -1126,6 +1145,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
                 user_id=None,
                 team_id=None,
                 key_alias=None,
+                key_hash=None,
                 return_full_object=True,
                 organization_id=None,
             )

@@ -1,11 +1,12 @@
 import json
-from typing import List, Literal, Union
+from typing import Dict, List, Literal, Union
 
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
+from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from litellm.types.utils import ChatCompletionMessageToolCall
@@ -16,16 +17,64 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 ########################################################
 def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolParam:
     """Convert an MCP tool to an OpenAI tool."""
+    normalized_parameters = _normalize_mcp_input_schema(mcp_tool.inputSchema)
+    
     return ChatCompletionToolParam(
         type="function",
         function=FunctionDefinition(
             name=mcp_tool.name,
             description=mcp_tool.description or "",
-            parameters=mcp_tool.inputSchema,
+            parameters=normalized_parameters,
             strict=False,
         ),
     )
 
+
+def _normalize_mcp_input_schema(input_schema: dict) -> dict:
+    """
+    Normalize MCP input schema to ensure it's valid for OpenAI function calling.
+    
+    OpenAI requires that function parameters have:
+    - type: 'object'
+    - properties: dict (can be empty)
+    - additionalProperties: false (recommended)
+    """
+    if not input_schema:
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False
+        }
+    
+    # Make a copy to avoid modifying the original
+    normalized_schema = dict(input_schema)
+    
+    # Ensure type is 'object'
+    if "type" not in normalized_schema:
+        normalized_schema["type"] = "object"
+    
+    # Ensure properties exists (can be empty)
+    if "properties" not in normalized_schema:
+        normalized_schema["properties"] = {}
+    
+    # Add additionalProperties if not present (recommended by OpenAI)
+    if "additionalProperties" not in normalized_schema:
+        normalized_schema["additionalProperties"] = False
+    
+    return normalized_schema
+
+
+def transform_mcp_tool_to_openai_responses_api_tool(mcp_tool: MCPTool) -> FunctionToolParam:
+    """Convert an MCP tool to an OpenAI Responses API tool."""
+    normalized_parameters = _normalize_mcp_input_schema(mcp_tool.inputSchema)
+    
+    return FunctionToolParam(
+        name=mcp_tool.name,
+        parameters=normalized_parameters,
+        strict=False,
+        type="function",
+        description=mcp_tool.description or "",
+    )
 
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
@@ -76,8 +125,8 @@ def _get_function_arguments(function: FunctionDefinition) -> dict:
     return arguments if isinstance(arguments, dict) else {}
 
 
-def _transform_openai_tool_call_to_mcp_tool_call_request(
-    openai_tool: ChatCompletionMessageToolCall,
+def transform_openai_tool_call_request_to_mcp_tool_call_request(
+    openai_tool: Union[ChatCompletionMessageToolCall, Dict],
 ) -> MCPCallToolRequestParams:
     """Convert an OpenAI ChatCompletionMessageToolCall to an MCP CallToolRequestParams."""
     function = openai_tool["function"]
@@ -100,8 +149,10 @@ async def call_openai_tool(
     Returns:
         The result of the MCP tool call.
     """
-    mcp_tool_call_request_params = _transform_openai_tool_call_to_mcp_tool_call_request(
-        openai_tool=openai_tool,
+    mcp_tool_call_request_params = (
+        transform_openai_tool_call_request_to_mcp_tool_call_request(
+            openai_tool=openai_tool,
+        )
     )
     return await call_mcp_tool(
         session=session,

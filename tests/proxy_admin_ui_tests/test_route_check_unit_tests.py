@@ -88,6 +88,14 @@ def test_is_llm_api_route():
         is True
     )
 
+    # MCP routes
+    assert RouteChecks.is_llm_api_route("/mcp") is True
+    assert RouteChecks.is_llm_api_route("/mcp/") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/call") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/list") is True
+
+    
     # check non-matching routes
     assert RouteChecks.is_llm_api_route("/some/random/route") is False
     assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False

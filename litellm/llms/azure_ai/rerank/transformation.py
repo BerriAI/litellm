@@ -17,6 +17,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
     """
     Azure AI Rerank - Follows the same Spec as Cohere Rerank
     """
+
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         if api_base is None:
             raise ValueError(

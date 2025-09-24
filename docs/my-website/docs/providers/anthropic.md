@@ -4,6 +4,9 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-1-20250805`
+- `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
+- `claude-3.7` (`claude-3-7-sonnet-20250219`)
 - `claude-3.5` (`claude-3-5-sonnet-20240620`)
 - `claude-3` (`claude-3-haiku-20240307`, `claude-3-opus-20240229`, `claude-3-sonnet-20240229`)
 - `claude-2`
@@ -52,7 +55,28 @@ import os
 
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
+# os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
+
+### Custom API Base
+
+When using a custom API base for Anthropic (e.g., a proxy or custom endpoint), LiteLLM automatically appends the appropriate suffix (`/v1/messages` or `/v1/complete`) to your base URL.
+
+If your custom endpoint already includes the full path or doesn't follow Anthropic's standard URL structure, you can disable this automatic suffix appending:
+
+```python
+import os
+
+os.environ["ANTHROPIC_API_BASE"] = "https://my-custom-endpoint.com/custom/path"
+os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true"  # Prevents automatic suffix
+```
+
+Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
+- Base URL `https://my-proxy.com` → `https://my-proxy.com/v1/messages`
+- Base URL `https://my-proxy.com/api` → `https://my-proxy.com/api/v1/messages`
+
+With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
+- Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
 
 ## Usage
 
@@ -64,7 +88,7 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-3-opus-20240229", messages=messages)
+response = completion(model="claude-opus-4-20250514", messages=messages)
 print(response)
 ```
 
@@ -80,7 +104,7 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
-response = completion(model="claude-3-opus-20240229", messages=messages, stream=True)
+response = completion(model="claude-opus-4-20250514", messages=messages, stream=True)
 for chunk in response:
     print(chunk["choices"][0]["delta"]["content"])  # same as openai format
 ```
@@ -102,10 +126,10 @@ export ANTHROPIC_API_KEY="your-api-key"
 
 ```yaml
 model_list:
-  - model_name: claude-3 ### RECEIVED MODEL NAME ###
+  - model_name: claude-4 ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
-      model: claude-3-opus-20240229 ### MODEL NAME sent to `litellm.completion()` ###
-      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("AZURE_API_KEY_EU")
+      model: claude-opus-4-20250514 ### MODEL NAME sent to `litellm.completion()` ###
+      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("ANTHROPIC_API_KEY")
 ```
 
 ```bash
@@ -156,7 +180,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 <TabItem value="cli" label="cli">
 
 ```bash
-$ litellm --model claude-3-opus-20240229
+$ litellm --model claude-opus-4-20250514
 
 # Server running on http://0.0.0.0:4000
 ```
@@ -244,6 +268,9 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-5-sonnet  | `completion('claude-3-5-sonnet-20240620', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-haiku  | `completion('claude-3-haiku-20240307', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3-opus  | `completion('claude-3-opus-20240229', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -601,11 +628,6 @@ response = await client.chat.completions.create(
 
 ## **Function/Tool Calling**
 
-:::info 
-
-LiteLLM now uses Anthropic's 'tool' param 🎉 (v1.34.29+)
-:::
-
 ```python
 from litellm import completion
 
@@ -664,6 +686,185 @@ response = completion(
 )
 ```
 
+### Disable Tool Calling
+
+You can disable tool calling by setting the `tool_choice` to `"none"`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice="none",
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: anthropic-claude-model
+    litellm_params:
+        model: anthropic/claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+Replace `anything` with your LiteLLM Proxy Virtual Key, if [setup](../proxy/virtual_keys).
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer anything" \
+  -d '{
+    "model": "anthropic-claude-model",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}],
+    "tool_choice": "none"
+  }'
+```
+</TabItem>
+</Tabs>
+
+
+
+### MCP Tool Calling 
+
+Here's how to use MCP tool calling with Anthropic:
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+LiteLLM supports MCP tool calling with Anthropic in the OpenAI Responses API format.
+
+<Tabs>
+<TabItem value="openai_format" label="OpenAI Format">
+
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools=[
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    },
+]
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="anthropic_format" label="Anthropic Format">
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools = [
+    {
+        "type": "url",
+        "url": "https://mcp.deepwiki.com/mcp",
+        "name": "deepwiki-mcp",
+    }
+]
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+
+print(response)
+```
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4-sonnet
+    litellm_params:
+        model: anthropic/claude-sonnet-4-20250514
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}]
+  }'
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [
+        {
+            "type": "url",
+            "url": "https://mcp.deepwiki.com/mcp",
+            "name": "deepwiki-mcp",
+        }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
 
 ### Parallel Function Calling 
 
@@ -750,7 +951,11 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
-### Computer Tools
+### Anthropic Hosted Tools (Computer, Text Editor, Web Search)
+
+
+<Tabs>
+<TabItem value="computer" label="Computer">
 
 ```python
 from litellm import completion
@@ -780,6 +985,205 @@ resp = completion(
 
 print(resp)
 ```
+
+</TabItem>
+<TabItem value="text_editor" label="Text Editor">
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "text_editor_20250124",
+    "name": "str_replace_editor"
+}]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-5-sonnet-latest
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-latest
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}],
+    "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+<TabItem value="web_search" label="Web Search">
+
+:::info
+Live from v1.70.1+
+:::
+
+LiteLLM maps OpenAI's `search_context_size` param to Anthropic's `max_uses` param.
+
+| OpenAI | Anthropic |
+| --- | --- |
+| Low | 1 | 
+| Medium | 5 | 
+| High | 10 | 
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```python
+from litellm import completion
+
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "What's the weather like today?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    web_search_options={
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
+)
+
+print(resp)
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 5
+}]
+model = "claude-3-5-sonnet-20241022"
+messages = [{"role": "user", "content": "There's a syntax error in my primes.py file. Can you help me fix it?"}]
+
+resp = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(resp)
+```
+</TabItem>
+
+</Tabs>
+</TabItem>
+
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+- model_name: claude-3-5-sonnet-latest
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-latest
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "web_search_options": {
+        "search_context_size": "medium",
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
+    }
+  }'
+```
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-3-5-sonnet-latest",
+    "messages": [{"role": "user", "content": "What's the weather like today?"}],
+    "tools": [{
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 5
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
+
 
 ## Usage - Vision 
 
@@ -821,6 +1225,14 @@ print(f"\nResponse: {resp}")
 
 ## Usage - Thinking / `reasoning_content`
 
+LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/23051d89dd3611a81617d84277059cd88b2df511/litellm/llms/anthropic/chat/transformation.py#L298)
+
+| reasoning_effort | thinking |
+| ---------------- | -------- |
+| "low"            | "budget_tokens": 1024 |
+| "medium"         | "budget_tokens": 2048 |
+| "high"           | "budget_tokens": 4096 |
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -830,7 +1242,7 @@ from litellm import completion
 resp = completion(
     model="anthropic/claude-3-7-sonnet-20250219",
     messages=[{"role": "user", "content": "What is the capital of France?"}],
-    thinking={"type": "enabled", "budget_tokens": 1024},
+    reasoning_effort="low",
 )
 
 ```
@@ -863,7 +1275,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   -d '{
     "model": "claude-3-7-sonnet-20250219",
     "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
+    "reasoning_effort": "low"
   }'
 ```
 
@@ -926,6 +1338,44 @@ ModelResponse(
     )
 )
 ```
+
+### Pass `thinking` to Anthropic models
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+
+You can also pass the `thinking` parameter to Anthropic models.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-3-7-sonnet-20250219",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-3-7-sonnet-20250219",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 1024}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
+
 
 ## **Passing Extra Headers to Anthropic API**
 
@@ -1035,8 +1485,10 @@ response = completion(
             "content": [
                 {"type": "text", "text": "You are a very professional document summarization specialist. Please summarize the given document."},
                 {
-                    "type": "image_url",
-                    "image_url": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    "type": "file",
+                    "file": {
+                       "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                    }
                 },
             ],
         }
@@ -1047,7 +1499,7 @@ response = completion(
 print(response.choices[0])
 ```
 </TabItem>
-<TabItem value="proxy" lable="PROXY">
+<TabItem value="proxy" label="PROXY">
 
 1. Add model to config 
 
@@ -1081,8 +1533,10 @@ curl http://0.0.0.0:4000/v1/chat/completions \
             "text": "You are a very professional document summarization specialist. Please summarize the given document"
           },
           {
-                "type": "image_url",
-                "image_url": "data:application/pdf;base64,{encoded_file}" # 👈 PDF
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{encoded_file}", # 👈 PDF
+                }
             }
           }
         ]

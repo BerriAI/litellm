@@ -60,7 +60,6 @@ class BedrockRerankHandler(BaseAWSLLM):
         extra_headers: Optional[dict] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
-
         request_data = RerankRequest(
             model=model,
             query=query,

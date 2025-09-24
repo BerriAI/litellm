@@ -96,7 +96,7 @@ async def test_acompletion_caching_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -213,7 +213,7 @@ async def test_acompletion_caching_with_ttl_on_router():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -279,7 +279,7 @@ async def test_acompletion_caching_on_router_caching_groups():
             {
                 "model_name": "azure-gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "api_version": os.getenv("AZURE_API_VERSION"),

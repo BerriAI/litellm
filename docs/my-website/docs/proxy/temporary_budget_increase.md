@@ -3,7 +3,7 @@
 Set temporary budget increase for a LiteLLM Virtual Key. Use this if you get asked to increase the budget for a key temporarily.
 
 
-| Heirarchy | Supported | 
+| Hierarchy | Supported | 
 |-----------|-----------|
 | LiteLLM Virtual Key | ✅ |
 | User | ❌ |
@@ -16,7 +16,7 @@ Set temporary budget increase for a LiteLLM Virtual Key. Use this if you get ask
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 

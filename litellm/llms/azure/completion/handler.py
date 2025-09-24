@@ -72,6 +72,7 @@ class AzureTextCompletion(BaseAzureLLM):
                     azure_ad_token=azure_ad_token,
                     azure_ad_token_provider=azure_ad_token_provider,
                     acompletion=acompletion,
+                    litellm_params=litellm_params,
                 )
 
                 data = {"model": None, "prompt": prompt, **optional_params}
