@@ -13,6 +13,7 @@ from typing import (
     Union,
 )
 
+from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
 from openai.types.chat.chat_completion import ChatCompletion
@@ -30,6 +31,7 @@ from openai.types.moderation_create_response import Moderation, ModerationCreate
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
+import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
