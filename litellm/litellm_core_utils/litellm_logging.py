@@ -26,7 +26,6 @@ from typing import (
     cast,
 )
 
-import fastuuid as uuid
 from httpx import Response
 from pydantic import BaseModel
 
@@ -38,6 +37,7 @@ from litellm import (
     turn_off_message_logging,
 )
 from litellm._logging import _is_debugging_on, verbose_logger
+from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
