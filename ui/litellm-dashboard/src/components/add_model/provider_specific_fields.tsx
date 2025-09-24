@@ -465,7 +465,22 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
-  }]
+  }],
+  [Providers.IOIntelligence]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://api.intelligence.io.solutions/api/v1",
+      defaultValue: "https://api.intelligence.io.solutions/api/v1"
+    },
+    {
+      key: "api_key",
+      label: "IO Intelligence API Key",
+      type: "password",
+      required: true,
+      tooltip: "Get your API key from IO.NET dashboard"
+    }
+  ]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({

@@ -472,6 +472,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
+        "providers/io_intelligence",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
