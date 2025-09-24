@@ -13,7 +13,6 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
@@ -33,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
+from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
@@ -2633,3 +2633,18 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationSettings(BaseModel):
+    """
+    Settings for priority-based rate limiting reservation.
+    
+    Defines what priority to assign to keys without explicit priority metadata.
+    The priority_reservation mapping is configured separately via litellm.priority_reservation.
+    """
+    default_priority: float = Field(
+        default=0.5,
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation."
+    )
+
+    model_config = ConfigDict(protected_namespaces=())

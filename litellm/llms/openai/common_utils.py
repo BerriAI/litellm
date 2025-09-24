@@ -5,11 +5,14 @@ Common helpers / utils across al OpenAI endpoints
 import hashlib
 import json
 import ssl
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
 
 import httpx
 import openai
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -194,7 +197,9 @@ class BaseOpenAILLM:
         return param_names
 
     @staticmethod
-    def _get_async_http_client() -> Optional[httpx.AsyncClient]:
+    def _get_async_http_client(
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Optional[httpx.AsyncClient]:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
@@ -205,8 +210,11 @@ class BaseOpenAILLM:
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+                ssl_context=ssl_config
+                if isinstance(ssl_config, ssl.SSLContext)
+                else None,
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                shared_session=shared_session,
             ),
             follow_redirects=True,
         )
@@ -215,10 +223,10 @@ class BaseOpenAILLM:
     def _get_sync_http_client() -> Optional[httpx.Client]:
         if litellm.client_session is not None:
             return litellm.client_session
-        
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
-        
+
         return httpx.Client(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,
