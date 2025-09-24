@@ -2633,3 +2633,18 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationSettings(BaseModel):
+    """
+    Settings for priority-based rate limiting reservation.
+    
+    Defines what priority to assign to keys without explicit priority metadata.
+    The priority_reservation mapping is configured separately via litellm.priority_reservation.
+    """
+    default_priority: float = Field(
+        default=0.5,
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation."
+    )
+
+    model_config = ConfigDict(protected_namespaces=())

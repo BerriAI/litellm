@@ -1,6 +1,6 @@
 """Teams management client for LiteLLM proxy."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 
@@ -99,7 +99,7 @@ class TeamsManagementClient:
             UnauthorizedError: If authentication fails
         """
         url = f"{self._base_url}/v2/team/list"
-        params = {
+        params: Dict[str, Union[str, int]] = {
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,

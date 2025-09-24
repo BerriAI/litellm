@@ -274,14 +274,15 @@ class KeysManagementClient:
             data["aliases"] = aliases
         request = requests.Request("POST", url, headers=self._get_headers(), json=data)
         session = requests.Session()
+        response_text: Optional[str] = None
         try:
             response = session.send(request.prepare())
+            response_text = response.text
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                raise UnauthorizedError(e)
-            raise
+        except Exception:
+            raise Exception(f"Error updating key: {response_text}")
+
 
     def info(self, key: str, return_request: bool = False) -> Union[Dict[str, Any], requests.Request]:
         """
