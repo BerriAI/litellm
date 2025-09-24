@@ -359,7 +359,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `pip install -e ".[all]"`
-4. Start proxy backend `python3 /path/to/litellm/proxy_cli.py`
+4. Start proxy backend `python litellm/proxy_cli.py`
 
 ### Frontend
 1. Navigate to `ui/litellm-dashboard`
