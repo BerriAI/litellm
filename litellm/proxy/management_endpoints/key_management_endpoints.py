@@ -1558,20 +1558,6 @@ def _check_model_access_group(
     return True
 
 
-def _calculate_next_rotation_time(rotation_interval: str) -> datetime:
-    """
-    Calculate the next rotation timestamp based on rotation interval.
-    
-    Args:
-        rotation_interval: String representing rotation interval (e.g., "30d", "1w")
-        
-    Returns:
-        datetime: The next rotation timestamp in UTC
-    """
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    
-    interval_seconds = duration_in_seconds(rotation_interval)
-    return datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
 
 
 async def generate_key_helper_fn(  # noqa: PLR0915
@@ -1741,8 +1727,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         if auto_rotate and rotation_interval:
             key_data.update({
                 "auto_rotate": auto_rotate,
-                "rotation_interval": rotation_interval,
-                "next_rotation_at": _calculate_next_rotation_time(rotation_interval)
+                "rotation_interval": rotation_interval
+                # last_rotation_at will be null initially - rotation happens on first check
             })
 
         if (

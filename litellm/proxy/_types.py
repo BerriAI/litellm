@@ -1829,11 +1829,10 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    last_rotation_at: Optional[datetime] = None  # When the key was last rotated
     rotation_count: Optional[int] = 0  # Number of times key has been rotated
     auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
-    next_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+    last_rotation_at: Optional[datetime] = None  # When this key was last rotated
 
     model_config = ConfigDict(protected_namespaces=())
 
