@@ -550,6 +550,23 @@ def retrieve_batch(
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         client = kwargs.get("client", None)
         
+        # Check if this is an async invoke ARN (different from regular batch ARN)
+        # Async invoke ARNs have format: arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}:[0-9]{12}:async-invoke/[a-z0-9]{12}
+        if (batch_id.startswith("arn:aws") and 
+            ":bedrock:" in batch_id and 
+            ":async-invoke/" in batch_id):
+            # Handle async invoke status check
+            # Remove aws_region_name from kwargs to avoid duplicate parameter
+            async_kwargs = kwargs.copy()
+            async_kwargs.pop("aws_region_name", None)
+            
+            return _handle_async_invoke_status(
+                batch_id=batch_id,
+                aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
+                logging_obj=litellm_logging_obj,
+                **async_kwargs
+            )
+        
         # Try to use provider config first (for providers like bedrock)
         model: Optional[str] = kwargs.get("model", None)
         if model is not None:
@@ -933,3 +950,67 @@ def cancel_batch(
         return response
     except Exception as e:
         raise e
+
+
+def _handle_async_invoke_status(
+    batch_id: str,
+    aws_region_name: str,
+    logging_obj=None,
+    **kwargs
+) -> dict:
+    """
+    Handle async invoke status check for AWS Bedrock.
+    
+    Args:
+        batch_id: The async invoke ARN
+        aws_region_name: AWS region name
+        **kwargs: Additional parameters
+        
+    Returns:
+        dict: Status information including status, output_file_id (S3 URL), etc.
+    """
+    import asyncio
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+    
+    async def _async_get_status():
+        # Create embedding handler instance
+        embedding_handler = BedrockEmbedding()
+        
+        # Get the status of the async invoke job
+        status_response = await embedding_handler._get_async_invoke_status(
+            invocation_arn=batch_id,
+            aws_region_name=aws_region_name,
+            logging_obj=logging_obj,
+            **kwargs
+        )
+        
+        # Transform response to a more user-friendly format
+        result = {
+            "batch_id": status_response["invocationArn"],
+            "status": status_response["status"],
+            "submit_time": status_response["submitTime"],
+            "last_modified_time": status_response["lastModifiedTime"],
+            "end_time": status_response.get("endTime"),
+            "output_file_id": status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"],
+            "failure_message": status_response.get("failureMessage"),
+            "model_arn": status_response["modelArn"]
+        }
+        
+        return result
+    
+    # Since this function is called from within an async context via run_in_executor,
+    # we need to create a new event loop in a thread to avoid conflicts
+    import concurrent.futures
+    import threading
+    
+    def run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(_async_get_status())
+        finally:
+            new_loop.close()
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        return future.result()
