@@ -1,3 +1,14 @@
+"""
+Purpose
+- Live language toolchain checks: Python/Node/C/C++/Go/Java/Rust/ASM flows run via /agent/run tools.
+
+Scope
+- DOES: skip if toolchain not available; assert ok responses when present.
+- DOES NOT: run by default; environment-dependent.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_PORT=8788 pytest tests/ndsmoke/test_mini_agent_lang_ndsmoke.py -q
+"""
 import os
 import socket
 import httpx

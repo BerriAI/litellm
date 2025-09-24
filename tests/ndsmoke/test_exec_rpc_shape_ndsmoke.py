@@ -1,4 +1,17 @@
+"""
+Purpose
+- Infra sanity: Exec RPC is reachable and always returns {ok, rc, stdout, stderr, t_ms}.
+
+Scope
+- DOES: post to /exec('python', 'print(1)'); assert t_ms present.
+- DOES NOT: run by default; relies on reachable Exec RPC container.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_EXEC_BASE=http://127.0.0.1:8792 \
+  pytest tests/ndsmoke -k test_exec_rpc_shape_python_print1_optional -q
+"""
 import os, httpx, pytest, socket
+from urllib.parse import urlsplit
 
 
 def _can_connect(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -13,10 +26,15 @@ def _can_connect(host: str, port: int, timeout: float = 0.5) -> bool:
 def test_exec_rpc_shape_python_print1_optional():
     if os.getenv('DOCKER_MINI_AGENT','0') != '1':
         pytest.skip('DOCKER_MINI_AGENT not set; skipping live ndsmoke')
-    host = os.getenv('MINI_AGENT_EXEC_BASE','http://127.0.0.1:18790').rstrip('/')
-    if not _can_connect('127.0.0.1', 8790):
-        pytest.skip('exec RPC not reachable')
-    r = httpx.post(host+"/exec", json={"language":"python","code":"print(1)","timeout_sec":10.0}, timeout=15.0)
+
+    base = os.getenv('MINI_AGENT_EXEC_BASE','http://127.0.0.1:8792').rstrip('/')
+    p = urlsplit(base)
+    host = p.hostname or '127.0.0.1'
+    port = p.port or (443 if p.scheme == 'https' else 80)
+    if not _can_connect(host, port):
+        pytest.skip(f'exec RPC not reachable on {host}:{port}')
+
+    r = httpx.post(base + "/exec", json={"language":"python","code":"print(1)","timeout_sec":10.0}, timeout=15.0)
     r.raise_for_status()
     data = r.json()
     assert isinstance(data, dict)

@@ -774,6 +774,21 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.AIMLChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "chutes":
+        # Chutes is OpenAI-compatible. Resolve base/key from env if not explicitly provided.
+        # Environment variable support:
+        # - CHUTES_API_BASE or CHUTES_BASE for base URL
+        # - CHUTES_API_KEY or CHUTES_API_TOKEN for auth
+        api_base = (
+            api_base
+            or get_secret("CHUTES_API_BASE")
+            or get_secret("CHUTES_BASE")
+        )  # type: ignore
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("CHUTES_API_KEY")
+            or get_secret_str("CHUTES_API_TOKEN")
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

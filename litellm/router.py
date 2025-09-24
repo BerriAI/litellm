@@ -40,9 +40,10 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from typing_extensions import overload
 
-# Ensure a default event loop exists for sync tests calling get_event_loop().run_until_complete(...)
-try:  # Py3.12+ no default loop by default
-    asyncio.get_event_loop()
+# Ensure a default event loop exists for sync tests calling run_until_complete(...)
+# Prefer get_running_loop (Py3.12-safe); create/set one only if absent.
+try:
+    asyncio.get_running_loop()
 except RuntimeError:
     try:
         _loop_router = asyncio.new_event_loop()

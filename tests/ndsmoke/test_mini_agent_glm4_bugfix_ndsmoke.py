@@ -1,3 +1,15 @@
+"""
+Purpose
+- Live robustness: agent repairs a common glm4 Python bug (stray __main__) and prints target outputs.
+
+Scope
+- DOES: iterate with auto-run; assert expected prints appear in final/msgs.
+- DOES NOT: run by default; model-dependent.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_PORT=8788 LITELLM_DEFAULT_CODE_MODEL='ollama/glm4:latest' \
+  pytest tests/ndsmoke -k test_mini_agent_glm4_bugfix_iterates_live_optional -q
+"""
 import os, socket, httpx, pytest
 
 TIMEOUT = int(os.getenv("NDSMOKE_TIMEOUT", "240"))

@@ -1,3 +1,14 @@
+"""
+Purpose
+- Live acceptance: Chutes route returns a non-empty assistant message.
+
+Scope
+- DOES: call arouter_call('chutes/...') and assert non-empty text.
+- DOES NOT: run by default; skips unless CHUTES_API_KEY/TOKEN is set.
+
+Run
+- DOCKER_MINI_AGENT=1 CHUTES_API_KEY=... pytest tests/ndsmoke -k test_chutes_chat_live_optional -q
+"""
 import os, asyncio, pytest
 from dotenv import find_dotenv, load_dotenv
 

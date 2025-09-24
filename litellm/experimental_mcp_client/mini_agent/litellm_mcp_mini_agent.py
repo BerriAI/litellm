@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -81,6 +82,27 @@ async def arouter_call(
     if api_key is not None:
         kwargs["api_key"] = api_key
 
+    # Dev/test shortcut: if model is 'dummy' or 'noop', bypass provider mapping/network.
+    # Controlled by MINI_AGENT_ALLOW_DUMMY (default "1" keeps local dev/compose healthchecks green).
+    if (model in ("dummy", "noop")) and (os.getenv("MINI_AGENT_ALLOW_DUMMY", "1") == "1"):
+        return {"choices": [{"message": {"role": "assistant", "content": ""}}]}
+
+    # Fork-local mapping: support "chutes/<vendor>/<model>" without adding a global provider.
+    # Translate to OpenAI-compatible call using CHUTES_* env when present.
+    if isinstance(model, str) and model.startswith("chutes/"):
+        try:
+            remainder = model.split("/", 1)[1] if "/" in model else model
+        except Exception:
+            remainder = model
+        ch_api_base = os.getenv("CHUTES_API_BASE") or os.getenv("CHUTES_BASE")
+        ch_api_key = os.getenv("CHUTES_API_KEY") or os.getenv("CHUTES_API_TOKEN")
+        if ch_api_base and not kwargs.get("api_base"):
+            kwargs["api_base"] = ch_api_base
+        if ch_api_key and not kwargs.get("api_key"):
+            kwargs["api_key"] = ch_api_key
+        kwargs.setdefault("custom_llm_provider", "openai")
+        model = remainder
+
     return await litellm.acompletion(model=model, messages=messages, stream=stream, **kwargs)
 
 
@@ -88,8 +110,9 @@ async def arouter_call(
 @dataclass
 class AgentConfig:
     model: str
-    max_iterations: int = 4
+    max_iterations: int = 3
     max_tools_per_iter: int = 4
+    tool_concurrency: int = 1
     enable_repair: bool = True
     research_on_unsure: bool = False
     max_research_hops: int = 1
@@ -97,6 +120,7 @@ class AgentConfig:
     hard_char_budget: int = 16000
     shell_allow_prefixes: Sequence[str] = ("echo",)
     tool_timeout_sec: float = 10.0
+    max_total_seconds: Optional[float] = None
 
     # Compatibility / optional behavior toggles used by smokes
     use_tools: bool = False  # when True, agent prefers tool-enabled prompting (kept for compatibility)
@@ -434,9 +458,17 @@ async def arun_mcp_mini_agent(
 ) -> AgentRunResult:
     conv = list(messages)
     iters: List[IterationRecord] = []
+    t_start = time.perf_counter()
 
     tools = await mcp.list_openai_tools()
+    tools_to_pass = tools if cfg.use_tools else []
+    tool_choice   = "auto" if cfg.use_tools else None
+
     for step in range(cfg.max_iterations):
+        # wall-clock budget check
+        if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
+            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+
         # pruning for bounded context
         conv = _prune_history_preserve_pair(
             conv,
@@ -450,10 +482,19 @@ async def arun_mcp_mini_agent(
         if cfg.escalate_on_budget_exceeded and is_final_iter and (cfg.escalate_model or cfg.model):
             chosen_model = (cfg.escalate_model or cfg.model)
 
-        resp = await arouter_call(model=chosen_model, messages=conv, tools=tools, tool_choice="auto")
+        resp = await arouter_call(
+            model=chosen_model,
+            messages=conv, 
+            tools=tools_to_pass, 
+            tool_choice=tool_choice
+        )
         asst = _extract_assistant_message(resp)
         conv.append({k: v for k, v in asst.items() if k in ("role", "content", "tool_calls")})
-
+        
+        # Wall-clock cutoff after model response
+        if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
+            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+        
         tcs = _get_tool_calls(asst)
 
         # Optional: autorun code block from assistant content if no tool calls are present
@@ -477,35 +518,73 @@ async def arun_mcp_mini_agent(
                 ]
 
         if not tcs:
-            # possible final answer
-            content = asst.get("content") or ""
-            # research nudge if unsure and allowed
+            content = (asst.get("content") or "")
+            # If wall-clock exceeded, stop with budget instead of finalizing
+            if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
+                return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+            # NEW: if we are supposed to escalate and the model says budget exceeded, don't finalize yet
+            if (
+                cfg.escalate_on_budget_exceeded
+                and isinstance(content, str)
+                and "budget" in content.lower()
+                and "exceeded" in content.lower()
+            ):
+                conv.append({
+                    "role": "assistant",
+                    "content": "Observation: budget exceeded; escalating on next step."
+                })
+                continue
+
             if cfg.research_on_unsure and "not sure" in content.lower():
                 conv.append({
                     "role": "assistant",
                     "content": "Observation: Model is unsure. Use available research tools and try again with citations.",
                 })
                 continue
+
             return AgentRunResult(messages=conv, final_answer=content, stopped_reason="success", iterations=iters)
+
 
         # Handle tool calls
         inv_recs: List[Dict[str, Any]] = []
-        for i, tc in enumerate(tcs):
-            if i >= cfg.max_tools_per_iter:
-                break
+        to_run = tcs[: cfg.max_tools_per_iter]
+
+        async def _invoke(idx: int, tc: Dict[str, Any]):
             tool_name = (tc.get("function") or {}).get("name")
             args = (tc.get("function") or {}).get("arguments")
+            payload = {"id": tc.get("id"), "type": tc.get("type"), "function": {"name": tool_name, "arguments": args}}
             try:
-                out_json = await mcp.call_openai_tool({"id": tc.get("id"), "type": tc.get("type"), "function": {"name": tool_name, "arguments": args}})
-                inv = json.loads(out_json)
-                ok = bool(inv.get("ok"))
-                text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
-                conv.append({"role": "tool", "tool_call_id": tc.get("id"), "content": text})
-                inv_recs.append({"name": tool_name, **inv})
+                out_json = await mcp.call_openai_tool(payload)
+                return (idx, out_json, None, tool_name, tc.get("id"))
             except Exception as e:
-                err = str(e)
-                conv.append({"role": "tool", "tool_call_id": tc.get("id"), "content": f"error: {err}"})
-                inv_recs.append({"name": tool_name, "ok": False, "error": err})
+                return (idx, None, e, tool_name, tc.get("id"))
+
+        results = []
+        if getattr(cfg, "tool_concurrency", 1) > 1 and len(to_run) > 1:
+            sem = asyncio.Semaphore(max(1, int(getattr(cfg, "tool_concurrency", 1))))
+            async def _runner(idx: int, tc: Dict[str, Any]):
+                async with sem:
+                    return await _invoke(idx, tc)
+            tasks = [_runner(i, tc) for i, tc in enumerate(to_run)]
+            results = await asyncio.gather(*tasks)
+        else:
+            for i, tc in enumerate(to_run):
+                results.append(await _invoke(i, tc))
+
+        # Append tool results in submission order
+        for idx, out_json, err, tool_name, tool_call_id in sorted(results, key=lambda x: x[0]):
+            if err is not None:
+                err_s = str(err)
+                conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"error: {err_s}"})
+                inv_recs.append({"name": tool_name, "ok": False, "error": err_s})
+            else:
+                try:
+                    inv = json.loads(out_json) if isinstance(out_json, str) else (out_json or {})
+                except Exception:
+                    inv = {"ok": False, "error": "invalid tool JSON"}
+                text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
+                conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": text})
+                inv_recs.append({"name": tool_name, **inv})
 
         iters.append(IterationRecord(tool_invocations=inv_recs))
 

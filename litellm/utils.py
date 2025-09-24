@@ -4449,6 +4449,12 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+    elif llm_provider == "chutes":
+        api_key = (
+            api_key
+            or get_secret("CHUTES_API_KEY")
+            or get_secret("CHUTES_API_TOKEN")
+        )
     return api_key
 
 
@@ -5543,110 +5549,115 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("MOONSHOT_API_KEY")
-    else:
-        ## openai - chatcompletion + text completion
-        if (
-            model in litellm.open_ai_chat_completion_models
-            or model in litellm.open_ai_text_completion_models
-            or model in litellm.open_ai_embedding_models
-            or model in litellm.openai_image_generation_models
-        ):
-            if "OPENAI_API_KEY" in os.environ:
+        elif custom_llm_provider == "chutes":
+            if ("CHUTES_API_KEY" in os.environ) or ("CHUTES_API_TOKEN" in os.environ):
                 keys_in_environment = True
             else:
-                missing_keys.append("OPENAI_API_KEY")
-        ## anthropic
-        elif model in litellm.anthropic_models:
-            if "ANTHROPIC_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("ANTHROPIC_API_KEY")
-        ## cohere
-        elif model in litellm.cohere_models:
-            if "COHERE_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("COHERE_API_KEY")
-        ## replicate
-        elif model in litellm.replicate_models:
-            if "REPLICATE_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("REPLICATE_API_KEY")
-        ## openrouter
-        elif model in litellm.openrouter_models:
-            if "OPENROUTER_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("OPENROUTER_API_KEY")
-        ## vercel_ai_gateway
-        elif model in litellm.vercel_ai_gateway_models:
-            if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
-        ## datarobot
-        elif model in litellm.datarobot_models:
-            if "DATAROBOT_API_TOKEN" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("DATAROBOT_API_TOKEN")
-        ## vertex - text + chat models
-        elif (
-            model in litellm.vertex_chat_models
-            or model in litellm.vertex_text_models
-            or model in litellm.models_by_provider["vertex_ai"]
-        ):
-            if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
-        ## huggingface
-        elif model in litellm.huggingface_models:
-            if "HUGGINGFACE_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("HUGGINGFACE_API_KEY")
-        ## ai21
-        elif model in litellm.ai21_models:
-            if "AI21_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("AI21_API_KEY")
-        ## together_ai
-        elif model in litellm.together_ai_models:
-            if "TOGETHERAI_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("TOGETHERAI_API_KEY")
-        ## aleph_alpha
-        elif model in litellm.aleph_alpha_models:
-            if "ALEPH_ALPHA_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("ALEPH_ALPHA_API_KEY")
-        ## baseten
-        elif model in litellm.baseten_models:
-            if "BASETEN_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("BASETEN_API_KEY")
-        ## nlp_cloud
-        elif model in litellm.nlp_cloud_models:
-            if "NLP_CLOUD_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("NLP_CLOUD_API_KEY")
-        elif model in litellm.novita_models:
-            if "NOVITA_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("NOVITA_API_KEY")
-        elif model in litellm.nebius_models:
-            if "NEBIUS_API_KEY" in os.environ:
-                keys_in_environment = True
-            else:
-                missing_keys.append("NEBIUS_API_KEY")
+                missing_keys.append("CHUTES_API_KEY")
+        else:
+            ## openai - chatcompletion + text completion
+            if (
+                model in litellm.open_ai_chat_completion_models
+                or model in litellm.open_ai_text_completion_models
+                or model in litellm.open_ai_embedding_models
+                or model in litellm.openai_image_generation_models
+            ):
+                if "OPENAI_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("OPENAI_API_KEY")
+            ## anthropic
+            elif model in litellm.anthropic_models:
+                if "ANTHROPIC_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("ANTHROPIC_API_KEY")
+            ## cohere
+            elif model in litellm.cohere_models:
+                if "COHERE_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("COHERE_API_KEY")
+            ## replicate
+            elif model in litellm.replicate_models:
+                if "REPLICATE_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("REPLICATE_API_KEY")
+            ## openrouter
+            elif model in litellm.openrouter_models:
+                if "OPENROUTER_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("OPENROUTER_API_KEY")
+            ## vercel_ai_gateway
+            elif model in litellm.vercel_ai_gateway_models:
+                if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
+            ## datarobot
+            elif model in litellm.datarobot_models:
+                if "DATAROBOT_API_TOKEN" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("DATAROBOT_API_TOKEN")
+            ## vertex - text + chat models
+            elif (
+                model in litellm.vertex_chat_models
+                or model in litellm.vertex_text_models
+                or model in litellm.models_by_provider["vertex_ai"]
+            ):
+                if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
+            ## huggingface
+            elif model in litellm.huggingface_models:
+                if "HUGGINGFACE_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("HUGGINGFACE_API_KEY")
+            ## ai21
+            elif model in litellm.ai21_models:
+                if "AI21_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("AI21_API_KEY")
+            ## together_ai
+            elif model in litellm.together_ai_models:
+                if "TOGETHERAI_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("TOGETHERAI_API_KEY")
+            ## aleph_alpha
+            elif model in litellm.aleph_alpha_models:
+                if "ALEPH_ALPHA_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("ALEPH_ALPHA_API_KEY")
+            ## baseten
+            elif model in litellm.baseten_models:
+                if "BASETEN_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("BASETEN_API_KEY")
+            ## nlp_cloud
+            elif model in litellm.nlp_cloud_models:
+                if "NLP_CLOUD_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("NLP_CLOUD_API_KEY")
+            elif model in litellm.novita_models:
+                if "NOVITA_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("NOVITA_API_KEY")
+            elif model in litellm.nebius_models:
+                if "NEBIUS_API_KEY" in os.environ:
+                    keys_in_environment = True
+                else:
+                    missing_keys.append("NEBIUS_API_KEY")
 
     def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""

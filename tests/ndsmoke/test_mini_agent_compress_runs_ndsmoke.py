@@ -1,3 +1,15 @@
+"""
+Purpose
+- Live mini-agent (tools on): repair loop converges and prints expected outputs.
+
+Scope
+- DOES: post to /agent/run (local tools); assert last tool clean or outputs present.
+- DOES NOT: run by default; requires reachable agent API and a code-capable model.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_PORT=8788 LITELLM_DEFAULT_CODE_MODEL='ollama/...' \
+  pytest tests/ndsmoke -k test_mini_agent_compress_runs_iterates_live_optional -q
+"""
 import os, socket, httpx, pytest
 
 TIMEOUT = int(os.getenv("NDSMOKE_TIMEOUT", "240"))

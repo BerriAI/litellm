@@ -1,3 +1,15 @@
+"""
+Purpose
+- Live code loop: generate→run→repair until Python code prints two known outputs.
+
+Scope
+- DOES: call live LLM for code; run it locally; iterate with directives.
+- DOES NOT: guarantee determinism; skips unless DOCKER_MINI_AGENT=1.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_HOST=127.0.0.1 MINI_AGENT_API_PORT=8788 \
+  LITELLM_DEFAULT_CODE_MODEL='ollama/...' pytest tests/ndsmoke -k test_loop_exec_python_ndsmoke -q
+"""
 import asyncio
 import os
 import re

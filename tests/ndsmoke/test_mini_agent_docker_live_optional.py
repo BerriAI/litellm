@@ -1,3 +1,15 @@
+"""
+Purpose
+- Live code task via /agent/run in Docker environment; ensure we get an observation or a final answer.
+
+Scope
+- DOES: post with tools enabled and auto_run_code_on_code_block; assert success or observation.
+- DOES NOT: run by default; requires agent API reachable.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_PORT=8788 LITELLM_DEFAULT_CODE_MODEL='ollama/...' \
+  pytest tests/ndsmoke -k test_mini_agent_docker_ -q
+"""
 import os, asyncio, json, socket, pytest, httpx
 
 TIMEOUT = int(os.getenv("NDSMOKE_TIMEOUT", "240"))

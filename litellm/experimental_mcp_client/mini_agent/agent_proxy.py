@@ -76,11 +76,12 @@ async def run(req: AgentRunReq):
     def _build_cfg() -> agent.AgentConfig:
         return agent.AgentConfig(
             model=req.model,
-            max_iterations=req.max_iterations if isinstance(req.max_iterations, int) and req.max_iterations > 0 else 4,
+            max_iterations=req.max_iterations if isinstance(req.max_iterations, int) and req.max_iterations > 0 else 3,
             use_tools=bool(req.use_tools),
             auto_run_code_on_code_block=bool(req.auto_run_code_on_code_block),
             escalate_on_budget_exceeded=bool(req.escalate_on_budget_exceeded),
             escalate_model=req.escalate_model,
+            max_total_seconds=req.max_total_seconds,
         )
 
     # Helper: pick last successful tool invocation (ok=True), else None

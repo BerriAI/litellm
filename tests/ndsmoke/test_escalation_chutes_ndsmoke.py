@@ -1,3 +1,15 @@
+"""
+Purpose
+- Live escalation: /agent/run escalates to a chutes/* model on the last step.
+
+Scope
+- DOES: post to agent API; assert metrics.escalated and used_model startswith 'chutes/'.
+- DOES NOT: run by default; relies on reachable agent API and chutes credentials.
+
+Run
+- DOCKER_MINI_AGENT=1 MINI_AGENT_API_HOST=127.0.0.1 MINI_AGENT_API_PORT=8788 CHUTES_API_KEY=... \
+  pytest tests/ndsmoke -k test_escalation_to_chutes_live_optional -q
+"""
 
 import os, httpx, pytest
 

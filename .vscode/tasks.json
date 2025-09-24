@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tests: smoke (deterministic)",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "-m",
+        "pytest",
+        "-vv",
+        "tests/smoke"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "tests: ndsmoke (network-dependent)",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "-m",
+        "pytest",
+        "-vv",
+        "tests/ndsmoke"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    }
+  ]
+}

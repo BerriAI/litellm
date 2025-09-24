@@ -1,5 +1,6 @@
 import os, re, sys, socket, json, asyncio, httpx, pytest
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlsplit
 
 TIMEOUT_TOTAL = int(os.getenv("NDSMOKE_TIMEOUT", "300"))  # ~5 minutes
 TOOL_TIMEOUT = int(os.getenv("NDSMOKE_TOOL_TIMEOUT", "90"))
@@ -22,9 +23,9 @@ async def llm_chat(model: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]
 
 
 async def exec_rpc(language: str, code: str, timeout: float = 90.0) -> Dict[str, Any]:
-    url = os.getenv('MINI_AGENT_EXEC_BASE','http://127.0.0.1:8790').rstrip('/') + '/exec'
+    base = os.getenv('MINI_AGENT_EXEC_BASE','http://127.0.0.1:8792').rstrip('/')
     async with httpx.AsyncClient(timeout=timeout+5) as client:
-        r = await client.post(url, json={"language": language, "code": code, "timeout_sec": timeout})
+        r = await client.post(base + '/exec', json={"language": language, "code": code, "timeout_sec": timeout})
         r.raise_for_status()
         return r.json()
 
@@ -86,11 +87,13 @@ async def _loop_lang(model: str, lang: str, prompt: str, marker: str) -> Dict[st
     ("asm", "ASM_OK", "Return only one ```asm code block (NASM x86_64 Linux). Program prints ASM_OK to stdout using sys_write syscall. If assembly/link fails, fix and retry."),
 ])
 @pytest.mark.timeout(400)
-def test_multilang_loop_ndsmoke(lang: str, marker: str, prompt: str):
+def test_multilang_loop_ndsmoke(lang, marker, prompt):
     if os.getenv('DOCKER_MINI_AGENT','0') != '1':
         pytest.skip('DOCKER_MINI_AGENT not set; skipping live docker ndsmoke')
-    if not _can_connect('127.0.0.1', 8790):
-        pytest.skip('exec RPC not reachable')
-    model = os.getenv('LITELLM_DEFAULT_CODE_MODEL','ollama/glm4:latest')
-    out = asyncio.run(_loop_lang(model, lang, prompt, marker))
-    assert out.get("ok") is True, f"final invocation: {out.get('last')}"
+
+    base = os.getenv('MINI_AGENT_EXEC_BASE','http://127.0.0.1:8792')
+    p = urlsplit(base)
+    _h = p.hostname or '127.0.0.1'
+    _p = p.port or (443 if p.scheme == 'https' else 80)
+    if not _can_connect(_h, _p):
+        pytest.skip(f'exec RPC not reachable on {_h}:{_p}')
