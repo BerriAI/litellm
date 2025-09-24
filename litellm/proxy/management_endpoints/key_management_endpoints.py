@@ -1232,13 +1232,11 @@ def validate_key_team_change(
             )
 
     # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
     if key.user_id is not None:
-        is_member = False
-        for member in team.members_with_roles:
-            if member.user_id == key.user_id:
-                is_member = True
-                break
-        if not is_member:
+        if not member_object:
             raise HTTPException(
                 status_code=403,
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
@@ -1265,10 +1263,17 @@ def validate_key_team_change(
         team_obj=team,
     ):
         return
+    # this teams member permissions allow updating a
+    elif TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=member_object,
+        team_table=cast(LiteLLM_TeamTableCachedObj, team),
+        route=KeyManagementRoutes.KEY_UPDATE.value,
+    ):
+        return
     else:
         raise HTTPException(
             status_code=403,
-            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}. Please ask your Proxy Admin to allow this action under 'Member Permissions' for this team.",
         )
 
 
