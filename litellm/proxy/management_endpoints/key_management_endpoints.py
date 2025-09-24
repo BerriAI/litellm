@@ -346,6 +346,7 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json["allowed_routes"] = ["info_routes"]
     return data_json
 
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -358,13 +359,13 @@ async def validate_team_id_used_in_service_account_request(
             status_code=400,
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
             detail="prisma_client is required for service account keys. Please specify `prisma_client` in the request body.",
         )
-    
+
     # check if team_id exists in the database
     team = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id},
@@ -375,6 +376,7 @@ async def validate_team_id_used_in_service_account_request(
             detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
         )
     return True
+
 
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
@@ -550,6 +552,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Validate user-provided key format
+    if data.key is not None and not data.key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+            },
+        )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
@@ -914,6 +925,15 @@ async def prepare_key_update_data(
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
     non_default_values = {}
+    # ADD METADATA FIELDS
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
     for k, v in data_json.items():
         if (
             k in LiteLLM_ManagementEndpoint_MetadataFields
@@ -1126,6 +1146,9 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
+
+            # Set Management Endpoint Metadata Fields
+
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -1209,13 +1232,11 @@ def validate_key_team_change(
             )
 
     # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
     if key.user_id is not None:
-        is_member = False
-        for member in team.members_with_roles:
-            if member.user_id == key.user_id:
-                is_member = True
-                break
-        if not is_member:
+        if not member_object:
             raise HTTPException(
                 status_code=403,
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
@@ -1242,10 +1263,17 @@ def validate_key_team_change(
         team_obj=team,
     ):
         return
+    # this teams member permissions allow updating a
+    elif TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=member_object,
+        team_table=cast(LiteLLM_TeamTableCachedObj, team),
+        route=KeyManagementRoutes.KEY_UPDATE.value,
+    ):
+        return
     else:
         raise HTTPException(
             status_code=403,
-            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}. Please ask your Proxy Admin to allow this action under 'Member Permissions' for this team.",
         )
 
 
@@ -2439,6 +2467,9 @@ async def list_keys(
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
     ),
+    include_created_by_keys: bool = Query(
+        False, description="Include keys created by the user"
+    ),
     sort_by: Optional[str] = Query(
         default=None,
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
@@ -2501,6 +2532,7 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
         )
@@ -2578,6 +2610,7 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
 ) -> KeyListResponseObject:
@@ -2626,6 +2659,10 @@ async def _list_key_helper(
 
     if user_condition:
         or_conditions.append(user_condition)
+
+    # Add condition for created by keys if provided
+    if include_created_by_keys and user_id:
+        or_conditions.append({"created_by": user_id})
 
     # Add condition for admin team keys if provided
     if admin_team_ids:
@@ -2876,7 +2913,10 @@ async def unblock_key(
             param="key",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    hashed_token = hash_token(token=data.key)
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

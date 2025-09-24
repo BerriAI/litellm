@@ -108,7 +108,16 @@ async def llm_passthrough_factory_proxy_route(
 
     # Construct the full target URL using httpx
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    # Join paths correctly by removing trailing/leading slashes as needed
+    if not base_url.path or base_url.path == "/":
+        # If base URL has no path, just use the new path
+        updated_url = base_url.copy_with(path=encoded_endpoint)
+    else:
+        # Otherwise, combine the paths
+        base_path = base_url.path.rstrip("/")
+        clean_path = encoded_endpoint.lstrip("/")
+        full_path = f"{base_path}/{clean_path}"
+        updated_url = base_url.copy_with(path=full_path)
 
     # Add or update query parameters
     provider_api_key = passthrough_endpoint_router.get_credentials(
@@ -130,7 +139,11 @@ async def llm_passthrough_factory_proxy_route(
     is_streaming_request = False
     # anthropic is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
+        if "multipart/form-data" not in request.headers.get("content-type", ""):
+            _request_body = await request.json()
+        else:
+            _request_body = await get_form_data(request)
+        
         if _request_body.get("stream"):
             is_streaming_request = True
 
@@ -172,7 +185,9 @@ async def gemini_proxy_route(
         request=request, api_key=f"Bearer {google_ai_studio_api_key}"
     )
 
-    base_target_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    base_target_url = (
+        os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+    )
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -444,6 +459,14 @@ async def anthropic_proxy_route(
         region_name=None,
     )
 
+    custom_headers = {}
+    if (
+        "authorization" not in request.headers
+        and "x-api-key" not in request.headers
+        and anthropic_api_key is not None
+    ):
+        custom_headers["x-api-key"] = "{}".format(anthropic_api_key)
+
     ## check for streaming
     is_streaming_request = await is_streaming_request_fn(request)
 
@@ -451,7 +474,7 @@ async def anthropic_proxy_route(
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={"x-api-key": "{}".format(anthropic_api_key)},
+        custom_headers=custom_headers,
         _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
@@ -462,6 +485,76 @@ async def anthropic_proxy_route(
     )
 
     return received_value
+
+
+async def handle_bedrock_count_tokens(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_body: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Handle AWS Bedrock CountTokens API requests.
+
+    This function processes count_tokens endpoints like:
+    - /v1/messages/count_tokens
+    - /v1/messages/count-tokens
+    """
+    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        # Initialize the handler
+        handler = BedrockCountTokensHandler()
+
+        # Extract model from request body
+        model = request_body.get("model")
+        if not model:
+            raise HTTPException(
+                status_code=400, detail={"error": "Model is required in request body"}
+            )
+
+        # Get model parameters from router
+        litellm_params = {"user_api_key_dict": user_api_key_dict}
+        resolved_model = model  # Default fallback
+
+        if llm_router:
+            deployments = llm_router.get_model_list(model_name=model)
+            if deployments and len(deployments) > 0:
+                # Get the first matching deployment
+                deployment = deployments[0]
+                model_litellm_params = deployment.get("litellm_params", {})
+
+                # Get the resolved model ID from the configuration
+                if "model" in model_litellm_params:
+                    resolved_model = model_litellm_params["model"]
+
+                # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
+                for key, value in model_litellm_params.items():
+                    if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                        litellm_params[key] = value  # type: ignore
+
+        verbose_proxy_logger.debug(f"Count tokens litellm_params: {litellm_params}")
+        verbose_proxy_logger.debug(f"Resolved model: {resolved_model}")
+
+        # Handle the count tokens request
+        result = await handler.handle_count_tokens_request(
+            request_data=request_body,
+            litellm_params=litellm_params,
+            resolved_model=resolved_model,
+        )
+
+        return result
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"}
+        )
 
 
 async def bedrock_llm_proxy_route(
@@ -489,6 +582,17 @@ async def bedrock_llm_proxy_route(
     )
 
     request_body = await _read_request_body(request=request)
+
+    # Special handling for count_tokens endpoints
+    if "count_tokens" in endpoint or "count-tokens" in endpoint:
+        return await handle_bedrock_count_tokens(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            request_body=request_body,
+        )
+
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -505,13 +609,13 @@ async def bedrock_llm_proxy_route(
                 "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
                 + endpoint,
             },
-        ) 
+        )
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
     data["custom_llm_provider"] = "bedrock"
-    
+
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,

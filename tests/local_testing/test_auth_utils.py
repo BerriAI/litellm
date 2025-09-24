@@ -259,3 +259,55 @@ def test_get_model_from_request(request_data, expected_model):
     model = get_model_from_request(request_data, "/v1/files")
     assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
 
+
+def test_get_customer_user_header_from_mapping_returns_customer_header():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result == "X-OpenWebUI-User-Email"
+
+
+def test_get_customer_user_header_from_mapping_no_customer_returns_none():
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+    ]
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result is None
+
+    # Also support a single mapping dict
+    single_mapping = {"header_name": "X-Only-Internal", "litellm_user_role": "internal_user"}
+    result = get_customer_user_header_from_mapping(single_mapping)
+    assert result is None
+
+
+def test_get_internal_user_header_from_mapping_returns_internal_header():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result == "X-OpenWebUI-User-Id"
+
+
+def test_get_internal_user_header_from_mapping_no_internal_returns_none():
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
+    ]
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result is None
+
+    # Also support single mapping dict
+    single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping)
+    assert result is None

@@ -1,11 +1,12 @@
 import json
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 from typing_extensions import (
     Protocol,
     Required,
     Self,
+    TypedDict,
     TypeGuard,
     get_origin,
     override,
@@ -51,7 +52,7 @@ AllDatabricksContentValues = Union[str, List[AllDatabricksContentListValues]]
 
 class DatabricksFunction(TypedDict, total=False):
     name: Required[str]
-    description: dict | str
+    description: Union[dict, str]
     parameters: dict
     strict: bool
 

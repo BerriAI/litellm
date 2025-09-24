@@ -11,8 +11,9 @@ export enum Providers {
   Azure = "Azure",                     
   Azure_AI_Studio = "Azure AI Foundry (Studio)", 
   Cerebras = "Cerebras",                
-  Cohere = "Cohere",                    
-  Databricks = "Databricks",            
+  Cohere = "Cohere",         
+  Dashscope = "Dashscope",
+  Databricks = "Databricks (Qwen API)",            
   DeepInfra = "DeepInfra",             
   Deepgram = "Deepgram",                
   Deepseek = "Deepseek",               
@@ -30,6 +31,7 @@ export enum Providers {
   OpenAI_Text = "OpenAI Text Completion",
   OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
   Openrouter = "Openrouter",            
+  Oracle = "Oracle Cloud Infrastructure (OCI)",
   Perplexity = "Perplexity",           
   Sambanova = "Sambanova",              
   TogetherAI = "TogetherAI",            
@@ -37,7 +39,7 @@ export enum Providers {
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
   VolcEngine = "VolcEngine",           
   Voyage = "Voyage AI",                
-  xAI = "xAI",                          
+  xAI = "xAI",                      
 }
 
 export const provider_map: Record<string, string> = {
@@ -56,6 +58,7 @@ export const provider_map: Record<string, string> = {
     OpenAI_Text_Compatible: "text-completion-openai",
     Vertex_AI: "vertex_ai",
     Databricks: "databricks",
+    Dashscope: "dashscope",
     xAI: "xai",
     Deepseek: "deepseek",
     Ollama: "ollama",
@@ -65,6 +68,7 @@ export const provider_map: Record<string, string> = {
     Perplexity: "perplexity",
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
+    Oracle: "oci",
     FireworksAI: "fireworks_ai",
     GradientAI: "gradient_ai",
     Triton: "triton",
@@ -91,6 +95,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
     [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
     [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
+    [Providers.Dashscope]: `${asset_logos_folder}dashscope.svg`,
     [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
     [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
     [Providers.Groq]: `${asset_logos_folder}groq.svg`,
@@ -103,6 +108,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
     [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
     [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
+    [Providers.Oracle]: `${asset_logos_folder}oracle.svg`,
     [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
     [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
@@ -163,6 +169,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "azure_ai/command-r-plus";
     } else if (selectedProvider == Providers.Azure) {
       return "azure/my-deployment";
+    } else if (selectedProvider == Providers.Oracle) {
+      return "oci/xai.grok-4";
     } else if (selectedProvider == Providers.Voyage) {
       return "voyage/";
     } else if (selectedProvider == Providers.JinaAI) {

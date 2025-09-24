@@ -28,6 +28,7 @@ from litellm.types.files import (
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
 )
+from litellm.types.utils import LlmProviders
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -492,7 +493,8 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
-        if labels is not None:
+        # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
+        if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
     except Exception as e:
         raise e
@@ -535,7 +537,11 @@ def sync_transform_request_body(
             logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+        cached_content = None
+        if "cached_content" in optional_params:
+            cached_content = optional_params.pop("cached_content")
+        elif "cachedContent" in optional_params:
+            cached_content = optional_params.pop("cachedContent")
 
     return _transform_request_body(
         messages=messages,
@@ -582,7 +588,11 @@ async def async_transform_request_body(
             logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+        cached_content = None
+        if "cached_content" in optional_params:
+            cached_content = optional_params.pop("cached_content")
+        elif "cachedContent" in optional_params:
+            cached_content = optional_params.pop("cachedContent")
 
     return _transform_request_body(
         messages=messages,

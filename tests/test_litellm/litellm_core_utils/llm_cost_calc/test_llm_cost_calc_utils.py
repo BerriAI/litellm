@@ -22,8 +22,11 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    calculate_cache_writing_cost,
+    generic_cost_per_token,
+)
+from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
 def test_reasoning_tokens_no_price_set():
@@ -174,6 +177,35 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
     assert prompt_cost < 0.085
 
 
+def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
+    model = "claude-3-5-haiku-20241022"
+    usage = Usage(
+        completion_tokens=90,
+        prompt_tokens=28436,
+        total_tokens=28526,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=0,
+            rejected_prediction_tokens=None,
+            text_tokens=None,
+        ),
+        prompt_tokens_details=None,
+        cache_creation_input_tokens=2000,
+    )
+
+    custom_llm_provider = "anthropic"
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    print(f"prompt_cost: {prompt_cost}")
+    assert round(prompt_cost, 3) == 0.023
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
@@ -194,7 +226,7 @@ def test_string_cost_values():
         completion_tokens=500,
         total_tokens=1500,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None
+            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(
             audio_tokens=50,
@@ -203,7 +235,6 @@ def test_string_cost_values():
             accepted_prediction_tokens=None,
             rejected_prediction_tokens=None,
         ),
-        _cache_creation_input_tokens=150,
     )
 
     # Mock get_model_info to return our mock model info
@@ -356,3 +387,242 @@ def test_string_cost_values_with_threshold():
 
     assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
+def test_calculate_cache_writing_cost():
+    """Test the calculate_cache_writing_cost function with detailed cache creation token breakdown."""
+
+    # Test case 1: With cache creation token details (matching the provided input)
+    cache_creation_tokens = 14055
+    cache_creation_token_details = CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=56, ephemeral_1h_input_tokens=13999
+    )
+    cache_creation_cost_above_1hr = 6e-06
+    cache_creation_cost = 3.75e-06
+
+    result = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_token_details,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        cache_creation_cost=cache_creation_cost,
+    )
+
+    # Expected calculation:
+    # 5m tokens: 56 * 3.75e-06 = 0.00021
+    # 1h tokens: 13999 * 6e-06 = 0.083994
+    # Total: 0.00021 + 0.083994 = 0.084204
+    expected_cost = (56 * 3.75e-06) + (13999 * 6e-06)
+
+    assert round(result, 6) == round(expected_cost, 6)
+    assert round(result, 6) == 0.084204
+
+    # Test case 2: Without cache creation token details (fallback behavior)
+    cache_creation_tokens_no_details = 1000
+    cache_creation_token_details_none = None
+    cache_creation_cost_fallback = 5e-06
+
+    result_no_details = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens_no_details,
+        cache_creation_token_details=cache_creation_token_details_none,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        cache_creation_cost=cache_creation_cost_fallback,
+    )
+
+    # Expected calculation when no details: 1000 * 5e-06 = 0.005
+    expected_cost_no_details = 1000 * 5e-06
+
+    assert round(result_no_details, 6) == round(expected_cost_no_details, 6)
+    assert result_no_details == 0.005
+
+    # Test case 3: With cache creation token details but None values
+    cache_creation_token_details_partial = CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=None, ephemeral_1h_input_tokens=100
+    )
+
+    result_partial = calculate_cache_writing_cost(
+        cache_creation_tokens=500,
+        cache_creation_token_details=cache_creation_token_details_partial,
+        cache_creation_cost_above_1hr=6e-06,
+        cache_creation_cost=3e-06,
+    )
+
+    # Expected calculation: 0 (for None 5m tokens) + (100 * 6e-06) = 0.0006
+    expected_cost_partial = (0.0) + (100 * 6e-06)
+
+    assert round(result_partial, 6) == round(expected_cost_partial, 6)
+    assert round(result_partial, 6) == 0.0006
+
+    # Test case 4: Zero costs
+    result_zero = calculate_cache_writing_cost(
+        cache_creation_tokens=1000,
+        cache_creation_token_details=CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=50, ephemeral_1h_input_tokens=950
+        ),
+        cache_creation_cost_above_1hr=0.0,
+        cache_creation_cost=0.0,
+    )
+
+    assert result_zero == 0.0
+
+
+def test_service_tier_flex_pricing():
+    """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test standard pricing
+    std_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    std_total = std_cost[0] + std_cost[1]
+    
+    # Test flex pricing
+    flex_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="flex"
+    )
+    flex_total = flex_cost[0] + flex_cost[1]
+    
+    # Verify flex is approximately 50% of standard
+    assert std_total > 0, "Standard cost should be greater than 0"
+    assert flex_total > 0, "Flex cost should be greater than 0"
+    
+    flex_ratio = flex_total / std_total
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+    
+    # Verify specific costs match expected values
+    # gpt-5-nano flex: input=2.5e-08, output=2e-07
+    expected_flex_prompt = 1000 * 2.5e-08  # 0.000025
+    expected_flex_completion = 500 * 2e-07  # 0.0001
+    expected_flex_total = expected_flex_prompt + expected_flex_completion
+    
+    assert abs(flex_cost[0] - expected_flex_prompt) < 1e-10, f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
+    assert abs(flex_cost[1] - expected_flex_completion) < 1e-10, f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
+    assert abs(flex_total - expected_flex_total) < 1e-10, f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
+
+
+def test_service_tier_default_pricing():
+    """Test that when no service tier is provided, standard pricing is used."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-5-nano
+    model = "gpt-5-nano"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test with no service tier (should use standard)
+    default_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    
+    # Test with explicit standard service tier
+    standard_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="standard"
+    )
+    
+    # Both should be identical
+    assert abs(default_cost[0] - standard_cost[0]) < 1e-10, "Default and standard prompt costs should be identical"
+    assert abs(default_cost[1] - standard_cost[1]) < 1e-10, "Default and standard completion costs should be identical"
+    
+    # Verify specific costs match expected standard values
+    # gpt-5-nano standard: input=5e-08, output=4e-07
+    expected_standard_prompt = 1000 * 5e-08  # 0.00005
+    expected_standard_completion = 500 * 4e-07  # 0.0002
+    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    
+    assert abs(default_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
+    assert abs(default_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
+
+
+def test_service_tier_fallback_pricing():
+    """Test that when service tier is provided but model doesn't have those keys, it falls back to standard pricing."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-4 which doesn't have flex pricing keys
+    model = "gpt-4"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test standard pricing
+    std_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    std_total = std_cost[0] + std_cost[1]
+    
+    # Test flex pricing (should fall back to standard since gpt-4 doesn't have flex keys)
+    flex_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="flex"
+    )
+    flex_total = flex_cost[0] + flex_cost[1]
+    
+    # Test priority pricing (should fall back to standard since gpt-4 doesn't have priority keys)
+    priority_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="priority"
+    )
+    priority_total = priority_cost[0] + priority_cost[1]
+    
+    # All should be identical (fallback to standard)
+    assert abs(std_total - flex_total) < 1e-10, f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
+    assert abs(std_total - priority_total) < 1e-10, f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
+    
+    # Verify costs are reasonable (not zero)
+    assert std_total > 0, "Standard cost should be greater than 0"
+    assert flex_total > 0, "Flex cost should be greater than 0 (fallback)"
+    assert priority_total > 0, "Priority cost should be greater than 0 (fallback)"
+    
+    # Verify specific costs match expected gpt-4 values
+    # gpt-4 standard: input=3e-05, output=6e-05
+    expected_standard_prompt = 1000 * 3e-05  # 0.03
+    expected_standard_completion = 500 * 6e-05  # 0.03
+    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    
+    assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
+    assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"

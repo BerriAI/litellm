@@ -14,7 +14,6 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -22,6 +21,7 @@ from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     STREAM_SSE_DATA_PREFIX,
@@ -259,6 +259,7 @@ class ProxyBaseLLMRequestProcessing:
             "_arealtime",
             "aget_responses",
             "adelete_responses",
+            "acancel_responses",
             "acreate_batch",
             "aretrieve_batch",
             "afile_content",
@@ -355,6 +356,7 @@ class ProxyBaseLLMRequestProcessing:
             "_arealtime",
             "aget_responses",
             "adelete_responses",
+            "acancel_responses",
             "atext_completion",
             "aimage_edit",
             "alist_input_items",

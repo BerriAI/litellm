@@ -46,6 +46,7 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     SpecialModelNames,
     UserAPIKeyAuth,
+    NewTeamRequest,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
@@ -468,16 +469,12 @@ async def get_end_user_object(
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
-        if isinstance(cached_user_obj, dict):
-            return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
-        elif isinstance(cached_user_obj, LiteLLM_EndUserTable):
-            return_obj = cached_user_obj
-            check_in_budget(end_user_obj=return_obj)
-            return return_obj
+        return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+        check_in_budget(end_user_obj=return_obj)
+        return return_obj
+
     # else, check db
-    try:
+    try:        
         response = await prisma_client.db.litellm_endusertable.find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True},
@@ -486,9 +483,9 @@ async def get_end_user_object(
         if response is None:
             raise Exception
 
-        # save the end-user object to cache
+        # save the end-user object to cache (always store as dict for consistency)
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=response
+            key="end_user_id:{}".format(end_user_id), value=response.dict()
         )
 
         _response = LiteLLM_EndUserTable(**response.dict())
@@ -529,10 +526,7 @@ async def get_team_membership(
     # check if in cache
     cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_membership_obj is not None:
-        if isinstance(cached_membership_obj, dict):
-            return LiteLLM_TeamMembership(**cached_membership_obj)
-        elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
-            return cached_membership_obj
+        return LiteLLM_TeamMembership(**cached_membership_obj)
 
     # else, check db
     try:
@@ -544,8 +538,8 @@ async def get_team_membership(
         if response is None:
             return None
 
-        # save the team membership object to cache
-        await user_api_key_cache.async_set_cache(key=_key, value=response)
+        # save the team membership object to cache (store as dict)
+        await user_api_key_cache.async_set_cache(key=_key, value=response.dict())
 
         _response = LiteLLM_TeamMembership(**response.dict())
 
@@ -821,8 +815,9 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
+
     await user_api_key_cache.async_set_cache(
-        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
 
@@ -889,10 +884,17 @@ async def _get_team_db_check(
     )
 
     if response is None and team_id_upsert:
-        response = await prisma_client.db.litellm_teamtable.create(
-            data={"team_id": team_id}
-        )
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
 
+        new_team_data = NewTeamRequest(team_id=team_id)
+
+        mock_request = Request(scope={"type": "http"})
+        system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        created_team_dict = await new_team(
+            data=new_team_data, http_request=mock_request, user_api_key_dict=system_admin_user
+        )
+        response = LiteLLM_TeamTable(**created_team_dict)
     return response
 
 
@@ -1211,7 +1213,6 @@ def _check_model_access_helper(
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
-    object_type: Literal["user", "team", "key", "org"] = "user",
 ) -> bool:
     ## check if model in allowed model names
     from collections import defaultdict
@@ -1316,7 +1317,6 @@ def _can_object_call_model(
             models=models,
             team_model_aliases=team_model_aliases,
             team_id=team_id,
-            object_type=object_type,
         ):
             return True
 

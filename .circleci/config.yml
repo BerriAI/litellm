@@ -144,7 +144,7 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
-            pip install "cryptography<40.0.0"
+            pip install "cryptography>=43.0.1"
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
                 --config-file mypy.ini \
@@ -671,6 +671,7 @@ jobs:
             pip install mypy
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install "google-genai==1.22.0"
             pip install pyarrow
             pip install "boto3==1.36.0"
             pip install "aioboto3==13.4.0"
@@ -1049,6 +1050,51 @@ jobs:
             ls
             python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_mapped_tests_coverage.xml
+            mv .coverage litellm_mapped_tests_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_mapped_tests_coverage.xml
+            - litellm_mapped_tests_coverage
+  litellm_mapped_enterprise_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest-mock==3.12.0"
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "hypercorn==0.17.3"
+            pip install "pydantic==2.10.2"
+            pip install "mcp==1.10.1"
+            pip install "requests-mock>=1.12.1"
+            pip install "responses==0.25.7"
+            pip install "pytest-xdist==3.6.1"
+            pip install "semantic_router==0.1.10"
+            pip install "fastapi-offline==1.7.3"
+      - setup_litellm_enterprise_pip
       - run:
           name: Run enterprise tests
           command: |
@@ -1457,6 +1503,7 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
@@ -1474,6 +1521,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
       - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
       - run: python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
+      - run: python ./tests/code_coverage_tests/check_fastuuid_usage.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -1777,8 +1825,8 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e AZURE_API_KEY=$AZURE_BATCHES_API_KEY \
-              -e AZURE_API_BASE=$AZURE_BATCHES_API_BASE \
+              -e AZURE_API_KEY=$AZURE_API_KEY \
+              -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -2824,8 +2872,8 @@ jobs:
             source "$NVM_DIR/bash_completion"
             
             # Install and use Node version
-            nvm install v18.17.0
-            nvm use v18.17.0
+            nvm install v20
+            nvm use v20
             
             cd ui/litellm-dashboard
             
@@ -2878,7 +2926,26 @@ jobs:
           name: Install Playwright Browsers
           command: |
             npx playwright install
+      - run:
+          name: Run UI unit tests (Vitest)
+          command: |
+            # Use Node 20 (several deps require >=20)
+            export NVM_DIR="/opt/circleci/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            nvm install 20
+            nvm use 20
       
+            cd ui/litellm-dashboard
+            npm ci || npm install
+      
+            # CI run, with both LCOV (Codecov) and HTML (artifact you can click)
+            CI=true npm run test -- --run --coverage \
+              --coverage.provider=v8 \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reportsDirectory=coverage/html
+
+
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
@@ -3154,6 +3221,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_mapped_enterprise_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - litellm_mapped_tests:
           filters:
             branches:
@@ -3198,6 +3271,7 @@ workflows:
             - guardrails_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
+            - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
@@ -3258,6 +3332,7 @@ workflows:
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
             - litellm_mapped_tests
+            - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
             - pass_through_unit_testing
