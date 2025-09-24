@@ -527,6 +527,7 @@ vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
+cloudrift_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -745,6 +746,8 @@ def add_known_models():
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
             ovhcloud_embedding_models.add(key)
+        elif value.get("litellm_provider") == "cloudrift":
+            clodrift_models.add(key)
 
 
 add_known_models()
@@ -840,6 +843,7 @@ model_list = list(
     | vercel_ai_gateway_models
     | volcengine_models
     | ovhcloud_models
+    | cloudrift_models
 )
 
 model_list_set = set(model_list)

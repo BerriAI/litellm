@@ -315,6 +315,7 @@ LITELLM_CHAT_PROVIDERS = [
     "lambda_ai",
     "vercel_ai_gateway",
     "ovhcloud",
+    "cloudrift"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -449,6 +450,7 @@ openai_compatible_endpoints: List = [
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
+    "https://inference.cloudrift.ai/v1/chat/completions"
 ]
 
 
@@ -493,6 +495,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "cloudrift"
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -508,6 +511,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "cloudrift"
     ]
 )
 _openai_like_providers: List = [

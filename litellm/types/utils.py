@@ -2396,6 +2396,7 @@ class LlmProviders(str, Enum):
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
     OVHCLOUD = "ovhcloud"
+    CLOUDRIFT = "cloudrift"
 
 
 # Create a set of all provider values for quick lookup

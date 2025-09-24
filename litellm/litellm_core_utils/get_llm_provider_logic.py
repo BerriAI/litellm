@@ -252,6 +252,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://inference.cloudrift.ai/v1":
+                        custom_llm_provider = "cloudrift"
+                        dynamic_api_key = get_secret_str("CLOUDRIFT_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -774,6 +777,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.AIMLChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "cloudrift":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.CloudRiftChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 
