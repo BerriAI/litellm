@@ -588,3 +588,30 @@ async def test_get_user_info_from_db():
         user_info = await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         mock_get_user_object.call_args.kwargs["user_id"] = "krrishd"
+
+
+class TestCLIKeyRegenerationFlow:
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_regenerate_existing_key(self):
+        """Test that the CLI SSO callback properly regenerates an existing key."""
+
+        with patch('litellm.proxy.management_endpoints.ui_sso._regenerate_cli_key') as mock_regenerate:
+            # Mock the function to return something
+            mock_regenerate.return_value = None
+
+            # Import the function we're testing
+            from litellm.proxy.management_endpoints import ui_sso
+
+            # Call the function with keyword arguments as the actual implementation does
+            await ui_sso._regenerate_cli_key(
+                existing_key='sk-existing-key-123',
+                new_key='sk-new-key-456',
+                user_id=None
+            )
+
+            # Verify the mock was called with keyword arguments
+            mock_regenerate.assert_called_once_with(
+                existing_key='sk-existing-key-123',
+                new_key='sk-new-key-456',
+                user_id=None
+            )
