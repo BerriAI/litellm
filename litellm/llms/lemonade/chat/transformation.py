@@ -26,7 +26,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     presence_penalty: Optional[int] = None
     stop: Optional[Union[str, list]] = None
     temperature: Optional[int] = None
-    top_p: Optional[float] = None
+    top_p: Optional[int] = None
     top_k: Optional[int] = None
     response_format: Optional[dict] = None
     tools: Optional[list] = None
@@ -42,7 +42,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         presence_penalty: Optional[int] = None,
         stop: Optional[Union[str, list]] = None,
         temperature: Optional[int] = None,
-        top_p: Optional[float] = None,
+        top_p: Optional[int] = None,
         top_k: Optional[int] = None,
         response_format: Optional[dict] = None,
         tools: Optional[list] = None,
@@ -89,13 +89,16 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             )
 
         # Returning the model if it was found in lemonade. Currently there is no mechanism to report
-        # if the model supports function calling or the max tokens so we leave those out
+        # the models max input or output tokens so leaving those as None
         return ModelInfoBase(
             key=model,
             litellm_provider="lemonade",
             mode="chat",
             input_cost_per_token=0.0,
             output_cost_per_token=0.0,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            max_tokens=None,
         )
 
     def _get_openai_compatible_provider_info(
