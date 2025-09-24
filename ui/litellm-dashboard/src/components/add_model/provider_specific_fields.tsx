@@ -459,6 +459,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
+  }],
+  [Providers.Oracle]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
   }]
 };
 
