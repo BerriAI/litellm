@@ -163,6 +163,7 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
+
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
             team_ids: Optional[List[str]] = get_nested_value(
                 data=token,
@@ -483,7 +484,18 @@ class JWTHandler:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"]
+        algorithms = [
+            "RS256",
+            "RS384",
+            "RS512",
+            "PS256",
+            "PS384",
+            "PS512",
+            "ES256",
+            "ES384",
+            "ES512",
+            "EdDSA",
+        ]
 
         audience = os.getenv("JWT_AUDIENCE")
         decode_options = None
@@ -540,7 +552,9 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
         elif public_key is not None and isinstance(public_key, str):
             try:
-                cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
+                cert = x509.load_pem_x509_certificate(
+                    public_key.encode(), default_backend()
+                )
 
                 # Extract public key
                 key = cert.public_key().public_bytes(
@@ -565,7 +579,7 @@ class JWTHandler:
                 raise Exception(f"Validation fails: {str(e)}")
 
         raise Exception("Invalid JWT Submitted")
-    
+
     async def close(self):
         await self.http_handler.close()
 

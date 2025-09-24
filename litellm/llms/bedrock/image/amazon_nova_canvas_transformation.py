@@ -7,12 +7,12 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasColorGuidedGenerationParams,
     AmazonNovaCanvasColorGuidedRequest,
     AmazonNovaCanvasImageGenerationConfig,
+    AmazonNovaCanvasInpaintingParams,
+    AmazonNovaCanvasInpaintingRequest,
     AmazonNovaCanvasRequestBase,
     AmazonNovaCanvasTextToImageParams,
     AmazonNovaCanvasTextToImageRequest,
     AmazonNovaCanvasTextToImageResponse,
-    AmazonNovaCanvasInpaintingParams,
-    AmazonNovaCanvasInpaintingRequest,
 )
 from litellm.types.utils import ImageResponse
 
@@ -67,6 +67,11 @@ class AmazonNovaCanvasConfig:
         """
         task_type = optional_params.pop("taskType", "TEXT_IMAGE")
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
+
+        # Extract model_id parameter to prevent "extraneous key" error from Bedrock API
+        # Following the same pattern as chat completions and embeddings
+        unencoded_model_id = optional_params.pop("model_id", None)  # noqa: F841
+
         image_generation_config = {**image_generation_config, **optional_params}
         if task_type == "TEXT_IMAGE":
             text_to_image_params: Dict[str, Any] = image_generation_config.pop(
