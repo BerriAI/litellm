@@ -74,10 +74,10 @@ tests/local_testing/log.txt
 litellm/proxy/_new_new_secret_config.yaml
 litellm/proxy/custom_guardrail.py
 .mypy_cache/*
+litellm/.mypy_cache/*
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/404.html
 litellm/proxy/_experimental/out/model_hub.html
-.mypy_cache/*
 litellm/proxy/application.log
 tests/llm_translation/vertex_test_account.json
 tests/llm_translation/test_vertex_key.json
