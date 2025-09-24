@@ -893,7 +893,8 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ) or "",
+                                )
+                                or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -909,13 +910,13 @@ class DBSpendUpdateWriter:
 
                             # Add cache-related fields if they exist
                             if "cache_read_input_tokens" in transaction:
-                                common_data["cache_read_input_tokens"] = (
-                                    transaction.get("cache_read_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_read_input_tokens"
+                                ] = transaction.get("cache_read_input_tokens", 0)
                             if "cache_creation_input_tokens" in transaction:
-                                common_data["cache_creation_input_tokens"] = (
-                                    transaction.get("cache_creation_input_tokens", 0)
-                                )
+                                common_data[
+                                    "cache_creation_input_tokens"
+                                ] = transaction.get("cache_creation_input_tokens", 0)
 
                             # Create update data structure
                             update_data = {

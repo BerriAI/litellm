@@ -10,8 +10,13 @@ router = APIRouter(
 )
 
 
-@router.post("/v1beta/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1beta/models/{model_name}:generateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)]
+)
 async def google_generate_content(
     request: Request,
     model_name: str,
@@ -74,9 +79,11 @@ class GoogleAIStudioDataGenerator:
 
     Thin wrapper around ProxyBaseLLMRequestProcessing.async_sse_data_generator
     """
+
     @staticmethod
     def _select_data_generator(response, user_api_key_dict, request_data):
         from litellm.proxy.proxy_server import proxy_logging_obj
+
         return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
@@ -84,8 +91,15 @@ class GoogleAIStudioDataGenerator:
             proxy_logging_obj=proxy_logging_obj,
         )
 
-@router.post("/v1beta/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
+
+@router.post(
+    "/v1beta/models/{model_name}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/models/{model_name}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def google_stream_generate_content(
     request: Request,
     model_name: str,
@@ -112,7 +126,6 @@ async def google_stream_generate_content(
     data = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
-
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -142,8 +155,6 @@ async def google_stream_generate_content(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-
-
 
 
 @router.post(
@@ -177,7 +188,7 @@ async def google_count_tokens(request: Request, model_name: str):
 
     data = await _read_request_body(request=request)
     contents = data.get("contents", [])
-    #Create TokenCountRequest for the internal endpoint
+    # Create TokenCountRequest for the internal endpoint
     from litellm.proxy._types import TokenCountRequest
 
     # Translate contents to openai format messages using the adapter

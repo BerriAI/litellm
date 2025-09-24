@@ -782,7 +782,7 @@ class LangFuseLogger:
         """
         Get the responses API content for Langfuse logging
         """
-        if hasattr(response_obj, 'output') and response_obj.output:
+        if hasattr(response_obj, "output") and response_obj.output:
             # ResponsesAPIResponse.output is a list of strings
             return response_obj.output
         else:

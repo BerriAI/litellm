@@ -63,9 +63,9 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         if "response_format" not in data or (
             data["response_format"] == "text" or data["response_format"] == "json"
         ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+            data[
+                "response_format"
+            ] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
 
         return AudioTranscriptionRequestData(
             data=data,

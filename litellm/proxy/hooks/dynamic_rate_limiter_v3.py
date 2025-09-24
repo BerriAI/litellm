@@ -25,15 +25,18 @@ from litellm.types.router import ModelGroupInfo
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     """
     Simple validation version that uses v3 parallel request limiter for priority-based rate limiting.
-    
+
     Key differences from original:
     1. Uses v3 limiter's sliding window approach instead of per-minute cache buckets
     2. Leverages Redis Lua scripts for atomic operations under high traffic
     3. Creates priority-specific rate limit descriptors
     """
+
     def __init__(self, internal_usage_cache: DualCache):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache)
+        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+            self.internal_usage_cache
+        )
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
@@ -65,43 +68,43 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> List[RateLimitDescriptor]:
         """
         Create rate limit descriptors based on priority and model group limits.
-        
+
         This is the key change: instead of calculating dynamic quotas based on active projects,
         we create descriptors with priority-adjusted limits and let the v3 limiter handle
         the actual rate limiting with its sliding window approach.
         """
         descriptors: List[RateLimitDescriptor] = []
-        
+
         # Get model group info
-        model_group_info: Optional[ModelGroupInfo] = self.llm_router.get_model_group_info(
-            model_group=model
-        )
+        model_group_info: Optional[
+            ModelGroupInfo
+        ] = self.llm_router.get_model_group_info(model_group=model)
         if model_group_info is None:
             return descriptors
 
         # Get priority weight
         priority_weight = self._get_priority_weight(priority)
-        
+
         # Create priority-specific rate limits
         # Use model:priority as the key to separate different priority levels
         priority_key = f"{model}:{priority or 'default'}"
-        
+
         rate_limit_config: RateLimitDescriptorRateLimitObject = {}
-        
+
         # Apply priority weight to model limits
         if model_group_info.tpm is not None:
             # Reserve portion of TPM based on priority
             reserved_tpm = int(model_group_info.tpm * priority_weight)
             rate_limit_config["tokens_per_unit"] = reserved_tpm
-            
+
         if model_group_info.rpm is not None:
-            # Reserve portion of RPM based on priority  
+            # Reserve portion of RPM based on priority
             reserved_rpm = int(model_group_info.rpm * priority_weight)
             rate_limit_config["requests_per_unit"] = reserved_rpm
 
         if rate_limit_config:
             rate_limit_config["window_size"] = self.v3_limiter.window_size
-            
+
             descriptors.append(
                 RateLimitDescriptor(
                     key="priority_model",
@@ -119,7 +122,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         data: dict,
         call_type: Literal[
             "completion",
-            "text_completion", 
+            "text_completion",
             "embeddings",
             "image_generation",
             "moderation",
@@ -136,7 +139,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return None
 
         key_priority: Optional[str] = user_api_key_dict.metadata.get("priority", None)
-        
+
         # Create priority-based descriptors
         descriptors = self._create_priority_based_descriptors(
             model=data["model"],
@@ -145,7 +148,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
         if not descriptors:
-            verbose_proxy_logger.debug("No rate limit descriptors created, allowing request")
+            verbose_proxy_logger.debug(
+                "No rate limit descriptors created, allowing request"
+            )
             return None
 
         try:
@@ -163,9 +168,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             status_code=429,
                             detail={
                                 "error": f"Priority-based rate limit exceeded for {status['descriptor_key']}. "
-                                        f"Priority: {key_priority}, "
-                                        f"Rate limit type: {status['rate_limit_type']}, "
-                                        f"Remaining: {status['limit_remaining']}"
+                                f"Priority: {key_priority}, "
+                                f"Rate limit type: {status['rate_limit_type']}, "
+                                f"Remaining: {status['limit_remaining']}"
                             },
                             headers={
                                 "retry-after": str(self.v3_limiter.window_size),
@@ -203,15 +208,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Add additional priority-specific headers
             if isinstance(response, ModelResponse):
-                key_priority: Optional[str] = user_api_key_dict.metadata.get("priority", None)
-                
+                key_priority: Optional[str] = user_api_key_dict.metadata.get(
+                    "priority", None
+                )
+
                 # Get existing additional headers
-                additional_headers = getattr(response, "_hidden_params", {}).get("additional_headers", {}) or {}
-                
+                additional_headers = (
+                    getattr(response, "_hidden_params", {}).get(
+                        "additional_headers", {}
+                    )
+                    or {}
+                )
+
                 # Add priority information
                 additional_headers["x-litellm-priority"] = key_priority or "default"
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
-                
+
                 # Update response
                 if not hasattr(response, "_hidden_params"):
                     response._hidden_params = {}

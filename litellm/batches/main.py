@@ -59,18 +59,22 @@ def _resolve_timeout(
 ) -> float:
     """
     Resolve timeout value from various sources and handle httpx.Timeout objects.
-    
+
     Args:
         optional_params: GenericLiteLLMParams object containing timeout
         kwargs: Additional kwargs that may contain request_timeout
         custom_llm_provider: Provider name for httpx timeout support check
         default_timeout: Default timeout value to use
-        
+
     Returns:
         Resolved timeout as float
     """
-    timeout = optional_params.timeout or kwargs.get("request_timeout", default_timeout) or default_timeout
-    
+    timeout = (
+        optional_params.timeout
+        or kwargs.get("request_timeout", default_timeout)
+        or default_timeout
+    )
+
     # Handle httpx.Timeout objects
     if isinstance(timeout, httpx.Timeout):
         if supports_httpx_timeout(custom_llm_provider) is False:
@@ -81,11 +85,11 @@ def _resolve_timeout(
             # For providers that support httpx.Timeout, we still need to return a float
             # This case might need to be handled differently based on the actual use case
             return float(timeout.read or default_timeout)
-    
+
     # Handle None case
     if timeout is None:
         return float(default_timeout)
-    
+
     # Handle numeric values (int, float, string representations)
     return float(timeout)
 
@@ -163,15 +167,19 @@ def create_batch(
         try:
             if model is not None:
                 model, _, _, _ = get_llm_provider(
-                                model=model, 
-                                custom_llm_provider=None,
-                        )
+                    model=model,
+                    custom_llm_provider=None,
+                )
         except Exception as e:
-            verbose_logger.exception(f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {str(e)}")
-            
+            verbose_logger.exception(
+                f"litellm.batches.main.py::create_batch() - Error inferring custom_llm_provider - {str(e)}"
+            )
+
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
-        litellm_logging_obj: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
+        litellm_logging_obj: LiteLLMLoggingObj = cast(
+            LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
+        )
         ### TIMEOUT LOGIC ###
         timeout = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
         litellm_logging_obj.update_environment_variables(
@@ -189,7 +197,6 @@ def create_batch(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        
 
         _create_batch_request = CreateBatchRequest(
             completion_window=completion_window,
@@ -378,6 +385,7 @@ async def aretrieve_batch(
     except Exception as e:
         raise e
 
+
 def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
@@ -497,6 +505,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
     return response
 
+
 @client
 def retrieve_batch(
     batch_id: str,
@@ -513,7 +522,9 @@ def retrieve_batch(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
+            "litellm_logging_obj", None
+        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         litellm_params = get_litellm_params(
@@ -549,7 +560,7 @@ def retrieve_batch(
 
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         client = kwargs.get("client", None)
-        
+
         # Try to use provider config first (for providers like bedrock)
         model: Optional[str] = kwargs.get("model", None)
         if model is not None:
@@ -559,7 +570,7 @@ def retrieve_batch(
             )
         else:
             provider_config = None
-            
+
         if provider_config is not None:
             response = base_llm_http_handler.retrieve_batch(
                 batch_id=batch_id,
@@ -568,7 +579,8 @@ def retrieve_batch(
                 headers=extra_headers or {},
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
-                logging_obj=litellm_logging_obj or LiteLLMLoggingObj(
+                logging_obj=litellm_logging_obj
+                or LiteLLMLoggingObj(
                     model=model or "bedrock/unknown",
                     messages=[],
                     stream=False,
@@ -586,7 +598,6 @@ def retrieve_batch(
                 model=model,
             )
             return response
-        
 
         #########################################################
         # Handle providers without provider config
@@ -600,7 +611,7 @@ def retrieve_batch(
             _is_async=_is_async,
             timeout=timeout,
         )
-        
+
     except Exception as e:
         raise e
 

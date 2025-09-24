@@ -94,9 +94,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -505,23 +505,23 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
                 end_ratio = 0.65
-                
+
                 # Calculate character distribution
                 start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
                 end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
-                
+
                 # Ensure we don't exceed the total limit
                 total_keep = start_chars + end_chars
                 if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
                     end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-                
+
                 # If the string length is less than what we want to keep, just truncate normally
                 if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
                     return value
-                
+
                 # Calculate how many characters are being skipped
                 skipped_chars = len(value) - total_keep
-                
+
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"

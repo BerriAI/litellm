@@ -292,8 +292,12 @@ class OpikLogger(CustomBatchLogger):
                     "project_name": project_name,
                     "id": trace_id,
                     "name": trace_name,
-                    "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "start_time": start_time.astimezone(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "end_time": end_time.astimezone(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     "input": input_data,
                     "output": output_data,
                     "metadata": metadata,
@@ -313,8 +317,12 @@ class OpikLogger(CustomBatchLogger):
                 "parent_span_id": parent_span_id,
                 "name": span_name,
                 "type": "llm",
-                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "start_time": start_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "input": input_data,
                 "output": output_data,
                 "metadata": metadata,

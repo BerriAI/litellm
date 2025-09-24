@@ -18,11 +18,12 @@ GenerateContentConfigDict = _genai_types.GenerateContentConfigDict
 GenerateContentRequestParametersDict = _genai_types._GenerateContentParametersDict
 ToolConfigDict = _genai_types.ToolConfigDict
 
+
 class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
-    tools: Optional[ToolConfigDict] # type: ignore[assignment]
+    tools: Optional[ToolConfigDict]  # type: ignore[assignment]
 
 
-class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
+class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc]
     _hidden_params: dict = {}
     pass

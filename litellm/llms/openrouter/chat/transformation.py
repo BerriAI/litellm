@@ -43,9 +43,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             extra_body["models"] = models
         if route is not None:
             extra_body["route"] = route
-        mapped_openai_params["extra_body"] = (
-            extra_body  # openai client supports `extra_body` param
-        )
+        mapped_openai_params[
+            "extra_body"
+        ] = extra_body  # openai client supports `extra_body` param
         return mapped_openai_params
 
     def remove_cache_control_flag_from_messages_and_tools(
