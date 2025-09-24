@@ -18109,6 +18109,32 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "sambanova/DeepSeek-V3.1": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 4.5e-06,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
+    "sambanova/gpt-oss-120b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 4.5e-06,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
