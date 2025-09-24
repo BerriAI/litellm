@@ -280,7 +280,7 @@ class KeysManagementClient:
             response_text = response.text
             response.raise_for_status()
             return response.json()
-        except Exception as e:
+        except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
 

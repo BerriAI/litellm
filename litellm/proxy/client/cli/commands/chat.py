@@ -4,9 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import click
 import requests
-import rich
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -161,79 +159,31 @@ def chat(
                 break
             
             # Handle special commands
-            if user_input.lower() in ['/quit', '/exit', '/q']:
-                console.print("[yellow]Chat session ended.[/yellow]")
+            should_continue, messages, new_model = _handle_special_commands(
+                console, user_input, messages, system, ctx
+            )
+            
+            if not should_continue:
                 break
-            elif user_input.lower() == '/help':
-                _show_help(console)
-                continue
-            elif user_input.lower() == '/clear':
-                messages = []
-                if system:
-                    messages.append({"role": "system", "content": system})
-                console.print("[green]Conversation history cleared.[/green]")
-                continue
-            elif user_input.lower() == '/history':
-                _show_history(console, messages)
-                continue
-            elif user_input.lower().startswith('/save'):
-                _save_conversation(console, messages, user_input)
-                continue
-            elif user_input.lower().startswith('/load'):
-                messages = _load_conversation(console, user_input, system)
-                continue
-            elif user_input.lower() == '/model':
-                # Allow switching models mid-conversation
-                available_models = _get_available_models(ctx)
-                new_model = _select_model(console, available_models)
-                if new_model:
-                    model = new_model
-                    console.print(f"[green]Switched to model: {model}[/green]")
-                continue
-            elif not user_input:
+            if new_model:
+                model = new_model
+            if should_continue and user_input.lower().startswith(('/quit', '/exit', '/q', '/help', '/clear', '/history', '/save', '/load', '/model')) or not user_input:
                 continue
             
             # Add user message to conversation
             messages.append({"role": "user", "content": user_input})
             
             # Display assistant label
-            console.print(f"\n[bold green]Assistant:[/bold green]")
+            console.print("\n[bold green]Assistant:[/bold green]")
             
             # Stream the response
-            try:
-                assistant_content = ""
-                for chunk in client.completions_stream(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                ):
-                    if "choices" in chunk and len(chunk["choices"]) > 0:
-                        delta = chunk["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            assistant_content += content
-                            console.print(content, end="")
-                            sys.stdout.flush()
-                
-                # Add newline after streaming
-                console.print()
-                
-                # Add assistant message to conversation history
-                if assistant_content:
-                    messages.append({"role": "assistant", "content": assistant_content})
-                else:
-                    console.print("[red]Error: No content received from the model[/red]")
-                    
-            except requests.exceptions.HTTPError as e:
-                console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
-                try:
-                    error_body = e.response.json()
-                    console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
-                except json.JSONDecodeError:
-                    console.print(f"[red]{e.response.text}[/red]")
-            except Exception as e:
-                console.print(f"\n[red]Error: {str(e)}[/red]")
+            assistant_content = _stream_response(console, client, model, messages, temperature, max_tokens)
+            
+            # Add assistant message to conversation history
+            if assistant_content:
+                messages.append({"role": "assistant", "content": assistant_content})
+            else:
+                console.print("[red]Error: No content received from the model[/red]")
                     
     except KeyboardInterrupt:
         console.print("\n[yellow]Chat session interrupted.[/yellow]")
@@ -325,3 +275,80 @@ def _load_conversation(console: Console, command: str, system: Optional[str]) ->
     if system:
         return [{"role": "system", "content": system}]
     return []
+
+
+def _handle_special_commands(
+    console: Console, 
+    user_input: str, 
+    messages: List[Dict[str, Any]], 
+    system: Optional[str],
+    ctx: click.Context
+) -> tuple[bool, List[Dict[str, Any]], Optional[str]]:
+    """Handle special chat commands. Returns (should_continue, updated_messages, updated_model)"""
+    if user_input.lower() in ['/quit', '/exit', '/q']:
+        console.print("[yellow]Chat session ended.[/yellow]")
+        return False, messages, None
+    elif user_input.lower() == '/help':
+        _show_help(console)
+        return True, messages, None
+    elif user_input.lower() == '/clear':
+        new_messages = []
+        if system:
+            new_messages.append({"role": "system", "content": system})
+        console.print("[green]Conversation history cleared.[/green]")
+        return True, new_messages, None
+    elif user_input.lower() == '/history':
+        _show_history(console, messages)
+        return True, messages, None
+    elif user_input.lower().startswith('/save'):
+        _save_conversation(console, messages, user_input)
+        return True, messages, None
+    elif user_input.lower().startswith('/load'):
+        new_messages = _load_conversation(console, user_input, system)
+        return True, new_messages, None
+    elif user_input.lower() == '/model':
+        available_models = _get_available_models(ctx)
+        new_model = _select_model(console, available_models)
+        if new_model:
+            console.print(f"[green]Switched to model: {new_model}[/green]")
+            return True, messages, new_model
+        return True, messages, None
+    elif not user_input:
+        return True, messages, None
+    
+    # Not a special command
+    return False, messages, None
+
+
+def _stream_response(console: Console, client: ChatClient, model: str, messages: List[Dict[str, Any]], temperature: float, max_tokens: Optional[int]) -> Optional[str]:
+    """Stream the model response and return the complete content"""
+    try:
+        assistant_content = ""
+        for chunk in client.completions_stream(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                delta = chunk["choices"][0].get("delta", {})
+                content = delta.get("content", "")
+                if content:
+                    assistant_content += content
+                    console.print(content, end="")
+                    sys.stdout.flush()
+        
+        console.print()  # Add newline after streaming
+        return assistant_content if assistant_content else None
+        
+    except requests.exceptions.HTTPError as e:
+        console.print(f"\n[red]Error: HTTP {e.response.status_code}[/red]")
+        try:
+            error_body = e.response.json()
+            console.print(f"[red]{error_body.get('error', {}).get('message', 'Unknown error')}[/red]")
+        except json.JSONDecodeError:
+            console.print(f"[red]{e.response.text}[/red]")
+        return None
+    except Exception as e:
+        console.print(f"\n[red]Error: {str(e)}[/red]")
+        return None
