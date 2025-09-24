@@ -9,17 +9,26 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Tuple,
     Union,
 )
 
 from openai._models import BaseModel as OpenAIObject
+from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.moderation import (
+    Categories,
+    CategoryAppliedInputTypes,
+    CategoryScores,
+)
+from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Required, TypedDict
+from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -46,6 +55,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     WebSearchOptions,
 )
+from .rerank import RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -111,18 +121,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    input_cost_per_token_priority: Optional[
-        float
-    ]  # OpenAI priority service tier pricing
+    input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
-    cache_read_input_token_cost_flex: Optional[
-        float
-    ]  # OpenAI flex service tier pricing
-    cache_read_input_token_cost_priority: Optional[
-        float
-    ]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -141,9 +145,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    output_cost_per_token_priority: Optional[
-        float
-    ]  # OpenAI priority service tier pricing
+    output_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -1135,6 +1137,9 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         kwargs["choices"] = new_choices
 
         super().__init__(**kwargs)
+
+
+from openai.types.chat import ChatCompletionChunk
 
 
 class ModelResponseBase(OpenAIObject):
@@ -2585,7 +2590,6 @@ class SpecialEnums(Enum):
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
-
     FLEX = "flex"
     PRIORITY = "priority"
 
@@ -2627,3 +2631,18 @@ CostResponseTypes = Union[
     ImageResponse,
     TranscriptionResponse,
 ]
+
+
+class PriorityReservationSettings(BaseModel):
+    """
+    Settings for priority-based rate limiting reservation.
+    
+    Defines what priority to assign to keys without explicit priority metadata.
+    The priority_reservation mapping is configured separately via litellm.priority_reservation.
+    """
+    default_priority: float = Field(
+        default=0.5,
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation."
+    )
+
+    model_config = ConfigDict(protected_namespaces=())
