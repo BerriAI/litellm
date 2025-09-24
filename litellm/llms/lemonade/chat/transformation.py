@@ -1,20 +1,15 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, List, Optional, Tuple, Union
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
 )
 from litellm.types.utils import ModelResponse, ModelInfoBase
 
