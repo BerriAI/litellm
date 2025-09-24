@@ -196,19 +196,7 @@ model_list:
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
 ```
-or
-```yaml
-model_list:
- - model_name: gemini-pro
-    litellm_params:
-      model: vertex_ai/gemini-1.5-pro
-      litellm_credential_name: vertex-global
-      vertex_project: project-name-here
-      vertex_location: global
-      base_model: gemini
-      model_info:
-        provider: Vertex
-```
+
 2. Start Proxy 
 
 ```
@@ -826,6 +814,77 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 Use Vertex AI context caching is supported by calling provider api directly. (Unified Endpoint support coming soon.).
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
+
+#### 1. Create the Cache
+
+First, create the cache by sending a `POST` request to the `cachedContents` endpoint via the LiteLLM proxy.
+
+<Tabs>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/vertex_ai/v1/projects/{project_id}/locations/{location}/cachedContents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-flash",
+    "displayName": "example_cache",
+    "contents": [{
+      "role": "user",
+      "parts": [{
+        "text": ".... a long book to be cached"
+      }]
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### 2. Get the Cache Name from the Response
+
+Vertex AI will return a response containing the `name` of the cached content. This name is the identifier for your cached data.
+
+```json
+{
+    "name": "projects/12341234/locations/{location}/cachedContents/123123123123123",
+    "model": "projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-flash",
+    "createTime": "2025-09-23T19:13:50.674976Z",
+    "updateTime": "2025-09-23T19:13:50.674976Z",
+    "expireTime": "2025-09-23T20:13:50.655988Z",
+    "displayName": "example_cache",
+    "usageMetadata": {
+        "totalTokenCount": 1246,
+        "textCount": 5132
+    }
+}
+```
+
+#### 3. Use the Cached Content
+
+Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
+
+<Tabs>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+
+curl http://0.0.0.0:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "cachedContent": "projects/545201925769/locations/us-central1/cachedContents/4511135542628319232",
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+            "role": "user",
+            "content": "what is the book about?"
+        }
+    ]
+  }'
+```
+
+</TabItem>
 
 
 ## Pre-requisites
@@ -2736,7 +2795,3 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
-
-
-
-
