@@ -119,20 +119,15 @@ async def test_superagent_pre_call_block_with_mock(
 
 
 @pytest.mark.asyncio
-async def test_superagent_calls_fireworks_api(
+async def test_superagent_calls_superagent_api(
     user_api_key_dict: UserAPIKeyAuth,
     dual_cache: DualCache,
     sample_request: dict[str, Any],
 ):
     guardrail = SuperAgentGuardrail(
         guardrail_name="superagent-test",
-        api_base="https://api.fireworks.ai/inference/v1/chat/completions",
+        api_base="https://app.superagent.sh/api/guard",
         api_key="fw-123",
-        model="accounts/example/models/superagent",
-        system_prompt="system",
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=150,
     )
 
     response_payload = {
@@ -164,14 +159,11 @@ async def test_superagent_calls_fireworks_api(
     assert result == sample_request
     mock_post.assert_awaited_once()
     await_args = mock_post.await_args
-    assert await_args.args[0] == "https://api.fireworks.ai/inference/v1/chat/completions"
+    assert await_args.args[0] == "https://app.superagent.sh/api/guard"
     assert await_args.kwargs["headers"]["Authorization"] == "Bearer fw-123"
-    assert await_args.kwargs["json"]["model"] == "accounts/example/models/superagent"
-    assert await_args.kwargs["json"]["messages"][0]["role"] == "developer"
-    assert (
-        await_args.kwargs["json"]["messages"][1]["content"]
-        == sample_request["messages"][0]["content"]
-    )
+    assert await_args.kwargs["json"] == {
+        "prompt": sample_request["messages"][0]["content"]
+    }
 
 
 @pytest.mark.asyncio
@@ -182,7 +174,7 @@ async def test_superagent_parses_markdown_wrapped_json(
 ):
     guardrail = SuperAgentGuardrail(
         guardrail_name="superagent-test",
-        api_base="https://api.fireworks.ai/inference/v1/chat/completions",
+        api_base="https://app.superagent.sh/api/guard",
         api_key="fw-123",
     )
 
@@ -244,8 +236,7 @@ def test_superagent_guardrail_can_initialize_via_config(monkeypatch):
             "guardrail": "superagent",
             "mode": ["during_call"],
             "default_on": True,
-            "superagent_api_base": "https://api.fireworks.ai/inference/v1/chat/completions",
-            "model": "accounts/example/models/superagent",
+            "superagent_api_base": "https://app.superagent.sh/api/guard",
         },
     }
 
