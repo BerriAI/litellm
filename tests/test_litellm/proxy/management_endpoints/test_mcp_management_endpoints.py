@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.mcp import MCPAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def generate_mock_mcp_server_db_record(
@@ -63,10 +63,10 @@ def generate_mock_mcp_server_config_record(
         url=url,
         transport=MCPTransport.http if transport == "http" else MCPTransport.sse,
         auth_type=MCPAuth.api_key if auth_type == "api_key" else None,
-        mcp_info=MCPInfo(
-            server_name=name,
-            description="Config server description",
-        ),
+        mcp_info={
+            "server_name": name,
+            "description": "Config server description",
+        },
     )
 
 
