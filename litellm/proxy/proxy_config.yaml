@@ -36,3 +36,9 @@ guardrails:
       breakdown: true
       payload: true
       dev_info: true
+
+# proxy_config.yaml
+litellm_settings:
+  key_rotation:
+    enabled: true            # Enable the key rotation background job
+    check_frequency: 1d      # How often to check for keys needing rotation
