@@ -76,7 +76,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Credentials = self.get_credentials(
+        credentials: Credentials = self.get_credentials(  # type: ignore
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -178,27 +178,27 @@ class BedrockEmbedding(BaseAWSLLM):
             else:
                 # For other providers, create a generic async response
                 invocation_arn = response_list[0].get("invocationArn", "")
-                job_id = (
-                    invocation_arn.split("/")[-1]
-                    if "/" in invocation_arn
-                    else "unknown"
-                )
 
                 from litellm.types.utils import Embedding, Usage
 
                 embedding = Embedding(
                     embedding=[],
                     index=0,
-                    object=f"embedding:job-{job_id}",
+                    object="embedding",  # Must be literal "embedding"
                 )
                 usage = Usage(prompt_tokens=0, total_tokens=0)
+
+                # Create hidden params with job ID
+                from litellm.types.llms.base import HiddenParams
+
+                hidden_params = HiddenParams()
+                setattr(hidden_params, "_invocation_arn", invocation_arn)
 
                 returned_response = EmbeddingResponse(
                     data=[embedding],
                     model=model,
                     usage=usage,
-                    _async_job_id=job_id,
-                    _invocation_arn=invocation_arn,
+                    hidden_params=hidden_params,
                 )
         else:
             # Handle regular invoke responses
@@ -255,7 +255,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(
+            prepped = self.get_request_headers(  # type: ignore  # type: ignore
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
@@ -321,7 +321,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(
+            prepped = self.get_request_headers(  # type: ignore  # type: ignore
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
@@ -529,7 +529,7 @@ class BedrockEmbedding(BaseAWSLLM):
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
 
-        prepped = self.get_request_headers(
+        prepped = self.get_request_headers(  # type: ignore
             credentials=credentials,
             aws_region_name=aws_region_name,
             extra_headers=extra_headers,
@@ -590,7 +590,7 @@ class BedrockEmbedding(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
 
         # Get AWS signed headers
-        prepped = self.get_request_headers(
+        prepped = self.get_request_headers(  # type: ignore
             credentials=credentials,
             aws_region_name=aws_region_name,
             extra_headers=None,

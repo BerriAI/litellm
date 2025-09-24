@@ -270,24 +270,25 @@ class TwelveLabsMarengoEmbeddingConfig:
         """
         invocation_arn = response.get("invocationArn", "")
 
-        # Extract job ID from ARN (last part after the last slash)
-        job_id = invocation_arn.split("/")[-1] if "/" in invocation_arn else "unknown"
-
         # Create a placeholder embedding object for the job
         embedding = Embedding(
             embedding=[],  # Empty embedding for async jobs
             index=0,
-            object=f"embedding_job_id:{job_id}",
+            object="embedding",
         )
 
         # Create usage object (empty for async jobs)
         usage = Usage(prompt_tokens=0, total_tokens=0)
 
+        # Create hidden params with job ID
+        from litellm.types.llms.base import HiddenParams
+
+        hidden_params = HiddenParams()
+        setattr(hidden_params, "_invocation_arn", invocation_arn)
+
         return EmbeddingResponse(
             data=[embedding],
             model=model,
             usage=usage,
-            # Add custom fields to indicate this is an async job
-            _async_job_id=job_id,
-            _invocation_arn=invocation_arn,
+            hidden_params=hidden_params,
         )
