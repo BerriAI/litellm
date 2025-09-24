@@ -6,7 +6,7 @@ allowing auth credentials to be passed via environment variables.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport, MCPStdioConfig
 
