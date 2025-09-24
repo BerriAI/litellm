@@ -11261,13 +11261,13 @@
         ]
     },
     "gpt-3.5-turbo": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 0.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 16385,
         "max_output_tokens": 4096,
         "max_tokens": 4097,
         "mode": "chat",
-        "output_cost_per_token": 2e-06,
+        "output_cost_per_token": 1.5e-06,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
