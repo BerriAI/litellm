@@ -36,7 +36,7 @@ class InMemoryCache(BaseCache):
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
         self.max_size_in_memory = (
-            max_size_in_memory or 200
+            max_size_in_memory if max_size_in_memory is not None else 200
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
         self.max_size_per_item = (
@@ -103,19 +103,31 @@ class InMemoryCache(BaseCache):
     def evict_cache(self):
         """
         Eviction policy:
-        - check if any items in ttl_dict are expired -> remove them from ttl_dict and cache_dict
+        1. First, remove expired items from ttl_dict and cache_dict
+        2. If cache is still at or above max_size_in_memory, evict items with earliest expiration times
 
 
         This guarantees the following:
-        - 1. When item ttl not set: At minimumm each item will remain in memory for 5 minutes
-        - 2. When ttl is set: the item will remain in memory for at least that amount of time
+        - 1. When item ttl not set: At minimum each item will remain in memory for the default ttl
+        - 2. When ttl is set: the item will remain in memory for at least that amount of time, unless cache size requires eviction
         - 3. the size of in-memory cache is bounded
 
         """
         current_time = time.time()
+        
+        # Step 1: Remove expired items
         expired_keys = [key for key, ttl in self.ttl_dict.items() if current_time > ttl]
         for key in expired_keys:
             self._remove_key(key)
+
+        # Step 2: If cache is still full, evict items with earliest expiration times
+        if len(self.cache_dict) >= self.max_size_in_memory:
+            # Sort by expiration time (earliest first) and evict until we're under the limit
+            items_by_expiration = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+            keys_to_evict = items_by_expiration[:len(self.cache_dict) - self.max_size_in_memory + 1]
+            
+            for key, _ in keys_to_evict:
+                self._remove_key(key)
 
         # de-reference the removed item
         # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
@@ -135,6 +147,10 @@ class InMemoryCache(BaseCache):
             return False
 
     def set_cache(self, key, value, **kwargs):
+        # Handle the edge case where max_size_in_memory is 0
+        if self.max_size_in_memory == 0:
+            return  # Don't cache anything if max size is 0
+            
         if len(self.cache_dict) >= self.max_size_in_memory:
             # only evict when cache is full
             self.evict_cache()
