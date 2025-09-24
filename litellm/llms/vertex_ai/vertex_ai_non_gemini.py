@@ -3,12 +3,18 @@ import os
 import time
 from typing import Any, Callable, Optional, cast
 
+import google.auth
 import httpx
+from google.auth.transport import requests as google_auth_requests
+from google.cloud.aiplatform import constants
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
-from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.custom_httpx.http_handler import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    get_async_httpx_client,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -24,6 +30,164 @@ class VertexAIError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+
+def get_google_auth_session():
+    """
+    Get Google authenticated session for making HTTP requests to Vertex AI.
+    """
+    credentials, project = google.auth.default()
+    credentials._scopes = constants.base.DEFAULT_AUTHED_SCOPES
+    return google_auth_requests.AuthorizedSession(credentials)
+
+
+def get_project_number(project_id: str) -> Optional[str]:
+    """
+    Get the Google Cloud project number from the project ID using direct HTTP request.
+
+    Args:
+        project_id: The Google Cloud project ID
+
+    Returns:
+        The project number as a string, or None if not found
+    """
+    try:
+        # Get authenticated session
+        session = get_google_auth_session()
+
+        # Make direct HTTP request to Cloud Resource Manager API
+        url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}"
+        response = session.get(url)
+
+        if response.status_code == 200:
+            project_data = response.json()
+            project_number = project_data.get("projectNumber")
+            return str(project_number) if project_number else None
+        else:
+            from litellm._logging import verbose_logger
+
+            verbose_logger.warning(
+                f"Could not retrieve project number for {project_id}: HTTP {response.status_code} - {response.text}"
+            )
+            return None
+
+    except Exception as e:
+        # Log the error but don't raise it to avoid breaking the main flow
+        from litellm._logging import verbose_logger
+
+        verbose_logger.warning(
+            f"Could not retrieve project number for {project_id}: {e}"
+        )
+        return None
+
+
+def get_dedicated_endpoint_url(
+    endpoint_name: str,
+    vertex_project: str,
+    vertex_location: str,
+    project_number: Optional[str] = None,
+) -> str:
+    """
+    Get the URL for a dedicated endpoint prediction request.
+    For dedicated endpoints, we need to use the endpoint's dedicated DNS.
+    """
+    # For dedicated endpoints, the endpoint_name should contain the full endpoint ID
+    # Format: projects/{project}/locations/{location}/endpoints/{endpoint_id}
+    if not endpoint_name.startswith("projects/"):
+        endpoint_id = endpoint_name
+        endpoint_name = f"projects/{vertex_project}/locations/{vertex_location}/endpoints/{endpoint_id}"
+
+    # Extract endpoint_id from the full resource name
+    endpoint_id = endpoint_name.split("/")[-1]
+
+    # For dedicated endpoints, use the custom DNS format:
+    # https://{ENDPOINT_ID}.{LOCATION}-{PROJECT_NUMBER}.prediction.vertexai.goog/v1/projects/{PROJECT_ID}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}:predict
+    # Note: This requires the project number, not project ID
+    if project_number is None:
+        # Try to get the project number from the project ID
+        project_number = get_project_number(vertex_project)
+        if project_number is None:
+            raise ValueError(f"Project number not found for {vertex_project}")
+
+    return f"https://{endpoint_id}.{vertex_location}-{project_number}.prediction.vertexai.goog/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{endpoint_id}:predict"
+
+
+def make_vertex_ai_prediction_request(
+    endpoint_name: str,
+    instances: list,
+    vertex_project: str,
+    vertex_location: str,
+    parameters: Optional[dict] = None,
+    timeout: Optional[float] = None,
+) -> dict:
+    """
+    Make a direct HTTP request to Vertex AI prediction endpoint.
+    """
+    # Get authenticated session
+    session = get_google_auth_session()
+
+    # Construct URL
+    url = get_dedicated_endpoint_url(endpoint_name, vertex_project, vertex_location)
+
+    # Prepare request body
+    request_body: dict = {"instances": instances}
+    if parameters:
+        request_body["parameters"] = parameters
+
+    # Set headers
+    headers = {"Content-Type": "application/json"}
+
+    # Make the request
+    response = session.post(
+        url=url, data=json.dumps(request_body), headers=headers, timeout=timeout
+    )
+
+    if response.status_code != 200:
+        raise VertexAIError(
+            status_code=response.status_code,
+            message=f"Failed to make prediction request. Status code: {response.status_code}, response: {response.text}.",
+        )
+
+    return response.json()
+
+
+async def make_vertex_ai_prediction_request_async(
+    endpoint_name: str,
+    instances: list,
+    vertex_project: str,
+    vertex_location: str,
+    parameters: Optional[dict] = None,
+    timeout: Optional[float] = None,
+) -> dict:
+    """
+    Make an async HTTP request to Vertex AI prediction endpoint.
+    """
+    # Get async HTTP client
+    http_client = get_async_httpx_client("vertex_ai")  # type: ignore
+
+    # Construct URL
+    url = get_dedicated_endpoint_url(endpoint_name, vertex_project, vertex_location)
+
+    # Prepare request body
+    request_body: dict = {"instances": instances}
+    if parameters:
+        request_body["parameters"] = parameters
+
+    # Set headers
+    headers = {"Content-Type": "application/json"}
+
+    # Make the request
+    response = await http_client.post(
+        url=url, json=request_body, headers=headers, timeout=timeout
+    )
+
+    if response.status_code != 200:
+        raise VertexAIError(
+            status_code=response.status_code,
+            message=f"Failed to make prediction request. Status code: {response.status_code}, response: {response.text}.",
+        )
+
+    return response.json()
 
 
 class TextStreamer:
@@ -239,18 +403,22 @@ def completion(  # noqa: PLR0915
                 location=vertex_location,
             )
             request_str += f"llm_model = aiplatform.PrivateEndpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
-        elif model == "dedicated" or (optional_params.get("model_id") and "mg-endpoint-" in optional_params.get("model_id", "")):
+        elif model == "dedicated" or (
+            optional_params.get("model_id")
+            and "mg-endpoint-" in optional_params.get("model_id", "")
+        ):
             mode = "dedicated"
             model = optional_params.pop("model_id", model)
             instances = [optional_params.copy()]
             instances[0]["prompt"] = prompt
-            print_verbose(f"endpoint_name: {model}, project: {vertex_project}, location: {vertex_location}")
-            llm_model = aiplatform.Endpoint(
-                endpoint_name=model,
-                project=vertex_project,
-                location=vertex_location,
+            print_verbose(
+                f"endpoint_name: {model}, project: {vertex_project}, location: {vertex_location}"
             )
-            request_str += f"llm_model = aiplatform.Endpoint(endpoint_name={model}, project={vertex_project}, location={vertex_location})\n"
+            # No need to initialize aiplatform.Endpoint - we'll use direct HTTP requests
+            llm_model = None  # We'll use the HTTP client instead
+            request_str += (
+                "# Using direct HTTP requests instead of aiplatform.Endpoint\n"
+            )
         else:  # assume vertex model garden on public endpoint
             mode = "custom"
 
@@ -440,8 +608,18 @@ def completion(  # noqa: PLR0915
             """
             if instances is None:
                 raise ValueError("instances are required for dedicated endpoint")
-            if llm_model is None:
-                raise ValueError("Unable to pick client for dedicated endpoint")
+
+            # Prepare request details for curl logging BEFORE logging call
+            url = get_dedicated_endpoint_url(model, vertex_project, vertex_location)
+            request_body = {"instances": [instances[0]]}
+            headers = {"Content-Type": "application/json"}
+
+            # Update request_str for curl logging
+            request_str = f"curl -X POST \\\n{url} \\\n"
+            for k, v in headers.items():
+                request_str += f"-H '{k}: {v}' \\\n"
+            request_str += f"-d '{json.dumps(request_body)}'\n"
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -451,15 +629,17 @@ def completion(  # noqa: PLR0915
                     "request_str": request_str,
                 },
             )
-            request_str += f"llm_model.predict(instances={instances[0]})\n"
-            # print(f"request_str: {request_str}")  # Removed: avoid logging potential sensitive data.
-            # Use predict method which automatically handles dedicated endpoint URLs
-            response = llm_model.predict(
+
+            # Use direct HTTP request instead of aiplatform.Endpoint.predict()
+            response = make_vertex_ai_prediction_request(
+                endpoint_name=model,
                 instances=[instances[0]],  # Convert back from dict format
-                parameters={}
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                parameters={},
             )
-            
-            completion_response = response.predictions[0]
+
+            completion_response = response["predictions"][0]
             if (
                 isinstance(completion_response, str)
                 and "\nOutput:\n" in completion_response
@@ -639,12 +819,21 @@ async def async_completion(  # noqa: PLR0915
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
 
         elif mode == "dedicated":
-            # Use fake streaming for dedicated endpoints since async predict is not supported
+            # Use async HTTP requests for dedicated endpoints
             if instances is None:
                 raise ValueError("instances are required for dedicated endpoint")
-            if llm_model is None:
-                raise ValueError("Unable to pick client for dedicated endpoint")
-            
+
+            # Prepare request details for curl logging BEFORE logging call
+            url = get_dedicated_endpoint_url(model, vertex_project, vertex_location)
+            request_body = {"instances": [instances[0]]}
+            headers = {"Content-Type": "application/json"}
+
+            # Update request_str for curl logging
+            request_str = f"curl -X POST \\\n{url} \\\n"
+            for k, v in headers.items():
+                request_str += f"-H '{k}: {v}' \\\n"
+            request_str += f"-d '{json.dumps(request_body)}'\n"
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -654,21 +843,23 @@ async def async_completion(  # noqa: PLR0915
                     "request_str": request_str,
                 },
             )
-            
-            # Use synchronous predict since async is not supported for dedicated endpoints
-            request_str += f"llm_model.predict(instances={instances[0]})\n"
-            response = llm_model.predict(
+
+            # Use async HTTP request instead of aiplatform.Endpoint.predict()
+            response = await make_vertex_ai_prediction_request_async(
+                endpoint_name=model,
                 instances=[instances[0]],  # Convert back from dict format
-                parameters={}
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                parameters={},
             )
-            
-            completion_response = response.predictions[0]
+
+            completion_response = response["predictions"][0]
             if (
                 isinstance(completion_response, str)
                 and "\nOutput:\n" in completion_response
             ):
                 completion_response = completion_response.split("\nOutput:\n", 1)[1]
-            
+
             # Return the response directly for async completion
             return completion_response
 
@@ -848,12 +1039,23 @@ async def async_streaming(  # noqa: PLR0915
             response = TextStreamer(completion_response)
 
     elif mode == "dedicated":
-        # Use fake streaming for dedicated endpoints since async streaming is not supported
+        # Use HTTP requests for dedicated endpoints
         if instances is None:
             raise ValueError("Instances are required for dedicated endpoint")
-        
+
         stream = optional_params.pop("stream", None)
-        
+
+        # Prepare request details for curl logging BEFORE logging call
+        url = get_dedicated_endpoint_url(model, vertex_project, vertex_location)
+        request_body = {"instances": [instances[0]]}
+        headers = {"Content-Type": "application/json"}
+
+        # Update request_str for curl logging
+        request_str = f"curl -X POST \\\n{url} \\\n"
+        for k, v in headers.items():
+            request_str += f"-H '{k}: {v}' \\\n"
+        request_str += f"-d '{json.dumps(request_body)}'\n"
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -863,21 +1065,23 @@ async def async_streaming(  # noqa: PLR0915
                 "request_str": request_str,
             },
         )
-        
-        # Use synchronous predict since async is not supported for dedicated endpoints
-        request_str += f"llm_model.predict(instances={instances[0]})\n"
-        response = llm_model.predict(
+
+        # Use direct HTTP request instead of aiplatform.Endpoint.predict()
+        response = make_vertex_ai_prediction_request(
+            endpoint_name=model,
             instances=[instances[0]],  # Convert back from dict format
-            parameters={}
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            parameters={},
         )
-        
-        completion_response = response.predictions[0]
+
+        completion_response = response["predictions"][0]
         if (
             isinstance(completion_response, str)
             and "\nOutput:\n" in completion_response
         ):
             completion_response = completion_response.split("\nOutput:\n", 1)[1]
-        
+
         # Use TextStreamer for fake streaming
         if stream:
             response = TextStreamer(completion_response)
