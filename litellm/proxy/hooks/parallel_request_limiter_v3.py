@@ -25,6 +25,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -565,13 +566,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 for i, status in enumerate(response["statuses"]):
                     if status["code"] == "OVER_LIMIT":
                         descriptor = descriptors[floor(i / 2)]
+                        
+                        # Calculate reset time (window_start + window_size)
+                        now = datetime.now().timestamp()
+                        reset_time = now + self.window_size  # Conservative estimate
+                        reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+                        
+                        # Handle negative remaining values more gracefully
+                        remaining_display = max(0, status['limit_remaining'])
+                        
+                        # Create detailed error message
+                        rate_limit_type = status['rate_limit_type']
+                        current_limit = status['current_limit']
+                        
+                        detail = (
+                            f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
+                            f"Limit type: {rate_limit_type}. "
+                            f"Current limit: {current_limit}, Remaining: {remaining_display}. "
+                            f"Limit resets at: {reset_time_formatted}"
+                        )
+                        
                         raise HTTPException(
                             status_code=429,
-                            detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
+                            detail=detail,
                             headers={
                                 "retry-after": str(self.window_size),
                                 "rate_limit_type": str(status["rate_limit_type"]),
-                            },  # Retry after 1 minute
+                                "reset_at": reset_time_formatted,
+                            },
                         )
 
             else:
@@ -687,6 +709,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
+            get_metadata_variable_name_from_kwargs
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import ModelResponse, Usage
@@ -702,7 +725,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"]["metadata"]
+            litellm_metadata = kwargs["litellm_params"].get(get_metadata_variable_name_from_kwargs(kwargs), {})
             if litellm_metadata is None:
                 return
             user_api_key = litellm_metadata.get("user_api_key")
@@ -715,7 +738,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Get total tokens from response
             total_tokens = 0
-            if isinstance(response_obj, ModelResponse):
+            # spot fix for /responses api
+            if (isinstance(response_obj, ModelResponse) or isinstance(response_obj, BaseLiteLLMOpenAIResponseObject)):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
                     if rate_limit_type == "output":

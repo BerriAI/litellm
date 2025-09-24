@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
@@ -231,6 +231,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    requestMetadata: Optional[Dict[str, str]]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -328,15 +329,22 @@ class CohereEmbeddingResponse(TypedDict):
     texts: List[str]
 
 
-class AmazonTitanV2EmbeddingRequest(TypedDict):
-    inputText: str
+class AmazonTitanV2EmbeddingRequest(TypedDict, total=False):
+    inputText: Required[str]
     dimensions: int
     normalize: bool
+    embeddingTypes: List[Literal["float", "binary"]]
 
 
-class AmazonTitanV2EmbeddingResponse(TypedDict):
-    embedding: List[float]
-    inputTextTokenCount: int
+class AmazonTitanV2EmbeddingsByType(TypedDict, total=False):
+    binary: List[int]  # Array of integers for binary format
+    float: List[float]  # Array of floats for float format
+
+
+class AmazonTitanV2EmbeddingResponse(TypedDict, total=False):
+    embedding: List[float]  # Legacy field - array of floats (backward compatibility)
+    embeddingsByType: AmazonTitanV2EmbeddingsByType  # New format per AWS schema
+    inputTextTokenCount: Required[int]  # Always present in AWS response
 
 
 class AmazonTitanG1EmbeddingRequest(TypedDict):
