@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _common_key_generation_helper,
     _list_key_helper,
     prepare_key_update_data,
+    validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app
 
@@ -1033,3 +1034,60 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
 
     assert exc_info.value.code == "400"
     assert "Invalid key format" in str(exc_info.value.message)
+
+
+def test_validate_key_team_change_with_member_permissions():
+    """
+    Test validate_key_team_change function with team member permissions.
+    
+    This test covers the new logic that allows team members with specific
+    permissions to update keys, not just team admins.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import KeyManagementRoutes
+
+    # Create mock objects
+    mock_key = MagicMock()
+    mock_key.user_id = "test-user-123"
+    mock_key.models = ["gpt-4"]
+    mock_key.tpm_limit = None
+    mock_key.rpm_limit = None
+    
+    mock_team = MagicMock()
+    mock_team.team_id = "test-team-456" 
+    mock_team.members_with_roles = []
+    mock_team.tpm_limit = None
+    mock_team.rpm_limit = None
+    
+    mock_change_initiator = MagicMock()
+    mock_change_initiator.user_id = "test-user-123"
+    
+    mock_router = MagicMock()
+    
+    # Mock the member object returned by _get_user_in_team
+    mock_member_object = MagicMock()
+    
+    with patch('litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model'):
+        with patch('litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team') as mock_get_user:
+            with patch('litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin') as mock_is_admin:
+                with patch('litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint') as mock_has_perms:
+                    
+                    mock_get_user.return_value = mock_member_object
+                    mock_is_admin.return_value = False
+                    mock_has_perms.return_value = True
+                    
+                    # This should not raise an exception due to member permissions
+                    validate_key_team_change(
+                        key=mock_key,
+                        team=mock_team,
+                        change_initiated_by=mock_change_initiator,
+                        llm_router=mock_router
+                    )
+                    
+                    # Verify the permission check was called with correct parameters
+                    mock_has_perms.assert_called_once_with(
+                        team_member_object=mock_member_object,
+                        team_table=mock_team,
+                        route=KeyManagementRoutes.KEY_UPDATE.value
+                    )

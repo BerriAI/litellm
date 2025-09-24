@@ -731,7 +731,6 @@ async def _create_new_cli_key(
         config={},
         spend=0,
         user_id=user_id,
-        team_id="litellm-cli",
         table_name="key",
         token=key,
     )
