@@ -62,22 +62,49 @@ class KeyRotationManager:
     
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """
-        Find keys that are due for rotation based on their next_rotation_at timestamp.
+        Find keys that are due for rotation based on their rotation interval.
         
-        Simple logic:
+        Logic:
         - Key has auto_rotate = true
-        - Key's next_rotation_at is in the past (due for rotation)
+        - Key has rotation_interval set
+        - Either: never been rotated (last_rotation_at is null) OR
+        - Time since last rotation >= rotation_interval
         """
-        now = datetime.now(timezone.utc)
-        
-        return await self.prisma_client.db.litellm_verificationtoken.find_many(
+        keys_with_rotation = await self.prisma_client.db.litellm_verificationtoken.find_many(
             where={
                 "auto_rotate": True,  # Only keys marked for auto rotation
-                "next_rotation_at": {
-                    "lte": now  # Due for rotation (next_rotation_at is in the past)
-                }
+                "rotation_interval": {"not": None}  # Must have rotation interval set
             }
         )
+        
+        # Filter keys that need rotation based on last_rotation_at + interval
+        keys_needing_rotation = []
+        now = datetime.now(timezone.utc)
+        
+        for key in keys_with_rotation:
+            if self._should_rotate_key(key, now):
+                keys_needing_rotation.append(key)
+        
+        return keys_needing_rotation
+    
+    def _should_rotate_key(self, key: LiteLLM_VerificationToken, now: datetime) -> bool:
+        """
+        Determine if a key should be rotated based on last rotation time and interval.
+        """
+        if not key.rotation_interval:
+            return False
+        
+        # If never rotated, rotate immediately
+        if key.last_rotation_at is None:
+            return True
+        
+        # Calculate if enough time has passed since last rotation
+        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+        
+        interval_seconds = duration_in_seconds(key.rotation_interval)
+        next_rotation_time = key.last_rotation_at + timedelta(seconds=interval_seconds)
+        
+        return now >= next_rotation_time
     
     async def _rotate_key(self, key: LiteLLM_VerificationToken):
         """
@@ -98,18 +125,14 @@ class KeyRotationManager:
             user_api_key_dict=system_user,
             litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
         )
-        
-        # Calculate next rotation time and update DB
-        next_rotation_at = self._calculate_next_rotation(key.rotation_interval)
-        
-        # Update the key with new rotation info
-        if key.token:
+       
+        # Update the NEW key with rotation info (regenerate_key_fn creates a new token)
+        if isinstance(response, GenerateKeyResponse) and response.token_id:
             await self.prisma_client.db.litellm_verificationtoken.update(
-                where={"token": key.token},
+                where={"token": response.token_id},
                 data={
-                    "last_rotation_at": datetime.now(timezone.utc),
                     "rotation_count": (key.rotation_count or 0) + 1,
-                    "next_rotation_at": next_rotation_at
+                    "last_rotation_at": datetime.now(timezone.utc)
                 }
             )
         
@@ -123,14 +146,3 @@ class KeyRotationManager:
                 litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
             )
     
-    def _calculate_next_rotation(self, rotation_interval: Optional[str]) -> Optional[datetime]:
-        """
-        Calculate when this key should next be rotated
-        """
-        if not rotation_interval:
-            return None
-            
-        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        
-        interval_seconds = duration_in_seconds(rotation_interval)
-        return datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
