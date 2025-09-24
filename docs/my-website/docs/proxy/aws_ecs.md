@@ -24,46 +24,19 @@ Before you begin, ensure you have:
 
 ## Required IAM Setup
 
-### Step 1: Create ECS Service-Linked Role
-
-First, create the ECS service-linked role that allows ECS to manage resources on your behalf:
-
-<Tabs>
-<TabItem value="aws-cli" label="AWS CLI">
-
-```bash
-aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
-```
-
-</TabItem>
-<TabItem value="aws-console" label="AWS Console">
-
-1. Go to the [IAM Console](https://console.aws.amazon.com/iam/)
-2. Navigate to **Roles** in the left sidebar
-3. Click **Create role**
-4. Select **AWS service** as trusted entity type
-5. Choose **Elastic Container Service** from the service list
-6. Select **Elastic Container Service** as the use case
-7. Click **Next** through permissions (automatically attached)
-8. Create the role (will be named `AWSServiceRoleForECS`)
-
-</TabItem>
-</Tabs>
-
-### Step 2: Create Task Execution Role
+### Step 1: Create a Task Execution Role
 
 Create this role in the [IAM Console](https://console.aws.amazon.com/iam/) → **Roles** → **Create role**:
 
 **Role Configuration:**
 - **Trusted entity**: AWS service → Elastic Container Service → Elastic Container Service Task
-- **Role name**: `ecsTaskExecutionRole`
 
 **Required Policies to Attach:**
 - ✅ `AmazonECSTaskExecutionRolePolicy` (required for all ECS tasks)
 - ✅ `SecretsManagerReadWrite` (if using AWS Secrets Manager for API keys)
 - ✅ `AmazonSSMReadOnlyAccess` (if using Systems Manager parameters)
 
-### Step 3: Create Task Role (Optional but Recommended)
+### Step 2: Create Task Role (Recommended)
 
 Create this role for your LiteLLM application permissions:
 
@@ -190,15 +163,7 @@ aws iam list-attached-role-policies --role-name ecsTaskExecutionRole
 # 4. Verify task role (if created)
 aws iam get-role --role-name litellm-task-role
 
-# 5. Test ECS cluster creation permissions
-aws ecs describe-clusters --clusters non-existent-cluster
-# Should return empty clusters array, not permission denied
 ```
-
-**Expected ARN formats:**
-- Service-linked role: `arn:aws:iam::YOUR-ACCOUNT-ID:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS`
-- Execution role: `arn:aws:iam::YOUR-ACCOUNT-ID:role/ecsTaskExecutionRole`
-- Task role: `arn:aws:iam::YOUR-ACCOUNT-ID:role/litellm-task-role`
 
 :::tip
 If you encounter the error "Unable to assume the service linked role", run:
@@ -275,27 +240,6 @@ Navigate to Amazon ECS -> Task Definitions -> Create new task definition with JS
 }
 ```
 
-### 2. Register Task Definition
-
-```bash
-aws ecs register-task-definition file://litellm-task-definition.json
-```
-
-### 3. Create ECS Cluster
-
-```bash
-aws ecs create-cluster \
-    --cluster-name litellm-cluster \
-    --capacity-providers FARGATE \
-    --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
-```
-
-### 4. Create Service
-
-Create a new service in UI by referencing the task name
-
-Your deployment should start running now!
-
 ## Configuration Management
 
 ### Using Config File with EFS
@@ -341,6 +285,7 @@ sudo cp litellm-config.yaml /mnt/efs/
         }
       ],
       "command": [
+        "litellm",
         "--config",
         "/app/config/litellm-config.yaml",
         "--port",
@@ -369,6 +314,28 @@ Store your configuration in S3 and use environment variables:
   ]
 }
 ```
+
+### 2. Register Task Definition
+
+```bash
+aws ecs register-task-definition file://litellm-task-definition.json
+```
+
+### 3. Create ECS Cluster
+
+```bash
+aws ecs create-cluster \
+    --cluster-name litellm-cluster \
+    --capacity-providers FARGATE \
+    --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
+```
+
+### 4. Create Service
+
+Create a new service in UI by referencing the task name
+
+Your deployment should start running now!
+
 
 ## Load Balancing & Auto Scaling
 
@@ -400,44 +367,6 @@ aws elbv2 create-listener \
     --protocol HTTP \
     --port 80 \
     --default-actions Type=forward,TargetGroupArn=arn:aws:elasticloadbalancing:region:account:targetgroup/litellm-tg/1234567890123456
-```
-
-### Auto Scaling Configuration
-
-Create `litellm-autoscaling.json`:
-
-```json
-{
-  "ServiceName": "litellm-service",
-  "Cluster": "litellm-cluster",
-  "ScalableDimension": "ecs:service:DesiredCount",
-  "ResourceId": "service/litellm-cluster/litellm-service",
-  "MinCapacity": 2,
-  "MaxCapacity": 10
-}
-```
-
-```bash
-# Register scalable target
-aws application-autoscaling register-scalable-target \
-    --service-namespace ecs \
-    --cli-input-json file://litellm-autoscaling.json
-
-# Create scaling policy
-aws application-autoscaling put-scaling-policy \
-    --service-namespace ecs \
-    --scalable-dimension ecs:service:DesiredCount \
-    --resource-id service/litellm-cluster/litellm-service \
-    --policy-name litellm-cpu-scaling \
-    --policy-type TargetTrackingScaling \
-    --target-tracking-scaling-policy-configuration '{
-        "TargetValue": 70.0,
-        "PredefinedMetricSpecification": {
-            "PredefinedMetricType": "ECSServiceAverageCPUUtilization"
-        },
-        "ScaleOutCooldown": 300,
-        "ScaleInCooldown": 300
-    }'
 ```
 
 ## Monitoring and Logging
@@ -478,7 +407,7 @@ Add to your task definition for enhanced monitoring:
 ## Testing Your Deployment
 
 ```bash
-curl -X POST http://${ALB_DNS}/chat/completions \
+curl -X POST http://your-public-or-private-ip/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-your-master-key" \
   -d '{
@@ -499,17 +428,3 @@ curl -X POST http://${ALB_DNS}/chat/completions \
 2. **Health Check Failures**:
    - Verify health check endpoint accessibility. use health/liveliness
    - Check container resource allocation
-
-### Debug Commands
-
-```bash
-# Check service status
-aws ecs describe-services --cluster litellm-cluster --services litellm-service
-
-# View task logs
-aws logs tail /ecs/litellm-proxy
-
-# Check task health
-aws ecs describe-tasks --cluster litellm-cluster --tasks task-id
-
-````
