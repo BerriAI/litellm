@@ -1117,6 +1117,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=422, message="max retries must be an int"
                 )
 
+            if api_key is None and azure_ad_token_provider is not None:
+                azure_ad_token = azure_ad_token_provider()
+                if azure_ad_token:
+                    headers.pop(
+                        "api-key", None
+                    )
+                    headers["Authorization"] = f"Bearer {azure_ad_token}"
+
             # init AzureOpenAI Client
             azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
