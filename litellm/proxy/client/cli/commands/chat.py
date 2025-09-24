@@ -32,8 +32,8 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
-        model = Prompt.ask("Please enter a model name")
-        return model if model.strip() else None
+        model_name = Prompt.ask("Please enter a model name")
+        return model_name if model_name.strip() else None
     
     # Display available models in a table
     table = Table(title="Available Models")
@@ -42,7 +42,8 @@ def _select_model(console: Console, available_models: List[Dict[str, Any]]) -> O
     table.add_column("Owned By", style="yellow")
     MAX_MODELS_TO_DISPLAY = 200
     
-    for i, model in enumerate(available_models[:MAX_MODELS_TO_DISPLAY]):  # Limit to first 20 models
+    models_to_display: List[Dict[str, Any]] = available_models[:MAX_MODELS_TO_DISPLAY]
+    for i, model in enumerate(models_to_display):  # Limit to first 200 models
         table.add_row(
             str(i + 1),
             str(model.get("id", "")),
