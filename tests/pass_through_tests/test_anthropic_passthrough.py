@@ -43,8 +43,9 @@ async def test_anthropic_basic_completion_with_headers():
                 json.dumps(response_json, indent=4, default=str),
             )
             reported_usage = response_json.get("usage", None)
-            anthropic_api_input_tokens = reported_usage.get("input_tokens", None)
-            anthropic_api_output_tokens = reported_usage.get("output_tokens", None)
+            # fix null checks for reported_usage
+            anthropic_api_input_tokens = reported_usage.get("input_tokens", None) if reported_usage else None
+            anthropic_api_output_tokens = reported_usage.get("output_tokens", None) if reported_usage else None
             litellm_call_id = response_headers.get("x-litellm-call-id")
 
             print(f"LiteLLM Call ID: {litellm_call_id}")
