@@ -40,7 +40,6 @@ from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
-import fastuuid as uuid
 import httpx
 import openai
 import tiktoken
@@ -59,6 +58,7 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
+from litellm._uuid import uuid
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
