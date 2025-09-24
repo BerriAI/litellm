@@ -159,13 +159,13 @@ class TestTokenUtilities:
             'user_id': 'test-user'
         }
         
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=token_data):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=token_data):
             result = get_stored_api_key()
             assert result == 'test-api-key-123'
 
     def test_get_stored_api_key_no_token(self):
         """Test getting stored API key when no token exists"""
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=None):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=None):
             result = get_stored_api_key()
             assert result is None
 
@@ -175,7 +175,7 @@ class TestTokenUtilities:
             'user_id': 'test-user'
         }
         
-        with patch('litellm.proxy.client.cli.commands.auth.load_token', return_value=token_data):
+        with patch('litellm.litellm_core_utils.cli_token_utils.load_cli_token', return_value=token_data):
             result = get_stored_api_key()
             assert result is None
 
@@ -471,7 +471,7 @@ class TestCLIKeyRegenerationFlow:
             
             assert result.exit_code == 0
             assert "✅ Login successful!" in result.output
-            assert "API Key: sk-regenerated-key-456" in result.output
+            assert "API Key: sk-regenerated-key-4..." in result.output
             
             # Verify existing key was retrieved
             mock_get_stored.assert_called_once()
@@ -486,7 +486,9 @@ class TestCLIKeyRegenerationFlow:
             
             # Verify polling was done with correct session key
             mock_get.assert_called()
-            poll_url = mock_get.call_args[0][0]
+            # Check that the polling URL was called (should be the first call)
+            first_call_args = mock_get.call_args_list[0]
+            poll_url = first_call_args[0][0]
             assert "sk-new-session-uuid-789" in poll_url
             
             # Verify regenerated key was saved
