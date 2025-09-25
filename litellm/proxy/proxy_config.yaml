@@ -23,3 +23,16 @@ model_list:
     litellm_params:
       model: gemini/*
       api_key: os.environ/GEMINI_API_KEY
+
+
+guardrails:
+  - guardrail_name: lakera
+    litellm_params:
+      guardrail: lakera_v2
+      mode: pre_call
+      api_key: os.environ/LAKERA_API_KEY
+      default_on: false
+      project_id: project-9770817088
+      breakdown: true
+      payload: true
+      dev_info: true
