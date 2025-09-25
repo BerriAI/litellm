@@ -16,11 +16,35 @@ Memory Management Strategy:
 
 from typing import Any, Callable, Optional, Type, TypeVar
 
-from pond import Pond, PooledObject, PooledObjectFactory
+try:
+    from pond import Pond, PooledObject, PooledObjectFactory  # type: ignore
+    POND_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    POND_AVAILABLE = False
+    class Pond:  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def register(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def borrow(self, *args: Any, **kwargs: Any) -> Any:
+            pass
+
+        def recycle(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    class PooledObject:  # type: ignore
+        def __init__(self, keeped_object: Any = None) -> None:
+            self.keeped_object = keeped_object
+
+    class PooledObjectFactory:  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
 
 T = TypeVar('T')
 
-class GenericPooledObjectFactory(PooledObjectFactory):
+class GenericPooledObjectFactory(PooledObjectFactory):  # type: ignore[misc]
     """Generic factory class for creating pooled objects of any type."""
     
     def __init__(
@@ -79,7 +103,7 @@ def get_object_pool(
     time_between_eviction_runs: int = 300,  # Less frequent eviction to maintain high reuse ratio
     eviction_weight: float = 0.3,  # Less aggressive eviction for better reuse
     prewarm_count: int = 5  # Lower pre-warm count to reduce initial memory usage
-) -> Pond:
+) -> Pond | None:
     """Get or create a global object pool instance with balanced eviction-based memory control.
     
     Memory is controlled through moderate eviction to balance reuse ratio and memory usage:
@@ -98,9 +122,13 @@ def get_object_pool(
         prewarm_count: Number of objects to pre-warm the pool with (default: 5)
     
     Returns:
-        Pond instance for the specified object type
+        Pond instance for the specified object type or None if pond is not available
     """
     
+    # If pond is not available, disable pooling gracefully
+    if not POND_AVAILABLE:
+        return None
+
     if pool_name in _pools:
         return _pools[pool_name]
     
