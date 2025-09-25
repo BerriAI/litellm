@@ -5,9 +5,12 @@ import dotenv, os
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import copy
 import traceback
+import json
+import hashlib
 from packaging.version import Version
 from litellm._logging import verbose_logger
 import litellm
+from litellm.caching import DualCache
 
 
 class LangFuseLogger:
@@ -63,6 +66,9 @@ class LangFuseLogger:
             )
         else:
             self.upstream_langfuse = None
+
+        # cache for prompts fetched via Langfuse prompt management
+        self.prompt_cache = DualCache()
 
     # def log_error(kwargs, response_obj, start_time, end_time):
     #     generation = trace.generation(
@@ -417,3 +423,34 @@ class LangFuseLogger:
             trace.generation(**generation_params)
         except Exception as e:
             verbose_logger.debug(f"Langfuse Layer Error - {traceback.format_exc()}")
+
+    def _prompt_cache_key(self, name: str, variables: dict) -> str:
+        """Generate a cache key for prompt requests."""
+        try:
+            serialized = json.dumps(variables, sort_keys=True)
+        except Exception:
+            serialized = str(variables)
+        digest = hashlib.sha256(serialized.encode()).hexdigest()
+        return f"langfuse_prompt:{name}:{digest}"
+
+    def get_prompt(self, name: str, variables: dict | None = None, ttl: int = 3600):
+        """Fetch prompt from Langfuse with caching."""
+        variables = variables or {}
+        cache_key = self._prompt_cache_key(name, variables)
+        cached = self.prompt_cache.get_cache(cache_key)
+        if cached is not None:
+            return cached
+        prompt = self.Langfuse.get_prompt(name, variables)
+        self.prompt_cache.set_cache(cache_key, prompt, ttl=ttl)
+        return prompt
+
+    async def async_get_prompt(self, name: str, variables: dict | None = None, ttl: int = 3600):
+        """Asynchronously fetch prompt from Langfuse with caching."""
+        variables = variables or {}
+        cache_key = self._prompt_cache_key(name, variables)
+        cached = await self.prompt_cache.async_get_cache(cache_key)
+        if cached is not None:
+            return cached
+        prompt = self.Langfuse.get_prompt(name, variables)
+        await self.prompt_cache.async_set_cache(cache_key, prompt, ttl=ttl)
+        return prompt
