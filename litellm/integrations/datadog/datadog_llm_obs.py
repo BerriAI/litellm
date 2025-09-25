@@ -40,25 +40,33 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
-
-            # Determine configuration mode
-            self.use_agent_mode = self._determine_configuration_mode()
-
-            self.async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
-            )
-
-            if self.use_agent_mode:
+            
+            # Check for DD_AGENT_HOST first (new option)
+            dd_agent_host = os.getenv("DD_AGENT_HOST")
+            if dd_agent_host:
                 # Agent-based configuration
+                self.use_agent_mode = True
                 self.DD_API_KEY = None  # No API key needed for agent mode
                 self.intake_url = self._get_agent_endpoint()
             else:
-                # Direct API configuration
+                # Original direct API configuration (backward compatibility)
+                if os.getenv("DD_API_KEY", None) is None:
+                    raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
+                if os.getenv("DD_SITE", None) is None:
+                    raise Exception(
+                        "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
+                    )
+                
+                self.use_agent_mode = False
                 self.DD_API_KEY = os.getenv("DD_API_KEY")
                 self.DD_SITE = os.getenv("DD_SITE")
                 self.intake_url = (
                     f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
                 )
+
+            self.async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.LoggingCallback
+            )
 
             # testing base url
             dd_base_url = os.getenv("DD_BASE_URL")
@@ -79,35 +87,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
 
-    def _determine_configuration_mode(self) -> bool:
-        """
-        Determine whether to use agent-based or direct API configuration.
-
-        Returns:
-            bool: True if using agent mode, False if using direct API mode
-        """
-        dd_agent_host = os.getenv("DD_AGENT_HOST")
-        dd_api_key = os.getenv("DD_API_KEY")
-        dd_site = os.getenv("DD_SITE")
-
-        if dd_agent_host:
-            # Agent mode - DD_AGENT_HOST is set
-            verbose_logger.debug("DataDogLLMObs: Using agent-based configuration")
-            return True
-        elif dd_api_key and dd_site:
-            # Direct API mode - DD_API_KEY and DD_SITE are set
-            verbose_logger.debug("DataDogLLMObs: Using direct API configuration")
-            return False
-        else:
-            # Neither configuration is complete
-            if dd_agent_host:
-                raise Exception(
-                    "DD_AGENT_HOST is set but DD_API_KEY and DD_SITE are missing. Please set either DD_AGENT_HOST OR both DD_API_KEY and DD_SITE"
-                )
-            else:
-                raise Exception(
-                    "DD_API_KEY and DD_SITE are not set, and DD_AGENT_HOST is not set. Please set either DD_AGENT_HOST OR both DD_API_KEY and DD_SITE"
-                )
 
     def _get_agent_endpoint(self) -> str:
         """

@@ -19,7 +19,7 @@ import os
 import traceback
 import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
@@ -70,24 +70,36 @@ class DataDogLogger(
         """
         try:
             verbose_logger.debug("Datadog: in init datadog logger")
-
-            # Determine configuration mode
-            self.use_agent_mode = self._determine_configuration_mode()
-
-            self.async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.LoggingCallback
-            )
-
-            if self.use_agent_mode:
+            
+            #########################################################
+            # Handle datadog_params set as litellm.datadog_params
+            #########################################################
+            dict_datadog_params = self._get_datadog_params()
+            kwargs.update(dict_datadog_params)
+            
+            # Check for DD_AGENT_HOST first (new option)
+            dd_agent_host = os.getenv("DD_AGENT_HOST")
+            if dd_agent_host:
                 # Agent-based configuration
+                self.use_agent_mode = True
                 self.DD_API_KEY = None  # No API key needed for agent mode
                 self.intake_url = self._get_agent_endpoint()
             else:
-                # Direct API configuration
+                # Original direct API configuration (backward compatibility)
+                if os.getenv("DD_API_KEY", None) is None:
+                    raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
+                if os.getenv("DD_SITE", None) is None:
+                    raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+                
+                self.use_agent_mode = False
                 self.DD_API_KEY = os.getenv("DD_API_KEY")
                 self.intake_url = (
                     f"https://http-intake.logs.{os.getenv('DD_SITE')}/api/v2/logs"
                 )
+
+            self.async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.LoggingCallback
+            )
 
             ###################################
             # OPTIONAL -only used for testing
@@ -111,35 +123,20 @@ class DataDogLogger(
             )
             raise e
 
-    def _determine_configuration_mode(self) -> bool:
+    def _get_datadog_params(self) -> Dict:
         """
-        Determine whether to use agent-based or direct API configuration.
+        Get the datadog_params from litellm.datadog_params
 
-        Returns:
-            bool: True if using agent mode, False if using direct API mode
+        These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
         """
-        dd_agent_host = os.getenv("DD_AGENT_HOST")
-        dd_api_key = os.getenv("DD_API_KEY")
-        dd_site = os.getenv("DD_SITE")
-
-        if dd_agent_host:
-            # Agent mode - DD_AGENT_HOST is set
-            verbose_logger.debug("Datadog: Using agent-based configuration")
-            return True
-        elif dd_api_key and dd_site:
-            # Direct API mode - DD_API_KEY and DD_SITE are set
-            verbose_logger.debug("Datadog: Using direct API configuration")
-            return False
-        else:
-            # Neither configuration is complete
-            if dd_agent_host:
-                raise Exception(
-                    "DD_AGENT_HOST is set but DD_API_KEY and DD_SITE are missing. Please set either DD_AGENT_HOST OR both DD_API_KEY and DD_SITE"
-                )
-            else:
-                raise Exception(
-                    "DD_API_KEY and DD_SITE are not set, and DD_AGENT_HOST is not set. Please set either DD_AGENT_HOST OR both DD_API_KEY and DD_SITE"
-                )
+        dict_datadog_params: Dict = {}
+        if litellm.datadog_params is not None:
+            if isinstance(litellm.datadog_params, DatadogInitParams):
+                dict_datadog_params = litellm.datadog_params.model_dump()
+            elif isinstance(litellm.datadog_params, Dict):
+                # only allow params that are of DatadogInitParams
+                dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
+        return dict_datadog_params
 
     def _get_agent_endpoint(self) -> str:
         """
