@@ -2075,8 +2075,6 @@ class PrismaClient:
                 if query_type == "find_all":
                     response = await self.db.litellm_endusertable.find_many(
                         where={"budget_id": {"in": budget_id_list}},
-                        order={"litellm_budget_table": {"created_at": "desc"}},
-                        include={"litellm_budget_table": True}
                     )
                     return response
             elif table_name == "team":
