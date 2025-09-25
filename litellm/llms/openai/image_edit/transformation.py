@@ -82,7 +82,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _image = request_dict.get("image")
+        _image_list = request_dict.get("image")
         _mask = request_dict.get("mask")
         data_without_files = {
             k: v for k, v in request_dict.items() if k not in ["image", "mask"]
@@ -90,23 +90,21 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         files_list: List[Tuple[str, Any]] = []
 
         # Handle image parameter
-        if _image is not None:
-            # Handle case where image can be a list (extract first image)
-            if isinstance(_image, list):
-                _image = _image[0] if _image else None
-
-            if _image is not None:
-                image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                    _image
-                )
-                if isinstance(_image, BufferedReader):
-                    files_list.append(
-                        ("image", (_image.name, _image, image_content_type))
+        if _image_list is not None:
+            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
+            for _image in image_list:
+                if _image is not None:
+                    image_content_type: str = ImageEditRequestUtils.get_image_content_type(
+                        _image
                     )
-                else:
-                    files_list.append(
-                        ("image", ("image.png", _image, image_content_type))
-                    )
+                    if isinstance(_image, BufferedReader):
+                        files_list.append(
+                            ("image", (_image.name, _image, image_content_type))
+                        )
+                    else:
+                        files_list.append(
+                            ("image", ("image.png", _image, image_content_type))
+                        )
 
         # Handle mask parameter if provided
         if _mask is not None:
