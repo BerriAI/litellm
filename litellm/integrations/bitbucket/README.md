@@ -91,7 +91,7 @@ litellm.set_global_bitbucket_config(bitbucket_config)
 # Use with completion - the model prefix 'bitbucket/' tells LiteLLM to use BitBucket prompt management
 response = litellm.completion(
     model="bitbucket/gpt-4",  # The actual model comes from the .prompt file
-    prompt_id="chat_assistant",
+    prompt_id="prompts/chat_assistant", # Location of the prompt file
     prompt_variables={
         "user_message": "What is machine learning?",
         "system_context": "You are a helpful AI tutor."
@@ -126,7 +126,7 @@ model_list:
   - model_name: my-bitbucket-model
     litellm_params:
       model: bitbucket/gpt-4
-      prompt_id: "hello"
+      prompt_id: "prompts/hello"
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
