@@ -75,6 +75,8 @@ def _get_redis_cluster_kwargs(client=None):
     available_args.append("ssl_cert_reqs")
     available_args.append("ssl_check_hostname")
     available_args.append("ssl_ca_certs")
+    available_args.append("ssl_certfile")  # Client certificate file for TLS authentication
+    available_args.append("ssl_keyfile")  # Client certificate key file for TLS authentication
     available_args.append("redis_connect_func")  # Needed for sync clusters and IAM detection
     available_args.append("gcp_service_account")
     available_args.append("gcp_ssl_ca_certs")

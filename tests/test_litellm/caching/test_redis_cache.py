@@ -225,3 +225,5 @@ async def test_redis_cache_tls_client_cert_init(monkeypatch, redis_no_ping):
     assert connection_kwargs["ssl_certfile"] == "/path/to/client.crt"
     assert connection_kwargs["ssl_keyfile"] == "/path/to/client.key"
     assert connection_kwargs["ssl_ca_certs"] == "/path/to/ca.crt"
+
+
