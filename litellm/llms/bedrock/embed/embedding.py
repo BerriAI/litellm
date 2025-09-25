@@ -624,7 +624,7 @@ class BedrockEmbedding(BaseAWSLLM):
             )
 
         # Make the GET request
-        client = AsyncHTTPHandler()
+        client = get_async_httpx_client(llm_provider="bedrock")
         response = await client.get(
             url=prepped.url,
             headers=prepped.headers,

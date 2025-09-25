@@ -199,7 +199,7 @@ class TestBedrockAsyncInvokeEmbedding:
             assert hasattr(response, '_hidden_params')
             assert response._hidden_params is not None
             assert hasattr(response._hidden_params, '_invocation_arn')
-            assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
+            assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
 
     @pytest.mark.asyncio
     async def test_async_invoke_status_checking(self):

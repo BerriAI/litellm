@@ -59,14 +59,21 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
 
         input_data = test_image_base64 if input_type == "image" else test_input
 
-        response = litellm.embedding(
-            model=model,
-            input=input_data,
-            client=client,
-            aws_region_name="us-east-1",
-            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-            api_key=test_api_key
-        )
+        # Add inputType parameter for TwelveLabs Marengo models
+        kwargs = {
+            "model": model,
+            "input": input_data,
+            "client": client,
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "api_key": test_api_key
+        }
+        
+        # Add inputType for TwelveLabs Marengo models
+        if "twelvelabs.marengo-embed" in model:
+            kwargs["inputType"] = input_type
+            
+        response = litellm.embedding(**kwargs)
 
         assert isinstance(response, litellm.EmbeddingResponse)
         assert isinstance(response.data[0]['embedding'], list)
