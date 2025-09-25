@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -8,25 +8,18 @@ from litellm.types.utils import CallTypes, Usage
 
 
 async def calculate_batch_cost_and_usage(
+    batch: Batch,
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
 ) -> Tuple[float, Usage, List[str]]:
     """
     Calculate the cost and usage of a batch
     """
-    # Calculate costs and usage
-    batch_cost = _batch_cost_calculator(
+    return await _calculate_batch_cost_and_usage_internal(
+        batch=batch,
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,
     )
-    batch_usage = _get_batch_job_total_usage_from_file_content(
-        file_content_dictionary=file_content_dictionary,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    batch_models = _get_batch_models_from_file_content(file_content_dictionary)
-
-    return batch_cost, batch_usage, batch_models
 
 
 async def _handle_completed_batch(
@@ -34,12 +27,43 @@ async def _handle_completed_batch(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
 ) -> Tuple[float, Usage, List[str]]:
     """Helper function to process a completed batch and handle logging"""
-    # Get batch results
-    file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
-        batch, custom_llm_provider
+    return await _calculate_batch_cost_and_usage_internal(
+        batch=batch,
+        custom_llm_provider=custom_llm_provider,
+        file_content_dictionary=None,
     )
 
-    # Calculate costs and usage
+
+async def _calculate_batch_cost_and_usage_internal(
+        batch: Batch,
+        custom_llm_provider: Literal["openai", "azure", "vertex_ai"],
+        file_content_dictionary: Optional[List[dict]] = None,
+) -> Tuple[float, Usage, List[str]]:
+    # Check if batch has usage and model information directly available
+    batch_usage = getattr(batch, 'usage', None)
+    batch_model = getattr(batch, 'model', None)
+
+    if batch_usage is not None and batch_model is not None:
+        # Use batch.usage and batch.model if available
+        from litellm.cost_calculator import batch_cost_calculator
+
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=batch_usage,
+            model=batch_model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        batch_cost = prompt_cost + completion_cost
+        batch_models = [batch_model]
+
+        return batch_cost, batch_usage, batch_models
+
+    # Get file content dictionary if not provided
+    if file_content_dictionary is None:
+        file_content_dictionary = await _get_batch_output_file_content_as_dictionary(
+            batch, custom_llm_provider
+        )
+
+    # Calculate costs and usage from file content
     batch_cost = _batch_cost_calculator(
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,

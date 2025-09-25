@@ -146,6 +146,7 @@ class CheckBatchCost:
 
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
+                        batch=response,
                         file_content_dictionary=file_content_as_dict,
                         custom_llm_provider=llm_provider,  # type: ignore
                     )
