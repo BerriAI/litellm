@@ -2,7 +2,7 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from litellm.types.rerank import (

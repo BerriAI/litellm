@@ -1,5 +1,5 @@
 import enum
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional
 
 from pydantic import BaseModel, Field

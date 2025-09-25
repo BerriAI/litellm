@@ -671,7 +671,7 @@ async def upload_logo(file: UploadFile = File(...)):
     os.makedirs(upload_dir, exist_ok=True)
     
     # Generate unique filename
-    import uuid
+    from litellm._uuid import uuid
     unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
     

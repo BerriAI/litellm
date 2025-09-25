@@ -61,7 +61,7 @@ async def generate_key(
 async def chat_completion(session, key: str, model: str):
     """Make a chat completion request using OpenAI SDK"""
     from openai import AsyncOpenAI
-    import uuid
+    from litellm._uuid import uuid
 
     client = AsyncOpenAI(
         api_key=key, base_url="http://0.0.0.0:4000/v1"  # Point to our local proxy

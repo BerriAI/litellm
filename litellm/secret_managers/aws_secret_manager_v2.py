@@ -215,7 +215,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params: Additional AWS parameters
             timeout: Request timeout
         """
-        import uuid
+        from litellm._uuid import uuid
 
         # Prepare the request data
         data = {"Name": secret_name, "SecretString": secret_value}

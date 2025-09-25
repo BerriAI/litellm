@@ -4,7 +4,7 @@ organizations, teams, and keys.
 """
 
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger

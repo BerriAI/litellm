@@ -4,7 +4,7 @@ Transformation logic from Cohere's /v1/rerank format to Together AI's  `/v1/rera
 Why separate file? Make it easy to see how transformation works
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional
 
 from litellm.types.rerank import (
