@@ -35,13 +35,13 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.utils import load_credentials_from_list
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
 )
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
