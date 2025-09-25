@@ -187,9 +187,9 @@ class ProxyInitializationHelpers:
             "interface": "asgi",
             "host": "0.0.0.0",
             "port": 4000,
-            "workers": 8,
+            "workers": 17,
             "runtime_mode": "mt",
-            "runtime_threads": 16,
+            "runtime_threads": 34,
             "task_impl": "rust",
             "loop": "uvloop",
             "backlog": 8192,
@@ -254,14 +254,14 @@ class ProxyInitializationHelpers:
             f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n"  # noqa
         )  # noqa
 
-        # Get default Granian configuration and override with provided parameters
-        granian_config = ProxyInitializationHelpers._get_default_granian_init_args(
-            host=host,
-            port=port,
-            workers=num_workers,
-            backlog=2048,
-            factory=True,
-        )
+        # # Get default Granian configuration and override with provided parameters
+        # granian_config = ProxyInitializationHelpers._get_default_granian_init_args(
+        #     host=host,
+        #     port=port,
+        #     workers=num_workers,
+        #     backlog=2048,
+        #     factory=True,
+        # )
 
         # Parse user-provided Granian arguments
         user_granian_args = {}
@@ -276,10 +276,9 @@ class ProxyInitializationHelpers:
         # Configure Granian server with defaults
         server_config = {
             "target": "litellm.proxy.proxy_server:app",
-            "address": granian_config["host"],
-            "port": granian_config["port"],
+            "address": "0.0.0.0",
+            "port": 4000,
             "interface": Interfaces.ASGI,
-            "backlog": granian_config["backlog"],
         }
 
         # Add worker configuration if provided
