@@ -12522,7 +12522,7 @@
         "supports_function_calling": true,
         "supports_native_streaming": false,
         "supports_parallel_function_calling": true,
-        "supports_pdf_input": false,
+        "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_response_schema": true,
