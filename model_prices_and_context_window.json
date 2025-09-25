@@ -8229,6 +8229,23 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "ft:gpt-4.1-2025-04-14": {
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 1047576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_batches": 6e-06,
+        "supports_functions_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supporrts_vision": true
+    },
     "ft:gpt-4o-2024-08-06": {
         "input_cost_per_token": 3.75e-06,
         "input_cost_per_token_batches": 1.875e-06,
