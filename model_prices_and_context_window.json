@@ -21892,5 +21892,16 @@
         "metadata": {
             "notes": "Mistral Large Instruct model on IO Intelligence infrastructure"
         }
+    },
+    "io_intelligence/BAAI/bge-multilingual-gemma2": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "io_intelligence",
+        "mode": "embedding",
+        "source": "https://docs.io.net/reference/get-started-with-io-intelligence-api",
+        "metadata": {
+            "notes": "BAAI BGE multilingual Gemma2 embedding model on IO Intelligence infrastructure"
+        }
     }
 }
