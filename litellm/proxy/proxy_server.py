@@ -3835,12 +3835,13 @@ class ProxyStartupEvent:
         ########################################################
         from litellm.constants import (
             LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
-            LITELLM_KEY_ROTATION_ENABLED_ENV,
+            LITELLM_KEY_ROTATION_ENABLED,
         )
         
-        key_rotation_enabled = str_to_bool(LITELLM_KEY_ROTATION_ENABLED_ENV) or False
+        key_rotation_enabled: Optional[bool] = str_to_bool(LITELLM_KEY_ROTATION_ENABLED)
+        verbose_proxy_logger.debug(f"key_rotation_enabled: {key_rotation_enabled}")
         
-        if key_rotation_enabled:
+        if key_rotation_enabled is True:
             try:
                 from litellm.proxy.common_utils.key_rotation_manager import (
                     KeyRotationManager,
@@ -3850,10 +3851,7 @@ class ProxyStartupEvent:
                 global prisma_client
                 if prisma_client is not None:
                     key_rotation_manager = KeyRotationManager(prisma_client)
-                    
-                    # Schedule based on environment variable (default: 30 minutes)
-                    interval_minutes = LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS // 60
-                    verbose_proxy_logger.info(f"Key rotation background job scheduled every {interval_minutes} minutes (LITELLM_KEY_ROTATION_ENABLED=true)")
+                    verbose_proxy_logger.debug(f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)")
                     scheduler.add_job(
                         key_rotation_manager.process_rotations,
                         "interval",
