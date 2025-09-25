@@ -253,7 +253,7 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     """Configuration parameters for the Presidio PII masking guardrail"""
 
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = Field(
+    pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
