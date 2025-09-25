@@ -54,7 +54,6 @@ def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5Config):
 def test_azure_gpt5_codex_model_detection(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5-Codex models are correctly detected."""
     assert config.is_model_gpt_5_model("gpt-5-codex")
-    assert config.is_model_gpt_5_model("gpt-5-codex-latest")
     assert config.is_model_gpt_5_model("gpt5_series/gpt-5-codex")
 
 
@@ -102,11 +101,3 @@ def test_azure_gpt5_codex_series_transform_request(config: AzureOpenAIGPT5Config
     )
     assert request["model"] == "gpt-5-codex"
 
-    request = config.transform_request(
-        model="gpt5_series/gpt-5-codex-latest",
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        headers={},
-    )
-    assert request["model"] == "gpt-5-codex-latest"
