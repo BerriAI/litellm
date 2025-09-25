@@ -84,13 +84,20 @@ class SageMakerVoyageEmbeddingConfig(VoyageEmbeddingConfig, BaseAWSLLM):
         Extract the actual Voyage model name from the full model path.
         
         Args:
-            model: Full model name like "sagemaker_voyage/voyage-3" or just "voyage-3"
+            model: Full model name like "sagemaker/voyage/voyage-3" or just "voyage-3"
             
         Returns:
             str: The base Voyage model name (e.g., "voyage-3")
         """
         if "/" in model:
-            return model.split("/")[-1]
+            # Handle both new format "sagemaker/voyage/voyage-3" and old format "sagemaker_voyage/voyage-3"
+            parts = model.split("/")
+            if len(parts) >= 3 and parts[0] == "sagemaker" and parts[1] == "voyage":
+                # New format: sagemaker/voyage/voyage-3
+                return parts[2]
+            else:
+                # Old format or other: take the last part
+                return parts[-1]
         return model
 
     def _get_endpoint_name(self, model: str, optional_params: dict) -> str:

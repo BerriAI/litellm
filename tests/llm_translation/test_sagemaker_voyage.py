@@ -52,10 +52,14 @@ class TestSageMakerVoyageEmbeddingConfig:
 
     def test_extract_model_name(self, config):
         """Test model name extraction from full model paths."""
-        # Test full model path
-        full_model = "sagemaker_voyage/voyage-3"
+        # Test new hierarchical format
+        new_model = "sagemaker/voyage/voyage-3"
         expected = "voyage-3"
-        assert config._extract_model_name(full_model) == expected
+        assert config._extract_model_name(new_model) == expected
+        
+        # Test old format (backward compatibility)
+        old_model = "sagemaker_voyage/voyage-3"
+        assert config._extract_model_name(old_model) == expected
         
         # Test just model name
         model_name = "voyage-3-lite"
@@ -63,13 +67,13 @@ class TestSageMakerVoyageEmbeddingConfig:
 
     def test_get_endpoint_name_default(self, config, sample_optional_params):
         """Test default endpoint name construction."""
-        model = "sagemaker_voyage/voyage-3"
+        model = "sagemaker/voyage/voyage-3"
         endpoint_name = config._get_endpoint_name(model, sample_optional_params)
         assert endpoint_name == "voyage-3"
 
     def test_get_endpoint_name_custom(self, config):
         """Test custom endpoint name from optional parameters."""
-        model = "sagemaker_voyage/voyage-3"
+        model = "sagemaker/voyage/voyage-3"
         optional_params = {"sagemaker_endpoint_name": "my-custom-endpoint"}
         endpoint_name = config._get_endpoint_name(model, optional_params)
         assert endpoint_name == "my-custom-endpoint"
@@ -78,7 +82,7 @@ class TestSageMakerVoyageEmbeddingConfig:
     def test_get_complete_url(self, mock_region, config, sample_optional_params):
         """Test SageMaker runtime URL construction."""
         mock_region.return_value = "us-east-1"
-        model = "sagemaker_voyage/voyage-3"
+        model = "sagemaker/voyage/voyage-3"
         
         url = config.get_complete_url(
             api_base=None,
@@ -102,7 +106,7 @@ class TestSageMakerVoyageEmbeddingConfig:
         
         headers = config.validate_environment(
             headers={},
-            model="sagemaker_voyage/voyage-3",
+            model="sagemaker/voyage/voyage-3",
             messages=[],
             optional_params=sample_optional_params,
             litellm_params={},
@@ -123,7 +127,7 @@ class TestSageMakerVoyageEmbeddingConfig:
 
     def test_transform_embedding_request(self, config, sample_optional_params):
         """Test embedding request transformation."""
-        model = "sagemaker_voyage/voyage-3"
+        model = "sagemaker/voyage/voyage-3"
         input_texts = ["Hello world", "Test text"]
         
         request = config.transform_embedding_request(
@@ -158,7 +162,7 @@ class TestSageMakerVoyageEmbeddingConfig:
         logging_obj = MagicMock()
         
         result = config.transform_embedding_response(
-            model="sagemaker_voyage/voyage-3",
+            model="sagemaker/voyage/voyage-3",
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=logging_obj,
@@ -183,7 +187,7 @@ class TestSageMakerVoyageEmbeddingConfig:
         
         with pytest.raises(SageMakerVoyageError) as exc_info:
             config.transform_embedding_response(
-                model="sagemaker_voyage/voyage-3",
+                model="sagemaker/voyage/voyage-3",
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=logging_obj,
@@ -207,9 +211,9 @@ class TestSageMakerVoyageIntegration:
     """Test integration with main litellm embedding function."""
 
     @pytest.mark.parametrize("model", [
-        "sagemaker_voyage/voyage-3",
-        "sagemaker_voyage/voyage-3-lite", 
-        "sagemaker_voyage/voyage-code-3",
+        "sagemaker/voyage/voyage-3",
+        "sagemaker/voyage/voyage-3-lite", 
+        "sagemaker/voyage/voyage-code-3",
     ])
     @patch("litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.embedding")
     def test_embedding_function_routing(self, mock_http_handler, model):
@@ -249,7 +253,7 @@ class TestSageMakerVoyageIntegration:
         mock_http_handler.return_value = mock_response
         
         response = embedding(
-            model="sagemaker_voyage/voyage-3",
+            model="sagemaker/voyage/voyage-3",
             input=["Test input"],
             aws_region_name="us-west-2",
             aws_access_key_id="test_key",
@@ -279,7 +283,7 @@ class TestSageMakerVoyageIntegration:
         mock_http_handler.return_value = mock_response
         
         response = await litellm.aembedding(
-            model="sagemaker_voyage/voyage-3",
+            model="sagemaker/voyage/voyage-3",
             input=["Async test input"],
             aws_region_name="us-east-1",
         )
@@ -294,7 +298,7 @@ class TestSageMakerVoyageIntegration:
         """Test error handling for unsupported models."""
         with pytest.raises(Exception):  # Should raise appropriate error
             embedding(
-                model="sagemaker_voyage/unsupported-model",
+                model="sagemaker/voyage/unsupported-model",
                 input=["Test input"],
             )
 
@@ -314,7 +318,7 @@ class TestSageMakerVoyageRealWorld:
         3. Proper IAM permissions
         """
         response = embedding(
-            model="sagemaker_voyage/voyage-3",
+            model="sagemaker/voyage/voyage-3",
             input=["Hello world", "Test embedding"],
             aws_region_name="us-east-1",
             sagemaker_endpoint_name="your-voyage-endpoint-name",

@@ -16,7 +16,7 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = 'your-secret-key'
 os.environ['AWS_REGION_NAME'] = 'us-east-1'
 
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["Sample text 1", "Sample text 2"],
     input_type="query"  # or "document" for retrieval tasks
 )
@@ -27,7 +27,7 @@ print(response)
 
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["Sample text 1", "Sample text 2"],
     sagemaker_endpoint_name="my-custom-voyage-endpoint",
     aws_region_name="us-west-2",
@@ -69,31 +69,31 @@ All Voyage AI models available on AWS Marketplace are supported:
 
 | Model Name | SageMaker Usage | Description |
 |------------|----------------|-------------|
-| voyage-3 | `sagemaker_voyage/voyage-3` | Latest general-purpose embedding model |
-| voyage-3-lite | `sagemaker_voyage/voyage-3-lite` | Lighter version of voyage-3 |  
-| voyage-3-large | `sagemaker_voyage/voyage-3-large` | Larger, higher-capacity version |
-| voyage-code-3 | `sagemaker_voyage/voyage-code-3` | Optimized for code similarity |
-| voyage-code-2 | `sagemaker_voyage/voyage-code-2` | Previous generation code model |
-| voyage-finance-2 | `sagemaker_voyage/voyage-finance-2` | Finance domain-specific |
-| voyage-law-2 | `sagemaker_voyage/voyage-law-2` | Legal domain-specific |
-| voyage-multilingual-2 | `sagemaker_voyage/voyage-multilingual-2` | Multilingual support |
-| voyage-2 | `sagemaker_voyage/voyage-2` | Previous generation general model |
-| voyage-large-2 | `sagemaker_voyage/voyage-large-2` | Previous generation large model |
-| voyage-large-2-instruct | `sagemaker_voyage/voyage-large-2-instruct` | Instruction-tuned variant |
+| voyage-3 | `sagemaker/voyage/voyage-3` | Latest general-purpose embedding model |
+| voyage-3-lite | `sagemaker/voyage/voyage-3-lite` | Lighter version of voyage-3 |  
+| voyage-3-large | `sagemaker/voyage/voyage-3-large` | Larger, higher-capacity version |
+| voyage-code-3 | `sagemaker/voyage/voyage-code-3` | Optimized for code similarity |
+| voyage-code-2 | `sagemaker/voyage/voyage-code-2` | Previous generation code model |
+| voyage-finance-2 | `sagemaker/voyage/voyage-finance-2` | Finance domain-specific |
+| voyage-law-2 | `sagemaker/voyage/voyage-law-2` | Legal domain-specific |
+| voyage-multilingual-2 | `sagemaker/voyage/voyage-multilingual-2` | Multilingual support |
+| voyage-2 | `sagemaker/voyage/voyage-2` | Previous generation general model |
+| voyage-large-2 | `sagemaker/voyage/voyage-large-2` | Previous generation large model |
+| voyage-large-2-instruct | `sagemaker/voyage/voyage-large-2-instruct` | Instruction-tuned variant |
 
 ### Multimodal Embedding Models
 
 | Model Name | SageMaker Usage | Description |
 |------------|----------------|-------------|
-| voyage-multimodal-3 | `sagemaker_voyage/voyage-multimodal-3` | Text and image embeddings |
+| voyage-multimodal-3 | `sagemaker/voyage/voyage-multimodal-3` | Text and image embeddings |
 
 ### Reranking Models
 
 | Model Name | SageMaker Usage | Description |
 |------------|----------------|-------------|
-| rerank-2 | `sagemaker_voyage/rerank-2` | Latest reranking model |
-| rerank-2-lite | `sagemaker_voyage/rerank-2-lite` | Lighter reranking model |
-| rerank-lite-1 | `sagemaker_voyage/rerank-lite-1` | Previous generation reranker |
+| rerank-2 | `sagemaker/voyage/rerank-2` | Latest reranking model |
+| rerank-2-lite | `sagemaker/voyage/rerank-2-lite` | Lighter reranking model |
+| rerank-lite-1 | `sagemaker/voyage/rerank-lite-1` | Previous generation reranker |
 
 ## Configuration Options
 
@@ -109,7 +109,7 @@ os.environ['AWS_REGION_NAME'] = 'us-east-1'
 
 # Method 2: Explicit parameters  
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"],
     aws_access_key_id="your-key",
     aws_secret_access_key="your-secret", 
@@ -119,14 +119,14 @@ response = embedding(
 # Method 3: IAM roles (recommended for production)
 # No credentials needed - uses instance/container IAM role
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"],
     aws_region_name="us-east-1"
 )
 
 # Method 4: AWS profiles
 response = embedding(
-    model="sagemaker_voyage/voyage-3", 
+    model="sagemaker/voyage/voyage-3", 
     input=["text"],
     aws_profile_name="my-profile"
 )
@@ -138,7 +138,7 @@ All Voyage AI parameters are supported:
 
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["query text", "document text"], 
     input_type="query",  # "query" or "document" 
     truncation=True,     # Enable truncation
@@ -151,7 +151,7 @@ response = embedding(
 
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"],
     # SageMaker specific
     sagemaker_endpoint_name="my-custom-endpoint",  # Override endpoint name
@@ -176,7 +176,7 @@ documents = [
 ]
 
 doc_embeddings = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=documents,
     input_type="document"  # Important for documents
 )
@@ -184,7 +184,7 @@ doc_embeddings = embedding(
 # Embed query for retrieval
 query = "What is Python?"
 query_embedding = embedding(
-    model="sagemaker_voyage/voyage-3", 
+    model="sagemaker/voyage/voyage-3", 
     input=[query],
     input_type="query"  # Important for queries
 )
@@ -200,7 +200,7 @@ code_snippets = [
 ]
 
 code_embeddings = embedding(
-    model="sagemaker_voyage/voyage-code-3",  # Code-specific model
+    model="sagemaker/voyage/voyage-code-3",  # Code-specific model
     input=code_snippets,
     input_type="document"
 )
@@ -217,7 +217,7 @@ multilingual_text = [
 ]
 
 embeddings = embedding(
-    model="sagemaker_voyage/voyage-multilingual-2",
+    model="sagemaker/voyage/voyage-multilingual-2",
     input=multilingual_text,
     input_type="query"
 )
@@ -231,7 +231,7 @@ By default, the endpoint name is derived from the model name. You can override t
 
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"],
     sagemaker_endpoint_name="voyage-3-production-v2"
 )
@@ -241,7 +241,7 @@ response = embedding(
 
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"], 
     aws_region_name="eu-west-1",  # Use European deployment
     sagemaker_endpoint_name="voyage-3-eu"
@@ -255,7 +255,7 @@ from litellm.llms.voyage.embedding.sagemaker_transformation import SageMakerVoya
 
 try:
     response = embedding(
-        model="sagemaker_voyage/voyage-3",
+        model="sagemaker/voyage/voyage-3",
         input=["text"],
     )
 except SageMakerVoyageError as e:
@@ -285,13 +285,13 @@ Process multiple texts together for efficiency:
 # Efficient: Process in batches
 large_batch = ["text1", "text2", ..., "text100"] 
 embeddings = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=large_batch  # Process all at once
 )
 
 # Less efficient: Individual calls
 # for text in large_batch:
-#     embedding(model="sagemaker_voyage/voyage-3", input=[text])
+#     embedding(model="sagemaker/voyage/voyage-3", input=[text])
 ```
 
 ## Monitoring and Logging
@@ -303,7 +303,7 @@ import litellm
 litellm.set_verbose = True
 
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["text"],
 )
 # Will output detailed request/response information
@@ -317,12 +317,12 @@ Configure SageMaker Voyage in your proxy config:
 model_list:
   - model_name: voyage-embeddings
     litellm_params:
-      model: sagemaker_voyage/voyage-3
+      model: sagemaker/voyage/voyage-3
       aws_region_name: us-east-1
       input_type: query
   - model_name: voyage-code-embeddings  
     litellm_params:
-      model: sagemaker_voyage/voyage-code-3
+      model: sagemaker/voyage/voyage-code-3
       aws_region_name: us-east-1
       sagemaker_endpoint_name: voyage-code-production
 ```

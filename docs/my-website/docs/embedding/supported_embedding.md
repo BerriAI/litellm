@@ -285,7 +285,7 @@ os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-west-2, etc.
 from litellm import embedding
 
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["good morning from litellm", "this is another item"],
     input_type="query"  # "query" for search queries, "document" for documents
 )
@@ -295,7 +295,7 @@ print(response)
 ### Usage - Custom Endpoint
 ```python
 response = embedding(
-    model="sagemaker_voyage/voyage-3",
+    model="sagemaker/voyage/voyage-3",
     input=["sample text"],
     sagemaker_endpoint_name="my-voyage-endpoint",  # Custom endpoint name
     aws_region_name="us-west-2"
@@ -307,14 +307,14 @@ All Voyage AI models available on AWS Marketplace are supported:
 
 | Model Name | Function Call | Description |
 |------------|---------------|-------------|
-| voyage-3 | `embedding(model="sagemaker_voyage/voyage-3", input=input)` | Latest general-purpose model |
-| voyage-3-lite | `embedding(model="sagemaker_voyage/voyage-3-lite", input=input)` | Lighter version |
-| voyage-3-large | `embedding(model="sagemaker_voyage/voyage-3-large", input=input)` | Larger capacity |
-| voyage-code-3 | `embedding(model="sagemaker_voyage/voyage-code-3", input=input)` | Code similarity |
-| voyage-finance-2 | `embedding(model="sagemaker_voyage/voyage-finance-2", input=input)` | Finance domain |
-| voyage-law-2 | `embedding(model="sagemaker_voyage/voyage-law-2", input=input)` | Legal domain |
-| voyage-multilingual-2 | `embedding(model="sagemaker_voyage/voyage-multilingual-2", input=input)` | Multilingual |
-| voyage-multimodal-3 | `embedding(model="sagemaker_voyage/voyage-multimodal-3", input=input)` | Text + image |
+| voyage-3 | `embedding(model="sagemaker/voyage/voyage-3", input=input)` | Latest general-purpose model |
+| voyage-3-lite | `embedding(model="sagemaker/voyage/voyage-3-lite", input=input)` | Lighter version |
+| voyage-3-large | `embedding(model="sagemaker/voyage/voyage-3-large", input=input)` | Larger capacity |
+| voyage-code-3 | `embedding(model="sagemaker/voyage/voyage-code-3", input=input)` | Code similarity |
+| voyage-finance-2 | `embedding(model="sagemaker/voyage/voyage-finance-2", input=input)` | Finance domain |
+| voyage-law-2 | `embedding(model="sagemaker/voyage/voyage-law-2", input=input)` | Legal domain |
+| voyage-multilingual-2 | `embedding(model="sagemaker/voyage/voyage-multilingual-2", input=input)` | Multilingual |
+| voyage-multimodal-3 | `embedding(model="sagemaker/voyage/voyage-multimodal-3", input=input)` | Text + image |
 
 **Prerequisites:** You need to subscribe to Voyage AI models in AWS Marketplace and deploy them to SageMaker endpoints. See the [detailed guide](./providers/sagemaker_voyage) for setup instructions.
 

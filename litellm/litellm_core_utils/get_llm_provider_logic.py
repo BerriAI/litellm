@@ -379,6 +379,9 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "compactifai"
         elif model.startswith("ovhcloud/"):
             custom_llm_provider = "ovhcloud"
+        # sagemaker voyage models
+        elif model.startswith("sagemaker/voyage/"):
+            custom_llm_provider = "sagemaker_voyage"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
