@@ -245,7 +245,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         )
         extra_body_params = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params = _get_api_params(params=optional_params)
+        watsonx_api_params = _get_api_params(params=optional_params, model=model)
 
         watsonx_auth_payload = self._prepare_payload(
             model=model,
