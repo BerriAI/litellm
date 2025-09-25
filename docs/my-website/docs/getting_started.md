@@ -32,8 +32,7 @@ Next Steps 👉 [Call all supported models - e.g. Claude-2, Llama2-70b, etc.](./
 More details 👉
 
 - [Completion() function details](./completion/)
-- [Overview of supported models / providers on LiteLLM](./providers/)
-- [Search all models / providers](https://models.litellm.ai/)
+- [All supported models / providers on LiteLLM](./providers/)
 - [Build your own OpenAI proxy](https://github.com/BerriAI/liteLLM-proxy/tree/main)
 
 ## streaming

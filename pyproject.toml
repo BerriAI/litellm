@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.77.3"
+version = "1.77.4"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -20,7 +20,6 @@ Documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0, !=3.9.7"
-fastuuid = ">=0.12.0"
 httpx = ">=0.23.0"
 openai = ">=1.99.5"
 python-dotenv = ">=0.2.0"
@@ -32,8 +31,8 @@ jinja2 = "^3.1.2"
 aiohttp = ">=3.10"
 pydantic = "^2.5.0"
 jsonschema = "^4.22.0"
-pondpond = "^1.4.1"
 numpydoc = {version = "*", optional = true} # used in utils.py
+fastuuid = {version = ">=0.12.0", optional = true}
 
 uvicorn = {version = "^0.29.0", optional = true}
 uvloop = {version = "^0.21.0", optional = true, markers="sys_platform != 'win32'"}
@@ -93,6 +92,7 @@ proxy = [
     "litellm-enterprise",
     "rich",
     "polars",
+    "fastuuid",
 ]
 
 extra_proxy = [
@@ -114,6 +114,7 @@ caching = ["diskcache"]
 semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
+
 
 [tool.isort]
 profile = "black"
@@ -157,7 +158,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.77.3"
+version = "1.77.4"
 version_files = [
     "pyproject.toml:^version"
 ]

@@ -801,3 +801,59 @@ def test_fix_enum_empty_strings():
     # 3. Other properties preserved
     assert input_schema["properties"]["user_agent_type"]["type"] == "string"
     assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+
+def test_get_token_url():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexLLM,
+    )
+
+    vertex_llm = VertexLLM()
+    vertex_ai_project = "pathrise-convert-1606954137718"
+    vertex_ai_location = "us-central1"
+    vertex_credentials = ""
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"cached_content": "hi"}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url=", url)
+
+
+
+    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
+        optional_params={"temperature": 0.1}
+    )
+
+    _, url = vertex_llm._get_token_and_url(
+        auth_header=None,
+        vertex_project=vertex_ai_project,
+        vertex_location=vertex_ai_location,
+        vertex_credentials=vertex_credentials,
+        gemini_api_key="",
+        custom_llm_provider="vertex_ai_beta",
+        should_use_v1beta1_features=should_use_v1beta1_features,
+        api_base=None,
+        model="",
+        stream=False,
+    )
+
+    print("url for normal request", url)
+
+    assert "v1beta1" not in url
+    assert "/v1/" in url
+
+    pass

@@ -89,6 +89,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.utils import StandardKeyGenerationConfig, LlmProviders
+from litellm.types.utils import PriorityReservationSettings
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
@@ -374,6 +375,7 @@ public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
+priority_reservation_settings: "PriorityReservationSettings" = PriorityReservationSettings()
 
 
 ######## Networking Settings ########
