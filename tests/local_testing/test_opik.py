@@ -120,8 +120,8 @@ def test_sync_opik_logging_http_request():
                 temperature=0.2,
                 mock_response="This is a mock response",
             )
-        
-        # Need to wait for a short amount of time as the log_success callback is called in a different thread
+
+        # Need to wait for a short amount of time as the log_success callback is called in a different thread. One or two seconds is often not enough.
         time.sleep(3)
 
         # Check that 5 spans and 5 traces were sent
