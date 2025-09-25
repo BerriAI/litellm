@@ -17,7 +17,7 @@ import logging
 import threading
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from collections import defaultdict
 from functools import lru_cache
 from typing import (

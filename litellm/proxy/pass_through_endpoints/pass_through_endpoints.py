@@ -3,7 +3,7 @@ import asyncio
 import copy
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from base64 import b64encode
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union

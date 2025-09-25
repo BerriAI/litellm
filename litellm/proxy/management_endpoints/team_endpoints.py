@@ -12,7 +12,7 @@ All /team management endpoints
 import asyncio
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 

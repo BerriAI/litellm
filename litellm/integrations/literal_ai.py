@@ -2,7 +2,7 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional
 
 import httpx
