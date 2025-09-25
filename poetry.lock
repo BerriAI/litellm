@@ -3770,29 +3770,8 @@ python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-<<<<<<< HEAD
-    {file = "litellm_proxy_extras-0.2.20-py3-none-any.whl", hash = "sha256:80ebe03be210eed99ddab0bf8e1a14169f24a502ecdaa98f4bb5032ebe65a944"},
-    {file = "litellm_proxy_extras-0.2.20.tar.gz", hash = "sha256:8dea657f965122490be480327995ce534e75dc96778cb3e05c562c7996f85cce"},
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
     {file = "litellm_proxy_extras-0.2.19-py3-none-any.whl", hash = "sha256:cd4cc5fc639ac24bc99af70b8b56b7cc0480b0e72a2a53638f557beb7e9f64fd"},
     {file = "litellm_proxy_extras-0.2.19.tar.gz", hash = "sha256:e53592e39eb0b9c3b6cd32f29e6a0a53be51d7ad31dedfb69b58c24073b5b3ec"},
->>>>>>> parent of ded823a3a3 ([Feat] Initial support for scheduled key rotations  (#14877))
-=======
->>>>>>> parent of c4838e730c (bump v extras)
-]
-
-[[package]]
-name = "madoka"
-version = "0.7.1"
-description = "Memory-efficient CountMin Sketch key-value structure (based on Madoka C++ library)"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "madoka-0.7.1-cp37-cp37m-macosx_10_14_x86_64.whl", hash = "sha256:7521eee9ace30b376bb54fdcb2cb42bf6b7a0346b0d0b612f25f3299aa4a95af"},
-    {file = "madoka-0.7.1.tar.gz", hash = "sha256:e258baa84fc0a3764365993b8bf5e1b065383a6ca8c9f862fb3e3e709843fae7"},
 ]
 
 [[package]]
@@ -5552,21 +5531,6 @@ style = ["great-tables (>=0.8.0)"]
 timezone = ["tzdata ; platform_system == \"Windows\""]
 xlsx2csv = ["xlsx2csv (>=0.8.0)"]
 xlsxwriter = ["xlsxwriter"]
-
-[[package]]
-name = "pondpond"
-version = "1.4.1"
-description = "Pond is a high performance object-pooling library for Python."
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "pondpond-1.4.1-py3-none-any.whl", hash = "sha256:641028ead4e8018ca6de1220c660ddd6d6fbf62a60e72f410655dd0451d82880"},
-    {file = "pondpond-1.4.1.tar.gz", hash = "sha256:8afa34b869d1434d21dd2ec12644abc3b1733fcda8fcf355300338a13a79bb7b"},
-]
-
-[package.dependencies]
-madoka = ">=0.7.1"
 
 [[package]]
 name = "priority"
@@ -9614,4 +9578,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "6ea59a97b3d69dc5fcc45645131e2fc843ec533854dba19852cecf8e10da5e7a"
+content-hash = "6ba83d170d58367d0888a0bdd320a5a348d49411cb4c4661af81c36e9cf23420"
