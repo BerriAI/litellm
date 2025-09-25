@@ -15,7 +15,7 @@ class PiiAction(str, Enum):
     MASK = "MASK"
 
 
-def test_presidio_union_type_fix():
+def test_presidio_union_type_fix() -> None:
     """Test that Union[PiiEntityType, str] allows both enum and string entity types"""
 
     # This is the core fix - mixed entity types in pii_entities_config
