@@ -36,3 +36,5 @@ guardrails:
       breakdown: true
       payload: true
       dev_info: true
+
+# proxy_config.yaml
