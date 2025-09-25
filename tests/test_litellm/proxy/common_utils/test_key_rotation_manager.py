@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     GenerateKeyResponse,
-    KeyRotationSettings,
     LiteLLM_VerificationToken,
 )
 from litellm.proxy.common_utils.key_rotation_manager import KeyRotationManager
@@ -33,8 +32,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
-        settings = KeyRotationSettings(enabled=True, check_frequency="30s")
-        manager = KeyRotationManager(mock_prisma_client, settings)
+        manager = KeyRotationManager(mock_prisma_client)
         
         now = datetime.now(timezone.utc)
         
@@ -94,8 +92,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
-        settings = KeyRotationSettings(enabled=True, check_frequency="30s")
-        manager = KeyRotationManager(mock_prisma_client, settings)
+        manager = KeyRotationManager(mock_prisma_client)
         
         now = datetime.now(timezone.utc)
         
@@ -157,8 +154,7 @@ class TestKeyRotationManager:
         """
         # Setup
         mock_prisma_client = AsyncMock()
-        settings = KeyRotationSettings(enabled=True, check_frequency="30s")
-        manager = KeyRotationManager(mock_prisma_client, settings)
+        manager = KeyRotationManager(mock_prisma_client)
         
         # Mock key to rotate
         key_to_rotate = LiteLLM_VerificationToken(
