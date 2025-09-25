@@ -795,9 +795,9 @@ curl http://localhost:4000/v1/responses \
 
 
 
-## Session Management - Non-OpenAI Models
+## Session Management
 
-LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
 
 #### Usage
 
