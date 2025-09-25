@@ -652,6 +652,30 @@ async def proxy_startup_event(app: FastAPI):
             litellm_proxy_budget_name=litellm_proxy_admin_name
         )
 
+    ### PRELOAD USERS INTO CACHE ###
+    if prisma_client is not None and general_settings is not None:
+        preload_limit = general_settings.get("preload_users_limit", 0)
+        if preload_limit > 0:
+            from litellm.proxy.utils import preload_users_into_cache        
+            verbose_proxy_logger.info(
+                f"Starting background user preload into cache: limit={preload_limit}"
+            )
+            
+            async def _preload_users_background():
+                try:
+                    await preload_users_into_cache(
+                        prisma_client=prisma_client,  # type: ignore
+                        user_api_key_cache=user_api_key_cache,
+                        limit=preload_limit
+                    )
+                    verbose_proxy_logger.info("User preload background task completed")
+                except Exception as e:
+                    verbose_proxy_logger.error(f"Failed to preload users in background: {e}")
+                    # Don't fail startup if preload fails
+                    pass
+            
+            asyncio.create_task(_preload_users_background())
+
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
         await ProxyStartupEvent.initialize_scheduled_background_jobs(

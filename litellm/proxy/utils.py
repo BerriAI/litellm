@@ -2074,7 +2074,9 @@ class PrismaClient:
             elif table_name == "enduser" and budget_id_list is not None:
                 if query_type == "find_all":
                     response = await self.db.litellm_endusertable.find_many(
-                        where={"budget_id": {"in": budget_id_list}}
+                        where={"budget_id": {"in": budget_id_list}},
+                        order={"litellm_budget_table": {"created_at": "desc"}},
+                        include={"litellm_budget_table": True}
                     )
                     return response
             elif table_name == "team":
@@ -3023,6 +3025,79 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
                     key=cache_key, value=cache_value, ttl=600
                 )  # store for 10 minutes
     return
+
+
+async def preload_users_into_cache(
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    limit: int = 1000,
+) -> Dict[str, Any]:
+    """
+    Pre-load users from database into cache on startup.
+    
+    Args:
+        prisma_client: Database client
+        user_api_key_cache: Cache instance to store users
+        limit: Maximum number of users to pre-load (must be > 0 and <= 10000)
+    Returns:
+        Dict with preload statistics
+    """
+    try:
+        verbose_proxy_logger.info(f"Starting user preload: limit={limit}")
+        users = await prisma_client.db.litellm_endusertable.find_many(
+            take=limit,
+            order={"litellm_budget_table": {"created_at": "desc"}},
+            include={"litellm_budget_table": True}
+        )
+        
+        if not users:
+            verbose_proxy_logger.info("No users found in database to preload")
+            return {"preloaded_count": 0, "total_users": 0}
+        
+        preloaded_count = 0
+        failed_count = 0
+        
+        for user in users:
+            try:
+                cache_key = "end_user_id:{}".format(user.user_id)
+                existing_cache = user_api_key_cache.get_cache(key=cache_key)
+                if existing_cache is not None:
+                    continue
+                
+
+                user_api_key_cache.set_cache(
+                    key=cache_key,
+                    value=user.dict()
+                )
+                
+                preloaded_count += 1
+                
+                if preloaded_count % 100 == 0:
+                    verbose_proxy_logger.debug(f"Preloaded {preloaded_count} users...")
+                    
+            except Exception as e:
+                failed_count += 1
+                verbose_proxy_logger.warning(f"Failed to preload user {user.user_id}: {e}")
+                continue
+        
+        result = {
+            "preloaded_count": preloaded_count,
+            "failed_count": failed_count,
+            "total_users": len(users),
+            "limit": limit
+        }
+        
+        verbose_proxy_logger.info(
+            f"User preload completed: {preloaded_count} users cached, "
+            f"{failed_count} failed, {len(users)} total users in database"
+        )
+        
+        return result
+        
+    except Exception as e:
+        error_msg = f"Error during user preload: {e}"
+        verbose_proxy_logger.error(error_msg)
+        return {"error": error_msg, "preloaded_count": 0}
 
 
 async def send_email(
