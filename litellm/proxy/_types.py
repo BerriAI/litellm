@@ -1,7 +1,7 @@
 import enum
 import json
-import uuid
 from datetime import datetime
+from litellm._uuid import uuid
 from typing import (
     TYPE_CHECKING,
     Any,

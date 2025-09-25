@@ -9,8 +9,8 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-import uuid
 from datetime import datetime
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -54,7 +54,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                     raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
                 if os.getenv("DD_SITE", None) is None:
                     raise Exception(
-                        "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
+                        "DD_SITE is not set, set 'DD_SITE=<>', example site = `us5.datadoghq.com`"
                     )
                 
                 self.use_agent_mode = False
