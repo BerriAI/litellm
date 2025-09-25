@@ -196,6 +196,19 @@ model_list:
       vertex_location: "us-central1"
       vertex_credentials: "/path/to/service_account.json" # [OPTIONAL] Do this OR `!gcloud auth application-default login` - run this to add vertex credentials to your env
 ```
+or
+```yaml
+model_list:
+ - model_name: gemini-pro
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      litellm_credential_name: vertex-global
+      vertex_project: project-name-here
+      vertex_location: global
+      base_model: gemini
+      model_info:
+        provider: Vertex
+```
 
 2. Start Proxy 
 
