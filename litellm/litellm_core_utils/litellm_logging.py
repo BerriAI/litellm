@@ -3649,8 +3649,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                     return callback
 
             # Get global BitBucket config
-            import litellm
-
             bitbucket_config = getattr(litellm, "global_bitbucket_config", None)
             if bitbucket_config is None:
                 raise ValueError(
