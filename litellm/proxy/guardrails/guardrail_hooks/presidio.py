@@ -173,7 +173,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
 
         if self.pii_entities_config:
-            analyze_payload["entities"] = list(self.pii_entities_config.keys())  # type: ignore
+            analyze_payload["entities"] = list(self.pii_entities_config.keys())
 
         ##################################################################
         ######### End of adding config params
