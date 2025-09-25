@@ -81,7 +81,7 @@ def test_bitbucket_client_missing_required_fields():
         BitBucketClient({"access_token": "test"})
 
 
-@patch("requests.Session.get")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_bitbucket_client_get_file_content_success(mock_get):
     """Test successful file content retrieval from BitBucket."""
     # Mock successful response
@@ -104,13 +104,15 @@ def test_bitbucket_client_get_file_content_success(mock_get):
     mock_get.assert_called_once()
 
 
-@patch("requests.Session.get")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_bitbucket_client_get_file_content_not_found(mock_get):
     """Test file content retrieval when file doesn't exist."""
     # Mock 404 response
+    import httpx
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = Exception("404 Not Found")
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("404 Not Found", request=MagicMock(), response=mock_response)
     mock_response.status_code = 404
+    mock_response.response = mock_response
     mock_get.return_value = mock_response
 
     config = {
@@ -125,13 +127,15 @@ def test_bitbucket_client_get_file_content_not_found(mock_get):
     assert content is None
 
 
-@patch("requests.Session.get")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_bitbucket_client_get_file_content_access_denied(mock_get):
     """Test file content retrieval with access denied error."""
     # Mock 403 response
+    import httpx
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = Exception("403 Forbidden")
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("403 Forbidden", request=MagicMock(), response=mock_response)
     mock_response.status_code = 403
+    mock_response.response = mock_response
     mock_get.return_value = mock_response
 
     config = {
@@ -146,13 +150,15 @@ def test_bitbucket_client_get_file_content_access_denied(mock_get):
         client.get_file_content("test.prompt")
 
 
-@patch("requests.Session.get")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_bitbucket_client_get_file_content_auth_failed(mock_get):
     """Test file content retrieval with authentication failure."""
     # Mock 401 response
+    import httpx
     mock_response = MagicMock()
-    mock_response.raise_for_status.side_effect = Exception("401 Unauthorized")
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError("401 Unauthorized", request=MagicMock(), response=mock_response)
     mock_response.status_code = 401
+    mock_response.response = mock_response
     mock_get.return_value = mock_response
 
     config = {
@@ -167,7 +173,7 @@ def test_bitbucket_client_get_file_content_auth_failed(mock_get):
         client.get_file_content("test.prompt")
 
 
-@patch("requests.Session.get")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
 def test_bitbucket_client_list_files_success(mock_get):
     """Test successful file listing from BitBucket."""
     # Mock successful response
@@ -219,7 +225,7 @@ input:
     }
 
     manager = BitBucketPromptManager(config)
-    template = manager._parse_prompt_file(prompt_content, "test_prompt")
+    template = manager.prompt_manager._parse_prompt_file(prompt_content, "test_prompt")
 
     assert template.template_id == "test_prompt"
     assert template.model == "gpt-4"
@@ -240,7 +246,7 @@ def test_bitbucket_prompt_manager_parse_prompt_file_no_frontmatter():
     }
 
     manager = BitBucketPromptManager(config)
-    template = manager._parse_prompt_file(prompt_content, "simple_prompt")
+    template = manager.prompt_manager._parse_prompt_file(prompt_content, "simple_prompt")
 
     assert template.template_id == "simple_prompt"
     assert template.content == "Simple prompt: {{message}}"
@@ -263,9 +269,9 @@ def test_bitbucket_prompt_manager_render_template():
         content="Hello {{name}}! Welcome to {{place}}.",
         metadata={"model": "gpt-4"},
     )
-    manager.prompts["test_template"] = template
+    manager.prompt_manager.prompts["test_template"] = template
 
-    rendered = manager.render_template("test_template", {"name": "World", "place": "Earth"})
+    rendered = manager.prompt_manager.render_template("test_template", {"name": "World", "place": "Earth"})
     assert rendered == "Hello World! Welcome to Earth."
 
 
@@ -280,7 +286,7 @@ def test_bitbucket_prompt_manager_render_template_not_found():
     manager = BitBucketPromptManager(config)
 
     with pytest.raises(ValueError, match="Template 'nonexistent' not found"):
-        manager.render_template("nonexistent", {"some": "variable"})
+        manager.prompt_manager.render_template("nonexistent", {"some": "variable"})
 
 
 @patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
@@ -304,13 +310,13 @@ Hello {{name}}!"""
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
 
     # Should have loaded the prompt
-    assert "test_prompt" in manager.prompts
-    template = manager.prompts["test_prompt"]
+    assert "test_prompt" in manager.prompt_manager.prompts
+    template = manager.prompt_manager.prompts["test_prompt"]
     assert template.model == "gpt-4"
     assert template.temperature == 0.7
 
     # Test rendering
-    rendered = manager.render_template("test_prompt", {"name": "World"})
+    rendered = manager.prompt_manager.render_template("test_prompt", {"name": "World"})
     assert rendered == "Hello World!"
 
 
@@ -364,7 +370,7 @@ def test_bitbucket_prompt_manager_pre_call_hook():
         content="System: You are a helpful assistant.\n\nUser: {{user_message}}",
         metadata={"model": "gpt-4", "temperature": 0.7},
     )
-    manager.prompts["test_prompt"] = template
+    manager.prompt_manager.prompts["test_prompt"] = template
 
     # Test pre_call_hook
     messages = [{"role": "user", "content": "This will be ignored"}]
@@ -428,15 +434,25 @@ def test_bitbucket_prompt_manager_get_available_prompts():
     # Add some test templates
     template1 = BitBucketPromptTemplate("prompt1", "content1", {})
     template2 = BitBucketPromptTemplate("prompt2", "content2", {})
-    manager.prompts["prompt1"] = template1
-    manager.prompts["prompt2"] = template2
+    manager.prompt_manager.prompts["prompt1"] = template1
+    manager.prompt_manager.prompts["prompt2"] = template2
 
     available_prompts = manager.get_available_prompts()
     assert set(available_prompts) == {"prompt1", "prompt2"}
 
 
-def test_bitbucket_prompt_manager_reload_prompts():
+@patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
+def test_bitbucket_prompt_manager_reload_prompts(mock_client_class):
     """Test reloading prompts from BitBucket."""
+    # Mock the BitBucket client
+    mock_client = MagicMock()
+    mock_client.get_file_content.return_value = """---
+model: gpt-4
+temperature: 0.7
+---
+Hello {{name}}!"""
+    mock_client_class.return_value = mock_client
+
     config = {
         "workspace": "test-workspace",
         "repository": "test-repo",
@@ -467,7 +483,7 @@ def test_bitbucket_prompt_manager_yaml_parsing_fallback():
 temperature: 0.7
 max_tokens: 150"""
     
-    parsed = manager._parse_yaml_basic(yaml_content)
+    parsed = manager.prompt_manager._parse_yaml_basic(yaml_content)
     assert parsed["model"] == "gpt-4"
     assert parsed["temperature"] == 0.7
     assert parsed["max_tokens"] == 150
@@ -491,7 +507,7 @@ disabled: false
 count: 42
 rate: 0.5"""
     
-    parsed = manager._parse_yaml_basic(yaml_content)
+    parsed = manager.prompt_manager._parse_yaml_basic(yaml_content)
     assert parsed["model"] == "gpt-4"
     assert parsed["temperature"] == 0.7
     assert parsed["max_tokens"] == 150
