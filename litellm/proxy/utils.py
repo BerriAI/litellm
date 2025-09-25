@@ -2816,13 +2816,13 @@ class PrismaClient:
                 )
             )
             raise e
-    
+
     @backoff.on_exception(
-            backoff.expo,
-            Exception,
-            max_tries=3,
-            max_time=10,
-            on_backoff=on_backoff,
+        backoff.expo,
+        Exception, 
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
     )
     async def health_check(self):
         """
@@ -2832,8 +2832,6 @@ class PrismaClient:
         try:
             sql_query = "SELECT 1"
 
-            # Execute the raw query
-            # The asterisk before `user_id_list` unpacks the list into separate arguments
             response = await self.db.query_raw(sql_query)
             return response
         except Exception as e:
