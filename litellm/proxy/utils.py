@@ -1308,7 +1308,7 @@ class ProxyLogging:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj is None:
-            import uuid
+            from litellm._uuid import uuid
 
             request_data["litellm_call_id"] = str(uuid.uuid4())
             user_api_key_logged_metadata = (

@@ -11,7 +11,7 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-import uuid
+from litellm._uuid import uuid
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status

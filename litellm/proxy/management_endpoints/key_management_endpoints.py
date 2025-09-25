@@ -14,7 +14,7 @@ import copy
 import json
 import secrets
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Tuple, cast
 

@@ -17,7 +17,7 @@ import asyncio
 import datetime
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime as datetimeObj
 from typing import Any, Dict, List, Optional, Union
 

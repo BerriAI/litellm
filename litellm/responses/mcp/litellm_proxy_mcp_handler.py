@@ -630,7 +630,7 @@ class LiteLLM_Proxy_MCP_Handler:
         Returns:
             List of MCP tool execution events for streaming
         """
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm.responses.mcp.mcp_streaming_iterator import create_mcp_call_events
 
@@ -714,7 +714,7 @@ class LiteLLM_Proxy_MCP_Handler:
         """Add custom output elements to the final response for MCP tool execution."""
         # Import the required classes for creating output items
         import json
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 

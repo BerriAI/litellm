@@ -2,7 +2,7 @@
 
 import importlib
 import os
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Type, cast
 
