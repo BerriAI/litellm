@@ -3837,7 +3837,6 @@ class ProxyStartupEvent:
             LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
             LITELLM_KEY_ROTATION_ENABLED_ENV,
         )
-        from litellm.secret_managers.main import str_to_bool
         
         key_rotation_enabled = str_to_bool(LITELLM_KEY_ROTATION_ENABLED_ENV) or False
         

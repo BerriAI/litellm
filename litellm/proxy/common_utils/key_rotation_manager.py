@@ -5,7 +5,7 @@ Handles finding keys that need rotation based on their individual schedules.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
