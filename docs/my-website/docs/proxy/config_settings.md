@@ -438,8 +438,9 @@ router_settings:
 | DD_BASE_URL | Base URL for Datadog integration
 | DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
 | _DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
-| DD_API_KEY | API key for Datadog integration
-| DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
+| DD_API_KEY | API key for Datadog integration (Option 1)
+| DD_SITE | Site URL for Datadog (e.g., datadoghq.com) (Option 1)
+| DD_AGENT_HOST | Datadog agent host and port (Option 2)
 | DD_SOURCE | Source identifier for Datadog logs
 | DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
 | DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
