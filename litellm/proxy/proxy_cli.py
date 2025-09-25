@@ -143,6 +143,62 @@ class ProxyInitializationHelpers:
         return uvicorn_args
 
     @staticmethod
+    def _get_default_granian_init_args(
+        host: str,
+        port: int,
+        workers: Optional[int] = None,
+        backlog: Optional[int] = None,
+        factory: Optional[bool] = None,
+    ) -> dict:
+        """
+        Get the arguments for `granian` server
+        """
+        # Start with default values
+        granian_args = ProxyInitializationHelpers._get_granian_defaults().copy()
+        
+        # Override with provided parameters
+        if host is not None:
+            granian_args["host"] = host
+        
+        if port is not None:
+            granian_args["port"] = port
+
+        if workers is not None:
+            granian_args["workers"] = workers
+
+        # Set backlog
+        if backlog is not None:
+            granian_args["backlog"] = backlog
+        
+        # Set factory mode
+        if factory is not None:
+            granian_args["factory"] = factory
+        else:
+            granian_args["factory"] = True  # Use factory mode to avoid multiprocessing issues
+        
+        return granian_args
+
+    @staticmethod
+    def _get_granian_defaults() -> dict:
+        """
+        Get default configuration values for Granian server
+        """
+        return {
+            "interface": "asgi",
+            "host": "0.0.0.0",
+            "port": 4000,
+            "workers": 8,
+            "runtime_mode": "mt",
+            "runtime_threads": 16,
+            "task_impl": "rust",
+            "loop": "uvloop",
+            "backlog": 8192,
+            "backpressure": 16384,
+            "no-access-log": False,
+            "no-log": False,
+        }
+
+    @staticmethod
     def _init_hypercorn_server(
         app: FastAPI,
         host: str,
@@ -176,6 +232,99 @@ class ProxyInitializationHelpers:
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))  # type: ignore
+
+    @staticmethod
+    def _init_granian_server(
+        host: str,
+        port: int,
+        ssl_certfile_path: str,
+        ssl_keyfile_path: str,
+        ciphers: Optional[str] = None,
+        num_workers: Optional[int] = None,
+        granian_args: Optional[str] = None,
+    ):
+        """
+        Initialize litellm with `granian`
+        """
+        from granian import Granian
+        from granian.constants import Interfaces
+        from pathlib import Path
+
+        print(  # noqa
+            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n"  # noqa
+        )  # noqa
+
+        # Get default Granian configuration and override with provided parameters
+        granian_config = ProxyInitializationHelpers._get_default_granian_init_args(
+            host=host,
+            port=port,
+            workers=num_workers,
+            backlog=2048,
+            factory=True,
+        )
+
+        # Parse user-provided Granian arguments
+        user_granian_args = {}
+        if granian_args is not None:
+            try:
+                user_granian_args = json.loads(granian_args)
+                print(f"Using custom Granian arguments: {user_granian_args}")
+            except json.JSONDecodeError as e:
+                print(f"Warning: Invalid JSON in granian_args: {e}")
+                print("Ignoring granian_args and using defaults")
+
+        # Configure Granian server with defaults
+        server_config = {
+            "target": "litellm.proxy.proxy_server:app",
+            "address": granian_config["host"],
+            "port": granian_config["port"],
+            "interface": Interfaces.ASGI,
+            "backlog": granian_config["backlog"],
+        }
+
+        # Add worker configuration if provided
+        if num_workers is not None:
+            server_config["workers"] = num_workers
+            print(f"Using {num_workers} workers for Granian server")
+
+        # Map CLI-style arguments to Python API parameters
+        parameter_mapping = {
+            "no-access-log": "log_access",  # CLI: --no-access-log -> Python: log_access=False
+            "no-log": "log_enabled",        # CLI: --no-log -> Python: log_enabled=False
+        }
+        
+        # Merge user-provided arguments, overriding defaults
+        for key, value in user_granian_args.items():
+            # Handle special parameter mappings
+            if key in parameter_mapping:
+                mapped_key = parameter_mapping[key]
+                # For boolean flags like "no-access-log", invert the value
+                if key.startswith("no-"):
+                    server_config[mapped_key] = not value
+                    print(f"Setting Granian {mapped_key} = {not value} (mapped from {key} = {value})")
+                else:
+                    server_config[mapped_key] = value
+                    print(f"Setting Granian {mapped_key} = {value} (mapped from {key})")
+            else:
+                # Direct parameter mapping
+                server_config[key] = value
+                print(f"Setting Granian {key} = {value}")
+
+        # Add SSL configuration if provided
+        if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+            print(  # noqa
+                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
+            )
+            server_config["ssl_cert"] = Path(ssl_certfile_path)
+            server_config["ssl_key"] = Path(ssl_keyfile_path)
+            if ciphers is not None:
+                # Note: Granian doesn't have a direct ciphers parameter, 
+                # but SSL context can be configured through other means
+                pass
+
+        # Create and run Granian server
+        server = Granian(**server_config)
+        server.serve()
 
     @staticmethod
     def _run_gunicorn_server(
@@ -311,7 +460,7 @@ class ProxyInitializationHelpers:
 @click.option(
     "--num_workers",
     default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
-    help="Number of uvicorn / gunicorn workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
+    help="Number of uvicorn / gunicorn / granian workers to spin up. By default, it equals the number of logical CPUs in the system, or 4 workers if that cannot be determined.",
     envvar="NUM_WORKERS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
@@ -447,6 +596,12 @@ class ProxyInitializationHelpers:
     help="Starts proxy via hypercorn, instead of uvicorn (supports HTTP/2)",
 )
 @click.option(
+    "--run_granian",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via granian, instead of uvicorn (high-performance Rust-based ASGI server)",
+)
+@click.option(
     "--ssl_keyfile_path",
     default=None,
     type=str,
@@ -486,6 +641,13 @@ class ProxyInitializationHelpers:
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
 )
+@click.option(
+    "--granian_args",
+    default=None,
+    type=str,
+    help="Additional arguments to pass to Granian server as JSON string. Example: '{\"runtime_mode\": \"mt\", \"runtime_threads\": 32, \"backpressure\": 8192}'. Available options: runtime_mode, runtime_threads, task_impl, loop, backlog, backpressure, keep_alive, timeout_keep_alive. Note: access_log and log are handled as --no-access-log and --no-log flags",
+    envvar="GRANIAN_ARGS",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -517,6 +679,7 @@ def run_server(  # noqa: PLR0915
     version,
     run_gunicorn,
     run_hypercorn,
+    run_granian,
     ssl_keyfile_path,
     ssl_certfile_path,
     ciphers,
@@ -524,6 +687,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    granian_args,
 ):
     args = locals()
     if local:
@@ -813,7 +977,7 @@ def run_server(  # noqa: PLR0915
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
         )
-        if run_gunicorn is False and run_hypercorn is False:
+        if run_gunicorn is False and run_hypercorn is False and run_granian is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -847,7 +1011,33 @@ def run_server(  # noqa: PLR0915
                 ssl_keyfile_path=ssl_keyfile_path,
                 ciphers=ciphers,
             )
+        elif run_granian is True:
+            ProxyInitializationHelpers._init_granian_server(
+                host=host,
+                port=port,
+                ssl_certfile_path=ssl_certfile_path,
+                ssl_keyfile_path=ssl_keyfile_path,
+                ciphers=ciphers,
+                num_workers=num_workers,
+                granian_args=granian_args,
+            )
 
 
 if __name__ == "__main__":
     run_server()
+
+
+
+# granian server:app \                                         
+#   --interface asginl \
+#   --host 0.0.0.0 \
+#   --port 9000 \
+#   --workers 8 \
+#   --runtime-mode mt \
+#   --runtime-threads 16 \
+#   --task-impl rust \
+#   --loop uvloop \
+#   --backlog 8192 \
+#   --backpressure 16384 \
+#   --no-access-log \
+#   --no-log
