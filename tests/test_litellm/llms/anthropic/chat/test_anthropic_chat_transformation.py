@@ -11,6 +11,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
 
 
@@ -364,3 +365,50 @@ def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
     assert "thinking" in params
+
+
+def test_anthropic_user_id_validation():
+    """Test that user ID validation works properly for both chat and completion endpoints"""
+    # Test chat endpoint
+    chat_config = AnthropicConfig()
+    
+    # Valid user ID should pass
+    params = chat_config.map_openai_params(
+        non_default_params={"user": "valid_user_123"},
+        optional_params={},
+        model="claude-3-sonnet-20240229",
+        drop_params=True
+    )
+    assert "metadata" in params
+    assert params["metadata"]["user_id"] == "valid_user_123"
+    
+    # Invalid user ID (email) should be rejected
+    params = chat_config.map_openai_params(
+        non_default_params={"user": "test@example.com"},
+        optional_params={},
+        model="claude-3-sonnet-20240229",
+        drop_params=True
+    )
+    assert "metadata" not in params
+    
+    # Test completion endpoint
+    completion_config = AnthropicTextConfig()
+    
+    # Valid user ID should pass
+    params = completion_config.map_openai_params(
+        non_default_params={"user": "valid_user_123"},
+        optional_params={},
+        model="claude-2",
+        drop_params=True
+    )
+    assert "metadata" in params
+    assert params["metadata"]["user_id"] == "valid_user_123"
+    
+    # Invalid user ID (email) should be rejected
+    params = completion_config.map_openai_params(
+        non_default_params={"user": "test@example.com"},
+        optional_params={},
+        model="claude-2",
+        drop_params=True
+    )
+    assert "metadata" not in params
