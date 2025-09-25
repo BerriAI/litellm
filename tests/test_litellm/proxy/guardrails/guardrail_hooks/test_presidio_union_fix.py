@@ -2,8 +2,8 @@
 Minimal test for Presidio Union[PiiEntityType, str] type fix.
 Tests only the core fix without heavy dependencies.
 """
-from typing import Union, Dict
 from enum import Enum
+from typing import Dict, Union
 
 
 class PiiEntityType(str, Enum):
@@ -32,7 +32,7 @@ def test_presidio_union_type_fix():
     assert "EMPLOYEE_ID" in entities_list
     assert "CUSTOMER_ID" in entities_list
 
-    print("✅ Union type fix verified: mixed entity types work correctly")
+    # Union type fix verified: mixed entity types work correctly
 
 
 if __name__ == "__main__":
