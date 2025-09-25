@@ -45,7 +45,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 ## COMPLETION CALL 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   vertex_credentials=vertex_credentials_json
 )
@@ -69,7 +69,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
   vertex_credentials=vertex_credentials_json
 )
@@ -189,7 +189,7 @@ print(json.loads(completion.choices[0].message.content))
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: gemini-pro
+  - model_name: gemini-2.5-pro
     litellm_params:
       model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
@@ -209,6 +209,7 @@ model_list:
       model_info:
         provider: Vertex
 ```
+
 2. Start Proxy 
 
 ```
@@ -222,7 +223,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-  "model": "gemini-pro",
+  "model": "gemini-2.5-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
     ],
@@ -274,7 +275,7 @@ except JSONSchemaValidationError as e:
 1. Add model to config.yaml
 ```yaml
 model_list:
-  - model_name: gemini-pro
+  - model_name: gemini-2.5-pro
     litellm_params:
       model: vertex_ai/gemini-1.5-pro
       vertex_project: "project-id"
@@ -295,7 +296,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -D '{
-  "model": "gemini-pro",
+  "model": "gemini-2.5-pro",
   "messages": [
         {"role": "user", "content": "List 5 popular cookie recipes."}
     ],
@@ -403,7 +404,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-pro",
+    model="gemini-2.5-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
     tools=[{"googleSearch": {}}],
 )
@@ -418,7 +419,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gemini-pro",
+    "model": "gemini-2.5-pro",
     "messages": [
       {"role": "user", "content": "Who won the world cup?"}
     ],
@@ -539,7 +540,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gemini-pro",
+    model="gemini-2.5-pro",
     messages=[{"role": "user", "content": "Who won the world cup?"}],
     tools=[{"enterpriseWebSearch": {}}],
 )
@@ -554,7 +555,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "gemini-pro",
+    "model": "gemini-2.5-pro",
     "messages": [
       {"role": "user", "content": "Who won the world cup?"}
     ],
@@ -827,6 +828,77 @@ Use Vertex AI context caching is supported by calling provider api directly. (Un
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
 
+#### 1. Create the Cache
+
+First, create the cache by sending a `POST` request to the `cachedContents` endpoint via the LiteLLM proxy.
+
+<Tabs>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/vertex_ai/v1/projects/{project_id}/locations/{location}/cachedContents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-flash",
+    "displayName": "example_cache",
+    "contents": [{
+      "role": "user",
+      "parts": [{
+        "text": ".... a long book to be cached"
+      }]
+    }]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### 2. Get the Cache Name from the Response
+
+Vertex AI will return a response containing the `name` of the cached content. This name is the identifier for your cached data.
+
+```json
+{
+    "name": "projects/12341234/locations/{location}/cachedContents/123123123123123",
+    "model": "projects/{project_id}/locations/{location}/publishers/google/models/gemini-2.5-flash",
+    "createTime": "2025-09-23T19:13:50.674976Z",
+    "updateTime": "2025-09-23T19:13:50.674976Z",
+    "expireTime": "2025-09-23T20:13:50.655988Z",
+    "displayName": "example_cache",
+    "usageMetadata": {
+        "totalTokenCount": 1246,
+        "textCount": 5132
+    }
+}
+```
+
+#### 3. Use the Cached Content
+
+Use the `name` from the response as `cachedContent` or `cached_content` in subsequent API calls to reuse the cached information. This is passed in the body of your request to `/chat/completions`.
+
+<Tabs>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+
+curl http://0.0.0.0:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "cachedContent": "projects/545201925769/locations/us-central1/cachedContents/4511135542628319232",
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+            "role": "user",
+            "content": "what is the book about?"
+        }
+    ]
+  }'
+```
+
+</TabItem>
+
 
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
@@ -847,7 +919,7 @@ import litellm
 litellm.vertex_project = "hardy-device-38811" # Your Project ID
 litellm.vertex_location = "us-central1"  # proj location
 
-response = litellm.completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+response = litellm.completion(model="gemini-2.5-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
 ```
 
 ## Usage with LiteLLM Proxy Server
@@ -888,9 +960,9 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
     vertex_location: "us-central1" # proj location
 
   model_list: 
-    -model_name: team1-gemini-pro
+    -model_name: team1-gemini-2.5-pro
     litellm_params: 
-      model: gemini-pro
+      model: gemini-2.5-pro
   ```
 
   </TabItem>
@@ -917,7 +989,7 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
   )
 
   response = client.chat.completions.create(
-      model="team1-gemini-pro",
+      model="team1-gemini-2.5-pro",
       messages = [
           {
               "role": "user",
@@ -937,7 +1009,7 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
       --header 'Authorization: Bearer sk-1234' \
       --header 'Content-Type: application/json' \
       --data '{
-      "model": "team1-gemini-pro",
+      "model": "team1-gemini-2.5-pro",
       "messages": [
           {
           "role": "user",
@@ -987,7 +1059,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 
 
 response = completion(
-  model="vertex_ai/gemini-pro",
+  model="vertex_ai/gemini-2.5-pro",
   messages=[{"content": "You are a good bot.","role": "system"}, {"content": "Hello, how are you?","role": "user"}], 
   vertex_credentials=vertex_credentials_json,
   vertex_project="my-special-project", 
@@ -1051,7 +1123,7 @@ In certain use-cases you may need to make calls to the models and pass [safety s
 
 ```python
 response = completion(
-    model="vertex_ai/gemini-pro", 
+    model="vertex_ai/gemini-2.5-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
     safety_settings=[
         {
@@ -1165,7 +1237,7 @@ litellm.vertex_ai_safety_settings = [
         },
     ]
 response = completion(
-    model="vertex_ai/gemini-pro", 
+    model="vertex_ai/gemini-2.5-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
 )
 ```
@@ -1224,7 +1296,7 @@ litellm.vertex_location = "us-central1 # Your Location
 ## Gemini Pro
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro   | `completion('gemini-pro', messages)`, `completion('vertex_ai/gemini-pro', messages)` |
+| gemini-2.5-pro   | `completion('gemini-2.5-pro', messages)`, `completion('vertex_ai/gemini-2.5-pro', messages)` |
 
 ## Fine-tuned Models
 
@@ -1319,7 +1391,7 @@ curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
-| gemini-pro-vision   | `completion('gemini-pro-vision', messages)`, `completion('vertex_ai/gemini-pro-vision', messages)`|
+| gemini-2.5-pro-vision   | `completion('gemini-2.5-pro-vision', messages)`, `completion('vertex_ai/gemini-2.5-pro-vision', messages)`|
 
 ## Gemini 1.5 Pro (and Vision)
 | Model Name       | Function Call                        |
@@ -1333,7 +1405,7 @@ curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 
 #### Using Gemini Pro Vision
 
-Call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
+Call `gemini-2.5-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
 
 LiteLLM Supports the following image types passed in `url`
 - Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
@@ -1351,7 +1423,7 @@ LiteLLM Supports the following image types passed in `url`
 import litellm
 
 response = litellm.completion(
-  model = "vertex_ai/gemini-pro-vision",
+  model = "vertex_ai/gemini-2.5-pro-vision",
   messages=[
       {
           "role": "user",
@@ -1389,7 +1461,7 @@ image_path = "cached_logo.jpg"
 # Getting the base64 string
 base64_image = encode_image(image_path)
 response = litellm.completion(
-    model="vertex_ai/gemini-pro-vision",
+    model="vertex_ai/gemini-2.5-pro-vision",
     messages=[
         {
             "role": "user",
@@ -1445,7 +1517,7 @@ tools = [
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
 response = completion(
-    model="vertex_ai/gemini-pro-vision",
+    model="vertex_ai/gemini-2.5-pro-vision",
     messages=messages,
     tools=tools,
 )
@@ -2736,7 +2808,3 @@ Once that's done, when you deploy the new container in the Google Cloud Run serv
 
 
 s/o @[Darien Kindlund](https://www.linkedin.com/in/kindlund/) for this tutorial
-
-
-
-
