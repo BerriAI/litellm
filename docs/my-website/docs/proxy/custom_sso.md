@@ -1,9 +1,7 @@
 # ✨ Event Hooks for SSO Login
 
 :::info
-
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
-
+✨ SSO is free for up to 5 users. After that, an enterprise license is required. [Get Started with Enterprise here](https://www.litellm.ai/enterprise)
 :::
 
 ## Overview

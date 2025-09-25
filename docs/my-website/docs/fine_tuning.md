@@ -13,6 +13,8 @@ This is an Enterprise only endpoint [Get Started with Enterprise here](https://c
 | Feature | Supported | Notes | 
 |-------|-------|-------|
 | Supported Providers | OpenAI, Azure OpenAI, Vertex AI | - |
+
+#### ⚡️See an exhaustive list of supported models and providers at [models.litellm.ai](https://models.litellm.ai/)
 | Cost Tracking | 🟡 | [Let us know if you need this](https://github.com/BerriAI/litellm/issues) |
 | Logging | ✅ | Works across all logging integrations |
 
