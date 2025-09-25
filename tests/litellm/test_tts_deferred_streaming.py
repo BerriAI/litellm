@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from types import SimpleNamespace
 
 from litellm.llms.openai.openai import _DeferredOpenAITTSStream
 
@@ -35,15 +36,11 @@ class _FakeContextFactory:
         return _FakeStreamed(self._chunks)
 
 
-class _FakeClientNS:
-    pass
-
-
 def _make_fake_client(chunks):
-    client = _FakeClientNS()
-    client.audio = _FakeClientNS()
-    client.audio.speech = _FakeClientNS()
-    client.audio.speech.with_streaming_response = _FakeClientNS()
+    client = SimpleNamespace()
+    client.audio = SimpleNamespace()
+    client.audio.speech = SimpleNamespace()
+    client.audio.speech.with_streaming_response = SimpleNamespace()
     # create(**kwargs) should return an async context manager
     client.audio.speech.with_streaming_response.create = _FakeContextFactory(chunks)
     return client
