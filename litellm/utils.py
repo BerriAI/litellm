@@ -7165,6 +7165,12 @@ class ProviderConfigManager:
             return litellm.VoyageContextualEmbeddingConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
+        elif litellm.LlmProviders.SAGEMAKER_VOYAGE == provider:
+            from litellm.llms.voyage.embedding.sagemaker_transformation import (
+                SageMakerVoyageEmbeddingConfig,
+            )
+            
+            return SageMakerVoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
             return litellm.TritonEmbeddingConfig()
         elif litellm.LlmProviders.WATSONX == provider:
