@@ -63,13 +63,13 @@ Hello {{name}}!"""
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
 
     # Should have loaded the prompt
-    assert "test_prompt" in manager.prompts
-    template = manager.prompts["test_prompt"]
+    assert "test_prompt" in manager.prompt_manager.prompts
+    template = manager.prompt_manager.prompts["test_prompt"]
     assert template.model == "gpt-4"
     assert template.temperature == 0.7
 
     # Test rendering
-    rendered = manager.render_template("test_prompt", {"name": "World"})
+    rendered = manager.prompt_manager.render_template("test_prompt", {"name": "World"})
     assert rendered == "Hello World!"
 
 
@@ -88,23 +88,28 @@ def test_bitbucket_prompt_manager_error_handling(mock_client_class):
     }
 
     with pytest.raises(Exception, match="Failed to load prompt 'test_prompt' from BitBucket"):
-        BitBucketPromptManager(config, prompt_id="test_prompt")
+        manager = BitBucketPromptManager(config, prompt_id="test_prompt")
+        _ = manager.prompt_manager  # This triggers the error
 
 
 def test_bitbucket_prompt_manager_config_validation():
     """Test BitBucketPromptManager configuration validation."""
-    # Test missing required fields
+    # Test missing required fields - validation happens when prompt_manager is accessed
     with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
-        BitBucketPromptManager({})
+        manager = BitBucketPromptManager({})
+        _ = manager.prompt_manager  # This triggers validation
 
     with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
-        BitBucketPromptManager({"workspace": "test"})
+        manager = BitBucketPromptManager({"workspace": "test"})
+        _ = manager.prompt_manager  # This triggers validation
 
     with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
-        BitBucketPromptManager({"repository": "test"})
+        manager = BitBucketPromptManager({"repository": "test"})
+        _ = manager.prompt_manager  # This triggers validation
 
     with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
-        BitBucketPromptManager({"access_token": "test"})
+        manager = BitBucketPromptManager({"access_token": "test"})
+        _ = manager.prompt_manager  # This triggers validation
 
 
 @patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
@@ -140,8 +145,8 @@ Please provide a detailed response in {{language}}."""
     manager = BitBucketPromptManager(config, prompt_id="complex_prompt")
 
     # Should have loaded the prompt
-    assert "complex_prompt" in manager.prompts
-    template = manager.prompts["complex_prompt"]
+    assert "complex_prompt" in manager.prompt_manager.prompts
+    template = manager.prompt_manager.prompts["complex_prompt"]
     assert template.model == "gpt-4"
     assert template.temperature == 0.3
     assert template.max_tokens == 500
@@ -152,7 +157,7 @@ Please provide a detailed response in {{language}}."""
     }
 
     # Test rendering with all variables
-    rendered = manager.render_template(
+    rendered = manager.prompt_manager.render_template(
         "complex_prompt",
         {
             "user_question": "How do I create a class?",
@@ -167,7 +172,7 @@ Please provide a detailed response in {{language}}."""
     assert "Please provide a detailed response in Python." in rendered
 
     # Test rendering without optional context
-    rendered_no_context = manager.render_template(
+    rendered_no_context = manager.prompt_manager.render_template(
         "complex_prompt",
         {
             "user_question": "What is inheritance?",
@@ -330,12 +335,12 @@ def test_bitbucket_prompt_manager_get_template(mock_client_class):
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
 
     # Test getting existing template
-    template = manager.get_template("test_prompt")
+    template = manager.prompt_manager.get_template("test_prompt")
     assert template is not None
     assert template.template_id == "test_prompt"
 
     # Test getting non-existing template
-    template = manager.get_template("nonexistent")
+    template = manager.prompt_manager.get_template("nonexistent")
     assert template is None
 
 
@@ -356,6 +361,6 @@ def test_bitbucket_prompt_manager_list_templates(mock_client_class):
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
 
     # Test listing templates
-    templates = manager.list_templates()
+    templates = manager.prompt_manager.list_templates()
     assert isinstance(templates, list)
     assert "test_prompt" in templates
