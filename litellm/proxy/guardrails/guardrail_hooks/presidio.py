@@ -82,7 +82,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
-        self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
+        self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
         self.presidio_language = presidio_language or "en"
@@ -302,10 +302,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             entity_type = result.get("entity_type")
 
             if entity_type:
-                casted_entity_type: PiiEntityType = cast(PiiEntityType, entity_type)
+                # Check if entity_type is in config (supports both enum and string)
                 if (
-                    casted_entity_type in self.pii_entities_config
-                    and self.pii_entities_config[casted_entity_type] == PiiAction.BLOCK
+                    entity_type in self.pii_entities_config
+                    and self.pii_entities_config[entity_type] == PiiAction.BLOCK
                 ):
                     raise BlockedPiiEntityError(
                         entity_type=entity_type,
