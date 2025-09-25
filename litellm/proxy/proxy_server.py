@@ -151,6 +151,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -412,6 +413,8 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     applications,
     status,
 )
@@ -684,6 +687,8 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
 )
+
+vertex_live_passthrough_vertex_base = VertexBase()
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
@@ -4892,11 +4897,202 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                 Vertex AI Live API WebSocket Pass-through
+
+######################################################################
+
+
+@app.websocket("/vertex_ai/live")
+async def vertex_ai_live_passthrough_endpoint(
+    websocket: WebSocket,
+    model: Optional[str] = fastapi.Query(
+        None,
+        description="Optional model name, used to determine Vertex region for global models.",
+    ),
+    vertex_project: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI project id used for the upstream connection.",
+    ),
+    vertex_location: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI region (for example, 'us-central1').",
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    from starlette.websockets import WebSocketState
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import (
+        ConnectionClosedError,
+        ConnectionClosedOK,
+        InvalidStatusCode,
+    )
+
+    _ = user_api_key_dict  # passthrough route already authenticated; avoid lint warnings
+
+    await websocket.accept()
+
+    incoming_headers = dict(websocket.headers)
+    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+    if vertex_credentials_config is None:
+        # Attempt to load defaults from environment/config if not already initialised
+        passthrough_endpoint_router.set_default_vertex_config()
+        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+        )
+
+    resolved_project = vertex_project
+    resolved_location = vertex_location
+    credentials_value: Optional[str] = None
+
+    if vertex_credentials_config is not None:
+        resolved_project = resolved_project or vertex_credentials_config.vertex_project
+        resolved_location = resolved_location or vertex_credentials_config.vertex_location
+        credentials_value = vertex_credentials_config.vertex_credentials
+
+    try:
+        resolved_location = resolved_location or (
+            vertex_live_passthrough_vertex_base.get_default_vertex_location()
+        )
+        if model:
+            resolved_location = vertex_live_passthrough_vertex_base.get_vertex_region(
+                vertex_region=resolved_location,
+                model=model,
+            )
+
+        access_token, resolved_project = await vertex_live_passthrough_vertex_base._ensure_access_token_async(
+            credentials=credentials_value,
+            project_id=resolved_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to prepare Vertex AI credentials for live passthrough"
+        )
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason="Vertex AI authentication failed")
+        return
+
+    host_location = resolved_location or vertex_live_passthrough_vertex_base.get_default_vertex_location()
+    host = (
+        "aiplatform.googleapis.com"
+        if host_location == "global"
+        else f"{host_location}-aiplatform.googleapis.com"
+    )
+    service_url = (
+        f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+    upstream_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    if resolved_project:
+        upstream_headers["x-goog-user-project"] = resolved_project
+
+    # Forward any custom x-goog-* headers provided by the caller if we haven't overridden them
+    for header_name, header_value in incoming_headers.items():
+        lower_header = header_name.lower()
+        if lower_header.startswith("x-goog-") and header_name not in upstream_headers:
+            upstream_headers[header_name] = header_value
+
+    try:
+        async with connect(
+            service_url,
+            additional_headers=upstream_headers,
+        ) as upstream_ws:
+
+            async def forward_client_to_vertex() -> None:
+                try:
+                    while True:
+                        message = await websocket.receive()
+                        message_type = message.get("type")
+                        if message_type == "websocket.disconnect":
+                            await upstream_ws.close()
+                            break
+
+                        text_data = message.get("text")
+                        bytes_data = message.get("bytes")
+
+                        if text_data is not None:
+                            await upstream_ws.send(text_data)
+                        elif bytes_data is not None:
+                            await upstream_ws.send(bytes_data)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "Vertex AI live passthrough: error forwarding client message"
+                    )
+                    await upstream_ws.close()
+
+            async def forward_vertex_to_client() -> None:
+                try:
+                    async for upstream_message in upstream_ws:
+                        if isinstance(upstream_message, bytes):
+                            await websocket.send_bytes(upstream_message)
+                        else:
+                            await websocket.send_text(upstream_message)
+                except (ConnectionClosedOK, ConnectionClosedError):
+                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "Vertex AI live passthrough: error forwarding upstream message"
+                    )
+                    raise
+
+            tasks = [
+                asyncio.create_task(forward_client_to_vertex()),
+                asyncio.create_task(forward_vertex_to_client()),
+            ]
+
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            for task in done:
+                exception = task.exception()
+                if exception is not None:
+                    raise exception
+
+    except InvalidStatusCode as exc:
+        verbose_proxy_logger.exception(
+            "Vertex AI live passthrough: upstream rejected WebSocket connection"
+        )
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(
+                code=exc.status_code if hasattr(exc, "status_code") else 1011,
+                reason="Upstream connection rejected",
+            )
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Vertex AI live passthrough: unexpected error while proxying WebSocket"
+        )
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason="Vertex AI passthrough error")
+    finally:
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
+
+
+######################################################################
+
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-
 from litellm import _arealtime
 
 
