@@ -198,6 +198,8 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
+
+
 You can also pass the fields as part of the request header with a `opik_*` prefix:
 
 ```shell
