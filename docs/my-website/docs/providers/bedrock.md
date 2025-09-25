@@ -308,6 +308,65 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Request Metadata
+
+Attach metadata to Bedrock requests for logging and cost attribution.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    requestMetadata={
+        "cost_center": "engineering",
+        "user_id": "user123"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      requestMetadata:
+        cost_center: "engineering"
+```
+
+**Set on request**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-v1",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "requestMetadata": {"cost_center": "engineering"}
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Function Calling / Tool calling
 
 LiteLLM supports tool calling via Bedrock's Converse and Invoke API's.
@@ -2280,39 +2339,6 @@ response = completion(
 
 
 Make the bedrock completion call
-
----
-
-### Required AWS IAM Policy for AssumeRole
-
-To use `aws_role_name` (STS AssumeRole) with LiteLLM, your IAM user or role **must** have permission to call `sts:AssumeRole` on the target role. If you see an error like:
-
-```
-An error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::...:assumed-role/litellm-ecs-task-role/... is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::...:role/Enterprise/BedrockCrossAccountConsumer
-```
-
-This means the IAM identity running LiteLLM does **not** have permission to assume the target role. You must update your IAM policy to allow this action.
-
-#### Example IAM Policy
-
-Replace `<TARGET_ROLE_ARN>` with the ARN of the role you want to assume (e.g., `arn:aws:iam::123456789012:role/Enterprise/BedrockCrossAccountConsumer`).
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": "<TARGET_ROLE_ARN>"
-    }
-  ]
-}
-```
-
-**Note:** The target role itself must also trust the calling IAM identity (via its trust policy) for AssumeRole to succeed. See [AWS AssumeRole docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-api.html) for more details.
-
----
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
