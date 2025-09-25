@@ -3,6 +3,7 @@ Simplified tests for object pooling utilities in litellm.
 """
 
 import pytest
+pytest.importorskip("pond")
 
 from litellm.litellm_core_utils.object_pooling import (
     get_object_pool,
