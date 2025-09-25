@@ -1056,3 +1056,114 @@ def test_vertex_ai_code_line_length():
     
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_google_search_with_type_field():
+    """
+    Test that google search tools work correctly when 'type' field is present.
+    
+    This tests the fix for: https://github.com/BerriAI/litellm/issues/xxxx
+    When tools contain both "type" and "googleSearch" fields, the system should
+    ignore the "type" field and correctly identify and process the "googleSearch" tool.
+    """
+    v = VertexGeminiConfig()
+    
+    # Test case from the issue: tool with both "type" and "googleSearch"
+    tools_with_type = [
+        {
+            "type": "google_search",
+            "googleSearch": {}
+        }
+    ]
+    
+    result = v._map_function(value=tools_with_type)
+    
+    # Should return a list with one tool
+    assert len(result) == 1
+    
+    # The tool should contain googleSearch
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+    
+    # Should also have empty function_declarations (since no OpenAI function tools)
+    assert "function_declarations" in result[0]
+    assert result[0]["function_declarations"] == []
+
+
+def test_vertex_ai_google_search_with_type_and_content():
+    """
+    Test google search with type field and actual content.
+    """
+    v = VertexGeminiConfig()
+    
+    # Test with googleSearch containing configuration
+    tools_with_type_and_content = [
+        {
+            "type": "google_search",
+            "googleSearch": {
+                "dynamic_retrieval_config": {
+                    "mode": "MODE_DYNAMIC",
+                    "dynamic_threshold": 0.7
+                }
+            }
+        }
+    ]
+    
+    result = v._map_function(value=tools_with_type_and_content)
+    
+    # Should return a list with one tool
+    assert len(result) == 1
+    
+    # The tool should contain googleSearch with the configuration
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"]["dynamic_retrieval_config"]["mode"] == "MODE_DYNAMIC"
+    assert result[0]["googleSearch"]["dynamic_retrieval_config"]["dynamic_threshold"] == 0.7
+
+
+def test_vertex_ai_multiple_tools_with_type_field():
+    """
+    Test multiple tools where some have type fields and some don't.
+    """
+    v = VertexGeminiConfig()
+    
+    tools_mixed = [
+        {
+            "type": "google_search",
+            "googleSearch": {}
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        },
+        {
+            "code_execution": {}
+        }
+    ]
+    
+    result = v._map_function(value=tools_mixed)
+    
+    # Should return a list with one tool containing all the different tool types
+    assert len(result) == 1
+    
+    # Should have googleSearch
+    assert "googleSearch" in result[0]
+    assert result[0]["googleSearch"] == {}
+    
+    # Should have code_execution
+    assert "code_execution" in result[0]
+    assert result[0]["code_execution"] == {}
+    
+    # Should have function declaration for the OpenAI function
+    assert "function_declarations" in result[0]
+    assert len(result[0]["function_declarations"]) == 1
+    assert result[0]["function_declarations"][0]["name"] == "get_weather"
