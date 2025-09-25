@@ -84,6 +84,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     CostResponseTypes,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
@@ -343,6 +344,9 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
+        
+        # Initialize cost breakdown field
+        self.cost_breakdown: Optional[CostBreakdown] = None
 
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
@@ -1154,6 +1158,33 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details.get("end_time", datetime.datetime.now())
             - self.model_call_details.get("start_time", datetime.datetime.now())
         ).total_seconds() * 1000
+
+    def set_cost_breakdown(
+        self,
+        input_cost: float,
+        output_cost: float,
+        total_cost: float,
+        cost_for_built_in_tools_cost_usd_dollar: float,
+    ) -> None:
+        """
+        Helper method to store cost breakdown in the logging object.
+        
+        Args:
+            input_cost: Cost of input/prompt tokens
+            output_cost: Cost of output/completion tokens 
+            cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
+            total_cost: Total cost of request
+        """
+        
+        self.cost_breakdown = CostBreakdown(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar
+        )
+        verbose_logger.debug(
+            f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"
+        )
 
     def _response_cost_calculator(
         self,
@@ -4533,6 +4564,7 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
+            cost_breakdown=logging_obj.cost_breakdown,
             total_tokens=usage.total_tokens,
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
