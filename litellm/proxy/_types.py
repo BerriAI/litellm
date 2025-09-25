@@ -1640,25 +1640,6 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     }
 
 
-class KeyRotationSettings(LiteLLMPydanticObjectBase):
-    """
-    Global settings for automated key rotation system
-    """
-    enabled: bool = Field(
-        default=True,
-        description="Enable the key rotation background job"
-    )
-    check_frequency: str = Field(
-        default="1d",
-        description="How often to check for keys needing rotation (e.g., '1h', '6h', '1d')"
-    )
-    
-    def get_check_frequency_seconds(self) -> int:
-        """Get how often to check for rotations in seconds"""
-        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        return duration_in_seconds(self.check_frequency)
-
-
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
