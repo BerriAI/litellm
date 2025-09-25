@@ -95,6 +95,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return url.rstrip("/") + f"?api-version={api_version}"
 
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
+        self._ensure_gen_ai_hub_installed()
         with temporary_headers_addition(headers):
             return {**self.proxy_client.request_header}
 
