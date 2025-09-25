@@ -642,6 +642,9 @@ async def generate_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
+    - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -1558,6 +1561,8 @@ def _check_model_access_group(
     return True
 
 
+
+
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1611,6 +1616,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
+    auto_rotate: Optional[bool] = None,
+    rotation_interval: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1718,6 +1725,14 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
+        
+        # Add rotation fields if auto_rotate is enabled
+        if auto_rotate and rotation_interval:
+            key_data.update({
+                "auto_rotate": auto_rotate,
+                "rotation_interval": rotation_interval
+                # last_rotation_at will be null initially - rotation happens on first check
+            })
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
