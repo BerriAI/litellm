@@ -148,8 +148,7 @@ jobs:
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
                 --config-file mypy.ini \
-                --ignore-missing-imports \
-                --no-incremental; then
+                --ignore-missing-imports; then
                 echo "mypy detected errors"
                 exit 1
             fi
