@@ -132,22 +132,27 @@ class RateLimitResponseWithDescriptors(TypedDict):
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.batch_rate_limiter_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    BATCH_RATE_LIMITER_SCRIPT
-                )
-            )
-            self.token_increment_script = (
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    TOKEN_INCREMENT_SCRIPT
-                )
-            )
-        else:
-            self.batch_rate_limiter_script = None
-            self.token_increment_script = None
-
+        self.batch_rate_limiter_script = None
+        self.token_increment_script = None
+        self.scripts_initialized = False
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+
+    async def _initialize_scripts(self):
+        """Initialize Redis scripts if not already done"""
+        if self.scripts_initialized or self.internal_usage_cache.dual_cache.redis_cache is None:
+            return
+        
+        self.batch_rate_limiter_script = (
+            await self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                BATCH_RATE_LIMITER_SCRIPT
+            )
+        )
+        self.token_increment_script = (
+            await self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                TOKEN_INCREMENT_SCRIPT
+            )
+        )
+        self.scripts_initialized = True
 
     async def in_memory_cache_sliding_window(
         self,
@@ -313,7 +318,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
-            rate_limit = descriptor.get("rate_limit", {}) or {}
+            rate_limit = cast(RateLimitDescriptorRateLimitObject, descriptor.get("rate_limit", {}) or {})
             requests_limit = rate_limit.get("requests_per_unit")
             tokens_limit = rate_limit.get("tokens_per_unit")
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
@@ -373,6 +378,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return rate_limit_response
 
         ## IF under limit, check Redis
+        await self._initialize_scripts()  # Ensure scripts are initialized
         if self.batch_rate_limiter_script is not None:
             cache_values = await self.batch_rate_limiter_script(
                 keys=keys_to_fetch,
@@ -641,6 +647,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         # Check if script is available
+        await self._initialize_scripts()  # Ensure scripts are initialized
         if self.token_increment_script is None:
             verbose_proxy_logger.debug(
                 "TTL preservation script not available, using regular pipeline"
