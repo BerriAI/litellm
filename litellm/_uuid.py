@@ -11,7 +11,7 @@ try:
 
     FASTUUID_AVAILABLE = True
 except Exception:  # pragma: no cover - fallback path
-    import uuid as _uuid  # type: ignore
+    from litellm._uuid import uuid as _uuid  # type: ignore
 
 
 # Expose a module-like alias so callers can use: uuid.uuid4()

@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -659,7 +659,7 @@ async def test_embedding_caching_base_64():
         host=os.environ["REDIS_HOST"],
         port=os.environ["REDIS_PORT"],
     )
-    import uuid
+    from litellm._uuid import uuid
 
     inputs = [
         f"{uuid.uuid4()} hello this is ishaan",
@@ -788,7 +788,7 @@ async def test_redis_batch_cache_write():
     - read from client
     """
     litellm.set_verbose = True
-    import uuid
+    from litellm._uuid import uuid
 
     messages = [
         {"role": "user", "content": f"write a one sentence poem about: {uuid.uuid4()}"},
@@ -1479,7 +1479,7 @@ async def test_cache_control_overrides():
     )
     print("Testing cache override")
     litellm.set_verbose = True
-    import uuid
+    from litellm._uuid import uuid
 
     unique_num = str(uuid.uuid4())
 
@@ -1527,7 +1527,7 @@ def test_sync_cache_control_overrides():
     )
     print("Testing cache override")
     litellm.set_verbose = True
-    import uuid
+    from litellm._uuid import uuid
 
     unique_num = str(uuid.uuid4())
 
@@ -2050,7 +2050,7 @@ async def test_redis_proxy_batch_redis_get_cache():
 
     user_api_key_cache = DualCache()
 
-    import uuid
+    from litellm._uuid import uuid
 
     batch_redis_get_obj.in_memory_cache = user_api_key_cache.in_memory_cache
 
@@ -2493,7 +2493,7 @@ def test_redis_caching_multiple_namespaces():
 
     The same request with different namespaces should not be cached under the same key
     """
-    import uuid
+    from litellm._uuid import uuid
     from unittest.mock import patch, MagicMock
     import litellm
     from litellm.caching import Cache
@@ -2639,7 +2639,7 @@ def test_caching_with_reasoning_content():
     Test that reasoning content is cached
     """
 
-    import uuid
+    from litellm._uuid import uuid
 
     messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
     litellm.cache = Cache()
