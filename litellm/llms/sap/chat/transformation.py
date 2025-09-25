@@ -2,9 +2,9 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration  `/completion`
 """
 
-from typing import List, Optional, Union, Dict
+from typing import List, Optional, Union, Dict, Any
 from dataclasses import asdict
-from pydantic import BaseModel
+
 
 
 from litellm.types.utils import ModelResponse, Usage
@@ -12,16 +12,27 @@ from litellm.utils import CustomStreamWrapper
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from gen_ai_hub.orchestration.models.config import OrchestrationConfig
-from gen_ai_hub.orchestration.models.message import Message
-from gen_ai_hub.orchestration.models.llm import LLM
-from gen_ai_hub.orchestration.models.template import Template
-from gen_ai_hub.orchestration.models.response_format import (
-    ResponseFormatJsonSchema,
-    ResponseFormatJsonObject,
-    ResponseFormatText,
-)
-from gen_ai_hub.orchestration.models.tools import FunctionTool
+from .handler import OptionalDependencyError
+try:
+    from gen_ai_hub.orchestration.models.config import OrchestrationConfig
+    from gen_ai_hub.orchestration.models.message import Message
+    from gen_ai_hub.orchestration.models.llm import LLM
+    from gen_ai_hub.orchestration.models.template import Template
+    from gen_ai_hub.orchestration.models.response_format import (
+        ResponseFormatJsonSchema,
+        ResponseFormatJsonObject,
+        ResponseFormatText,
+    )
+    from gen_ai_hub.orchestration.models.tools import FunctionTool
+    _gen_ai_hub_import_error = None
+except ImportError as err:
+    OrchestrationConfig = Any  # type: ignore
+    Message = Any  # type: ignore
+    LLM = Any  # type: ignore
+    Template = Any  # type: ignore
+    ResponseFormatJsonSchema = Any  # type: ignore
+    FunctionTool = Any  # type: ignore
+    _gen_ai_hub_import_error = err
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -60,19 +71,28 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+        self._ensure_gen_ai_hub_installed()
 
     @classmethod
     def get_config(cls):
         return super().get_config()
 
-    def _should_fake_stream(self, optional_params: dict) -> bool:
-        """
-        Groq doesn't support 'response_format' while streaming
-        """
-        if optional_params.get("response_format") is not None:
-            return True
+    def _ensure_gen_ai_hub_installed(self) -> None:
+        """Ensure the gen-ai-hub package is available."""
+        if _gen_ai_hub_import_error is not None:
+            raise OptionalDependencyError(
+                "The gen-ai-hub package is required for this functionality. "
+                "Please install it with: pip install gen-ai-hub"
+            ) from _gen_ai_hub_import_error
 
-        return False
+    # def _should_fake_stream(self, optional_params: dict) -> bool:
+    #     """
+    #     Groq doesn't support 'response_format' while streaming
+    #     """
+    #     if optional_params.get("response_format") is not None:
+    #         return True
+    #
+    #     return False
 
     def get_supported_openai_params(self, model):
         return [
