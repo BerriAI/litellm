@@ -1228,7 +1228,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
-                "service_tier": self.optional_params.get("service_tier") if self.optional_params else None,
+                "service_tier": self.optional_params.get("service_tier")
+                if self.optional_params
+                else None,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -3606,6 +3608,27 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             dotprompt_logger = DotpromptManager()
             _in_memory_loggers.append(dotprompt_logger)
             return dotprompt_logger  # type: ignore
+        elif logging_integration == "bitbucket":
+            from litellm.integrations.bitbucket.bitbucket_prompt_manager import (
+                BitBucketPromptManager,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BitBucketPromptManager):
+                    return callback
+
+            # Get global BitBucket config
+            import litellm
+
+            bitbucket_config = getattr(litellm, "global_bitbucket_config", None)
+            if bitbucket_config is None:
+                raise ValueError(
+                    "BitBucket configuration not found. Please set litellm.global_bitbucket_config first."
+                )
+
+            bitbucket_logger = BitBucketPromptManager(bitbucket_config=bitbucket_config)
+            _in_memory_loggers.append(bitbucket_logger)
+            return bitbucket_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4191,16 +4214,22 @@ class StandardLoggingPayloadSetup:
 
             # Get the actual s3_path from the configured cold storage logger instance
             s3_path = ""  # default value
-            
+
             # Try to get the actual logger instance from the logger name
             try:
-                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(configured_cold_storage_logger)
-                if custom_logger and hasattr(custom_logger, 's3_path') and custom_logger.s3_path:
+                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
+                    configured_cold_storage_logger
+                )
+                if (
+                    custom_logger
+                    and hasattr(custom_logger, "s3_path")
+                    and custom_logger.s3_path
+                ):
                     s3_path = custom_logger.s3_path
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path
                 pass
-            
+
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
                 team_alias_prefix="",  # Don't split by team alias for cold storage

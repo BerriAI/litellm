@@ -149,6 +149,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
+    "bitbucket",
     "cloudzero",
     "posthog",
 ]
@@ -1348,3 +1349,11 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+
+### GLOBAL CONFIG ###
+global_bitbucket_config: Optional[Dict[str, Any]] = None
+
+def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
+    """Set global BitBucket configuration for prompt management."""
+    global global_bitbucket_config
+    global_bitbucket_config = config
