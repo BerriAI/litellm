@@ -2060,13 +2060,13 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
-class CostBreakdown(TypedDict, total=False):
+class CostBreakdown(TypedDict):
     """
     Detailed cost breakdown for a request
     """
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: float  # Cost of output/completion tokens
-    total_cost: float  # Total cost (input + output + reasoning)
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
