@@ -224,12 +224,13 @@ class OpikLogger(CustomBatchLogger):
         else:
             trace_id = None
             parent_span_id = None
-            
+        
         # Create Opik tags
         opik_tags = litellm_opik_metadata.get("tags", [])
         if kwargs.get("custom_llm_provider"):
             opik_tags.append(kwargs["custom_llm_provider"])
-        # Create thread id
+        
+        # Get thread_id if present
         thread_id = litellm_opik_metadata.get("thread_id", None)
 
         # Override with any opik_ headers from proxy request
@@ -242,10 +243,6 @@ class OpikLogger(CustomBatchLogger):
                     project_name = value
                 elif param_key == "thread_id" and value:
                     thread_id = value
-                elif param_key == "trace_id" and value:
-                    trace_id = value
-                elif param_key == "parent_span_id" and value:
-                    parent_span_id = value
                 elif param_key == "tags" and value:
                     try:
                         parsed_tags = json.loads(value)
@@ -319,21 +316,20 @@ class OpikLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"OpikLogger creating payload for trace with id {trace_id}"
             )
-
-            payload.append(
-                {
-                    "project_name": project_name,
-                    "id": trace_id,
-                    "name": trace_name,
-                    "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "input": input_data,
-                    "output": output_data,
-                    "metadata": metadata,
-                    "tags": opik_tags,
-                    "thread_id": thread_id,
-                }
-            )
+        payload.append(
+            {
+                "project_name": project_name,
+                "id": trace_id,
+                "name": trace_name,
+                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "input": input_data,
+                "output": output_data,
+                "metadata": metadata,
+                "tags": opik_tags,
+                "thread_id": thread_id,
+            }
+        )
 
         span_id = create_uuid7()
         verbose_logger.debug(
