@@ -1433,13 +1433,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             client=client,
         )
 
-        response = cast(OpenAI, openai_client).audio.speech.create(
+        # Use streaming response via context manager so callers can aiter_bytes without buffering
+        with cast(OpenAI, openai_client).audio.speech.with_streaming_response.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
-        )
-        return HttpxBinaryResponseContent(response=response.response)
+        ) as streamed:
+            return HttpxBinaryResponseContent(response=streamed.http_response)
 
     async def async_audio_speech(
         self,
@@ -1467,14 +1468,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             ),
         )
 
-        response = await openai_client.audio.speech.create(
+        # Use streaming response via context manager so callers can aiter_bytes without buffering
+        async with openai_client.audio.speech.with_streaming_response.create(
             model=model,
             voice=voice,  # type: ignore
             input=input,
             **optional_params,
-        )
-
-        return HttpxBinaryResponseContent(response=response.response)
+        ) as streamed:
+            return HttpxBinaryResponseContent(response=streamed.http_response)
 
 
 class OpenAIFilesAPI(BaseLLM):
