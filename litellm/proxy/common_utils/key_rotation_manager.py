@@ -11,7 +11,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import (
     GenerateKeyResponse,
-    KeyRotationSettings,
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
 )
@@ -27,9 +26,8 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
     
-    def __init__(self, prisma_client: PrismaClient, settings: KeyRotationSettings):
+    def __init__(self, prisma_client: PrismaClient):
         self.prisma_client = prisma_client
-        self.settings = settings
         
     async def process_rotations(self):
         """
