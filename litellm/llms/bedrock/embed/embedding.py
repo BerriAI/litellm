@@ -571,8 +571,6 @@ class BedrockEmbedding(BaseAWSLLM):
             dict: Status response from AWS Bedrock
         """
 
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
         # Get AWS credentials using the same method as other Bedrock methods
         credentials, _ = self._load_credentials(kwargs)
 
