@@ -15,10 +15,11 @@ Pass-through endpoints for Vertex AI - call provider-specific endpoint, in nativ
 
 ## Supported Endpoints
 
-LiteLLM supports 2 vertex ai passthrough routes:
+LiteLLM supports 3 vertex ai passthrough routes:
 
 1. `/vertex_ai` → routes to `https://{vertex_location}-aiplatform.googleapis.com/`
 2. `/vertex_ai/discovery` → routes to [`https://discoveryengine.googleapis.com`](https://discoveryengine.googleapis.com/)
+3. `/vertex_ai/live` → proxies Vertex AI Live (Gemini Live) WebSocket endpoints
 
 ## How to use
 
@@ -271,6 +272,65 @@ curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-cent
   -H "x-litellm-api-key: Bearer sk-1234" \
   -d '{"contents":[{"role": "user", "parts":[{"text": "hi"}]}]}'
 ```
+
+### Gemini Live API (WebSocket)
+
+LiteLLM forwards Vertex AI's real-time Gemini Live endpoints over `/vertex_ai/live`. Replace the upstream Vertex hostname with your proxy base while keeping the remainder of the path unchanged.
+
+```python
+import asyncio
+import json
+import os
+
+import websockets
+
+PROJECT_ID = os.environ["VERTEX_PROJECT"]
+LOCATION = "us-central1"
+MODEL = "gemini-2.0-flash-live-001"
+
+LITELLM_API_KEY = os.environ["LITELLM_API_KEY"]
+LITELLM_WS_BASE = os.environ.get("LITELLM_WS_BASE", "ws://localhost:4000")
+
+async def main():
+    live_path = (
+        f"/vertex_ai/live/v1/projects/{PROJECT_ID}/locations/{LOCATION}/"
+        f"publishers/google/models/{MODEL}:streamGenerateContent?alt=protojson"
+    )
+
+    async with websockets.connect(
+        f"{LITELLM_WS_BASE}{live_path}",
+        extra_headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+    ) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": "You are a helpful assistant",
+                        "modalities": ["TEXT"],
+                    },
+                }
+            )
+        )
+
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "input_text",
+                    "text": "Say hello from LiteLLM's Vertex Live passthrough!",
+                }
+            )
+        )
+
+        async for message in ws:
+            print("🔁 backend event", message)
+
+
+asyncio.run(main())
+```
+
+> The Vertex Live API can require additional headers (for example `x-goog-user-project` or a provider-specific `Sec-WebSocket-Protocol`). Add them to `extra_headers`; LiteLLM will forward them untouched to Vertex.
+
 ### Tuning API 
 
 Create Fine Tuning Job

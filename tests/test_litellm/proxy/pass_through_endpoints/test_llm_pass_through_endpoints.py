@@ -18,12 +18,14 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    bedrock_llm_proxy_route,
     create_pass_through_route,
     vertex_discovery_proxy_route,
+    vertex_live_passthrough_route,
     vertex_proxy_route,
-    bedrock_llm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from starlette.datastructures import Headers, QueryParams
 
 
 class TestBaseOpenAIPassThroughHandler:
@@ -362,6 +364,119 @@ class TestVertexAIPassThroughHandler:
                 custom_headers={"Authorization": f"Bearer {test_token}"},
             )
 
+
+class TestVertexLivePassThroughRoute:
+    @pytest.mark.asyncio
+    async def test_vertex_live_route_with_credentials(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials="{}",
+        )
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            router,
+        )
+
+        mock_token = AsyncMock(return_value=("vertex-access-token", "test-project"))
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async",
+            mock_token,
+        )
+
+        proxy_mock = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.proxy_vertex_live_websocket",
+            proxy_mock,
+        )
+
+        websocket = AsyncMock()
+        websocket.headers = Headers({"authorization": "Bearer litellm"})
+        websocket.query_params = QueryParams("alt=protojson&foo=bar")
+        websocket.url = httpx.URL("ws://localhost")
+        websocket.close = AsyncMock()
+
+        endpoint = (
+            "v1/projects/test-project/locations/us-central1/"
+            "publishers/google/models/gemini-2.0-flash-live-001:streamGenerateContent"
+        )
+
+        await vertex_live_passthrough_route(
+            websocket=websocket,
+            endpoint=endpoint,
+            _user_api_key_dict={"api_key": "litellm"},
+        )
+
+        proxy_mock.assert_awaited_once()
+        kwargs = proxy_mock.await_args.kwargs
+        assert kwargs["headers_passed_through"] is False
+        assert kwargs["headers"]["Authorization"] == "Bearer vertex-access-token"
+        assert kwargs["headers"]["x-goog-user-project"] == "test-project"
+        assert kwargs["subprotocols"] is None
+        assert kwargs["target_url"] == (
+            "wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vertex_live_route_passes_client_headers(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        router = PassthroughEndpointRouter()
+
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            router,
+        )
+
+        mock_token = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async",
+            mock_token,
+        )
+
+        proxy_mock = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.proxy_vertex_live_websocket",
+            proxy_mock,
+        )
+
+        websocket = AsyncMock()
+        websocket.headers = Headers(
+            {
+                "authorization": "Bearer upstream-token",
+                "sec-websocket-protocol": "protojson",
+                "x-goog-user-project": "client-project",
+            }
+        )
+        websocket.query_params = QueryParams("")
+        websocket.url = httpx.URL("ws://localhost")
+        websocket.close = AsyncMock()
+
+        endpoint = (
+            "v1/projects/client-project/locations/us-central1/"
+            "publishers/google/models/gemini-2.0-flash-live-001:streamGenerateContent"
+        )
+
+        await vertex_live_passthrough_route(
+            websocket=websocket,
+            endpoint=endpoint,
+            _user_api_key_dict={"api_key": "litellm"},
+        )
+
+        proxy_mock.assert_awaited_once()
+        kwargs = proxy_mock.await_args.kwargs
+        assert kwargs["headers_passed_through"] is True
+        assert kwargs["headers"]["authorization"] == "Bearer upstream-token"
+        assert kwargs["subprotocols"] == ["protojson"]
+        mock_token.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "initial_endpoint",

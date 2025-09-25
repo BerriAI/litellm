@@ -6,11 +6,14 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+import asyncio
+import contextlib
 import os
-from typing import Optional, cast
+from typing import Dict, List, Optional, Tuple, cast
+from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
 
 import litellm
@@ -19,7 +22,10 @@ from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     get_form_data,
@@ -874,6 +880,137 @@ class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
         return get_vertex_base_url(vertex_location)
 
 
+def _extract_websocket_subprotocols(headers: Dict[str, str]) -> Optional[List[str]]:
+    for key, value in headers.items():
+        if key.lower() == "sec-websocket-protocol" and value:
+            return [proto.strip() for proto in value.split(",") if proto.strip()]
+    return None
+
+
+def _prepare_vertex_live_backend_headers(
+    incoming_headers: Dict[str, str],
+    override_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    excluded = {
+        "host",
+        "connection",
+        "upgrade",
+        "origin",
+        "pragma",
+        "cache-control",
+        "sec-websocket-key",
+        "sec-websocket-version",
+        "sec-websocket-extensions",
+    }
+    backend_headers: Dict[str, str] = {}
+    for key, value in incoming_headers.items():
+        lower_key = key.lower()
+        if lower_key in excluded or lower_key.startswith("sec-websocket"):
+            continue
+        backend_headers[key] = value
+
+    if override_headers:
+        backend_headers.update(override_headers)
+    return backend_headers
+
+
+async def _relay_client_to_backend(websocket: WebSocket, backend_ws: "ClientConnection") -> None:
+    import websockets
+
+    while True:
+        try:
+            message = await websocket.receive()
+        except RuntimeError:
+            break
+
+        message_type = message.get("type")
+        if message_type == "websocket.disconnect":
+            with contextlib.suppress(Exception):
+                await backend_ws.close()
+            break
+
+        text_data = message.get("text")
+        bytes_data = message.get("bytes")
+
+        try:
+            if text_data is not None:
+                await backend_ws.send(text_data)
+            elif bytes_data is not None:
+                await backend_ws.send(bytes_data)
+        except websockets.exceptions.ConnectionClosed:
+            break
+
+
+async def _relay_backend_to_client(websocket: WebSocket, backend_ws: "ClientConnection") -> None:
+    import websockets
+
+    while True:
+        try:
+            data = await backend_ws.recv()
+        except websockets.exceptions.ConnectionClosed as e:
+            code = getattr(e, "code", 1000) or 1000
+            reason = getattr(e, "reason", "Remote closed") or "Remote closed"
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=code, reason=reason)
+            break
+        except Exception:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1011, reason="Internal server error")
+            break
+
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            await websocket.send_bytes(bytes(data))
+        else:
+            await websocket.send_text(cast(str, data))
+
+
+async def proxy_vertex_live_websocket(
+    websocket: WebSocket,
+    target_url: str,
+    headers: Dict[str, str],
+    subprotocols: Optional[List[str]],
+    headers_passed_through: bool,
+) -> None:
+    import websockets
+    from websockets.asyncio.client import ClientConnection
+
+    try:
+        async with websockets.connect(  # type: ignore
+            target_url,
+            extra_headers=headers,
+            subprotocols=subprotocols,
+        ) as backend_ws:
+            selected_subprotocol = getattr(backend_ws, "subprotocol", None)
+            await websocket.accept(subprotocol=selected_subprotocol)
+
+            client_to_backend = asyncio.create_task(
+                _relay_client_to_backend(websocket, cast(ClientConnection, backend_ws))
+            )
+            backend_to_client = asyncio.create_task(
+                _relay_backend_to_client(websocket, cast(ClientConnection, backend_ws))
+            )
+
+            done, pending = await asyncio.wait(
+                {client_to_backend, backend_to_client},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+    except websockets.exceptions.InvalidStatusCode as e:
+        reason = "Vertex backend rejected connection"
+        if headers_passed_through:
+            reason = (
+                "Vertex backend rejected connection; configure pass-through credentials or forward a valid Authorization header."
+            )
+        with contextlib.suppress(RuntimeError):
+            await websocket.close(code=e.status_code, reason=reason)
+    except Exception:
+        verbose_proxy_logger.exception("Error while proxying Vertex Live websocket")
+        with contextlib.suppress(RuntimeError):
+            await websocket.close(code=1011, reason="Internal server error")
+
 def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     """
     Returns the base URL for Vertex AI based on the provided location.
@@ -1087,6 +1224,87 @@ async def vertex_proxy_route(
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=ai_platform_handler,
         user_api_key_dict=user_api_key_dict,
+    )
+
+
+@router.websocket("/vertex-ai/live")
+@router.websocket("/vertex_ai/live")
+async def vertex_live_passthrough_route(
+    websocket: WebSocket,
+    _user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    incoming_headers = dict(websocket.headers.items())
+    subprotocols = _extract_websocket_subprotocols(incoming_headers)
+
+    # For Live API, use default project and location from config
+    vertex_project: Optional[str] = None
+    vertex_location: Optional[str] = "us-central1"  # Default location
+
+    vertex_handler = get_vertex_pass_through_handler(call_type="aiplatform")
+    vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+    base_target_url = vertex_handler.get_default_base_target_url(vertex_location)
+    headers_passed_through = False
+    override_headers: Dict[str, str] = {}
+
+    if vertex_credentials is None or vertex_credentials.vertex_project is None:
+        headers_passed_through = True
+    else:
+        vertex_project = vertex_credentials.vertex_project or vertex_project
+        vertex_location = vertex_credentials.vertex_location or vertex_location
+        vertex_credentials_str = vertex_credentials.vertex_credentials
+
+        _auth_header: Optional[str] = None
+        if vertex_credentials_str:
+            try:
+                _auth_header, vertex_project = await vertex_llm_base._ensure_access_token_async(
+                    credentials=vertex_credentials_str,
+                    project_id=vertex_project,
+                    custom_llm_provider="vertex_ai_beta",
+                )
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "Failed to resolve Vertex credentials for Live passthrough"
+                )
+                with contextlib.suppress(RuntimeError):
+                    await websocket.close(code=1011, reason="Authentication failure")
+                return
+
+        if _auth_header:
+            override_headers["Authorization"] = f"Bearer {_auth_header}"
+        if vertex_project:
+            override_headers.setdefault("x-goog-user-project", vertex_project)
+
+        base_target_url = vertex_handler.update_base_target_url_with_credential_location(
+            base_target_url, vertex_location
+        )
+
+    if base_target_url is None:
+        base_target_url = get_vertex_base_url(vertex_location)
+
+    # For Live API websocket, construct the URL directly
+    # Format: wss://{location}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent
+    
+    # Convert to websocket URL and remove trailing slash
+    base_target_url = base_target_url.rstrip("/").replace("https://", "wss://").replace("http://", "ws://")
+    
+    # Construct the Live API websocket endpoint
+    target_url = f"{base_target_url}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+
+    backend_headers = _prepare_vertex_live_backend_headers(
+        incoming_headers=incoming_headers,
+        override_headers=override_headers,
+    )
+
+    await proxy_vertex_live_websocket(
+        websocket=websocket,
+        target_url=target_url,
+        headers=backend_headers,
+        subprotocols=subprotocols,
+        headers_passed_through=headers_passed_through,
     )
 
 
