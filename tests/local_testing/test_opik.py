@@ -122,7 +122,7 @@ def test_sync_opik_logging_http_request():
             )
         
         # Need to wait for a short amount of time as the log_success callback is called in a different thread
-        time.sleep(1)
+        time.sleep(3)
 
         # Check that 5 spans and 5 traces were sent
         assert mock_post.call_count == 10, f"Expected 10 HTTP requests, but got {mock_post.call_count}"

@@ -202,7 +202,10 @@ class OpikLogger(CustomBatchLogger):
             return []
 
         # Update litellm_opik_metadata with opik metadata from requester
-        litellm_opik_metadata.update(standard_logging_object.get("metadata", {}).get("requester_metadata", {}).get("opik", {}))
+        standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
+        requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
+        requester_opik_metadata = requester_metadata.get("opik", {}) or {}
+        litellm_opik_metadata.update(requester_opik_metadata)
 
         verbose_logger.debug(
             f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}"
@@ -230,7 +233,8 @@ class OpikLogger(CustomBatchLogger):
         thread_id = litellm_opik_metadata.get("thread_id", None)
 
         # Override with any opik_ headers from proxy request
-        proxy_headers = (_litellm_params.get("proxy_server_request", {}).get("headers", {}) or {})
+        proxy_server_request = _litellm_params.get("proxy_server_request", {}) or {}
+        proxy_headers = proxy_server_request.get("headers", {}) or {}
         for key, value in proxy_headers.items():
             if key.startswith("opik_"):
                 param_key = key.replace("opik_", "", 1)
@@ -249,8 +253,7 @@ class OpikLogger(CustomBatchLogger):
                             opik_tags.extend(parsed_tags)
                     except (json.JSONDecodeError, TypeError):
                         pass
-
-        
+                    
         # Create input and output data
         input_data = standard_logging_object.get("messages", {})
         output_data = standard_logging_object.get("response", {})
@@ -273,7 +276,7 @@ class OpikLogger(CustomBatchLogger):
             del metadata["current_span_data"]
         metadata["created_from"] = "litellm"
 
-        metadata.update(standard_logging_object.get("metadata", {}))
+        metadata.update(standard_logging_metadata)
         if "call_type" in standard_logging_object:
             metadata["type"] = standard_logging_object["call_type"]
         if "status" in standard_logging_object:
