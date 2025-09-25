@@ -2816,13 +2816,13 @@ class PrismaClient:
                 )
             )
             raise e
-    
+
     @backoff.on_exception(
-            backoff.expo,
-            Exception,
-            max_tries=3,
-            max_time=10,
-            on_backoff=on_backoff,
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
     )
     async def health_check(self):
         """
@@ -2858,6 +2858,7 @@ class PrismaClient:
         """
         Get the row count from LiteLLM_SpendLogs table using PostgreSQL system statistics.
         """
+
         @backoff.on_exception(
             backoff.expo,
             Exception,
