@@ -280,7 +280,7 @@ async def test_add_and_delete_models():
     - Delete model
     - Call model -> expect to fail
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -404,7 +404,7 @@ async def test_add_model_run_health():
     Call /health
     -> Ensure the health check for the endpoint is working as expected
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -528,7 +528,7 @@ async def test_team_model_e2e():
     """
     from tests.test_users import new_user
     from tests.test_team import new_team
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         # Creat a user

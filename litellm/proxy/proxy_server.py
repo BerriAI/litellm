@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 import warnings
 from datetime import datetime, timedelta
 from typing import (
