@@ -33,7 +33,7 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: aiohttp_openai/any
+      model: openai/any
       api_base: https://your-fake-openai-endpoint.com/chat/completions
       api_key: "test"
 ```
