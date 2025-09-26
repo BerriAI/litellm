@@ -655,12 +655,7 @@ async def proxy_startup_event(app: FastAPI):
 
     ### PRELOAD USERS INTO CACHE ###
     if prisma_client is not None:
-        default_preload_limit = _DEFAULT_CACHE_WARMUP_USERS
-        preload_limit = (
-            general_settings.get("preload_users_limit", default_preload_limit)
-            if general_settings is not None
-            else default_preload_limit
-        )
+        preload_limit = _DEFAULT_CACHE_WARMUP_USERS
         if preload_limit > 0:
             from litellm.proxy.utils import preload_users_into_cache        
             verbose_proxy_logger.info(
