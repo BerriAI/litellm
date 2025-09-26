@@ -199,6 +199,12 @@ class MCPServerManager:
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
                 env=server_config.get("env", None) or {},
+                # oauth specific fields
+                client_id=server_config.get("client_id", None),
+                client_secret=server_config.get("client_secret", None),
+                scopes=server_config.get("scopes", None),
+                authorization_url=server_config.get("authorization_url", None),
+                token_url=server_config.get("token_url", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
@@ -607,20 +613,26 @@ class MCPServerManager:
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
-                "user_api_key_user_id": getattr(user_api_key_auth, "user_id", None)
-                if user_api_key_auth
-                else None,
-                "user_api_key_team_id": getattr(user_api_key_auth, "team_id", None)
-                if user_api_key_auth
-                else None,
-                "user_api_key_end_user_id": getattr(
-                    user_api_key_auth, "end_user_id", None
-                )
-                if user_api_key_auth
-                else None,
-                "user_api_key_hash": getattr(user_api_key_auth, "api_key_hash", None)
-                if user_api_key_auth
-                else None,
+                "user_api_key_user_id": (
+                    getattr(user_api_key_auth, "user_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_team_id": (
+                    getattr(user_api_key_auth, "team_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_end_user_id": (
+                    getattr(user_api_key_auth, "end_user_id", None)
+                    if user_api_key_auth
+                    else None
+                ),
+                "user_api_key_hash": (
+                    getattr(user_api_key_auth, "api_key_hash", None)
+                    if user_api_key_auth
+                    else None
+                ),
             }
 
             # Create MCP request object for processing
@@ -834,6 +846,16 @@ class MCPServerManager:
                 return server
         return None
 
+    def get_mcp_server_by_name(self, server_name: str) -> Optional[MCPServer]:
+        """
+        Get the MCP Server from the server name
+        """
+        registry = self.get_registry()
+        for server in registry.values():
+            if server.server_name == server_name:
+                return server
+        return None
+
     def _generate_stable_server_id(
         self,
         server_name: str,
@@ -1023,9 +1045,11 @@ class MCPServerManager:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
-                        description=_server_config.mcp_info.get("description")
-                        if _server_config.mcp_info
-                        else None,
+                        description=(
+                            _server_config.mcp_info.get("description")
+                            if _server_config.mcp_info
+                            else None
+                        ),
                         mcp_info=_server_config.mcp_info,
                         mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields

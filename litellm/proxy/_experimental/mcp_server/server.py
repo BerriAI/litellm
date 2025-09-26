@@ -519,16 +519,16 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details[
-                "mcp_tool_call_metadata"
-            ] = standard_logging_mcp_tool_call
+            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                standard_logging_mcp_tool_call
+            )
             litellm_logging_obj.model = f"MCP: {name}"
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
-        mcp_server: Optional[
-            MCPServer
-        ] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server: Optional[MCPServer] = (
+            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        )
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                 mcp_server.mcp_info or {}
@@ -638,26 +638,32 @@ if MCP_AVAILABLE:
         mcp_path_match = re.match(r"^/mcp/([^?#]+)(?:\?.*)?(?:#.*)?$", path)
         if mcp_path_match:
             servers_and_path = mcp_path_match.group(1)
-            
+
             if servers_and_path:
                 # Check if it contains commas (comma-separated servers)
-                if ',' in servers_and_path:
+                if "," in servers_and_path:
                     # For comma-separated, look for a path at the end
                     # Common patterns: /tools, /chat/completions, etc.
-                    path_match = re.search(r'/([^/,]+(?:/[^/,]+)*)$', servers_and_path)
+                    path_match = re.search(r"/([^/,]+(?:/[^/,]+)*)$", servers_and_path)
                     if path_match:
                         # Path found at the end, remove it from servers
-                        path_part = '/' + path_match.group(1)
-                        servers_part = servers_and_path[:-len(path_part)]
-                        mcp_servers_from_path = [s.strip() for s in servers_part.split(',') if s.strip()]
+                        path_part = "/" + path_match.group(1)
+                        servers_part = servers_and_path[: -len(path_part)]
+                        mcp_servers_from_path = [
+                            s.strip() for s in servers_part.split(",") if s.strip()
+                        ]
                     else:
                         # No path, just comma-separated servers
-                        mcp_servers_from_path = [s.strip() for s in servers_and_path.split(',') if s.strip()]
+                        mcp_servers_from_path = [
+                            s.strip() for s in servers_and_path.split(",") if s.strip()
+                        ]
                 else:
                     # Single server case - use regex approach for server/path separation
                     # This handles cases like "custom_solutions/user_123/chat/completions"
                     # where we want to extract "custom_solutions/user_123" as the server name
-                    single_server_match = re.match(r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path)
+                    single_server_match = re.match(
+                        r"^([^/]+(?:/[^/]+)?)(?:/.*)?$", servers_and_path
+                    )
                     if single_server_match:
                         server_name = single_server_match.group(1)
                         mcp_servers_from_path = [server_name]
@@ -809,6 +815,8 @@ if MCP_AVAILABLE:
 
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)
+    app.mount("/mcp", handle_streamable_http_mcp)
+    app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
     app.mount("/sse", handle_sse_mcp)
     app.add_middleware(AuthContextMiddleware)
 
@@ -839,14 +847,12 @@ if MCP_AVAILABLE:
         )
         auth_context_var.set(auth_user)
 
-    def get_auth_context() -> (
-        Tuple[
-            Optional[UserAPIKeyAuth],
-            Optional[str],
-            Optional[List[str]],
-            Optional[Dict[str, str]],
-        ]
-    ):
+    def get_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, str]],
+    ]:
         """
         Get the UserAPIKeyAuth from the auth context variable.
 
