@@ -506,7 +506,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         kwargs = {
             "litellm_params": {
-                **litellm_params_in_body,
+                **litellm_params_in_body,  # type: ignore
                 "metadata": _metadata,
                 "proxy_server_request": {
                     "url": str(request.url),
@@ -1126,7 +1126,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
-        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict = None):
+        def __init__(self, url: str, method: str = "WEBSOCKET", headers: Optional[dict] = None):
             self.url = url
             self.method = method
             self.headers = headers or {}
@@ -1146,7 +1146,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
         _parsed_body={},  # WebSocket doesn't have a traditional request body
         passthrough_logging_payload=passthrough_logging_payload,
         litellm_call_id=litellm_call_id,
-        request=dummy_request,
+        request=dummy_request,  # type: ignore
         logging_obj=logging_obj,
     )
 
@@ -1379,8 +1379,8 @@ async def websocket_passthrough_request(  # noqa: PLR0915
             end_time = datetime.now()
 
             # Update passthrough logging payload with response data
-            passthrough_logging_payload["response_body"] = websocket_messages
-            passthrough_logging_payload["end_time"] = end_time
+            passthrough_logging_payload["response_body"] = websocket_messages  # type: ignore
+            passthrough_logging_payload["end_time"] = end_time  # type: ignore
 
             # Remove logging_obj from kwargs to avoid duplicate keyword argument
             success_kwargs = kwargs.copy()
@@ -1419,9 +1419,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
             # Use the same success handler as HTTP passthrough endpoints
             asyncio.create_task(
                 pass_through_endpoint_logging.pass_through_async_success_handler(
-                    httpx_response=mock_response,  # Use mock response for WebSocket
-                    response_body=websocket_messages,
-                    url_route=endpoint,
+                    httpx_response=mock_response,  # type: ignore
+                    response_body=websocket_messages,  # type: ignore
+                    url_route=endpoint or "",
                     result="websocket_connection_successful",
                     start_time=start_time,
                     end_time=end_time,
@@ -1437,7 +1437,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                 await proxy_logging_obj.post_call_success_hook(
                     data={},
                     user_api_key_dict=user_api_key_dict,
-                    response={"status": "websocket_connection_successful"},
+                    response={"status": "websocket_connection_successful"},  # type: ignore
                 )
 
     except InvalidStatus as exc:
