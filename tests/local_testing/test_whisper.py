@@ -234,3 +234,13 @@ async def test_azure_transcribe_model_mapping():
     except Exception as e:
         # If Azure credentials are not available, skip this test
         pytest.skip(f"Azure credentials not available: {str(e)}")
+
+@pytest.mark.asyncio
+async def test_groq_whisper_transcribe():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from datetime import datetime
+    from unittest.mock import patch, MagicMock
+
+    await litellm.atranscription(
+        model="groq/whisper-large-v3-turbo", file=audio_file, response_format="json"
+    )
