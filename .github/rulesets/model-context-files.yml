@@ -1,0 +1,53 @@
+name: Model Context Files Protection
+description: Enhanced protection for model context JSON files requiring 2 approvals and source citations
+enforcement: active
+target: branch
+conditions:
+  ref_name:
+    include:
+      - main
+      - master
+      - develop
+  changed_files:
+    include:
+      - "model_prices_and_context_window.json"
+      - "**/model_context*.json"
+      - "**/context_window*.json"
+rules:
+  - type: required_reviewers
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_reviews: false
+      require_last_push_approval: true
+      bypass_pull_request_allowances:
+        users: []
+        teams: []
+        apps: []
+  - type: required_status_checks
+    parameters:
+      required_status_checks:
+        - context: "Model Context Validation"
+          strict: true
+        - context: "JSON Structure Validation"
+          strict: true
+      strict_required_status_checks_policy: true
+  - type: required_pull_request_reviews
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_reviews: false
+      require_last_push_approval: true
+      bypass_pull_request_allowances:
+        users: []
+        teams: []
+        apps: []
+  - type: required_signatures
+    parameters:
+      required_signatures: false
+bypass_actors:
+  - actor_id: 1
+    actor_type: OrganizationAdmin
+  - actor_id: 2
+    actor_type: RepositoryRole
+    repository_role: maintainer

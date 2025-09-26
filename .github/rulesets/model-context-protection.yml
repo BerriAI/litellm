@@ -1,0 +1,39 @@
+name: Model Context Protection
+description: Requires 2 approvals and cited sources for changes to model context JSON files
+enforcement: active
+target: branch
+conditions:
+  ref_name:
+    include:
+      - main
+      - master
+      - develop
+rules:
+  - type: required_reviewers
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_reviews: false
+      require_last_push_approval: true
+  - type: required_status_checks
+    parameters:
+      required_status_checks:
+        - context: "Model Context Validation"
+          strict: true
+      strict_required_status_checks_policy: true
+  - type: required_pull_request_reviews
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_reviews: false
+      require_last_push_approval: true
+      bypass_pull_request_allowances:
+        users: []
+        teams: []
+        apps: []
+bypass_actors:
+  - actor_id: 1
+    actor_type: OrganizationAdmin
+  - actor_id: 2
+    actor_type: RepositoryRole
+    repository_role: maintainer

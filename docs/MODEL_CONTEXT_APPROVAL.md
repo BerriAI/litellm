@@ -14,6 +14,21 @@ The following files require 2 approvals and cited sources for any changes:
 - Any file matching `**/model_context*.json`
 - Any file matching `**/context_window*.json`
 
+## GitHub Ruleset Protection
+
+This repository uses **GitHub Rulesets** to enforce approval requirements for model context files. The ruleset configuration is located at:
+
+- `.github/rulesets/model-context-files.yml` - Main ruleset for model context file protection
+- `.github/rulesets/model-context-protection.yml` - General model context protection
+
+### Ruleset Features
+
+- **2 approvals required** from different reviewers
+- **Source citation validation** via GitHub Actions
+- **JSON structure validation** before merge
+- **Bypass permissions** for organization admins and maintainers
+- **Automatic enforcement** on main, master, and develop branches
+
 ## Approval Requirements
 
 ### 1. Two Approvals Required
@@ -74,14 +89,35 @@ When citing sources, include:
 
 The following automated checks are in place:
 
-### GitHub Workflow
+### GitHub Rulesets
 
-- **File**: `.github/workflows/model_context_approval.yml`
+- **Files**: 
+  - `.github/rulesets/model-context-files.yml` - Main protection ruleset
+  - `.github/rulesets/model-context-protection.yml` - General protection
+- **Features**:
+  - Enforces 2 approvals requirement
+  - Validates JSON structure via status checks
+  - Requires source citations
+  - Bypass permissions for admins/maintainers
+
+### GitHub Actions Validation
+
+- **File**: `.github/workflows/model-context-validation.yml`
 - **Triggers**: On pull requests that modify model context files
 - **Checks**:
-  - Verifies at least 2 approvals
   - Validates JSON structure
-  - Warns if no source citations found
+  - Searches for source citations in PR description
+  - Provides helpful error messages
+
+### JSON Structure Validation
+
+- **File**: `.github/workflows/json-structure-validation.yml`
+- **Triggers**: On pull requests that modify model context files
+- **Checks**:
+  - Validates JSON syntax
+  - Checks for required fields in model entries
+  - Warns about missing cost information
+  - Monitors file size
 
 ### Pre-commit Hook
 
@@ -98,9 +134,10 @@ The following automated checks are in place:
 
 The approval workflow is integrated into the CI/CD pipeline:
 
-1. **Pre-commit validation** prevents commits without citations
-2. **GitHub workflow** blocks merging without 2 approvals
-3. **Automated checks** validate JSON structure and source citations
+1. **GitHub Rulesets** enforce 2 approvals requirement at the repository level
+2. **Pre-commit validation** prevents commits without citations
+3. **GitHub Actions** validate JSON structure and source citations
+4. **Status checks** must pass before merging
 
 ### Bypass Conditions
 
