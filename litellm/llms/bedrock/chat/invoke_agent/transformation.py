@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 """
 import base64
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx

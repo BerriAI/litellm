@@ -1,6 +1,6 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from httpx._models import Headers, Response

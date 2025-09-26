@@ -5,7 +5,7 @@ import json
 import threading
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx

@@ -2,7 +2,6 @@ import pytest
 
 from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
-
 @pytest.mark.parametrize(
     "model_name,expected",
     [

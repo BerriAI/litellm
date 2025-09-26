@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 import warnings
 from datetime import datetime, timedelta
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     get_type_hints,
 )
 
+from litellm._uuid import uuid
 from litellm.constants import (
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -1863,6 +1863,15 @@ class ProxyConfig:
                     set_global_prompt_directory(value)
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
+                    )
+                elif key == "global_bitbucket_config":
+                    from litellm.integrations.bitbucket import (
+                        set_global_bitbucket_config,
+                    )
+
+                    set_global_bitbucket_config(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
@@ -3810,9 +3819,10 @@ class ProxyStartupEvent:
         cls, scheduler: AsyncIOScheduler
     ):
         """
-        Initialize the spend tracking background jobs
+        Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
         2. Prometheus Background Job
+        3. Key Rotation Background Job
 
         Args:
             scheduler: The scheduler to add the background jobs to
@@ -3836,6 +3846,41 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
+
+        ########################################################
+        # Key Rotation Background Job
+        ########################################################
+        from litellm.constants import (
+            LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+            LITELLM_KEY_ROTATION_ENABLED,
+        )
+        
+        key_rotation_enabled: Optional[bool] = str_to_bool(LITELLM_KEY_ROTATION_ENABLED)
+        verbose_proxy_logger.debug(f"key_rotation_enabled: {key_rotation_enabled}")
+        
+        if key_rotation_enabled is True:
+            try:
+                from litellm.proxy.common_utils.key_rotation_manager import (
+                    KeyRotationManager,
+                )
+
+                # Get prisma_client from global scope
+                global prisma_client
+                if prisma_client is not None:
+                    key_rotation_manager = KeyRotationManager(prisma_client)
+                    verbose_proxy_logger.debug(f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)")
+                    scheduler.add_job(
+                        key_rotation_manager.process_rotations,
+                        "interval",
+                        seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+                        id="key_rotation_job"
+                    )
+                else:
+                    verbose_proxy_logger.warning("Key rotation enabled but prisma_client not available")
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Failed to setup key rotation job: {e}")
+        else:
+            verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
 
     @classmethod
     async def _setup_prisma_client(

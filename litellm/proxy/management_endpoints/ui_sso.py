@@ -10,7 +10,7 @@ Has all /sso/* routes
 
 import asyncio
 import os
-import uuid
+from litellm._uuid import uuid
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 

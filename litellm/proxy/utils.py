@@ -1308,7 +1308,7 @@ class ProxyLogging:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj is None:
-            import uuid
+            from litellm._uuid import uuid
 
             request_data["litellm_call_id"] = str(uuid.uuid4())
             user_api_key_logged_metadata = (
@@ -2817,6 +2817,13 @@ class PrismaClient:
             )
             raise e
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
+    )
     async def health_check(self):
         """
         Health check endpoint for the prisma client
@@ -2848,7 +2855,18 @@ class PrismaClient:
             raise e
 
     async def _get_spend_logs_row_count(self) -> int:
-        try:
+        """
+        Get the row count from LiteLLM_SpendLogs table using PostgreSQL system statistics.
+        """
+
+        @backoff.on_exception(
+            backoff.expo,
+            Exception,
+            max_tries=3,
+            max_time=10,
+            on_backoff=on_backoff,
+        )
+        async def _fetch_row_count() -> int:
             sql_query = """
             SELECT reltuples::BIGINT
             FROM pg_class
@@ -2856,12 +2874,22 @@ class PrismaClient:
             """
             result = await self.db.query_raw(query=sql_query)
             return result[0]["reltuples"]
+
+        try:
+            return await _fetch_row_count()
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error getting LiteLLM_SpendLogs row count: {e}"
             )
             return 0
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,
+        max_tries=3,
+        max_time=10,
+        on_backoff=on_backoff,
+    )
     async def _set_spend_logs_row_count_in_proxy_state(self) -> None:
         """
         Set the `LiteLLM_SpendLogs`row count in proxy state.

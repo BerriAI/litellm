@@ -3,7 +3,7 @@ import asyncio
 import copy
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from base64 import b64encode
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -932,7 +932,7 @@ def create_pass_through_route(
     cost_per_request: Optional[float] = None,
 ):
     # check if target is an adapter.py or a url
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm.proxy.types_utils.utils import get_instance_fn
 
@@ -1665,7 +1665,7 @@ async def initialize_pass_through_endpoints(
     Returns:
         None
     """
-    import uuid
+    from litellm._uuid import uuid
 
     verbose_proxy_logger.debug("initializing pass through endpoints")
     from litellm.proxy._types import CommonProxyErrors, LiteLLMRoutes
@@ -1908,7 +1908,7 @@ async def create_pass_through_endpoints(
     """
     Create new pass-through endpoint
     """
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm.proxy.proxy_server import (
         get_config_general_settings,

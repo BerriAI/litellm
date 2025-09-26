@@ -50,6 +50,7 @@ litellm_settings:
     port: 6379  # The port number for the Redis cache. Required if type is "redis".
     password: "your_password"  # The password for the Redis cache. Required if type is "redis".
     namespace: "litellm.caching.caching" # namespace for redis cache
+    max_connections: 100  # [OPTIONAL] Set Maximum number of Redis connections. Passed directly to redis-py. 
   
     # Optional - Redis Cluster Settings
     redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
@@ -613,6 +614,8 @@ router_settings:
 | LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
 | LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
 | LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
+| LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
+| LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
