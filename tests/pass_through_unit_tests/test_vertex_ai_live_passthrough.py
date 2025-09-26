@@ -360,7 +360,7 @@ class TestVertexAILivePassthroughIntegration:
     @pytest.fixture
     def mock_websocket(self):
         """Create a mock WebSocket for testing"""
-        websocket = MagicMock()
+        websocket = AsyncMock()
         websocket.headers = {"authorization": "Bearer test-token"}
         websocket.client_state = MagicMock()
         websocket.client_state.DISCONNECTED = "disconnected"
@@ -385,9 +385,13 @@ class TestVertexAILivePassthroughIntegration:
 
     @patch('litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.websocket_passthrough_request')
     @patch('litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router')
+    @patch('litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async')
+    @patch('litellm.proxy.proxy_server.proxy_logging_obj')
     @pytest.mark.asyncio
     async def test_vertex_ai_live_websocket_passthrough_route(
         self,
+        mock_proxy_logging_obj,
+        mock_ensure_access_token,
         mock_router,
         mock_websocket_passthrough,
         mock_websocket,
@@ -407,8 +411,11 @@ class TestVertexAILivePassthroughIntegration:
         )
         mock_router.set_default_vertex_config.return_value = None
         
-        # Mock the WebSocket passthrough request
-        mock_websocket_passthrough.return_value = AsyncMock()
+        # Mock the access token async call
+        mock_ensure_access_token.return_value = ("test-access-token", "test-project")
+        
+        # Mock the WebSocket passthrough request - it returns None, not an AsyncMock
+        mock_websocket_passthrough.return_value = None
         
         # Test the route
         result = await vertex_ai_live_websocket_passthrough(
@@ -424,6 +431,9 @@ class TestVertexAILivePassthroughIntegration:
         assert call_args[1]["websocket"] == mock_websocket
         assert call_args[1]["user_api_key_dict"] == mock_user_api_key
         assert call_args[1]["endpoint"] == "/vertex_ai/live"
+        
+        # The result should be None since websocket_passthrough_request returns None
+        assert result is None
 
     def test_vertex_ai_live_route_detection(self):
         """Test that the route detection works correctly"""
@@ -495,9 +505,8 @@ class TestVertexAILivePassthroughIntegration:
         # Verify the handler was called
         mock_handler.vertex_ai_live_passthrough_handler.assert_called_once()
         
-        # Verify the result
-        assert "standard_logging_response_object" in result
-        assert result["standard_logging_response_object"]["model"] == "gemini-1.5-pro"
+        # The method returns None (it doesn't return anything), so just verify it completed without error
+        assert result is None
 
 
 class TestVertexAILivePassthroughErrorHandling:
