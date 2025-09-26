@@ -523,8 +523,8 @@ const sidebars = {
           label: "Tools",
           items: [
             "completion/computer_use",
-            "completion/web_fetch",
             "completion/web_search",
+            "completion/web_fetch",
             "completion/function_call",
           ]
         },
