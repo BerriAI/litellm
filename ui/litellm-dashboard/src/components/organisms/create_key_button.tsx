@@ -327,13 +327,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         };
       }
       
-      // Add auto-rotation settings to the metadata
+      // Add auto-rotation settings as top-level fields
       if (autoRotationEnabled) {
-        metadata = {
-          ...metadata,
-          auto_rotation_enabled: true,
-          rotation_interval: rotationInterval
-        };
+        formValues.auto_rotate = true;
+        formValues.rotation_interval = rotationInterval;
       }
 
       // Handle duration field for key expiry
