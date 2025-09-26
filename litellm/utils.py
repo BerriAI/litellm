@@ -733,7 +733,7 @@ def function_setup(  # noqa: PLR0915
 
                 buffer = StringIO()
                 for m in messages:
-                    content = m.get("content")
+                    content = m.get("content", "")
                     if content is not None and isinstance(content, str):
                         buffer.write(content)
 
