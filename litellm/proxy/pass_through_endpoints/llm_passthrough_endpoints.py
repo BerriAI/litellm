@@ -700,7 +700,8 @@ async def bedrock_proxy_route(
     # Add or update query parameters
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
-    credentials: Credentials = BedrockConverseLLM().get_credentials()
+    bedrock_llm = BedrockConverseLLM()
+    credentials: Credentials = bedrock_llm.get_credentials()  # type: ignore
     sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
@@ -1293,18 +1294,22 @@ async def vertex_ai_live_websocket_passthrough(
         )
 
     resolved_project = vertex_project
-    resolved_location = vertex_location
+    resolved_location: Optional[str] = vertex_location
     credentials_value: Optional[str] = None
 
     if vertex_credentials_config is not None:
         resolved_project = resolved_project or vertex_credentials_config.vertex_project
-        resolved_location = (
+        temp_location = (
             resolved_location or vertex_credentials_config.vertex_location
         )
         # Ensure resolved_location is a string
-        if isinstance(resolved_location, dict):
-            resolved_location = str(resolved_location)
-        credentials_value = vertex_credentials_config.vertex_credentials
+        if isinstance(temp_location, dict):
+            resolved_location = str(temp_location)
+        elif temp_location is not None:
+            resolved_location = str(temp_location)
+        else:
+            resolved_location = None
+        credentials_value = str(vertex_credentials_config.vertex_credentials) if vertex_credentials_config.vertex_credentials is not None else None
 
     try:
         resolved_location = resolved_location or (
