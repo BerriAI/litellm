@@ -783,6 +783,38 @@ def test_batch_cost_calculator_with_zero_input_output_tokens():
         assert completion_cost == expected_completion_cost
 
 
+def test_batch_cost_calculator_with_zero_prompt_completion_tokens():
+    """Test batch_cost_calculator when input_tokens and output_tokens are zero."""
+    # Create usage object with zero input_tokens and output_tokens
+    usage = Usage(
+        prompt_tokens=0,  # Zero value
+        completion_tokens=0,  # Zero value
+        total_tokens=150,
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    # Mock model_info to return specific cost values
+    with patch('litellm.get_model_info') as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        }
+
+        prompt_cost, completion_cost = batch_cost_calculator(
+            usage=usage,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+
+        # Should fall back to prompt_tokens and completion_tokens
+        expected_prompt_cost = 100 * (0.001 / 2)
+        expected_completion_cost = 50 * (0.002 / 2)
+
+        assert prompt_cost == expected_prompt_cost
+        assert completion_cost == expected_completion_cost
+
+
 def test_batch_cost_calculator_with_partial_tokens():
     """Test batch_cost_calculator with both of input_tokens/output_tokens are None."""
     # Create usage object
