@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import pytest
 from dotenv import load_dotenv
 from fastapi import Request

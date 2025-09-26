@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 import pytest
-import uuid
+from litellm._uuid import uuid
 import os
 import asyncio
 from unittest import mock

@@ -928,7 +928,7 @@ async def test_get_team_redis(client_no_auth):
 
 
 import random
-import uuid
+from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from litellm.proxy._types import (

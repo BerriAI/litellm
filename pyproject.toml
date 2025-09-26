@@ -31,7 +31,6 @@ jinja2 = "^3.1.2"
 aiohttp = ">=3.10"
 pydantic = "^2.5.0"
 jsonschema = "^4.22.0"
-pondpond = "^1.4.1"
 numpydoc = {version = "*", optional = true} # used in utils.py
 fastuuid = {version = ">=0.12.0", optional = true}
 

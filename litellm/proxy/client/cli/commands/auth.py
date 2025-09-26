@@ -336,7 +336,7 @@ def _handle_team_assignment(base_url: str, api_key: str, user_id: str) -> None:
 @click.pass_context
 def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands

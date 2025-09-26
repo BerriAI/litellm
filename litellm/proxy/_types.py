@@ -1,6 +1,6 @@
 import enum
 import json
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -422,6 +422,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/update",
         "/user/delete",
         "/user/info",
+        "/user/list",
         # team
         "/team/new",
         "/team/update",

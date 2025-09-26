@@ -2,7 +2,7 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional, cast
 
