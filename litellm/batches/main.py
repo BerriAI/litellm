@@ -155,6 +155,12 @@ def create_batch(
     LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
     """
     try:
+        # Check if custom_llm_provider is specified in extra_body, similar to proxy endpoints
+        if extra_body and "custom_llm_provider" in extra_body:
+            provider_from_body = extra_body["custom_llm_provider"]
+            if provider_from_body in ["openai", "azure", "vertex_ai", "bedrock"]:
+                custom_llm_provider = provider_from_body  # type: ignore
+
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_call_id = kwargs.get("litellm_call_id", None)
         proxy_server_request = kwargs.get("proxy_server_request", None)
@@ -512,6 +518,12 @@ def retrieve_batch(
     LiteLLM Equivalent of GET https://api.openai.com/v1/batches/{batch_id}
     """
     try:
+        # Check if custom_llm_provider is specified in extra_body, similar to proxy endpoints
+        if extra_body and "custom_llm_provider" in extra_body:
+            provider_from_body = extra_body["custom_llm_provider"]
+            if provider_from_body in ["openai", "azure", "vertex_ai", "bedrock"]:
+                custom_llm_provider = provider_from_body  # type: ignore
+
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
@@ -663,6 +675,12 @@ def list_batches(
     List your organization's batches.
     """
     try:
+        # Check if custom_llm_provider is specified in extra_body, similar to proxy endpoints
+        if extra_body and "custom_llm_provider" in extra_body:
+            provider_from_body = extra_body["custom_llm_provider"]
+            if provider_from_body in ["openai", "azure"]:
+                custom_llm_provider = provider_from_body  # type: ignore
+
         # set API KEY
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params = get_litellm_params(
@@ -822,6 +840,12 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+        # Check if custom_llm_provider is specified in extra_body, similar to proxy endpoints
+        if extra_body and "custom_llm_provider" in extra_body:
+            provider_from_body = extra_body["custom_llm_provider"]
+            if provider_from_body in ["openai", "azure"]:
+                custom_llm_provider = provider_from_body  # type: ignore
+
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
