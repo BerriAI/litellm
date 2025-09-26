@@ -92,7 +92,6 @@ proxy = [
     "litellm-enterprise",
     "rich",
     "polars",
-    "fastuuid",
 ]
 
 extra_proxy = [
