@@ -372,9 +372,13 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             kwargs["model"] = model
             kwargs["custom_llm_provider"] = custom_llm_provider
 
+            # Safely log the model name: only allow known safe formats, redact otherwise.
+            import re
+            allowed_pattern = re.compile(r"^[A-Za-z0-9._\-:]+$")
+            safe_model = model if isinstance(model, str) and allowed_pattern.match(model) else "[REDACTED]"
             verbose_proxy_logger.debug(
                 f"Vertex AI Live API passthrough cost tracking - "
-                f"Model: {model}, Cost: ${response_cost:.6f}, "
+                f"Model: {safe_model}, Cost: ${response_cost:.6f}, "
                 f"Prompt tokens: {usage.prompt_tokens}, "
                 f"Completion tokens: {usage.completion_tokens}"
             )
