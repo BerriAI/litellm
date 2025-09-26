@@ -35,13 +35,13 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.utils import load_credentials_from_list
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
 )
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -308,6 +308,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    vertex_ai_live_websocket_passthrough,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -461,9 +464,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -959,9 +962,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1292,9 +1295,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -3107,10 +3110,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3340,9 +3343,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -4919,173 +4922,18 @@ async def vertex_ai_live_passthrough_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    from starlette.websockets import WebSocketState
-    from websockets.asyncio.client import connect
-    from websockets.exceptions import (
-        ConnectionClosedError,
-        ConnectionClosedOK,
-        InvalidStatusCode,
+    """
+    Vertex AI Live API WebSocket Pass-through Endpoint
+
+    This endpoint delegates to the WebSocket function defined in llm_passthrough_endpoints.py
+    """
+    return await vertex_ai_live_websocket_passthrough(
+        websocket=websocket,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        user_api_key_dict=user_api_key_dict,
     )
-
-    _ = user_api_key_dict  # passthrough route already authenticated; avoid lint warnings
-
-    await websocket.accept()
-
-    incoming_headers = dict(websocket.headers)
-    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
-    )
-
-    if vertex_credentials_config is None:
-        # Attempt to load defaults from environment/config if not already initialised
-        passthrough_endpoint_router.set_default_vertex_config()
-        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-            project_id=vertex_project,
-            location=vertex_location,
-        )
-
-    resolved_project = vertex_project
-    resolved_location = vertex_location
-    credentials_value: Optional[str] = None
-
-    if vertex_credentials_config is not None:
-        resolved_project = resolved_project or vertex_credentials_config.vertex_project
-        resolved_location = resolved_location or vertex_credentials_config.vertex_location
-        credentials_value = vertex_credentials_config.vertex_credentials
-
-    try:
-        resolved_location = resolved_location or (
-            vertex_live_passthrough_vertex_base.get_default_vertex_location()
-        )
-        if model:
-            resolved_location = vertex_live_passthrough_vertex_base.get_vertex_region(
-                vertex_region=resolved_location,
-                model=model,
-            )
-
-        access_token, resolved_project = await vertex_live_passthrough_vertex_base._ensure_access_token_async(
-            credentials=credentials_value,
-            project_id=resolved_project,
-            custom_llm_provider="vertex_ai_beta",
-        )
-    except Exception:
-        verbose_proxy_logger.exception(
-            "Failed to prepare Vertex AI credentials for live passthrough"
-        )
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close(code=1011, reason="Vertex AI authentication failed")
-        return
-
-    host_location = resolved_location or vertex_live_passthrough_vertex_base.get_default_vertex_location()
-    host = (
-        "aiplatform.googleapis.com"
-        if host_location == "global"
-        else f"{host_location}-aiplatform.googleapis.com"
-    )
-    service_url = (
-        f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
-    )
-
-    upstream_headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-    if resolved_project:
-        upstream_headers["x-goog-user-project"] = resolved_project
-
-    # Forward any custom x-goog-* headers provided by the caller if we haven't overridden them
-    for header_name, header_value in incoming_headers.items():
-        lower_header = header_name.lower()
-        if lower_header.startswith("x-goog-") and header_name not in upstream_headers:
-            upstream_headers[header_name] = header_value
-
-    try:
-        async with connect(
-            service_url,
-            additional_headers=upstream_headers,
-        ) as upstream_ws:
-
-            async def forward_client_to_vertex() -> None:
-                try:
-                    while True:
-                        message = await websocket.receive()
-                        message_type = message.get("type")
-                        if message_type == "websocket.disconnect":
-                            await upstream_ws.close()
-                            break
-
-                        text_data = message.get("text")
-                        bytes_data = message.get("bytes")
-
-                        if text_data is not None:
-                            await upstream_ws.send(text_data)
-                        elif bytes_data is not None:
-                            await upstream_ws.send(bytes_data)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    verbose_proxy_logger.exception(
-                        "Vertex AI live passthrough: error forwarding client message"
-                    )
-                    await upstream_ws.close()
-
-            async def forward_vertex_to_client() -> None:
-                try:
-                    async for upstream_message in upstream_ws:
-                        if isinstance(upstream_message, bytes):
-                            await websocket.send_bytes(upstream_message)
-                        else:
-                            await websocket.send_text(upstream_message)
-                except (ConnectionClosedOK, ConnectionClosedError):
-                    pass
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    verbose_proxy_logger.exception(
-                        "Vertex AI live passthrough: error forwarding upstream message"
-                    )
-                    raise
-
-            tasks = [
-                asyncio.create_task(forward_client_to_vertex()),
-                asyncio.create_task(forward_vertex_to_client()),
-            ]
-
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-            for task in done:
-                exception = task.exception()
-                if exception is not None:
-                    raise exception
-
-    except InvalidStatusCode as exc:
-        verbose_proxy_logger.exception(
-            "Vertex AI live passthrough: upstream rejected WebSocket connection"
-        )
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close(
-                code=exc.status_code if hasattr(exc, "status_code") else 1011,
-                reason="Upstream connection rejected",
-            )
-    except Exception:
-        verbose_proxy_logger.exception(
-            "Vertex AI live passthrough: unexpected error while proxying WebSocket"
-        )
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close(code=1011, reason="Vertex AI passthrough error")
-    finally:
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
 
 
 ######################################################################
@@ -6305,12 +6153,10 @@ def _add_team_models_to_all_models(
     team_models: Dict[str, Set[str]] = {}
 
     for team_object in team_db_objects_typed:
-
         if (
             len(team_object.models) == 0  # empty list = all model access
             or SpecialModelNames.all_proxy_models.value in team_object.models
         ):
-
             model_list = llm_router.get_model_list()
             if model_list is not None:
                 for model in model_list:
@@ -6461,7 +6307,6 @@ async def get_all_team_and_direct_access_models(
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
-
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
@@ -8821,9 +8666,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
