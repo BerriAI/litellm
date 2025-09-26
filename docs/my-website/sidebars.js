@@ -38,6 +38,7 @@ const sidebars = {
           "proxy/guardrails/bedrock",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
+          "proxy/guardrails/javelin",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
           "proxy/guardrails/noma_security",
