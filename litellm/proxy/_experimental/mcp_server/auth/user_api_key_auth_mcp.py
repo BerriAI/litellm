@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -96,9 +96,12 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
-        validated_user_api_key_auth = await user_api_key_auth(
-            api_key=litellm_api_key, request=request
-        )
+        if ".well-known" in str(request.url):  # public routes
+            validated_user_api_key_auth = UserAPIKeyAuth()
+        else:
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=litellm_api_key, request=request
+            )
         return (
             validated_user_api_key_auth,
             mcp_auth_header,
@@ -359,10 +362,10 @@ class MCPRequestHandler:
             return []
 
         try:
-            team_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
+            team_obj: Optional[LiteLLM_TeamTable] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": user_api_key_auth.team_id},
+                )
             )
             if team_obj is None:
                 verbose_logger.debug("team_obj is None")
@@ -535,10 +538,10 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": user_api_key_auth.team_id},
+        team_obj: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_auth.team_id},
+            )
         )
         if team_obj is None:
             verbose_logger.debug("team_obj is None")
