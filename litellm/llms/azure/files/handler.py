@@ -58,7 +58,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
         if openai_client is None:
             raise ValueError(
-                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -106,7 +106,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
         if openai_client is None:
             raise ValueError(
-                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -156,7 +156,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
         if openai_client is None:
             raise ValueError(
-                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -208,7 +208,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
         if openai_client is None:
             raise ValueError(
-                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -262,7 +262,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
         if openai_client is None:
             raise ValueError(
-                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
