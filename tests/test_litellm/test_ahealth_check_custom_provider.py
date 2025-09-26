@@ -42,3 +42,6 @@ async def test_ahealth_check_preserves_custom_model_with_explicit_provider_and_a
             # Verify it preserved the full model string
             called_kwargs = mock_acomp.await_args.kwargs
             assert called_kwargs.get("model") == model
+
+    # No-op assertion comment to re-trigger CI
+    assert True
