@@ -725,7 +725,8 @@ def function_setup(  # noqa: PLR0915
                 messages = kwargs["messages"]
             ### PRE-CALL RULES ###
             if (
-                isinstance(messages, list)
+                Rules.has_pre_call_rules()
+                and isinstance(messages, list)
                 and len(messages) > 0
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
