@@ -82,6 +82,11 @@ export interface KeyResponse {
         mcp_access_groups?: string[];
         vector_stores: string[];
     };
+    auto_rotate?: boolean;
+    rotation_interval?: string;
+    last_rotation_at?: string;
+    key_rotation_at?: string;
+    next_rotation_at?: string;
 }
 
 interface KeyListResponse {
