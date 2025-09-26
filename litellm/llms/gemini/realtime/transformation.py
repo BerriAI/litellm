@@ -3,7 +3,7 @@ This file contains the transformation logic for the Gemini realtime API.
 """
 
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm import verbose_logger

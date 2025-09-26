@@ -144,11 +144,12 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
-            pip install "cryptography<40.0.0"
+            pip install "cryptography>=43.0.1"
             python -m pip install types-requests types-setuptools types-redis types-PyYAML
             if ! python -m mypy . \
                 --config-file mypy.ini \
-                --ignore-missing-imports; then
+                --ignore-missing-imports \
+                --no-incremental; then
                 echo "mypy detected errors"
                 exit 1
             fi

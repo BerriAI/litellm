@@ -3,7 +3,7 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from copy import deepcopy
 from functools import partial
 from typing import (

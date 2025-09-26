@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import List
 from datetime import datetime, timezone, timedelta
 
@@ -379,7 +379,7 @@ async def test_e2e_size_of_redis_buffer():
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.db.db_transaction_queue.base_update_queue import BaseUpdateQueue
     from litellm.caching import RedisCache
-    import uuid
+    from litellm._uuid import uuid
 
 
     redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))

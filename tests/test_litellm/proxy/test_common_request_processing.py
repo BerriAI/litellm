@@ -1,5 +1,5 @@
 import copy
-import uuid
+from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

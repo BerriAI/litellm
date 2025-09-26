@@ -4,7 +4,7 @@
 This is an enterprise feature and requires a premium license.
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import (
