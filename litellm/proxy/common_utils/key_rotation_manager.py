@@ -4,7 +4,7 @@ Key Rotation Manager - Automated key rotation based on rotation schedules
 Handles finding keys that need rotation based on their individual schedules.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List
 
 from litellm._logging import verbose_proxy_logger
