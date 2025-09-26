@@ -409,7 +409,12 @@ class Router:
         )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
+        # Initialize model index for O(1) lookups by model ID
+        self.model_index: Dict[str, int] = {}
+        
         if model_list is not None:
+            # Build model index immediately to enable O(1) lookups from the start
+            self._build_model_index_from_list(model_list)
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
@@ -4975,6 +4980,9 @@ class Router:
             model = deployment.to_json(exclude_none=True)
 
             self.model_list.append(model)
+            # Update model index for O(1) lookup
+            if deployment.model_info.id is not None:
+                self.model_index[deployment.model_info.id] = len(self.model_list) - 1
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -5085,6 +5093,7 @@ class Router:
     def set_model_list(self, model_list: list):
         original_model_list = copy.deepcopy(model_list)
         self.model_list = []
+        self.model_index = {}  # Reset the index
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
         for model in original_model_list:
@@ -5324,8 +5333,27 @@ class Router:
 
         # add to model names
         self.model_list.append(_deployment)
+        # Update model index for O(1) lookup
+        if deployment.model_info.id is not None:
+            self.model_index[deployment.model_info.id] = len(self.model_list) - 1
         self.model_names.append(deployment.model_name)
         return deployment
+
+    def _remove_deployment_from_index(self, model_id: str, removal_idx: int) -> None:
+        """
+        Helper method to remove a deployment from the model list and update indices.
+        
+        Parameters:
+        - model_id: str - the id of the deployment to remove from index
+        - removal_idx: int - the index of the deployment in model_list
+        """
+        # Update indices for all models after the removed one
+        for idx_model_id, idx in self.model_index.items():
+            if idx > removal_idx:
+                self.model_index[idx_model_id] = idx - 1
+        # Remove the deleted model from index
+        if model_id in self.model_index:
+            del self.model_index[model_id]
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -5352,12 +5380,12 @@ class Router:
                 # if there is a new litellm param -> then update the deployment
                 # remove the previous deployment
                 removal_idx: Optional[int] = None
-                for idx, model in enumerate(self.model_list):
-                    if model["model_info"]["id"] == deployment.model_info.id:
-                        removal_idx = idx
+                if deployment.model_info.id in self.model_index:
+                    removal_idx = self.model_index[deployment.model_info.id]
 
-                if removal_idx is not None:
-                    self.model_list.pop(removal_idx)
+                    if removal_idx is not None:
+                        self.model_list.pop(removal_idx)
+                        self._remove_deployment_from_index(deployment.model_info.id, removal_idx)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -5381,13 +5409,14 @@ class Router:
         - OR None (if deleted deployment not found)
         """
         deployment_idx = None
-        for idx, m in enumerate(self.model_list):
-            if m["model_info"]["id"] == id:
-                deployment_idx = idx
+        if id in self.model_index:
+            deployment_idx = self.model_index[id]
 
         try:
             if deployment_idx is not None:
+                # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
+                self._remove_deployment_from_index(id, deployment_idx)
                 return item
             else:
                 return None
@@ -5400,15 +5429,17 @@ class Router:
 
         Raise Exception -> if model found in invalid format
         """
-        for model in self.model_list:
-            if "model_info" in model and "id" in model["model_info"]:
-                if model_id == model["model_info"]["id"]:
-                    if isinstance(model, dict):
-                        return Deployment(**model)
-                    elif isinstance(model, Deployment):
-                        return model
-                    else:
-                        raise Exception("Model invalid format - {}".format(type(model)))
+        # Use O(1) lookup via model_index only
+        if model_id in self.model_index:
+            idx = self.model_index[model_id]
+            model = self.model_list[idx]
+            if isinstance(model, dict):
+                return Deployment(**model)
+            elif isinstance(model, Deployment):
+                return model
+            else:
+                raise Exception("Model invalid format - {}".format(type(model)))
+        
         return None
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
@@ -6025,6 +6056,34 @@ class Router:
                     if value is not None:
                         additional_headers[header] = value
         return response
+
+    def _build_model_index_from_list(self, model_list: list):
+        """
+        Build model index from model list to enable O(1) lookups immediately.
+        This is called during initialization to avoid the race condition where
+        requests arrive before model_index is populated.
+        """
+        # First populate the model_list
+        self.model_list = []
+        for idx, model in enumerate(model_list):
+            # Extract model_info from the model dict
+            model_info = model.get("model_info", {})
+            model_id = model_info.get("id")
+            
+            # If no ID exists, generate one using the same logic as set_model_list
+            if model_id is None:
+                model_name = model.get("model_name", "")
+                litellm_params = model.get("litellm_params", {})
+                model_id = self._generate_model_id(model_name, litellm_params)
+                # Update the model_info in the original list
+                if "model_info" not in model:
+                    model["model_info"] = {}
+                model["model_info"]["id"] = model_id
+            
+            # Add to model_list
+            self.model_list.append(model)
+            # Add to index
+            self.model_index[model_id] = idx
 
     def get_model_ids(
         self, model_name: Optional[str] = None, exclude_team_models: bool = False
