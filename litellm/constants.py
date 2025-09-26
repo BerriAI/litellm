@@ -766,28 +766,22 @@ WANDB_MODELS: set = set(
         # openai models
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
-
         # zai-org models
         "zai-org/GLM-4.5",
-
         # Qwen models
         "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "Qwen/Qwen3-Coder-480B-A35B-Instruct",
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
-
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
-
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
         "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-
         # deepseek-ai
         "deepseek-ai/DeepSeek-V3.1",
         "deepseek-ai/DeepSeek-R1-0528",
         "deepseek-ai/DeepSeek-V3-0324",
-
         # microsoft
         "microsoft/Phi-4-mini-instruct",
     ]

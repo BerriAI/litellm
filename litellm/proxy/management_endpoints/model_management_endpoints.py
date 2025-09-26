@@ -1153,16 +1153,15 @@ async def clear_cache():
         )
         return
 
-
     try:
         # Only clear DB models, preserve config models
         verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
-        
+
         # Get current models and filter out DB models
         current_models = llm_router.model_list.copy()
         config_models = []
         db_model_ids = []
-        
+
         for model in current_models:
             model_info = model.get("model_info", {})
             if model_info.get("db_model", False):
@@ -1171,20 +1170,22 @@ async def clear_cache():
             else:
                 # This is a config model, preserve it
                 config_models.append(model)
-        
+
         # Clear only DB models
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
-        
+
         # Clear auto routers
         llm_router.auto_routers.clear()
-        
+
         # Reload only DB models
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
-        
-        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
+
+        verbose_proxy_logger.debug(
+            f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models"
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

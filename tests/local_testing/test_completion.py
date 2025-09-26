@@ -3201,7 +3201,6 @@ def response_format_tests(response: litellm.ModelResponse):
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
     try:
-
         if sync_mode:
             response = completion(
                 model=model,

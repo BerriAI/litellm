@@ -162,7 +162,7 @@ def test_azure_assistant_features_integrated_cost_tracking():
     Test integrated cost tracking for Azure assistant features.
     """
     model = "azure/gpt-4o"
-    
+
     # Test with multiple Azure assistant features
     standard_built_in_tools_params = StandardBuiltInToolsParams(
         vector_store_usage={"storage_gb": 1.0, "days": 10},
@@ -177,10 +177,10 @@ def test_azure_assistant_features_integrated_cost_tracking():
         custom_llm_provider="azure",
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
-    
+
     # Should calculate costs for:
     # - Vector store: 1.0 * 10 * 0.1 = $1.00
-    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00  
+    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00
     # - Code interpreter: 2 * 0.03 = $0.06
     # Total: $10.06
     expected_cost = 1.0 + 9.0 + 0.06

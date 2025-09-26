@@ -360,9 +360,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -404,9 +404,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
-            {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[
+            str, PatternMatchRouter
+        ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
@@ -588,9 +588,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -1212,10 +1212,7 @@ class Router:
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[
-        ModelResponse,
-        CustomStreamWrapper,
-    ]:
+    ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -2005,11 +2002,17 @@ class Router:
 
         # Filter out prompt management specific parameters from data before merging
         prompt_management_params = {
-            "bitbucket_config", "dotprompt_config", "prompt_id", 
-            "prompt_variables", "prompt_label", "prompt_version"
+            "bitbucket_config",
+            "dotprompt_config",
+            "prompt_id",
+            "prompt_variables",
+            "prompt_label",
+            "prompt_version",
         }
-        filtered_data = {k: v for k, v in data.items() if k not in prompt_management_params}
-        
+        filtered_data = {
+            k: v for k, v in data.items() if k not in prompt_management_params
+        }
+
         kwargs = {**filtered_data, **kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
@@ -3166,9 +3169,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = (
-                model_file_id_mapping
-            )
+            returned_response._hidden_params[
+                "model_file_id_mapping"
+            ] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -3731,11 +3734,11 @@ class Router:
 
             if isinstance(e, litellm.ContextWindowExceededError):
                 if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
-                        )
+                    context_window_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=context_window_fallbacks,
+                        model_group=model_group,
                     )
                     if context_window_fallback_model_group is None:
                         raise original_exception
@@ -3767,11 +3770,11 @@ class Router:
                     e.message += "\n{}".format(error_message)
             elif isinstance(e, litellm.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
-                    content_policy_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
-                        )
+                    content_policy_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
                     )
                     if content_policy_fallback_model_group is None:
                         raise original_exception
@@ -4108,7 +4111,9 @@ class Router:
         """
         model_group = kwargs.get("model")
         response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(
+            response
+        ):
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
@@ -5003,26 +5008,26 @@ class Router:
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-        auto_router_config_path: Optional[str] = (
-            deployment.litellm_params.auto_router_config_path
-        )
+        auto_router_config_path: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_config_path
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
                 "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        default_model: Optional[str] = (
-            deployment.litellm_params.auto_router_default_model
-        )
+        default_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_default_model
         if default_model is None:
             raise ValueError(
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[str] = (
-            deployment.litellm_params.auto_router_embedding_model
-        )
+        embedding_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_embedding_model
         if embedding_model is None:
             raise ValueError(
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
@@ -5134,12 +5139,12 @@ class Router:
         # Check if this is a prompt management model before validating as LLM provider
         litellm_model = deployment.litellm_params.model
         is_prompt_management_model = False
-        
+
         if "/" in litellm_model:
             split_litellm_model = litellm_model.split("/")[0]
             if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
                 is_prompt_management_model = True
-        
+
         if is_prompt_management_model:
             # For prompt management models, skip LLM provider validation
             # The actual model will be resolved at runtime from the prompt file

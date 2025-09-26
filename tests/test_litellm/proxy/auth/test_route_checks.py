@@ -130,22 +130,24 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value)
     assert "Tried to call route: /chat/completions" in str(exc_info.value)
 
-@pytest.mark.parametrize("route", [
-    "/anthropic/v1/messages",
-    "/anthropic/v1/count_tokens",
-    "/gemini/v1/models",
-    "/gemini/countTokens",
-])
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/anthropic/v1/messages",
+        "/anthropic/v1/count_tokens",
+        "/gemini/v1/models",
+        "/gemini/countTokens",
+    ],
+)
 def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
     """
     Virtual key with llm_api_routes should allow passthrough routes like /anthropic/v1/messages
-    
+
     Relevant issue: https://github.com/BerriAI/litellm/issues/14017
     """
 
-    valid_token = UserAPIKeyAuth(
-        user_id="test_user", allowed_routes=["llm_api_routes"]
-    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
         route=route, valid_token=valid_token

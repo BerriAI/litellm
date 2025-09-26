@@ -110,7 +110,7 @@ class VertexPassthroughLoggingHandler:
                     PassthroughCallTypes.passthrough_image_generation.value
                 )
             elif VertexPassthroughLoggingHandler._is_multimodal_embedding_response(
-                json_response=_json_response, 
+                json_response=_json_response,
             ):
                 # Use multimodal embedding transformation
                 vertex_multimodal_config = VertexAIMultimodalEmbeddingConfig()
@@ -221,7 +221,9 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
+            url_route
+        )
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
@@ -340,13 +342,13 @@ class VertexPassthroughLoggingHandler:
         """
         Detect if the response is from a multimodal embedding request.
 
-        Check if the response contains multimodal embedding fields: 
-            - Docs: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/multimodal-embeddings-api#response-body 
-        
-        
+        Check if the response contains multimodal embedding fields:
+            - Docs: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/multimodal-embeddings-api#response-body
+
+
         Args:
             json_response: The JSON response from Vertex AI
-            
+
         Returns:
             bool: True if this is a multimodal embedding response
         """
@@ -358,10 +360,14 @@ class VertexPassthroughLoggingHandler:
                     # Check for multimodal embedding response fields
                     if any(
                         key in prediction
-                        for key in ["textEmbedding", "imageEmbedding", "videoEmbeddings"]
+                        for key in [
+                            "textEmbedding",
+                            "imageEmbedding",
+                            "videoEmbeddings",
+                        ]
                     ):
                         return True
-        
+
         return False
 
     @staticmethod

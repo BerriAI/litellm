@@ -119,17 +119,13 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {}
     litellm_params = {
         "metadata": {
-            "requester_metadata": {
-                "user": "john_doe",
-                "project": "test-project"
-            }
+            "requester_metadata": {"user": "john_doe", "project": "test-project"}
         }
     }
 

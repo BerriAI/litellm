@@ -474,7 +474,7 @@ async def get_end_user_object(
         return return_obj
 
     # else, check db
-    try:        
+    try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True},
@@ -815,9 +815,10 @@ async def _cache_management_object(
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
-
     await user_api_key_cache.async_set_cache(
-        key=key, value=value, ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        key=key,
+        value=value,
+        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
 
@@ -892,7 +893,9 @@ async def _get_team_db_check(
         system_admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         created_team_dict = await new_team(
-            data=new_team_data, http_request=mock_request, user_api_key_dict=system_admin_user
+            data=new_team_data,
+            http_request=mock_request,
+            user_api_key_dict=system_admin_user,
         )
         response = LiteLLM_TeamTable(**created_team_dict)
     return response

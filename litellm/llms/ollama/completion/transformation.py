@@ -92,9 +92,9 @@ class OllamaConfig(BaseConfig):
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
     seed: Optional[int] = None
-    stop: Optional[list] = (
-        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
-    )
+    stop: Optional[
+        list
+    ] = None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None

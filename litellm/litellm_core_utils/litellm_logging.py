@@ -344,7 +344,7 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
-        
+
         # Initialize cost breakdown field
         self.cost_breakdown: Optional[CostBreakdown] = None
 
@@ -1168,19 +1168,19 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
-        
+
         Args:
             input_cost: Cost of input/prompt tokens
-            output_cost: Cost of output/completion tokens 
+            output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
         """
-        
+
         self.cost_breakdown = CostBreakdown(
             input_cost=input_cost,
             output_cost=output_cost,
             total_cost=total_cost,
-            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar
+            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
         verbose_logger.debug(
             f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"

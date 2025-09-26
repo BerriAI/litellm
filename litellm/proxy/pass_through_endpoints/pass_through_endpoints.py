@@ -476,7 +476,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_request_route=user_api_key_dict.request_route,
                 user_api_key_spend=user_api_key_dict.spend,
                 user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat()
+                if user_api_key_dict.budget_reset_at
+                else None,
             )
         )
 

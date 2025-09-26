@@ -1323,7 +1323,6 @@ class BaseLLMChatTest(ABC):
 
         litellm._turn_on_debug()
         try:
-
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
             litellm.model_cost = litellm.get_model_cost_map(url="")
 

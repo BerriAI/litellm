@@ -13,7 +13,7 @@ class V0ChatConfig(OpenAILikeChatConfig):
     """
     v0 is OpenAI-compatible with standard endpoints
     """
-    
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "v0"
@@ -36,9 +36,9 @@ class V0ChatConfig(OpenAILikeChatConfig):
         Reference: https://v0.dev/docs/v0-model-api#request-body
         """
         return [
-            "messages",     # Required
-            "model",        # Required
-            "stream",       # Optional
-            "tools",        # Optional
+            "messages",  # Required
+            "model",  # Required
+            "stream",  # Optional
+            "tools",  # Optional
             "tool_choice",  # Optional
         ]

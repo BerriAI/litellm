@@ -143,7 +143,7 @@ async def llm_passthrough_factory_proxy_route(
             _request_body = await request.json()
         else:
             _request_body = await get_form_data(request)
-        
+
         if _request_body.get("stream"):
             is_streaming_request = True
 

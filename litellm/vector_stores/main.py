@@ -42,12 +42,12 @@ def mock_vector_store_search_response(
                 content=[
                     VectorStoreResultContent(
                         text="This is a sample search result from the vector store.",
-                        type="text"
+                        type="text",
                     )
-                ]
+                ],
             )
         ]
-    
+
     return VectorStoreSearchResponse(
         object="vector_store.search_results.page",
         search_query="sample query",
@@ -79,7 +79,7 @@ def mock_vector_store_create_response(
             last_active_at=None,
             metadata=None,
         )
-    
+
     return mock_response
 
 
@@ -166,14 +166,14 @@ def create(
 ) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
     """
     Create a vector store.
-    
+
     Args:
         name: The name of the vector store.
         file_ids: A list of File IDs that the vector store should use.
         expires_after: The expiration policy for the vector store.
         chunking_strategy: The chunking strategy used to chunk the file(s).
         metadata: Set of 16 key-value pairs that can be attached to an object.
-        
+
     Returns:
         VectorStoreCreateResponse containing the created vector store details.
     """
@@ -199,8 +199,10 @@ def create(
             custom_llm_provider = "openai"
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        vector_store_provider_config = (
+            ProviderConfigManager.get_provider_vector_stores_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if vector_store_provider_config is None:
@@ -209,7 +211,7 @@ def create(
             )
 
         local_vars.update(kwargs)
-        
+
         # Get VectorStoreCreateOptionalRequestParams with only valid parameters
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams = (
             VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(
@@ -242,7 +244,7 @@ def create(
             _is_async=_is_async,
             client=kwargs.get("client"),
         )
-        
+
         return response
     except Exception as e:
         raise litellm.exception_type(
@@ -340,7 +342,7 @@ def search(
 ) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
-    
+
     Args:
         vector_store_id: The ID of the vector store to search.
         query: A query string or array for the search.
@@ -348,7 +350,7 @@ def search(
         max_num_results: Maximum number of results to return (1-50, default 10).
         ranking_options: Optional ranking options for search.
         rewrite_query: Whether to rewrite the natural language query for vector search.
-        
+
     Returns:
         VectorStoreSearchResponse containing the search results.
     """
@@ -391,8 +393,10 @@ def search(
             custom_llm_provider = "openai"
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = ProviderConfigManager.get_provider_vector_stores_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        vector_store_provider_config = (
+            ProviderConfigManager.get_provider_vector_stores_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if vector_store_provider_config is None:
@@ -401,7 +405,7 @@ def search(
             )
 
         local_vars.update(kwargs)
-        
+
         # Get VectorStoreSearchOptionalRequestParams with only valid parameters
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams = (
             VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
@@ -438,7 +442,7 @@ def search(
             _is_async=_is_async,
             client=kwargs.get("client"),
         )
-        
+
         return response
     except Exception as e:
         raise litellm.exception_type(

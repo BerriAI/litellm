@@ -688,10 +688,16 @@ class LangFuseLogger:
                         "completion_tokens": _usage_obj.completion_tokens,
                         "total_cost": cost if self._supports_costs() else None,
                     }
-                    usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
-                                                        output=_usage_obj.completion_tokens,
-                                                        cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
-                                                        cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
+                    usage_details = LangfuseUsageDetails(
+                        input=_usage_obj.prompt_tokens,
+                        output=_usage_obj.completion_tokens,
+                        cache_creation_input_tokens=_usage_obj.get(
+                            "cache_creation_input_tokens", 0
+                        ),
+                        cache_read_input_tokens=_usage_obj.get(
+                            "cache_read_input_tokens", 0
+                        ),
+                    )
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -789,7 +795,7 @@ class LangFuseLogger:
         """
         Get the responses API content for Langfuse logging
         """
-        if hasattr(response_obj, 'output') and response_obj.output:
+        if hasattr(response_obj, "output") and response_obj.output:
             # ResponsesAPIResponse.output is a list of strings
             return response_obj.output
         else:
