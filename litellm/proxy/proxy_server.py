@@ -12,7 +12,7 @@ import traceback
 import uuid
 import warnings
 from datetime import datetime, timedelta
-from constants import _DEFAULT_CACHE_WARMUP_USERS
+from litellm.constants import _DEFAULT_CACHE_WARMUP_USERS
 from typing import (
     TYPE_CHECKING,
     Any,
