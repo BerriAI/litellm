@@ -12,7 +12,7 @@ import traceback
 import uuid
 import warnings
 from datetime import datetime, timedelta
-from litellm.constants import _DEFAULT_CACHE_WARMUP_USERS
+from litellm.constants import DEFAULT_CACHE_WARMUP_USERS
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -655,7 +655,7 @@ async def proxy_startup_event(app: FastAPI):
 
     ### PRELOAD USERS INTO CACHE ###
     if prisma_client is not None:
-        preload_limit = _DEFAULT_CACHE_WARMUP_USERS
+        preload_limit = DEFAULT_CACHE_WARMUP_USERS
         if preload_limit > 0:
             from litellm.proxy.utils import preload_users_into_cache        
             verbose_proxy_logger.info(
