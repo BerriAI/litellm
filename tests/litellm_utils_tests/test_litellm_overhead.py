@@ -23,7 +23,6 @@ import litellm
     ],
 )
 async def test_litellm_overhead(model):
-
     litellm._turn_on_debug()
     start_time = datetime.now()
     if model == "openai/self_hosted":
@@ -72,7 +71,6 @@ async def test_litellm_overhead(model):
     ],
 )
 async def test_litellm_overhead_stream(model):
-
     litellm._turn_on_debug()
     start_time = datetime.now()
     if model == "openai/self_hosted":

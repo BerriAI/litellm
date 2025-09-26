@@ -36,7 +36,7 @@ class PodLockManager:
         """
         Attempt to acquire the lock for a specific cron job using Redis.
         Uses the SET command with NX and EX options to ensure atomicity.
-        
+
         Args:
             cronjob_id: The ID of the cron job to lock
         """

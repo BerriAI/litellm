@@ -24,7 +24,7 @@ class TestProcessAudioFile:
         """Test processing raw bytes input"""
         audio_data = b"fake audio data"
         result = process_audio_file(audio_data)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == audio_data
         assert result.filename == "audio.wav"
@@ -34,7 +34,7 @@ class TestProcessAudioFile:
         """Test processing bytearray input"""
         audio_data = bytearray(b"fake audio data")
         result = process_audio_file(audio_data)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == bytes(audio_data)
         assert result.filename == "audio.wav"
@@ -43,14 +43,14 @@ class TestProcessAudioFile:
     def test_process_file_path_input(self):
         """Test processing file path input"""
         test_content = b"test audio content"
-        
+
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
             temp_file.write(test_content)
             temp_file_path = temp_file.name
-        
+
         try:
             result = process_audio_file(temp_file_path)
-            
+
             assert isinstance(result, ProcessedAudioFile)
             assert result.file_content == test_content
             assert result.filename == os.path.basename(temp_file_path)
@@ -63,9 +63,9 @@ class TestProcessAudioFile:
         filename = "test.wav"
         audio_data = b"fake audio data"
         audio_tuple = (filename, audio_data)
-        
+
         result = process_audio_file(audio_tuple)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == audio_data
         assert result.filename == filename
@@ -74,17 +74,17 @@ class TestProcessAudioFile:
     def test_process_tuple_input_with_file_path(self):
         """Test processing tuple input with file path content"""
         test_content = b"test audio content"
-        
+
         with tempfile.NamedTemporaryFile(suffix=".flac", delete=False) as temp_file:
             temp_file.write(test_content)
             temp_file_path = temp_file.name
-        
+
         try:
             filename = "custom_name.flac"
             audio_tuple = (filename, temp_file_path)
-            
+
             result = process_audio_file(audio_tuple)
-            
+
             assert isinstance(result, ProcessedAudioFile)
             assert result.file_content == test_content
             assert result.filename == filename
@@ -97,14 +97,14 @@ class TestProcessAudioFile:
         test_content = b"test audio content"
         file_obj = io.BytesIO(test_content)
         file_obj.name = "test_audio.ogg"
-        
+
         result = process_audio_file(file_obj)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == test_content
         assert result.filename == "test_audio.ogg"
         assert result.content_type == "audio/ogg"
-        
+
         # Verify file pointer was reset
         assert file_obj.tell() == 0
 
@@ -112,9 +112,9 @@ class TestProcessAudioFile:
         """Test processing file-like object without name attribute"""
         test_content = b"test audio content"
         file_obj = io.BytesIO(test_content)
-        
+
         result = process_audio_file(file_obj)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == test_content
         assert result.filename == "audio.wav"
@@ -124,17 +124,17 @@ class TestProcessAudioFile:
         """Test processing tuple with file-like object as content"""
         test_content = b"test audio content"
         file_obj = io.BytesIO(test_content)
-        
+
         filename = "custom.mp3"
         audio_tuple = (filename, file_obj)
-        
+
         result = process_audio_file(audio_tuple)
-        
+
         assert isinstance(result, ProcessedAudioFile)
         assert result.file_content == test_content
         assert result.filename == filename
         assert result.content_type == "audio/mpeg"
-        
+
         # Verify file pointer was reset
         assert file_obj.tell() == 0
 
@@ -148,7 +148,7 @@ class TestProcessAudioFile:
             ("test.aac", "audio/aac"),
             ("test.m4a", "audio/x-m4a"),
         ]
-        
+
         for filename, expected_mime_type in test_cases:
             audio_tuple = (filename, b"fake content")
             result = process_audio_file(audio_tuple)
@@ -158,24 +158,25 @@ class TestProcessAudioFile:
         """Test MIME type fallback for unknown file extensions"""
         audio_tuple = ("test.unknown", b"fake content")
         result = process_audio_file(audio_tuple)
-        
+
         assert result.content_type == "audio/wav"  # Should fallback to default
 
     def test_process_pathlike_object(self):
         """Test processing os.PathLike object"""
         test_content = b"test audio content"
-        
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_file.write(test_content)
             temp_file_path = temp_file.name
-        
+
         try:
             # Convert to pathlib.Path
             from pathlib import Path
+
             path_obj = Path(temp_file_path)
-            
+
             result = process_audio_file(path_obj)
-            
+
             assert isinstance(result, ProcessedAudioFile)
             assert result.file_content == test_content
             assert result.filename == os.path.basename(temp_file_path)
@@ -202,7 +203,6 @@ class TestProcessAudioFile:
         """Test tuple with None filename gets default name"""
         audio_tuple = (None, b"fake content")
         result = process_audio_file(audio_tuple)
-        
+
         assert result.filename == "audio.wav"
         assert result.content_type == "audio/wav"
-

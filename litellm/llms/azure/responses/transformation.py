@@ -217,15 +217,15 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         at the correct location (before any query parameters).
         """
         from urllib.parse import urlparse, urlunparse
-        
+
         # Parse the URL to separate its components
         parsed_url = urlparse(api_base)
-        
+
         # Insert the response_id and /cancel at the end of the path component
         # Remove trailing slash if present to avoid double slashes
         path = parsed_url.path.rstrip("/")
         new_path = f"{path}/{response_id}/cancel"
-        
+
         # Reconstruct the URL with all original components but with the modified path
         cancel_url = urlunparse(
             (

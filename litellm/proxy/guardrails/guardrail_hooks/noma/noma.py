@@ -35,9 +35,9 @@ MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
 
 if TYPE_CHECKING:
-  from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-  
+
 class NomaBlockedMessage(HTTPException):
     """Exception raised when Noma guardrail blocks a message"""
 
@@ -733,7 +733,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
-    
+
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
@@ -741,4 +741,3 @@ class NomaGuardrail(CustomGuardrail):
         )
 
         return NomaGuardrailConfigModel
-

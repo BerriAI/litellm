@@ -1132,52 +1132,57 @@ def test_anthropic_disable_url_suffix_env_var():
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/messages appended
             assert actual_api_base.endswith("/v1/messages")
             assert actual_api_base == "https://api.example.com/v1/messages"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/path",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.anthropic_chat_completions") as mock_anthropic:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 mock_response = MagicMock()
                 mock_response.choices = [MagicMock()]
                 return mock_response
-            
+
             mock_anthropic.completion = capture_completion
-            
+
             # This should NOT append /v1/messages
             completion(
                 model="anthropic/claude-3-sonnet",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/messages appended
             assert actual_api_base == "https://api.example.com/custom/path"
             assert not actual_api_base.endswith("/v1/messages")
@@ -1192,48 +1197,53 @@ def test_anthropic_text_disable_url_suffix_env_var():
     # Test with environment variable disabled (default behavior)
     with patch.dict(os.environ, {"ANTHROPIC_API_BASE": "https://api.example.com"}):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base has /v1/complete appended
             assert actual_api_base.endswith("/v1/complete")
             assert actual_api_base == "https://api.example.com/v1/complete"
 
     # Test with environment variable enabled
-    with patch.dict(os.environ, {
-        "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
-        "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true"
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "ANTHROPIC_API_BASE": "https://api.example.com/custom/complete",
+            "LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX": "true",
+        },
+    ):
         actual_api_base = None
-        
+
         with patch("litellm.main.base_llm_http_handler") as mock_handler:
+
             def capture_completion(**kwargs):
                 nonlocal actual_api_base
                 actual_api_base = kwargs.get("api_base")
                 return MagicMock()
-            
+
             mock_handler.completion = capture_completion
-            
+
             # This should NOT append /v1/complete
             completion(
                 model="anthropic_text/claude-instant-1",
                 messages=[{"role": "user", "content": "test"}],
-                api_key="test-key"
+                api_key="test-key",
             )
-            
+
             # Verify the api_base does not have /v1/complete appended
             assert actual_api_base == "https://api.example.com/custom/complete"
             assert not actual_api_base.endswith("/v1/complete")

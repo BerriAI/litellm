@@ -51,7 +51,9 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_alias=user_api_key_dict.key_alias,
                 user_api_key_spend=user_api_key_dict.spend,
                 user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat()
+                if user_api_key_dict.budget_reset_at
+                else None,
                 user_api_key_user_email=user_api_key_dict.user_email,
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,

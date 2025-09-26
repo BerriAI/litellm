@@ -1497,7 +1497,6 @@ def test_system_prompt_only_adds_blank_user_message():
     assert first_content["role"] == "user"
     assert len(first_content["parts"]) == 1
 
-
     #########################################################
     # system message was passed in
     #########################################################

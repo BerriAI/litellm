@@ -473,6 +473,7 @@ def _has_user_setup_sso():
 
     return sso_setup
 
+
 def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
@@ -522,7 +523,11 @@ def get_end_user_id_from_request_body(
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
                     user_id_from_header = header_value
-                    user_id_str = str(user_id_from_header) if user_id_from_header is not None else ""
+                    user_id_str = (
+                        str(user_id_from_header)
+                        if user_id_from_header is not None
+                        else ""
+                    )
                     if user_id_str.strip():
                         return user_id_str
 

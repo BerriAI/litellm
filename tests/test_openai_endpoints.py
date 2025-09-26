@@ -567,7 +567,6 @@ async def test_batch_chat_completions():
 
     """
     async with aiohttp.ClientSession() as session:
-
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await chat_completion(
             session=session,
@@ -588,7 +587,6 @@ async def test_moderations_endpoint():
 
     """
     async with aiohttp.ClientSession() as session:
-
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await moderation(
             session=session,

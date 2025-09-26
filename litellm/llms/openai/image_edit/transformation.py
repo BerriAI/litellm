@@ -91,11 +91,13 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
         # Handle image parameter
         if _image_list is not None:
-            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
+            image_list = (
+                [_image_list] if not isinstance(_image_list, list) else _image_list
+            )
             for _image in image_list:
                 if _image is not None:
-                    image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                        _image
+                    image_content_type: str = (
+                        ImageEditRequestUtils.get_image_content_type(_image)
                     )
                     if isinstance(_image, BufferedReader):
                         files_list.append(

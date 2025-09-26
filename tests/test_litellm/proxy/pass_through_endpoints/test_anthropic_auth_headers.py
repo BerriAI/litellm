@@ -35,9 +35,15 @@ class TestAnthropicAuthHeaders:
         return {"user_id": "test_user"}
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+    )
     async def test_client_authorization_header_priority(
         self,
         mock_router,
@@ -71,9 +77,15 @@ class TestAnthropicAuthHeaders:
         assert call_kwargs["_forward_headers"] is True
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+    )
     async def test_client_x_api_key_header_priority(
         self,
         mock_router,
@@ -107,9 +119,15 @@ class TestAnthropicAuthHeaders:
         assert call_kwargs["_forward_headers"] is True
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+    )
     async def test_server_api_key_fallback(
         self,
         mock_router,
@@ -143,9 +161,15 @@ class TestAnthropicAuthHeaders:
         assert call_kwargs["_forward_headers"] is True
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+    )
     async def test_no_authentication_available(
         self,
         mock_router,
@@ -179,9 +203,15 @@ class TestAnthropicAuthHeaders:
         assert call_kwargs["_forward_headers"] is True
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn")
-    @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router")
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn"
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+    )
     async def test_both_client_headers_present(
         self,
         mock_router,
@@ -195,7 +225,7 @@ class TestAnthropicAuthHeaders:
         # Setup
         mock_request.headers = {
             "authorization": "Bearer client-auth-key",
-            "x-api-key": "client-x-api-key"
+            "x-api-key": "client-x-api-key",
         }
         mock_router.get_credentials.return_value = "server-key-456"
         mock_streaming.return_value = False
