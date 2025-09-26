@@ -1045,7 +1045,7 @@ def create_websocket_passthrough_route(
     return websocket_endpoint_func
 
 
-async def websocket_passthrough_request(
+async def websocket_passthrough_request(  # noqa: PLR0915
     websocket: WebSocket,
     target: str,
     custom_headers: dict,
