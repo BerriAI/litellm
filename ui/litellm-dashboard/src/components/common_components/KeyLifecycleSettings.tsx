@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { Select, Tooltip, Divider, Switch } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput } from "@tremor/react";
@@ -20,31 +20,6 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
   rotationInterval,
   onRotationIntervalChange,
 }) => {
-  // Predefined intervals
-  const predefinedIntervals = ["7d", "30d", "90d", "180d", "365d"];
-  
-  // Check if current interval is custom
-  const isCustomInterval = rotationInterval && !predefinedIntervals.includes(rotationInterval);
-  
-  const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
-  const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
-
-  const handleIntervalChange = (value: string) => {
-    if (value === "custom") {
-      setShowCustomInput(true);
-      // Don't change the actual interval yet, wait for custom input
-    } else {
-      setShowCustomInput(false);
-      setCustomInterval("");
-      onRotationIntervalChange(value);
-    }
-  };
-
-  const handleCustomIntervalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setCustomInterval(value);
-    onRotationIntervalChange(value);
-  };
   return (
     <div className="space-y-6">
       {/* Key Expiry Section */}
@@ -96,34 +71,18 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
                   <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
                 </Tooltip>
               </label>
-              <div className="space-y-2">
-                <Select
-                  value={showCustomInput ? "custom" : rotationInterval}
-                  onChange={handleIntervalChange}
-                  className="w-full"
-                  placeholder="Select interval"
-                >
-                  <Option value="7d">7 days</Option>
-                  <Option value="30d">30 days</Option>
-                  <Option value="90d">90 days</Option>
-                  <Option value="180d">180 days</Option>
-                  <Option value="365d">365 days</Option>
-                  <Option value="custom">Custom interval</Option>
-                </Select>
-                
-                {showCustomInput && (
-                  <div className="space-y-1">
-                    <TextInput
-                      value={customInterval}
-                      onChange={handleCustomIntervalChange}
-                      placeholder="e.g., 1s, 5m, 2h, 14d"
-                    />
-                    <div className="text-xs text-gray-500">
-                      Supported formats: seconds (s), minutes (m), hours (h), days (d)
-                    </div>
-                  </div>
-                )}
-              </div>
+              <Select
+                value={rotationInterval}
+                onChange={onRotationIntervalChange}
+                className="w-full"
+                placeholder="Select interval"
+              >
+                <Option value="7d">7 days</Option>
+                <Option value="30d">30 days</Option>
+                <Option value="90d">90 days</Option>
+                <Option value="180d">180 days</Option>
+                <Option value="365d">365 days</Option>
+              </Select>
             </div>
           )}
         </div>
