@@ -34,6 +34,7 @@ import { callback_map, mapDisplayToInternalNames } from "../callback_info_helper
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import ModelAliasManager from "../common_components/ModelAliasManager"
 import NotificationsManager from "../molecules/notifications_manager"
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
 
 const { Option } = Select;
 
@@ -169,6 +170,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("default");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
+  const [rotationInterval, setRotationInterval] = useState<string>("30d");
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -177,6 +180,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setDisabledCallbacks([]);
     setKeyType("default");
     setModelAliases({});
+    setAutoRotationEnabled(false);
+    setRotationInterval("30d");
   };
 
   const handleCancel = () => {
@@ -188,6 +193,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setDisabledCallbacks([]);
     setKeyType("default");
     setModelAliases({});
+    setAutoRotationEnabled(false);
+    setRotationInterval("30d");
   };
 
   useEffect(() => {
@@ -317,6 +324,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata = {
           ...metadata,
           litellm_disabled_callbacks: mappedDisabledCallbacks
+        };
+      }
+      
+      // Add auto-rotation settings to the metadata
+      if (autoRotationEnabled) {
+        metadata = {
+          ...metadata,
+          auto_rotation_enabled: true,
+          rotation_interval: rotationInterval
         };
       }
       
@@ -823,20 +839,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Expire Key{' '}
-                        <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="duration"
-                    className="mt-4"
-                  >
-                    <TextInput placeholder="e.g., 30d" />
-                  </Form.Item>
                   <Form.Item 
                     label={
                       <span>
@@ -1049,6 +1051,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           initialModelAliases={modelAliases}
                           onAliasUpdate={setModelAliases}
                           showExampleConfig={false}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Key Expiry & Auto-Rotation</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <KeyLifecycleSettings
+                          form={form}
+                          autoRotationEnabled={autoRotationEnabled}
+                          onAutoRotationChange={setAutoRotationEnabled}
+                          rotationInterval={rotationInterval}
+                          onRotationIntervalChange={setRotationInterval}
                         />
                       </div>
                     </AccordionBody>
