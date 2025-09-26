@@ -1,0 +1,59 @@
+name: Model Context Approval Required
+
+on:
+  pull_request:
+    paths:
+      - 'model_prices_and_context_window.json'
+      - '**/model_context*.json'
+      - '**/context_window*.json'
+
+jobs:
+  check-approvals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for required approvals
+        run: |
+          # Get the PR number from the event
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          
+          # Check if PR has at least 2 approvals
+          APPROVALS=$(gh pr view $PR_NUMBER --json reviews --jq '.reviews | map(select(.state == "APPROVED")) | length')
+          
+          if [ "$APPROVALS" -lt 2 ]; then
+            echo "❌ This PR requires at least 2 approvals to modify model context files."
+            echo "Current approvals: $APPROVALS"
+            echo "Required approvals: 2"
+            exit 1
+          else
+            echo "✅ PR has $APPROVALS approvals (required: 2)"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for cited sources
+        run: |
+          # Check if PR description or comments contain source citations
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_BODY="${{ github.event.pull_request.body }}"
+          
+          # Look for common citation patterns
+          if echo "$PR_BODY" | grep -qiE "(source|reference|citation|url|link|documentation|api|endpoint)"; then
+            echo "✅ PR description contains potential source citations"
+          else
+            echo "⚠️  Warning: No clear source citations found in PR description"
+            echo "Please ensure your changes to model context files are backed by cited sources"
+            echo "Add source URLs, API documentation links, or other references in the PR description"
+          fi
+
+      - name: Validate JSON structure
+        run: |
+          # Validate that the JSON file is still valid
+          if [ -f "model_prices_and_context_window.json" ]; then
+            python -m json.tool model_prices_and_context_window.json > /dev/null
+            echo "✅ JSON structure is valid"
+          fi
