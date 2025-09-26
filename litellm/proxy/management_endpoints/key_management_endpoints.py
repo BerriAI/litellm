@@ -1728,9 +1728,15 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         
         # Add rotation fields if auto_rotate is enabled
         if auto_rotate and rotation_interval:
+            # Calculate the initial rotation time
+            now = datetime.now(timezone.utc)
+            interval_seconds = duration_in_seconds(rotation_interval)
+            initial_rotation_time = now + timedelta(seconds=interval_seconds)
+            
             key_data.update({
                 "auto_rotate": auto_rotate,
-                "rotation_interval": rotation_interval
+                "rotation_interval": rotation_interval,
+                "key_rotation_at": initial_rotation_time
                 # last_rotation_at will be null initially - rotation happens on first check
             })
 
