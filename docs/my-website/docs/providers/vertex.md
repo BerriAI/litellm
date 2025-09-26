@@ -898,7 +898,7 @@ curl http://0.0.0.0:4000/chat/completions \
 ```
 
 </TabItem>
-
+</Tabs>
 
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
