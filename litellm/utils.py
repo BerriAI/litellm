@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+from io import StringIO
 import ast
 import asyncio
 import base64
@@ -729,12 +730,15 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
+
+                buffer = StringIO()
+                for m in messages:
+                    content = m.get("content")
+                    if content and isinstance(content, str):
+                        buffer.write(content)
+
                 rules_obj.pre_call_rules(
-                    input="".join(
-                        m.get("content", "")
-                        for m in messages
-                        if "content" in m and isinstance(m["content"], str)
-                    ),
+                    input=buffer.getvalue(),
                     model=model,
                 )
         elif (
