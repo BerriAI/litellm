@@ -335,6 +335,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           rotation_interval: rotationInterval
         };
       }
+
+      // Handle duration field for key expiry
+      if (formValues.duration) {
+        formValues.duration = formValues.duration;
+      }
       
       // Update the formValues with the final metadata
       formValues.metadata = JSON.stringify(metadata);
@@ -1058,7 +1063,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
-                      <b>Key Expiry & Auto-Rotation</b>
+                      <b>Key Lifecycle</b>
                     </AccordionHeader>
                     <AccordionBody>
                       <div className="mt-4">
