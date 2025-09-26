@@ -734,7 +734,7 @@ def function_setup(  # noqa: PLR0915
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content")
-                    if content and isinstance(content, str):
+                    if content is not None and isinstance(content, str):
                         buffer.write(content)
 
                 rules_obj.pre_call_rules(
