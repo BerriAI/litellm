@@ -1,5 +1,5 @@
-name: Model Context Protection
-description: Requires 2 approvals and cited sources for changes to model context JSON files
+name: Model Context Files - 2 Team Approvals Required
+description: Requires 2 team member approvals for changes to model context JSON files
 enforcement: active
 target: branch
 conditions:
@@ -8,19 +8,12 @@ conditions:
       - main
       - master
       - develop
+  changed_files:
+    include:
+      - "model_prices_and_context_window.json"
+      - "**/model_context*.json"
+      - "**/context_window*.json"
 rules:
-  - type: required_reviewers
-    parameters:
-      required_approving_review_count: 2
-      dismiss_stale_reviews_on_push: true
-      require_code_owner_reviews: false
-      require_last_push_approval: true
-  - type: required_status_checks
-    parameters:
-      required_status_checks:
-        - context: "Model Context Validation"
-          strict: true
-      strict_required_status_checks_policy: true
   - type: required_pull_request_reviews
     parameters:
       required_approving_review_count: 2

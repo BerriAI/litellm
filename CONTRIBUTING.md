@@ -269,21 +269,18 @@ If you need help:
 
 ### Requirements for Model Context Changes
 
-- **2 approvals required** from different reviewers (enforced by GitHub Rulesets)
-- **Cited sources mandatory** in PR description
-- **Automated validation** of JSON structure and citations
-- **Status checks** must pass before merging
+- **2 team member approvals required** from different reviewers
+- **Enforced by GitHub Rulesets** at the repository level
+- **Simple approval process** - no complex validation required
 
 ### Quick Reference
 
 ```bash
-# Include source citations in your PR description
-**Sources:**
-- Provider API: https://provider.com/api/pricing
-- Documentation: https://provider.com/docs/context-windows
+# Request reviews from 2 team members for model context changes
+# The GitHub Ruleset will automatically enforce this requirement
 ```
 
-**GitHub Rulesets:** The repository uses GitHub Rulesets to automatically enforce these requirements. See [Model Context Approval Process](docs/MODEL_CONTEXT_APPROVAL.md) for details.
+**GitHub Rulesets:** The repository uses GitHub Rulesets to automatically enforce the 2-approval requirement. See [Model Context Approval Process](docs/MODEL_CONTEXT_APPROVAL.md) for details.
 
 ## What to Contribute
 
