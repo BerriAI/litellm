@@ -50,7 +50,10 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
@@ -70,7 +73,13 @@ else:
     LoggingClass = Any
 
 
-ANTHROPIC_HOSTED_TOOLS = ["web_search", "bash", "text_editor", "code_execution"]
+ANTHROPIC_HOSTED_TOOLS = [
+    "web_search", 
+    "bash", 
+    "text_editor", 
+    "code_execution", 
+    "web_fetch"
+]
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
