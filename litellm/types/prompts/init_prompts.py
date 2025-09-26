@@ -3,13 +3,13 @@ from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Required, TypedDict
 
 
 class SupportedPromptIntegrations(str, Enum):
     DOT_PROMPT = "dotprompt"
     LANGFUSE = "langfuse"
     CUSTOM = "custom"
+    BITBUCKET = "bitbucket"
 
 
 class PromptInfo(BaseModel):
@@ -53,7 +53,6 @@ class PromptTemplateBase(BaseModel):
 class PromptInfoResponse(BaseModel):
     prompt_spec: PromptSpec
     raw_prompt_template: Optional[PromptTemplateBase] = None
-
 
 
 class ListPromptsResponse(BaseModel):

@@ -17,9 +17,9 @@ import asyncio
 import datetime
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from httpx import Response
@@ -71,6 +71,13 @@ class DataDogLogger(
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
             if os.getenv("DD_SITE", None) is None:
                 raise Exception("DD_SITE is not set in .env, set 'DD_SITE=<>")
+            
+            #########################################################
+            # Handle datadog_params set as litellm.datadog_params
+            #########################################################
+            dict_datadog_params = self._get_datadog_params()
+            kwargs.update(dict_datadog_params)
+            
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
@@ -100,6 +107,21 @@ class DataDogLogger(
                 f"Datadog: Got exception on init Datadog client {str(e)}"
             )
             raise e
+
+    def _get_datadog_params(self) -> Dict:
+        """
+        Get the datadog_params from litellm.datadog_params
+
+        These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
+        """
+        dict_datadog_params: Dict = {}
+        if litellm.datadog_params is not None:
+            if isinstance(litellm.datadog_params, DatadogInitParams):
+                dict_datadog_params = litellm.datadog_params.model_dump()
+            elif isinstance(litellm.datadog_params, Dict):
+                # only allow params that are of DatadogInitParams
+                dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
+        return dict_datadog_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -457,6 +479,7 @@ class DataDogLogger(
                     continue
                 else:
                     clean_metadata[key] = value
+
 
         # Build the initial payload
         payload = {

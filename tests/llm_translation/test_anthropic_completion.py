@@ -329,32 +329,51 @@ def test_process_anthropic_headers_with_no_matching_headers():
     assert result == expected_output, "Unexpected output for non-matching headers"
 
 
-def test_anthropic_computer_tool_use():
-    from litellm import completion
-
-    tools = [
-        {
-            "type": "computer_20241022",
-            "function": {
-                "name": "computer",
-                "parameters": {
-                    "display_height_px": 100,
-                    "display_width_px": 100,
-                    "display_number": 1,
+@pytest.mark.parametrize(
+    "tool_type, tool_config, message_content",
+    [
+        (
+            "computer_20241022",
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "computer",
+                    "parameters": {
+                        "display_height_px": 100,
+                        "display_width_px": 100,
+                        "display_number": 1,
+                    },
                 },
             },
-        }
-    ]
+            "Save a picture of a cat to my desktop.",
+        ),
+        (
+            "web_fetch_20250910",
+            {
+                "type": "web_fetch_20250910",
+                "name": "web_fetch",
+                "max_uses": 5,
+            },
+            "Please analyze the content at https://example.com/article",
+        ),
+    ],
+)
+def test_anthropic_tool_use(tool_type, tool_config, message_content):
+    """Test Anthropic tool use with computer use and web fetch tools."""
+    from litellm import completion
+    litellm._turn_on_debug()
+
+    tools = [tool_config]
     model = "claude-3-5-sonnet-20241022"
-    messages = [{"role": "user", "content": "Save a picture of a cat to my desktop."}]
+    messages = [{"role": "user", "content": message_content}]
 
     try:
         resp = completion(
             model=model,
             messages=messages,
             tools=tools,
-            # headers={"anthropic-beta": "computer-use-2024-10-22"},
         )
+        print(f"Tool type: {tool_type}")
         print(resp)
     except litellm.InternalServerError:
         pass

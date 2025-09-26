@@ -96,7 +96,7 @@ def test_router_timeouts():
 
 @pytest.mark.asyncio
 async def test_router_timeouts_bedrock():
-    import uuid
+    from litellm._uuid import uuid
 
     import openai
 

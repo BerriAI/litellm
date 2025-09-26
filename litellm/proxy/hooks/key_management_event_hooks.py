@@ -1,6 +1,6 @@
 import asyncio
 import json
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 

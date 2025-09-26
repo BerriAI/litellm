@@ -13,7 +13,7 @@ sys.path.insert(
 from unittest.mock import patch, MagicMock
 import logging
 from litellm._logging import verbose_logger
-import uuid
+from litellm._uuid import uuid
 
 verbose_logger.setLevel(logging.DEBUG)
 
