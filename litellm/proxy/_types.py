@@ -1743,7 +1743,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_header_mappings: Optional[List[UserHeaderMapping]] = None
     preload_users_limit: Optional[int] = Field(
         default=100,
-        description="Maximum number of users to pre-load into cache on startup. Set to 0 to disable preloading. Defaults to 0."
+        description="Maximum number of users to pre-load into cache on startup. Set to 0 to disable preloading. Defaults to 100."
     )
 
 
