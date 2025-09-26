@@ -16,6 +16,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _calculate_key_rotation_time,
     regenerate_key_fn,
 )
 from litellm.proxy.utils import PrismaClient
@@ -116,11 +117,9 @@ class KeyRotationManager:
        
         # Update the NEW key with rotation info (regenerate_key_fn creates a new token)
         if isinstance(response, GenerateKeyResponse) and response.token_id and key.rotation_interval:
-            # Calculate next rotation time
+            # Calculate next rotation time using helper function
             now = datetime.now(timezone.utc)
-            from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-            interval_seconds = duration_in_seconds(key.rotation_interval)
-            next_rotation_time = now + timedelta(seconds=interval_seconds)
+            next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
             await self.prisma_client.db.litellm_verificationtoken.update(
                 where={"token": response.token_id},
                 data={
