@@ -201,10 +201,11 @@ class LLMCachingHandler:
                         **kwargs
                     )
                     if (
-                        isinstance(cached_result, BaseModel)
-                        or isinstance(cached_result, CustomStreamWrapper)
-                    ) and hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
+                        isinstance(cached_result, (BaseModel, CustomStreamWrapper))
+                        and (_hidden_params := getattr(cached_result, "_hidden_params", None))
+                        is not None
+                    ):
+                        _hidden_params["cache_key"] = cache_key  # type: ignore
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
                     call_type == CallTypes.aembedding.value
@@ -310,10 +311,11 @@ class LLMCachingHandler:
                         **kwargs
                     )
                     if (
-                        isinstance(cached_result, BaseModel)
-                        or isinstance(cached_result, CustomStreamWrapper)
-                    ) and hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
+                        isinstance(cached_result, (BaseModel, CustomStreamWrapper))
+                    ) and (
+                        _hidden_params := getattr(cached_result, "_hidden_params", None)
+                    ) is not None:
+                        _hidden_params["cache_key"] = cache_key  # type: ignore
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
@@ -711,9 +713,9 @@ class LLMCachingHandler:
             )
 
         if (
-            hasattr(cached_result, "_hidden_params")
-            and cached_result._hidden_params is not None
-            and isinstance(cached_result._hidden_params, dict)
+            (_hidden_params := getattr(cached_result, "_hidden_params", None))
+            and _hidden_params is not None
+            and isinstance(_hidden_params, dict)
         ):
             cached_result._hidden_params["cache_hit"] = True
         return cached_result
