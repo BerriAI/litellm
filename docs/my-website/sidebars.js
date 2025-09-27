@@ -519,12 +519,19 @@ const sidebars = {
       type: "category",
       label: "Guides",
       items: [
+        {
+          type: "category",
+          label: "Tools",
+          items: [
+            "completion/computer_use",
+            "completion/web_search",
+            "completion/web_fetch",
+            "completion/function_call",
+          ]
+        },
         "completion/audio",
-        "completion/batching",
-        "completion/computer_use",
         "completion/document_understanding",
         "completion/drop_params",
-        "completion/function_call",
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
@@ -539,8 +546,8 @@ const sidebars = {
         "completion/stream",
         "completion/provider_specific_params",
         "completion/vision",
-        "completion/web_search",
         "exception_mapping",
+        "completion/batching",
         "guides/finetuned_models",
         "guides/security_settings",
         "proxy/veo_video_generation",

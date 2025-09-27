@@ -1,6 +1,5 @@
 import enum
 import json
-from litellm._uuid import uuid
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -24,6 +23,7 @@ from pydantic import (
 )
 from typing_extensions import Required, TypedDict
 
+from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.mcp import (
@@ -787,6 +787,14 @@ class GenerateKeyRequest(KeyRequestBase):
         default=LiteLLMKeyType.DEFAULT,
         description="Type of key that determines default allowed routes.",
     )
+    auto_rotate: Optional[bool] = Field(
+        default=False,
+        description="Whether this key should be automatically rotated"
+    )
+    rotation_interval: Optional[str] = Field(
+        default=None,
+        description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True"
+    )
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -834,6 +842,8 @@ class UpdateKeyRequest(KeyRequestBase):
     metadata: Optional[dict] = None
     temp_budget_increase: Optional[float] = None
     temp_budget_expiry: Optional[datetime] = None
+    auto_rotate: Optional[bool] = None
+    rotation_interval: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -1802,6 +1812,11 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    rotation_count: Optional[int] = 0  # Number of times key has been rotated
+    auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
+    rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
+    last_rotation_at: Optional[datetime] = None  # When this key was last rotated
+    key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1931,6 +1946,23 @@ class UserAPIKeyAuth(
             team_id=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             key_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+        )
+    
+    @classmethod
+    def get_litellm_internal_jobs_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for internal LiteLLM jobs like key rotation.
+
+        This is used to track actions performed by automated system jobs.
+        """
+        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+
+        return cls(
+            api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_id="system",
+            key_alias=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_alias="system",
+            user_id="system",
         )
 
 

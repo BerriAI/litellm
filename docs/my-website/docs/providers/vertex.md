@@ -898,7 +898,7 @@ curl http://0.0.0.0:4000/chat/completions \
 ```
 
 </TabItem>
-
+</Tabs>
 
 ## Pre-requisites
 * `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
@@ -1297,6 +1297,10 @@ litellm.vertex_location = "us-central1 # Your Location
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | gemini-2.5-pro   | `completion('gemini-2.5-pro', messages)`, `completion('vertex_ai/gemini-2.5-pro', messages)` |
+| gemini-2.5-flash-preview-09-2025   | `completion('gemini-2.5-flash-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-preview-09-2025', messages)` |
+| gemini-2.5-flash-lite-preview-09-2025   | `completion('gemini-2.5-flash-lite-preview-09-2025', messages)`, `completion('vertex_ai/gemini-2.5-flash-lite-preview-09-2025', messages)` |
+| gemini-flash-latest   | `completion('gemini-flash-latest', messages)`, `completion('vertex_ai/gemini-flash-latest', messages)` |
+| gemini-flash-lite-latest   | `completion('gemini-flash-lite-latest', messages)`, `completion('vertex_ai/gemini-flash-lite-latest', messages)` |
 
 ## Fine-tuned Models
 

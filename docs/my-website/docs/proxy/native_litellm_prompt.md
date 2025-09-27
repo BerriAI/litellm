@@ -1,9 +1,5 @@
-import '@theme/IdealImage'
-import '@theme/TabItem'
-import '@theme/Tabs'
-import Image
-import TabItem
-import Tabs
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # LiteLLM Prompt Management (GitOps)
 
