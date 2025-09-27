@@ -57,6 +57,13 @@ Get started [here](../../docs/proxy/dynamic_rate_limit#priority-quota-reservatio
 
 <iframe width="700" height="500" src="https://www.loom.com/embed/1b54b93139ee415d959402cc0629f3f7" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+## +550 RPS Performance Improvements
+
+
+This release delivers significant RPS improvements through targeted optimizations. 
+ 
+We've achieved a +500 RPS boost by fixing cache type inconsistencies that were causing frequent cache misses, plus an additional +50 RPS by removing unnecessary coroutine checks from the hot path. 
+
 
 ## New Models / Updated Models
 
