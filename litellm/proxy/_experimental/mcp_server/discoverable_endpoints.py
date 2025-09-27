@@ -12,9 +12,14 @@ router = APIRouter(
 )
 
 
+@router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
 async def authorize(
-    request: Request, client_id: str, redirect_uri: str, state: str = ""
+    request: Request,
+    client_id: str,
+    redirect_uri: str,
+    state: str = "",
+    mcp_server_name: Optional[str] = None,
 ):
     # Redirect to real GitHub OAuth
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -115,17 +120,10 @@ async def callback(code: str, state: str):
     # Forward token to Claude ephemeral endpoint
     redirect_uri = STATE_MAP.pop(state, None)
 
-    complete_returned_url = f"{redirect_uri}?{urlencode(params)}"
     if redirect_uri:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                complete_returned_url,
-                json={},
-            )
-        # Return simple page so the browser doesn't hang
-        return HTMLResponse(
-            "<html><body>Authentication complete. You can close this window.</body></html>"
-        )
+        complete_returned_url = f"{redirect_uri}?{urlencode(params)}"
+
+        return RedirectResponse(url=complete_returned_url, status_code=302)
 
     # fallback if redirect_uri not found
     return HTMLResponse(
