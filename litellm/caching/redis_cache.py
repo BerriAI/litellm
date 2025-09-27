@@ -43,6 +43,7 @@ else:
     async_redis_cluster_client = Any
     Span = Any
 
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
@@ -307,8 +308,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_scan_iter <- {_get_call_stack_info()}",
@@ -322,8 +323,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
@@ -373,8 +374,8 @@ class RedisCache(BaseCache):
         except Exception as e:
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
@@ -410,8 +411,8 @@ class RedisCache(BaseCache):
             )
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_set_cache <- {_get_call_stack_info()}",
@@ -499,8 +500,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_set_cache_pipeline <- {_get_call_stack_info()}",
@@ -590,8 +591,8 @@ class RedisCache(BaseCache):
             )
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_set_cache_sadd <- {_get_call_stack_info()}",
@@ -656,8 +657,8 @@ class RedisCache(BaseCache):
             end_time = time.time()
             _duration = end_time - start_time
 
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_increment <- {_get_call_stack_info()}",
@@ -826,8 +827,8 @@ class RedisCache(BaseCache):
 
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_get_cache <- {_get_call_stack_info()}",
@@ -887,8 +888,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_batch_get_cache <- {_get_call_stack_info()}",
@@ -974,8 +975,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_ping <- {_get_call_stack_info()}",
@@ -1087,8 +1088,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_increment_pipeline <- {_get_call_stack_info()}",
@@ -1167,8 +1168,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
@@ -1238,8 +1239,8 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
