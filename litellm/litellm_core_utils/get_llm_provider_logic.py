@@ -783,6 +783,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.inference.wandb.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("WANDB_API_KEY")
+    elif custom_llm_provider == "io_intelligence":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.IOIntelligenceChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

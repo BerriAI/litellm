@@ -315,6 +315,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
+    "io_intelligence",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -495,6 +496,7 @@ openai_compatible_providers: List = [
     "vercel_ai_gateway",
     "aiml",
     "wandb",
+    "io_intelligence",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
