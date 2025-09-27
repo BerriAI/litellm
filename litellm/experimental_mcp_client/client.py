@@ -117,6 +117,9 @@ class MCPClient:
                 await self._session.initialize()
             else:  # http
                 headers = self._get_auth_headers()
+                verbose_logger.debug(
+                    "litellm headers for streamablehttp_client: ", headers
+                )
                 self._transport_ctx = streamablehttp_client(
                     url=self.server_url,
                     timeout=timedelta(seconds=self.timeout),
