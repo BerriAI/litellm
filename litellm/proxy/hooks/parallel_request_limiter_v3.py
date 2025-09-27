@@ -303,18 +303,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if "{" in key and "}" in key:
                 start = key.find("{")
                 end = key.find("}", start)
-                hash_tag = key[start:end+1]
+                hash_tag = key[start : end + 1]
             else:
                 # Fallback for keys without hash tags
                 hash_tag = "no_hash_tag"
-            
+
             if hash_tag not in groups:
                 groups[hash_tag] = []
             groups[hash_tag].append(key)
-        
+
         return groups
 
-    
     async def _execute_redis_batch_rate_limiter_script(
         self,
         keys_to_fetch: List[str],
@@ -332,10 +331,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if self.batch_rate_limiter_script is None:
             return []
-        
+
         key_groups = self._group_keys_by_hash_tag(keys_to_fetch)
         all_cache_values = []
-        
+
         for hash_tag, group_keys in key_groups.items():
             try:
                 group_cache_values = await self.batch_rate_limiter_script(
@@ -354,7 +353,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
                 all_cache_values.extend(group_cache_values)
-        
+
         return all_cache_values
 
     async def should_rate_limit(
@@ -378,7 +377,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
-            rate_limit: Optional[RateLimitDescriptorRateLimitObject] = descriptor.get("rate_limit", {}) or {}
+            rate_limit: RateLimitDescriptorRateLimitObject = (
+                descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+            )
             requests_limit = rate_limit.get("requests_per_unit")
             tokens_limit = rate_limit.get("tokens_per_unit")
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
@@ -632,26 +633,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 for i, status in enumerate(response["statuses"]):
                     if status["code"] == "OVER_LIMIT":
                         descriptor = descriptors[floor(i / 2)]
-                        
+
                         # Calculate reset time (window_start + window_size)
                         now = datetime.now().timestamp()
                         reset_time = now + self.window_size  # Conservative estimate
-                        reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
-                        
+                        reset_time_formatted = datetime.fromtimestamp(
+                            reset_time
+                        ).strftime("%Y-%m-%d %H:%M:%S UTC")
+
                         # Handle negative remaining values more gracefully
-                        remaining_display = max(0, status['limit_remaining'])
-                        
+                        remaining_display = max(0, status["limit_remaining"])
+
                         # Create detailed error message
-                        rate_limit_type = status['rate_limit_type']
-                        current_limit = status['current_limit']
-                        
+                        rate_limit_type = status["rate_limit_type"]
+                        current_limit = status["current_limit"]
+
                         detail = (
                             f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. "
                             f"Limit type: {rate_limit_type}. "
                             f"Current limit: {current_limit}, Remaining: {remaining_display}. "
                             f"Limit resets at: {reset_time_formatted}"
                         )
-                        
+
                         raise HTTPException(
                             status_code=429,
                             detail=detail,
@@ -693,7 +696,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         return pipeline_operations
-    
+
     async def _execute_token_increment_script(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -703,15 +706,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if self.token_increment_script is None:
             return
-        
+
         # Group operations by hash tag for Redis cluster compatibility
         operation_keys = [op["key"] for op in pipeline_operations]
         key_groups = self._group_keys_by_hash_tag(operation_keys)
-        
+
         for _hash_tag, group_keys in key_groups.items():
             # Get operations for this hash tag group
-            group_operations = [op for op in pipeline_operations if op["key"] in group_keys]
-            
+            group_operations = [
+                op for op in pipeline_operations if op["key"] in group_keys
+            ]
+
             keys = []
             args = []
 
@@ -730,7 +735,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys=keys,
                 args=args,
             )
-
 
     async def async_increment_tokens_with_ttl_preservation(
         self,
@@ -757,7 +761,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         try:
             await self._execute_token_increment_script(pipeline_operations)
-            
+
             verbose_proxy_logger.debug(
                 f"Successfully executed TTL-preserving increment for {len(pipeline_operations)} keys"
             )
@@ -811,7 +815,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             # Get metadata from kwargs
-            litellm_metadata = kwargs["litellm_params"].get(get_metadata_variable_name_from_kwargs(kwargs), {})
+            litellm_metadata = kwargs["litellm_params"].get(
+                get_metadata_variable_name_from_kwargs(kwargs), {}
+            )
             if litellm_metadata is None:
                 return
             user_api_key = litellm_metadata.get("user_api_key")
@@ -825,7 +831,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Get total tokens from response
             total_tokens = 0
             # spot fix for /responses api
-            if (isinstance(response_obj, ModelResponse) or isinstance(response_obj, BaseLiteLLMOpenAIResponseObject)):
+            if isinstance(response_obj, ModelResponse) or isinstance(
+                response_obj, BaseLiteLLMOpenAIResponseObject
+            ):
                 _usage = getattr(response_obj, "usage", None)
                 if _usage and isinstance(_usage, Usage):
                     if rate_limit_type == "output":
@@ -943,7 +951,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 _get_parent_otel_span_from_kwargs(kwargs)
             )
             litellm_metadata = kwargs["litellm_params"]["metadata"]
-            user_api_key = litellm_metadata.get("user_api_key") if litellm_metadata else None
+            user_api_key = (
+                litellm_metadata.get("user_api_key") if litellm_metadata else None
+            )
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             if user_api_key:
