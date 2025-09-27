@@ -8,7 +8,7 @@ backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==23.0.0 # server dep
-# fastuuid==0.13.5 # for uuid4
+fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.36.0 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching

@@ -73,8 +73,8 @@ jobs:
           name: MyPy Type Checking
           command: |
             cd litellm
-            # Use the same approach as GitHub Actions without --show-traceback to avoid segfaults
-            python -m mypy . --ignore-missing-imports
+            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
+            python -m mypy . --ignore-missing-imports --exclude="fastuuid"
             cd ..
           no_output_timeout: 10m
   local_testing:
