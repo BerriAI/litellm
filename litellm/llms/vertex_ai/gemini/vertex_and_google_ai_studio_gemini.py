@@ -335,7 +335,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore
 
-            tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
+            # Identify tool name, ignoring 'type' field if present
+            tool_name = None
+            known_tools = [
+                "codeExecution", "code_execution",
+                "googleSearch", "googleSearchRetrieval", 
+                "enterpriseWebSearch", "urlContext"
+            ]
+            
+            # Look for known tools first
+            for key in tool.keys():
+                if key in known_tools:
+                    tool_name = key
+                    break
+            
+            # If no known tool found and only one non-type key, use that  
+            if tool_name is None:
+                non_type_keys = [k for k in tool.keys() if k != "type"]
+                if len(non_type_keys) == 1:
+                    tool_name = non_type_keys[0]
+
             if tool_name and (
                 tool_name == "codeExecution" or tool_name == "code_execution"
             ):  # code_execution maintained for backwards compatibility
