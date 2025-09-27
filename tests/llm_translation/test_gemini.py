@@ -452,7 +452,7 @@ def test_gemini_finish_reason():
 
     litellm._turn_on_debug()
     response = completion(
-        model="gemini/gemini-1.5-pro",
+        model="gemini/gemini-2.5-flash-lite",
         messages=[{"role": "user", "content": "give me 3 random words"}],
         max_tokens=2,
     )
