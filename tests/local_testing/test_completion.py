@@ -1746,7 +1746,7 @@ def test_completion_openai():
     "model, api_version",
     [
         # ("gpt-4o-2024-08-06", None),
-        # ("azure/chatgpt-v-3", None),
+        # ("azure/gpt-4.1-nano", None),
         ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
@@ -2417,7 +2417,7 @@ def test_completion_azure_extra_headers():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=messages,
                 api_base=os.getenv("AZURE_API_BASE"),
                 api_version="2023-07-01-preview",
@@ -2466,7 +2466,7 @@ def test_completion_azure_ad_token():
         litellm.client_session = http_client
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=messages,
                 azure_ad_token="my-special-token",
             )
@@ -2497,7 +2497,7 @@ def test_completion_azure_key_completion_arg():
         litellm.set_verbose = True
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             api_key=old_key,
             logprobs=True,
@@ -2555,7 +2555,7 @@ async def test_re_use_azure_async_client():
         ## Test azure call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3", messages=messages, client=client
+                model="azure/gpt-4.1-nano", messages=messages, client=client
             )
             print(f"response: {response}")
     except Exception as e:
@@ -2633,7 +2633,7 @@ def test_azure_openai_ad_token():
     litellm.input_callback = [tester]
     try:
         response = litellm.completion(
-            model="azure/chatgpt-v-3",  # e.g. gpt-35-instant
+            model="azure/gpt-4.1-nano",  # e.g. gpt-35-instant
             messages=[
                 {
                     "role": "user",
@@ -2671,7 +2671,7 @@ def test_completion_azure2():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             api_base=api_base,
             api_key=api_key,
@@ -2708,7 +2708,7 @@ def test_completion_azure3():
 
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
             max_tokens=10,
         )
@@ -2756,7 +2756,7 @@ def test_completion_azure_with_litellm_key():
         openai.api_key = "ymca"
 
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=messages,
         )
         # Add any assertions here to check the response
@@ -2784,7 +2784,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="gpt-4o-new-test",
+            deployment_id="gpt-4.1-nano",
             model="gpt-3.5-turbo",
             messages=messages,
         )
@@ -4098,7 +4098,7 @@ async def test_completion_ai21_chat():
 
 @pytest.mark.parametrize(
     "model",
-    ["gpt-4o", "azure/chatgpt-v-3"],
+    ["gpt-4o", "azure/gpt-4.1-nano"],
 )
 @pytest.mark.parametrize(
     "stream",
@@ -4120,7 +4120,7 @@ def test_completion_response_ratelimit_headers(model, stream):
     assert "x-ratelimit-remaining-requests" in additional_headers
     assert "x-ratelimit-remaining-tokens" in additional_headers
 
-    if model == "azure/chatgpt-v-3":
+    if model == "azure/gpt-4.1-nano":
         # Azure OpenAI header
         assert "llm_provider-azureml-model-session" in additional_headers
     if model == "claude-3-sonnet-20240229":
