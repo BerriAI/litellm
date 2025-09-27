@@ -491,12 +491,12 @@ async def test_async_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
         )
         ## test streaming
         response = await litellm.acompletion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
             stream=True,
         )
@@ -507,7 +507,7 @@ async def test_async_chat_azure_stream():
         # test failure callback
         try:
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm async azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -1004,7 +1004,7 @@ def test_turn_off_message_logging():
     "model",
     [
         "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
-    ],  # "gpt-3.5-turbo", "azure/chatgpt-v-3",
+    ],  # "gpt-3.5-turbo", "azure/gpt-4.1-nano",
 )
 @pytest.mark.parametrize(
     "turn_off_message_logging",
