@@ -364,7 +364,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
-        f"""
+        """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
 
         Args:

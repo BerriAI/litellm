@@ -1,11 +1,7 @@
 import importlib
 from typing import Dict, List, Optional
-from urllib.parse import urlencode, urlparse, urlunparse
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.params import Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_logger
 from litellm.proxy._types import UserAPIKeyAuth
