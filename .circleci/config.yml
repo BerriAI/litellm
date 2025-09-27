@@ -546,14 +546,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
       - run:
