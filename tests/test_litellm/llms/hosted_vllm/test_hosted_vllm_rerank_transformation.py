@@ -1,8 +1,19 @@
-import sys
 import os
+import sys
+
 import pytest
+
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
-from litellm.types.rerank import OptionalRerankParams, RerankResponse, RerankResponseResult, RerankResponseMeta, RerankBilledUnits, RerankTokens, RerankResponseDocument
+from litellm.types.rerank import (
+    OptionalRerankParams,
+    RerankBilledUnits,
+    RerankResponse,
+    RerankResponseDocument,
+    RerankResponseMeta,
+    RerankResponseResult,
+    RerankTokens,
+)
+
 
 class TestHostedVLLMRerankTransform:
     def setup_method(self):
@@ -27,23 +38,27 @@ class TestHostedVLLMRerankTransform:
         assert params["return_documents"] is True
 
     def test_map_cohere_rerank_params_raises_on_max_chunks_per_doc(self):
-        with pytest.raises(ValueError, match="Hosted VLLM does not support max_chunks_per_doc"):
+        with pytest.raises(
+            ValueError, match="Hosted VLLM does not support max_chunks_per_doc"
+        ):
             self.config.map_cohere_rerank_params(
                 non_default_params=None,
                 model=self.model,
                 drop_params=False,
                 query="test query",
                 documents=["doc1"],
-                max_chunks_per_doc=5
+                max_chunks_per_doc=5,
             )
 
     def test_get_complete_url(self):
         base = "https://api.example.com"
         url = self.config.get_complete_url(base, self.model)
-        assert url == "https://api.example.com/v1/rerank"
-        # Already ends with /v1/rerank
-        url2 = self.config.get_complete_url("https://api.example.com/v1/rerank", self.model)
-        assert url2 == "https://api.example.com/v1/rerank"
+        assert url == "https://api.example.com/rerank"
+        # Already ends with /rerank
+        url2 = self.config.get_complete_url(
+            "https://api.example.com/rerank", self.model
+        )
+        assert url2 == "https://api.example.com/rerank"
         # Raises if api_base is None
         with pytest.raises(ValueError):
             self.config.get_complete_url(None, self.model)
@@ -55,7 +70,7 @@ class TestHostedVLLMRerankTransform:
                 {"index": 0, "relevance_score": 0.9, "document": {"text": "doc1 text"}},
                 {"index": 1, "relevance_score": 0.7, "document": {"text": "doc2 text"}},
             ],
-            "usage": {"total_tokens": 42}
+            "usage": {"total_tokens": 42},
         }
         result = self.config._transform_response(response_dict)
         assert result.id == "abc123"
@@ -75,7 +90,7 @@ class TestHostedVLLMRerankTransform:
         response_dict = {
             "id": "abc123",
             "results": [{"relevance_score": 0.5}],
-            "usage": {"total_tokens": 10}
+            "usage": {"total_tokens": 10},
         }
         with pytest.raises(ValueError, match="Missing required fields in the result="):
-            self.config._transform_response(response_dict) 
+            self.config._transform_response(response_dict)

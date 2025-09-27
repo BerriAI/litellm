@@ -1,10 +1,11 @@
 """
 LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 """
+
 import asyncio
 import base64
 from datetime import timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -46,6 +47,7 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -59,7 +61,7 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-
+        self.extra_headers: Optional[Dict[str, str]] = extra_headers
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -115,6 +117,9 @@ class MCPClient:
                 await self._session.initialize()
             else:  # http
                 headers = self._get_auth_headers()
+                verbose_logger.debug(
+                    "litellm headers for streamablehttp_client: ", headers
+                )
                 self._transport_ctx = streamablehttp_client(
                     url=self.server_url,
                     timeout=timedelta(seconds=self.timeout),
@@ -186,9 +191,7 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        headers = {
-            "MCP-Protocol-Version": "2025-06-18"
-        }
+        headers = {"MCP-Protocol-Version": "2025-06-18"}
 
         if self._mcp_auth_value:
             if self.auth_type == MCPAuth.bearer_token:
@@ -199,6 +202,10 @@ class MCPClient:
                 headers["X-API-Key"] = self._mcp_auth_value
             elif self.auth_type == MCPAuth.authorization:
                 headers["Authorization"] = self._mcp_auth_value
+
+        # update the headers with the extra headers
+        if self.extra_headers:
+            headers.update(self.extra_headers)
 
         return headers
 

@@ -334,10 +334,8 @@ async def test_router_retries(sync_mode):
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/gpt-4o-new-test",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
+                "model": "gpt-4.1-nano",
+                "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
     ]
@@ -473,16 +471,12 @@ def test_reading_key_from_model_list():
 
     try:
         print("testing if router raises an exception")
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ.pop("AZURE_API_KEY", None)
         model_list = [
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": old_api_key,
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "model": "gpt-4.1-nano",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -521,10 +515,8 @@ def test_reading_key_from_model_list():
         print("\n completed_response", completed_response)
         assert len(completed_response) > 0
         print("\n Passed Streaming")
-        os.environ["AZURE_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_api_key
         print(f"FAILED TEST")
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
@@ -544,7 +536,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4o-new-test",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -555,7 +547,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.environ["AZURE_API_KEY"],
                     "api_base": os.environ["AZURE_API_BASE"],
                 },
@@ -574,7 +566,7 @@ def test_call_one_endpoint():
 
         async def call_azure_completion():
             response = await router.acompletion(
-                model="azure/gpt-4o-new-test",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "hello this request will pass"}],
                 specific_deployment=True,
             )
@@ -582,7 +574,7 @@ def test_call_one_endpoint():
 
         async def call_azure_embedding():
             response = await router.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm"],
                 specific_deployment=True,
             )
@@ -620,7 +612,7 @@ def test_router_azure_acompletion():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4o-new-test",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -1274,7 +1266,7 @@ def test_azure_embedding_on_router():
             {
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.environ["AZURE_API_KEY"],
                     "api_base": os.environ["AZURE_API_BASE"],
                 },

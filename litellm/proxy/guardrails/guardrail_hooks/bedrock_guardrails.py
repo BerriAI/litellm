@@ -363,7 +363,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
-        response = await self.async_handler.post(
+        httpx_response = await self.async_handler.post(
             url=prepared_request.url,
             data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
@@ -373,19 +373,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=response.json(),
+            guardrail_json_response=httpx_response.json(),
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(
-                response=response
+                response=httpx_response
             ),
             start_time=start_time.timestamp(),
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
         )
         #########################################################
-        if response.status_code == 200:
+        if httpx_response.status_code == 200:
             # check if the response was flagged
-            _json_response = response.json()
+            _json_response = httpx_response.json()
             redacted_response = _redact_pii_matches(_json_response)
             verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
@@ -398,8 +398,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         else:
             verbose_proxy_logger.error(
                 "Bedrock AI: error in response. Status code: %s, response: %s",
-                response.status_code,
-                response.text,
+                httpx_response.status_code,
+                httpx_response.text,
             )
 
         return bedrock_guardrail_response

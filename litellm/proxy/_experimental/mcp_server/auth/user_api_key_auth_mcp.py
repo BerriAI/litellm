@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -36,7 +36,11 @@ class MCPRequestHandler:
     async def process_mcp_request(
         scope: Scope,
     ) -> Tuple[
-        UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[Dict[str, str]]
+        UserAPIKeyAuth,
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
     ]:
         """
         Process and validate MCP request headers from the ASGI scope.
@@ -44,6 +48,7 @@ class MCPRequestHandler:
         1. Extracting and validating authentication headers
         2. Processing MCP server configuration
         3. Handling MCP-specific headers
+        4. Handling oauth2 headers
 
         Args:
             scope: ASGI scope containing request information
@@ -69,6 +74,9 @@ class MCPRequestHandler:
         mcp_server_auth_headers = (
             MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         )
+
+        # Get the oauth2 headers
+        oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         # Parse MCP servers from header
         mcp_servers_header = headers.get(
@@ -96,14 +104,18 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
-        validated_user_api_key_auth = await user_api_key_auth(
-            api_key=litellm_api_key, request=request
-        )
+        if ".well-known" in str(request.url):  # public routes
+            validated_user_api_key_auth = UserAPIKeyAuth()
+        else:
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=litellm_api_key, request=request
+            )
         return (
             validated_user_api_key_auth,
             mcp_auth_header,
             mcp_servers,
             mcp_server_auth_headers,
+            oauth2_headers,
         )
 
     @staticmethod
@@ -173,6 +185,17 @@ class MCPRequestHandler:
                         )
 
         return server_auth_headers
+
+    @staticmethod
+    def _get_oauth2_headers_from_headers(headers: Headers) -> Dict[str, str]:
+        """
+        Get the oauth2 headers from the request headers.
+        """
+        oauth2_headers = {}
+        for header_name, header_value in headers.items():
+            if header_name.lower().startswith("authorization"):
+                oauth2_headers["Authorization"] = header_value
+        return oauth2_headers
 
     @staticmethod
     def _get_mcp_client_side_auth_header_name() -> str:
@@ -359,10 +382,10 @@ class MCPRequestHandler:
             return []
 
         try:
-            team_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
+            team_obj: Optional[LiteLLM_TeamTable] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": user_api_key_auth.team_id},
+                )
             )
             if team_obj is None:
                 verbose_logger.debug("team_obj is None")
@@ -535,10 +558,10 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": user_api_key_auth.team_id},
+        team_obj: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_auth.team_id},
+            )
         )
         if team_obj is None:
             verbose_logger.debug("team_obj is None")

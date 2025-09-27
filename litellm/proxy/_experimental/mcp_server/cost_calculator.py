@@ -38,7 +38,8 @@ class MCPCostCalculator:
         # Unpack the mcp_tool_call_metadata
         #########################################################
         mcp_tool_call_metadata: StandardLoggingMCPToolCall = cast(StandardLoggingMCPToolCall, litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata", {})) or {}
-        mcp_server_cost_info: MCPServerCostInfo = mcp_tool_call_metadata.get("mcp_server_cost_info", {}) or {}
+        mcp_server_cost_info_raw = mcp_tool_call_metadata.get("mcp_server_cost_info", {}) or {}
+        mcp_server_cost_info: MCPServerCostInfo = cast(MCPServerCostInfo, mcp_server_cost_info_raw)
         #########################################################
         # User defined cost per query
         #########################################################
