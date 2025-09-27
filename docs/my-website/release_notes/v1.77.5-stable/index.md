@@ -122,10 +122,7 @@ import TabItem from '@theme/TabItem';
 
 #### Features
 
-- **[Responses API](../../docs/response_api)**
-    - Add /user/list to management routes - [PR #14868](https://github.com/BerriAI/litellm/pull/14868)
 - **General**
-    - Add SDK support for additional headers - [PR #14761](https://github.com/BerriAI/litellm/pull/14761)
     - Add shared_session parameter for aiohttp ClientSession reuse - [PR #14721](https://github.com/BerriAI/litellm/pull/14721)
 
 #### Bugs
@@ -145,17 +142,16 @@ import TabItem from '@theme/TabItem';
 - **Scheduled Key Rotations** - Initial support for scheduled key rotations - [PR #14877](https://github.com/BerriAI/litellm/pull/14877)
 - **UI Key Rotations** - Allow scheduling key rotations when creating virtual keys - [PR #14960](https://github.com/BerriAI/litellm/pull/14960)
 - **Proxy CLI Fixes** - Fixes for LiteLLM Proxy CLI to Auth to Gateway - [PR #14836](https://github.com/BerriAI/litellm/pull/14836)
-- **BitBucket Integration** - Add BitBucket Integration for Prompt Management - [PR #14882](https://github.com/BerriAI/litellm/pull/14882)
 - **Noma Guardrail** - Add noma guardrail provider to ui - [PR #14415](https://github.com/BerriAI/litellm/pull/14415)
 
 #### Bugs
 
 - **SSO** - Fix: SSO "Clear" button writes empty values instead of removing SSO config - [PR #14826](https://github.com/BerriAI/litellm/pull/14826)
 - **Admin Settings** - Remove useful links from admin settings - [PR #14918](https://github.com/BerriAI/litellm/pull/14918)
-
+- **Management Routes** - Add /user/list to management routes - [PR #14868](https://github.com/BerriAI/litellm/pull/14868)
 ---
 
-## Logging / Guardrail Integrations
+## Logging / Guardrail / Prompt Management Integrations
 
 #### Features
 
@@ -172,6 +168,10 @@ import TabItem from '@theme/TabItem';
 
 - **LakeraAI v2 Guardrail** - Ensure exception is raised correctly - [PR #14867](https://github.com/BerriAI/litellm/pull/14867)
 - **Presidio Guardrail** - Support custom entity types in Presidio guardrail with Union[PiiEntityType, str] - [PR #14899](https://github.com/BerriAI/litellm/pull/14899)
+
+#### Prompt Management
+
+- **BitBucket Integration** - Add BitBucket Integration for Prompt Management - [PR #14882](https://github.com/BerriAI/litellm/pull/14882)
 
 ---
 
@@ -202,11 +202,6 @@ import TabItem from '@theme/TabItem';
 - **Performance Optimization** - Fix: reduce get_deployment cost to O(1) - [PR #14967](https://github.com/BerriAI/litellm/pull/14967)
 - **Performance Optimization** - Fix: remove slow string operation - [PR #14955](https://github.com/BerriAI/litellm/pull/14955)
 - **DB Connection Management** - Fix: DB connection state retries - [PR #14925](https://github.com/BerriAI/litellm/pull/14925)
-
----
-
-## General Proxy Improvements
-
 
 
 
