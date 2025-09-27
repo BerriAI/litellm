@@ -756,6 +756,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         try:
+            await self._execute_token_increment_script(pipeline_operations)
+            
             verbose_proxy_logger.debug(
                 f"Successfully executed TTL-preserving increment for {len(pipeline_operations)} keys"
             )
