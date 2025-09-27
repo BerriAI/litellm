@@ -97,3 +97,102 @@ async def test_router_auto_router():
     )
     print("response._hidden_params", response._hidden_params)
     assert response._hidden_params["model_id"] == "claude-id"
+
+
+@pytest.mark.asyncio
+async def test_router_auto_router_with_tool_calls():
+    """
+    Test auto-router with tool calls - reproduces issue #14633
+    This should fail before the fix due to PreRoutingHookResponse validation
+    """
+    import litellm
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "custom-text-embedding-model",
+                "litellm_params": {
+                    "model": "text-embedding-3-large",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "litellm-gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "model_info": {"id": "openai-id"},
+            },
+            {
+                "model_name": "auto_router_tool_calls",
+                "litellm_params": {
+                    "model": "auto_router/auto_router_tool_calls",
+                    "auto_router_config_path": router_json_path,
+                    "auto_router_default_model": "gpt-4o-mini",
+                    "auto_router_embedding_model": "custom-text-embedding-model",
+                },
+            },
+        ],
+    )
+
+    # Create messages with tool calls (the problematic case from issue #14633)
+    messages_with_tool_calls = [
+        {'role': 'user', 'content': 'How is the weather in NY?'},
+        {
+            'role': 'assistant',
+            'content': '\n',
+            'refusal': None,
+            'annotations': None,
+            'audio': None,
+            'function_call': None,
+            'tool_calls': [
+                {
+                    'id': 'tooluse_loOUiUMPQFWJQwvpywYMKQ',
+                    'function': {
+                        'arguments': '{"query": "current weather in New York"}',
+                        'name': 'search_web'
+                    },
+                    'type': 'function',
+                    'index': 1
+                }
+            ],
+            'thinking_blocks': [
+                {
+                    'type': 'thinking',
+                    'thinking': 'The User has asked for the current weather in New York. I need to search for this information.'
+                }
+            ]
+        },
+        {
+            'tool_call_id': 'tooluse_loOUiUMPQFWJQwvpywYMKQ',
+            'role': 'tool',
+            'content': "It's sunny"
+        }
+    ]
+
+    # This should work after the fix but fail before it
+    # The error occurs in PreRoutingHookResponse validation
+    response = await router.acompletion(
+        model="auto_router_tool_calls",
+        messages=messages_with_tool_calls,
+        tools=[{
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the web for information",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }]
+    )
+
+    # Should successfully route and get a response
+    assert response is not None
+    print("Successfully handled tool calls with auto-router!")
