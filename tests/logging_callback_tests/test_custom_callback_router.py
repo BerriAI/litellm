@@ -393,14 +393,14 @@ async def test_async_chat_azure():
         litellm.set_verbose = True
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",  # openai model name
+                "model_name": "gpt-4.1-nano",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4o-new-test",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
-                "model_info": {"base_model": "azure/gpt-4-1106-preview"},
+                "model_info": {"base_model": "azure/gpt-4.1-nano"},
                 "tpm": 240000,
                 "rpm": 1800,
             },
@@ -471,7 +471,6 @@ async def test_async_chat_azure():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# asyncio.run(test_async_chat_azure())
 ## EMBEDDING
 @pytest.mark.asyncio
 async def test_async_embedding_azure():
@@ -483,7 +482,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
