@@ -397,7 +397,7 @@ def test_usage_based_routing():
                 "model": f"azure/{deployment_name}",
                 "api_key": os.environ["AZURE_API_KEY"],
                 "api_version": os.environ["AZURE_API_VERSION"],
-                "api_base": os.environ["AZURE_API_BASE"],
+                "api_base": "https://fake-api.openai.com/v1",
             }
             return params
 
