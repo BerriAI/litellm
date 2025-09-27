@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELM_STRING, MAX_STRING_LENGTH_PROMPT_IN_DB
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -21,6 +21,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingVectorStoreRequest,
+    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -297,7 +298,9 @@ def get_logging_payload(  # noqa: PLR0915
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     mcp_namespaced_tool_name = None
-    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = clean_metadata.get(
+        "mcp_tool_call_metadata"
+    )
     if mcp_tool_call_metadata is not None:
         mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
             "namespaced_tool_name", None
@@ -505,23 +508,23 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
                 end_ratio = 0.65
-                
+
                 # Calculate character distribution
                 start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
                 end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
-                
+
                 # Ensure we don't exceed the total limit
                 total_keep = start_chars + end_chars
                 if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
                     end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-                
+
                 # If the string length is less than what we want to keep, just truncate normally
                 if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
                     return value
-                
+
                 # Calculate how many characters are being skipped
                 skipped_chars = len(value) - total_keep
-                
+
                 # Build the truncated string: beginning + truncation marker + end
                 truncated_value = (
                     f"{value[:start_chars]}"
@@ -567,8 +570,9 @@ def _get_vector_store_request_for_spend_logs_payload(
     if vector_store_request_metadata is None:
         return None
     for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response = (
-            vector_store_request.get("vector_store_search_response", {}) or {}
+        vector_store_search_response: VectorStoreSearchResponse = (
+            vector_store_request.get("vector_store_search_response")
+            or VectorStoreSearchResponse()
         )
         response_data = vector_store_search_response.get("data", []) or []
         for response_item in response_data:
