@@ -40,7 +40,6 @@ try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:
     PrometheusLogger = None
-from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.s3_v2 import S3Logger
