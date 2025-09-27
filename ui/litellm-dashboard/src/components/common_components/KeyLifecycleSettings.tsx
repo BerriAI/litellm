@@ -130,7 +130,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
         {autoRotationEnabled && (
           <div className="bg-blue-50 p-3 rounded-md text-sm text-blue-700">
-            When rotation occurs, you'll receive a notification with the new key. The old key will be deactivated after a brief grace period.
+            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated after a brief grace period.
           </div>
         )}
       </div>
