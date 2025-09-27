@@ -275,7 +275,7 @@ async def test_acompletion_caching_on_router_caching_groups():
                 "rpm": 10000,
             },
             {
-                "model_name": "azure-gpt-4.1-nano",
+                "model_name": "azure-gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
