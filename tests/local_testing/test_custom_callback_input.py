@@ -774,7 +774,7 @@ async def test_async_embedding_openai():
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
         response = await litellm.aembedding(
-            model="azure/text-embedding-ada-002",
+            model="text-embedding-ada-002",
             input=["good morning from litellm"],
         )
         await asyncio.sleep(1)

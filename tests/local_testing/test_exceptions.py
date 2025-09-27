@@ -1349,7 +1349,7 @@ def test_context_window_exceeded_error_from_litellm_proxy():
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("stream_mode", [True, False])
-@pytest.mark.parametrize("model", ["azure/gpt-4o-new-test"])  # "gpt-4o-mini",
+@pytest.mark.parametrize("model", ["gpt-4.1-nano"])  # "gpt-4o-mini",
 @pytest.mark.asyncio
 async def test_exception_bubbling_up(sync_mode, stream_mode, model):
     """

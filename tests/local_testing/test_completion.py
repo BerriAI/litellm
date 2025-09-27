@@ -712,7 +712,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4o-new-test",
+        "azure/gpt-4.1-nano",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
@@ -3695,8 +3695,7 @@ def test_completion_volcengine():
     "model",
     [
         # "gemini-1.0-pro",
-        "gemini-1.5-pro",
-        # "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
