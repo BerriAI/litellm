@@ -203,6 +203,12 @@ class RealTimeStreaming:
             verbose_logger.debug(f"Error in client ack messages: {e}")
 
     async def bidirectional_forward(self):
+        if self.provider_config and self.provider_config.requires_session_configuration():
+            session_configuration_request = self.provider_config.session_configuration_request(self.model)
+            if session_configuration_request is None:
+                raise ValueError("Session configuration request is None, but requires_session_configuration is True")
+            await self.backend_ws.send(session_configuration_request)
+
         forward_task = asyncio.create_task(self.backend_to_client_send_messages())
         try:
             await self.client_ack_messages()

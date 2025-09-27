@@ -630,3 +630,122 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+StartOfSpeechSensitivityEnum = Literal[
+    "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
+]
+EndOfSpeechSensitivityEnum = Literal[
+    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
+]
+
+
+class AutomaticActivityDetection(TypedDict, total=False):
+    disabled: bool
+    start_of_speech_sensitivity: StartOfSpeechSensitivityEnum
+    prefix_padding_ms: int
+    end_of_speech_sensitivity: EndOfSpeechSensitivityEnum
+    silence_duration_ms: int
+
+
+class BidiGenerateContentSetup(TypedDict, total=False):
+    model: str
+    """The model to be used for the realtime session."""
+
+    generation_config: GenerationConfig
+    """The generation config to be used for the realtime session."""
+
+    system_instruction: ContentType
+    """The system instruction to be used for the realtime session."""
+
+    tools: List[Tools]
+    """The tools to be used for the realtime session."""
+
+    realtime_input_config: dict
+    """The realtime config to be used for the realtime session."""
+
+    session_resumption: dict
+    """The session resumption to be used for the realtime session."""
+
+    context_window_compression: dict
+    """The context window compression to be used for the realtime session."""
+
+    input_audio_transcription: dict
+    """The input audio transcription to be used for the realtime session."""
+
+    output_audio_transcription: dict
+    """The output audio transcription to be used for the realtime session."""
+
+
+class BidiGenerateContentClientContent(TypedDict, total=False):
+    turns: List[ContentType]
+    """The content appended to the current conversation with the model."""
+
+    turn_complete: bool
+    """If true, indicates that the server content generation should start with the currently accumulated prompt."""
+
+
+class BidiGenerateContentRealtimeInput(TypedDict, total=False):
+    media_chunks: List[BlobType]
+    """The audio to be sent to the model."""
+
+    audio: BlobType
+    """These form the realtime audio input stream."""
+
+    video: BlobType
+    """These form the realtime video input stream."""
+
+    activity_start: bool
+    """Output only. If true, indicates that the activity has started."""
+
+    activity_end: bool
+    """Output only. If true, indicates that the activity has ended."""
+
+    audio_stream_end: bool
+    """Indicates that the audio stream has ended"""
+
+    text: str
+    """These form the realtime text input stream."""
+
+
+class BidiGenerateContentTranscription(TypedDict):
+    text: str
+    """Output only. The transcription of the audio."""
+
+
+class BidiGenerateContentServerContent(TypedDict, total=False):
+    generation_complete: bool
+    """Output only. If true, indicates that the model is done generating."""
+
+    turn_complete: bool
+    """Output only. If true, indicates that the model has completed its turn. Generation will only start in response to additional client messages."""
+
+    interrupted: bool
+    """Output only. If true, indicates that a client message has interrupted current model generation. If the client is playing out the content in real time, this is a good signal to stop and empty the current playback queue."""
+
+    grounding_metadata: dict
+    """Output only. Grounding metadata for the generated content."""
+
+    input_transcription: BidiGenerateContentTranscription
+    """Output only. Input audio transcription. The transcription is sent independently of the other server messages and there is no guaranteed ordering."""
+
+    output_transcription: BidiGenerateContentTranscription
+    """Output only. Output audio transcription. The transcription is sent independently of the other server messages and there is no guaranteed ordering, in particular not between serverContent and this outputTranscription."""
+
+    model_turn: HttpxContentType
+    """Output only. The content that the model is currently generating."""
+
+
+class BidiGenerateContentSetupComplete(TypedDict):
+    session_id: str
+    """Output only. The session id of the session."""
+
+
+class BidiGenerateContentServerMessage(TypedDict, total=False):
+    usageMetadata: UsageMetadata
+    """Output only. Usage metadata for the generated content."""
+
+    serverContent: BidiGenerateContentServerContent
+    """Output only. The content that the model is currently generating."""
+
+    setupComplete: BidiGenerateContentSetupComplete
+    """Output only. The setup complete message."""
