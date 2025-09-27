@@ -637,11 +637,6 @@ async def proxy_startup_event(app: FastAPI):
         user_api_key_cache=user_api_key_cache,
     )
 
-    if use_background_health_checks:
-        asyncio.create_task(
-            _run_background_health_check()
-        )  # start the background health check coroutine.
-
     if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
@@ -663,6 +658,12 @@ async def proxy_startup_event(app: FastAPI):
         )
 
         await ProxyStartupEvent._update_default_team_member_budget()
+
+    # Start background health checks AFTER models are loaded and index is built
+    if use_background_health_checks:
+        asyncio.create_task(
+            _run_background_health_check()
+        )  # start the background health check coroutine.
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
