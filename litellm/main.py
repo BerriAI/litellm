@@ -17,12 +17,12 @@ import random
 import sys
 import time
 import traceback
-from litellm._uuid import uuid
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Coroutine,
@@ -36,8 +36,9 @@ from typing import (
     Union,
     cast,
     get_args,
-    TYPE_CHECKING,
 )
+
+from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -721,12 +722,15 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
         await asyncio.sleep(timeout.connect)
 
 
+MOCK_RESPONSE_TYPE = Union[str, Exception, dict]
+
+
 def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
     n: Optional[int] = None,
-    mock_response: Union[str, Exception, dict] = "This is a mock request",
+    mock_response: MOCK_RESPONSE_TYPE = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     mock_timeout: Optional[bool] = False,
     logging=None,
@@ -1007,7 +1011,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
-    mock_response = kwargs.get("mock_response", None)
+    mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
     mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
     force_timeout = kwargs.get("force_timeout", 600)  ## deprecated
@@ -1114,7 +1118,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = base_url
         if num_retries is not None:
             max_retries = num_retries
-        logging = litellm_logging_obj
+        logging: Logging = cast(Logging, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(**args)
@@ -1427,7 +1431,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
+                or get_secret_str("AZURE_API_VERSION")
                 or litellm.AZURE_DEFAULT_API_VERSION
             )
 
@@ -1529,12 +1533,14 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
         elif custom_llm_provider == "azure_text":
             # azure configs
-            api_type = get_secret("AZURE_API_TYPE") or "azure"
+            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
 
-            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+            api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
             )
 
             api_key = (
@@ -2545,15 +2551,10 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "compactifai":
             api_key = (
-                api_key
-                or get_secret_str("COMPACTIFAI_API_KEY")
-                or litellm.api_key
+                api_key or get_secret_str("COMPACTIFAI_API_KEY") or litellm.api_key
             )
 
-            api_base = (
-                api_base
-                or "https://api.compactif.ai/v1"
-            )
+            api_base = api_base or "https://api.compactif.ai/v1"
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(

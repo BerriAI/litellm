@@ -1,16 +1,3 @@
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:149: error: Incompatible types in assignment (expression has type "list[StreamingChoices]", variable has type "list[Choices | StreamingChoices]")  [assignment]
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:149: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:149: note: Consider using "Sequence" instead, which is covariant
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:204: error: Incompatible types in assignment (expression has type "list[StreamingChoices]", variable has type "list[Choices | StreamingChoices]")  [assignment]
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:204: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:204: note: Consider using "Sequence" instead, which is covariant
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:567: error: Incompatible types in assignment (expression has type "list[Choices]", variable has type "list[Choices | StreamingChoices]")  [assignment]
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:567: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
-litellm_core_utils/llm_response_utils/convert_dict_to_response.py:567: note: Consider using "Sequence" instead, which is covariant
-proxy/_types.py:443: error: Unsupported operand types for + ("list[str]" and "list[KeyManagementRoutes]")  [operator]
-proxy/_types.py:518: error: Unsupported operand types for + ("list[str]" and "list[KeyManagementRoutes]")  [operator]
-router.py:4528: error: Argument "deployment_id" to "increment_deployment_failures_for_current_minute" has incompatible type "Any | None"; expected "str"  [arg-type]
-router.py:5239: error: Argument "custom_llm_provider" to "_initialize_deployment_for_pass_through" of "Router" has incompatible type "str | None"; expected "str"  [arg-type]
 main.py:1373: error: Argument "mock_response" to "mock_completion" has incompatible type "Any | None"; expected "str | Exception | dict[Any, Any]"  [arg-type]
 main.py:1505: error: Argument "azure_ad_token_provider" to "completion" of "AzureChatCompletion" has incompatible type "Any | None"; expected "Callable[..., Any]"  [arg-type]
 main.py:1511: error: Argument "logging_obj" to "completion" of "AzureChatCompletion" has incompatible type "Any | None"; expected "Logging"  [arg-type]
@@ -100,15 +87,6 @@ main.py:4679: error: Argument "aembedding" to "embedding" of "BaseLLMHTTPHandler
 main.py:5611: error: Item "None" of "Any | None" has no attribute "update_environment_variables"  [union-attr]
 main.py:5766: error: Argument "logging_obj" to "speech" of "SpeechToCompletionBridgeHandler" has incompatible type "Any | None"; expected "Logging"  [arg-type]
 main.py:5795: error: Argument "logging_obj" to "speech" of "SpeechToCompletionBridgeHandler" has incompatible type "Any | None"; expected "Logging"  [arg-type]
-llms/watsonx/chat/handler.py:73: error: Argument "model" to "completion" of "OpenAILikeChatHandler" has incompatible type "Any | None"; expected "str"  [arg-type]
-llms/vertex_ai/fine_tuning/handler.py:143: error: Argument "vertex_hyper_parameters" to "_translate_vertex_response_hyperparameters" of "VertexFineTuningAPI" has incompatible type "FineTuneHyperparameters | dict[Never, Never]"; expected "FineTuneHyperparameters"  [arg-type]
-llms/openai/completion/transformation.py:103: error: Incompatible types in assignment (expression has type "list[Choices]", variable has type "list[Choices | StreamingChoices]")  [assignment]
-llms/openai/completion/transformation.py:103: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
-llms/openai/completion/transformation.py:103: note: Consider using "Sequence" instead, which is covariant
-llms/huggingface/embedding/transformation.py:271: error: Argument "role_dict" to "custom_prompt" has incompatible type "Any | None"; expected "dict[Any, Any]"  [arg-type]
-llms/bedrock/chat/invoke_handler.py:1452: error: Argument "chunk_data" to "converse_chunk_parser" of "AWSEventStreamDecoder" has incompatible type "Any | None"; expected "dict[Any, Any]"  [arg-type]
-llms/anthropic/cost_calculation.py:52: error: Incompatible types in assignment (expression has type "SearchContextCostPerQuery | dict[Never, Never]", variable has type "SearchContextCostPerQuery")  [assignment]
-llms/anthropic/completion/transformation.py:294: error: Incompatible types in assignment (expression has type "Any | None", variable has type "str")  [assignment]
 litellm_core_utils/streaming_handler.py:1374: error: Item "None" of "Any | None" has no attribute "id"  [union-attr]
 litellm_core_utils/streaming_handler.py:1379: error: Argument 1 to "copy_model_response_level_provider_specific_fields" of "CustomStreamWrapper" has incompatible type "Any | None"; expected "ModelResponseStream | ChatCompletionChunk"  [arg-type]
 litellm_core_utils/streaming_handler.py:1382: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
@@ -122,15 +100,13 @@ litellm_core_utils/streaming_handler.py:1408: error: Item "None" of "Any | None"
 litellm_core_utils/streaming_handler.py:1410: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
 litellm_core_utils/streaming_handler.py:1454: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
 litellm_core_utils/streaming_handler.py:1455: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
-litellm_core_utils/litellm_logging.py:2989: error: Argument "raw_response" to "transform_response" of "AnthropicConfig" has incompatible type "Any | None"; expected "Response"  [arg-type]
-proxy/guardrails/guardrail_hooks/bedrock_guardrails.py:379: error: Argument "response" to "_get_bedrock_guardrail_response_status" of "BedrockGuardrail" has incompatible type "Any | ModelResponse"; expected "Response"  [arg-type]
-proxy/guardrails/guardrail_hooks/bedrock_guardrails.py:386: error: Item "ModelResponse" of "Any | ModelResponse" has no attribute "status_code"  [union-attr]
-proxy/guardrails/guardrail_hooks/bedrock_guardrails.py:401: error: Item "ModelResponse" of "Any | ModelResponse" has no attribute "status_code"  [union-attr]
-proxy/guardrails/guardrail_hooks/bedrock_guardrails.py:402: error: Item "ModelResponse" of "Any | ModelResponse" has no attribute "text"  [union-attr]
-proxy/auth/oauth2_proxy_hook.py:17: error: Incompatible types in assignment (expression has type "Any | None", variable has type "dict[str, str]")  [assignment]
-proxy/_experimental/mcp_server/cost_calculator.py:53: error: Incompatible types in assignment (expression has type "MCPServerCostInfo | dict[Never, Never]", variable has type "MCPServerCostInfo")  [assignment]
+proxy/hooks/parallel_request_limiter_v3.py:381: error: Incompatible types in assignment (expression has type "RateLimitDescriptorRateLimitObject | dict[Never, Never]", variable has type "RateLimitDescriptorRateLimitObject | None")  [assignment]
+proxy/hooks/parallel_request_limiter_v3.py:383: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:384: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:385: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:386: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
 proxy/management_helpers/utils.py:39: error: Incompatible types (expression has type "Any | None", TypedDict item "models" has type "list[str]")  [typeddict-item]
+proxy/management_helpers/team_member_permission_checks.py:174: error: "str" has no attribute "value"  [attr-defined]
 proxy/pass_through_endpoints/pass_through_endpoints.py:501: error: Unsupported type "dict[str, Any]" for ** expansion in TypedDict  [typeddict-item]
 proxy/management_endpoints/ui_sso.py:895: error: Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "provider"  [union-attr]
 proxy/enterprise/litellm_enterprise/integrations/prometheus.py:2265: error: Incompatible types in assignment (expression has type "Any | None", variable has type "dict[Any, Any]")  [assignment]
-Found 127 errors in 20 files (checked 1114 source files)
