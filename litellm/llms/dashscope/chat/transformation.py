@@ -33,9 +33,17 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        DashScope does not support content in list format.
+        Standardize message format for DashScope API.
+        Ensures each message has required 'role' and 'content' fields.
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        transformed_messages = []
+        for message in messages:
+            transformed_messages.append({
+                "role": message["role"],
+                "content": message.get("content", "")
+            })
+        messages = transformed_messages
+            
         if is_async:
             return super()._transform_messages(
                 messages=messages, model=model, is_async=True
