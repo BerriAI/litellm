@@ -145,7 +145,7 @@ jobs:
           command: |
             cd litellm
             # Use the same simple approach that works in GitHub Actions
-            python -m mypy . --ignore-missing-imports
+            python -m mypy . --ignore-missing-imports --show-traceback
             cd ..
 
       # Run pytest and generate JUnit XML report
