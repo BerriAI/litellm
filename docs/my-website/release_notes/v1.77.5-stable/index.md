@@ -79,6 +79,8 @@ import TabItem from '@theme/TabItem';
 - **[Gemini](../../docs/providers/gemini)**
     - Added Gemini 2.5 Flash and Flash-lite preview models (September 2025 release) with improved pricing - [PR #14948](https://github.com/BerriAI/litellm/pull/14948)
     - Added new Anthropic web fetch tool support - [PR #14951](https://github.com/BerriAI/litellm/pull/14951)
+- **[XAI](../../docs/providers/xai)**
+    - Add xai/grok-4-fast models - [PR #14833](https://github.com/BerriAI/litellm/pull/14833)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Updated Claude Sonnet 4 configs to reflect million-token context window pricing - [PR #14639](https://github.com/BerriAI/litellm/pull/14639)
     - Added supported text field to anthropic citation response - [PR #14164](https://github.com/BerriAI/litellm/pull/14164)
@@ -87,6 +89,7 @@ import TabItem from '@theme/TabItem';
     - Support requestMetadata in Bedrock Converse API - [PR #14570](https://github.com/BerriAI/litellm/pull/14570)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Added vertex_ai/qwen models and azure/gpt-5-codex - [PR #14844](https://github.com/BerriAI/litellm/pull/14844)
+    - Update vertex ai qwen model pricing - [PR #14828](https://github.com/BerriAI/litellm/pull/14828)
     - Vertex AI Context Caching: use Vertex ai API v1 instead of v1beta1 and accept 'cachedContent' param - [PR #14831](https://github.com/BerriAI/litellm/pull/14831)
 - **[SambaNova](../../docs/providers/sambanova)**
     - Add sambanova deepseek v3.1 and gpt-oss-120b - [PR #14866](https://github.com/BerriAI/litellm/pull/14866)
@@ -123,6 +126,7 @@ import TabItem from '@theme/TabItem';
 #### Features
 
 - **General**
+    - Add SDK support for additional headers - [PR #14761](https://github.com/BerriAI/litellm/pull/14761)
     - Add shared_session parameter for aiohttp ClientSession reuse - [PR #14721](https://github.com/BerriAI/litellm/pull/14721)
 
 #### Bugs
@@ -137,11 +141,16 @@ import TabItem from '@theme/TabItem';
 
 #### Features
 
-- **Proxy CLI Auth** - Allow re-using cli auth token - [PR #14780](https://github.com/BerriAI/litellm/pull/14780)
-- **Proxy CLI** - Create a python method to login using litellm proxy - [PR #14782](https://github.com/BerriAI/litellm/pull/14782)
-- **Scheduled Key Rotations** - Initial support for scheduled key rotations - [PR #14877](https://github.com/BerriAI/litellm/pull/14877)
-- **UI Key Rotations** - Allow scheduling key rotations when creating virtual keys - [PR #14960](https://github.com/BerriAI/litellm/pull/14960)
-- **Proxy CLI Fixes** - Fixes for LiteLLM Proxy CLI to Auth to Gateway - [PR #14836](https://github.com/BerriAI/litellm/pull/14836)
+- **Proxy CLI Auth** 
+    - Allow re-using cli auth token - [PR #14780](https://github.com/BerriAI/litellm/pull/14780)
+    - Create a python method to login using litellm proxy - [PR #14782](https://github.com/BerriAI/litellm/pull/14782)
+    - Fixes for LiteLLM Proxy CLI to Auth to Gateway - [PR #14836](https://github.com/BerriAI/litellm/pull/14836)
+    
+**Virtual Keys**    
+    - Initial support for scheduled key rotations - [PR #14877](https://github.com/BerriAI/litellm/pull/14877)
+    - Allow scheduling key rotations when creating virtual keys - [PR #14960](https://github.com/BerriAI/litellm/pull/14960)
+- **Models + Endpoints** 
+    - Fix: added Oracle to provider's list - [PR #14835](https://github.com/BerriAI/litellm/pull/14835)
 
 
 #### Bugs
@@ -208,6 +217,32 @@ import TabItem from '@theme/TabItem';
 
 ---
 
+## Documentation Updates
+
+- **Provider Documentation** - Fix docs for provider_specific_params.md - [PR #14787](https://github.com/BerriAI/litellm/pull/14787)
+- **Model References** - Update model references from gemini-pro to gemini-2.5-pro - [PR #14775](https://github.com/BerriAI/litellm/pull/14775)
+- **Letta Guide** - Add Letta Guide documentation - [PR #14798](https://github.com/BerriAI/litellm/pull/14798)
+- **README** - Make the README document clearer - [PR #14860](https://github.com/BerriAI/litellm/pull/14860)
+- **Session Management** - Update docs for session management availability - [PR #14914](https://github.com/BerriAI/litellm/pull/14914)
+- **Cost Documentation** - Add documentation for additional cost-related keys in custom pricing - [PR #14949](https://github.com/BerriAI/litellm/pull/14949)
+- **Azure Passthrough** - Add azure passthrough documentation - [PR #14958](https://github.com/BerriAI/litellm/pull/14958)
+- **General Documentation** - Doc updates sept 2025 - [PR #14769](https://github.com/BerriAI/litellm/pull/14769)
+    - Clarified bridging between endpoints and mode in docs.
+    - Added Vertex AI Gemini API configuration as an alternative in relevant guides.
+    Linked AWS authentication info in the Bedrock guardrails documentation.
+    - Added Cancel Response API usage with code snippets
+    - Clarified that SSO (Single Sign-On) is free for up to 5 users:
+    - Alphabetized sidebar, leaving quick start / intros at top of categories
+    - Documented max_connections under cache_params.
+    - Clarified IAM AssumeRole Policy requirements.
+    - Added transform utilities example to Getting Started (showing request transformation).
+    - Added references to models.litellm.ai as the full models list in various docs.
+    - Added a code snippet for async_post_call_success_hook.
+    - Removed broken links to callbacks management guide. - Reformatted and linked cookbooks + other relevant docs
+- **Documentation Corrections** - Corrected docs updates sept 2025 - [PR #14916](https://github.com/BerriAI/litellm/pull/14916)
+
+---
+
 ## New Contributors
 
 * @uzaxirr made their first contribution in [PR #14761](https://github.com/BerriAI/litellm/pull/14761)
@@ -229,6 +264,20 @@ import TabItem from '@theme/TabItem';
 * @oytunkutrup1 made their first contribution in [PR #14858](https://github.com/BerriAI/litellm/pull/14858)
 * @nherment made their first contribution in [PR #14933](https://github.com/BerriAI/litellm/pull/14933)
 * @deepanshululla made their first contribution in [PR #14974](https://github.com/BerriAI/litellm/pull/14974)
+* @TeddyAmkie made their first contribution in [PR #14758](https://github.com/BerriAI/litellm/pull/14758)
+* @SmartManoj made their first contribution in [PR #14775](https://github.com/BerriAI/litellm/pull/14775)
+* @uc4w6c made their first contribution in [PR #14720](https://github.com/BerriAI/litellm/pull/14720)
+* @luizrennocosta made their first contribution in [PR #14783](https://github.com/BerriAI/litellm/pull/14783)
+* @AlexsanderHamir made their first contribution in [PR #14827](https://github.com/BerriAI/litellm/pull/14827)
+* @dharamendrak made their first contribution in [PR #14721](https://github.com/BerriAI/litellm/pull/14721)
+* @TomeHirata made their first contribution in [PR #14164](https://github.com/BerriAI/litellm/pull/14164)
+* @mrFranklin made their first contribution in [PR #14860](https://github.com/BerriAI/litellm/pull/14860)
+* @luisfucros made their first contribution in [PR #14866](https://github.com/BerriAI/litellm/pull/14866)
+* @huangyafei made their first contribution in [PR #14879](https://github.com/BerriAI/litellm/pull/14879)
+* @thiswillbeyourgithub made their first contribution in [PR #14949](https://github.com/BerriAI/litellm/pull/14949)
+* @Maximgitman made their first contribution in [PR #14965](https://github.com/BerriAI/litellm/pull/14965)
+* @subnet-dev made their first contribution in [PR #14938](https://github.com/BerriAI/litellm/pull/14938)
+* @22mSqRi made their first contribution in [PR #14972](https://github.com/BerriAI/litellm/pull/14972)
 
 ---
 
