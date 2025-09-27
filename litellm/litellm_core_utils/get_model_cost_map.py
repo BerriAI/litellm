@@ -2,44 +2,41 @@
 Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
 This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
+LITELLM_PRICE_DIR must be relative to /app ( root dir of litellm)
 
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
+export LITELLM_PRICE_DIR=config
 ```
 """
-
 import os
-
+import json
 import httpx
+import logging
 
+def load_local_backup() -> dict:
+    """
+    Load model cost data from the local backup JSON file.
+    The backup path is derived from the LITELLM_PRICE_DIR environment variable.
+    """
+    backup_path = os.path.join(os.getenv("LITELLM_PRICE_DIR", "litellm"), "model_prices_and_context_window_backup.json")
+    with open(backup_path, "r") as f:
+        return json.load(f)
 
 def get_model_cost_map(url: str) -> dict:
-    if (
-        os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
-    ):
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+    """
+    Retrieves the model cost and context window data from a remote source.
+    Falls back to a local JSON file if:
+    - The environment variable LITELLM_LOCAL_MODEL_COST_MAP is set to "True", or
+    - The remote fetch fails
+    """
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        return load_local_backup()
 
     try:
-        response = httpx.get(
-            url, timeout=5
-        )  # set a 5 second timeout for the get request
-        response.raise_for_status()  # Raise an exception if the request is unsuccessful
-        content = response.json()
-        return content
+        response = httpx.get(url, timeout=5)
+        response.raise_for_status()
+        return response.json()
     except Exception:
-        import importlib.resources
-        import json
-
-        with importlib.resources.open_text(
-            "litellm", "model_prices_and_context_window_backup.json"
-        ) as f:
-            content = json.load(f)
-            return content
+        logging.warning("[WARN] Remote fetch failed, falling back to local model cost map.")
+        return load_local_backup()
