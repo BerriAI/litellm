@@ -429,7 +429,8 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             return None
 
         model_invocation: Optional[InvokeAgentModelInvocationInput] = (
-            orchestration_trace.get("modelInvocationInput", {})
+            orchestration_trace.get("modelInvocationInput")
+            or InvokeAgentModelInvocationInput()
         )
         if not model_invocation:
             return None
