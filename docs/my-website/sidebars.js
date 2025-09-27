@@ -584,6 +584,7 @@ const sidebars = {
         "budget_manager",
         "caching/all_caches",
         "completion/token_usage",
+        "sdk_custom_pricing",
         "embedding/async_embedding",
         "embedding/moderation",
         "migration",
