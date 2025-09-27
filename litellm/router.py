@@ -4979,7 +4979,7 @@ class Router:
 
             model = deployment.to_json(exclude_none=True)
 
-            self._add_model_to_list_and_index_map(model, deployment.model_info.id)
+            self._add_model_to_list_and_index_map(model=model, model_id=deployment.model_info.id)
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -5329,7 +5329,7 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         # add to model names
-        self._add_model_to_list_and_index_map(_deployment, deployment.model_info.id)
+        self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
         self.model_names.append(deployment.model_name)
         return deployment
 
@@ -5342,9 +5342,9 @@ class Router:
         - removal_idx: int - the index where the deployment was removed from model_list
         """
         # Update indices for all models after the removed one
-        for model_id, idx in self.model_id_to_deployment_index_map.items():
+        for deployment_id, idx in self.model_id_to_deployment_index_map.items():
             if idx > removal_idx:
-                self.model_id_to_deployment_index_map[model_id] = idx - 1
+                self.model_id_to_deployment_index_map[deployment_id] = idx - 1
         # Remove the deleted model from index
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
@@ -5398,7 +5398,7 @@ class Router:
 
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
-                        self._update_deployment_indices_after_removal(deployment_id, removal_idx)
+                        self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -5429,7 +5429,7 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
-                self._update_deployment_indices_after_removal(id, deployment_idx)
+                self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
                 return item
             else:
                 return None
@@ -6093,7 +6093,7 @@ class Router:
                     model["model_info"] = {}
                 model["model_info"]["id"] = model_id
             
-            self._add_model_to_list_and_index_map(model, model_id)
+            self._add_model_to_list_and_index_map(model=model, model_id=model_id)
 
     def get_model_ids(
         self, model_name: Optional[str] = None, exclude_team_models: bool = False
