@@ -2581,37 +2581,6 @@ def test_re_use_openaiClient():
         pytest.fail("got Exception", e)
 
 
-def test_completion_azure():
-    try:
-        litellm.set_verbose = False
-        ## Test azure call
-        response = completion(
-            model="azure/gpt-4o-new-test",
-            messages=messages,
-            api_key="os.environ/AZURE_API_KEY",
-        )
-        print(f"response: {response}")
-        print(f"response hidden params: {response._hidden_params}")
-        ## Test azure flag for backwards-compat
-        # response = completion(
-        #     model="chatgpt-v-3",
-        #     messages=messages,
-        #     azure=True,
-        #     max_tokens=10
-        # )
-        # Add any assertions here to check the response
-        print(response)
-
-        cost = completion_cost(completion_response=response)
-        assert cost > 0.0
-        print("Cost for azure completion request", cost)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_azure()
-
-
 @pytest.mark.skip(
     reason="this is bad test. It doesn't actually fail if the token is not set in the header. "
 )

@@ -313,3 +313,29 @@ async def test_azure_gpt5_reasoning(model):
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
+
+
+
+def test_completion_azure():
+    try:
+        litellm.set_verbose = False
+        ## Test azure call
+        response = completion(
+            model="azure/gpt-4.1-nano",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, how are you?",
+                }
+            ],
+            api_key="os.environ/AZURE_API_KEY",
+        )
+        print(f"response: {response}")
+        print(f"response hidden params: {response._hidden_params}")
+        print(response)
+
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0
+        print("Cost for azure completion request", cost)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
