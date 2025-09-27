@@ -461,7 +461,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if stream is True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
-            choice_list = []
+            choice_list: List[Choices] = []
 
             assert response_object["choices"] is not None and isinstance(
                 response_object["choices"], Iterable
@@ -565,7 +565,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
-            model_response_object.choices = choice_list
+            model_response_object.choices = choice_list  # type: ignore
 
             if "usage" in response_object and response_object["usage"] is not None:
                 usage_object = litellm.Usage(**response_object["usage"])
