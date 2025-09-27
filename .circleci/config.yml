@@ -53,7 +53,7 @@ jobs:
     
   local_testing:
     docker:
-      - image: cimg/python:3.13.1
+      - image: cimg/python:3.12
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
