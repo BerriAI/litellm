@@ -664,8 +664,25 @@ async def test_async_completion_azure_caching_streaming():
     )
     litellm.callbacks = [customHandler_caching]
     unique_time = uuid.uuid4()
-    response1 = await litellm.acompletion(
-        model="azure/gpt-4.1-nano",
+    
+    # Use Router instead of direct litellm.acompletion to get router-specific metadata
+    model_list = [
+        {
+            "model_name": "gpt-4.1-nano",
+            "litellm_params": {
+                "model": "azure/gpt-4.1-nano",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+            "tpm": 240000,
+            "rpm": 1800,
+        },
+    ]
+    router = Router(model_list=model_list)
+    
+    response1 = await router.acompletion(
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -677,8 +694,8 @@ async def test_async_completion_azure_caching_streaming():
     await asyncio.sleep(1)
     initial_customhandler_caching_states = len(customHandler_caching.states)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
-    response2 = await litellm.acompletion(
-        model="azure/gpt-4.1-nano",
+    response2 = await router.acompletion(
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
