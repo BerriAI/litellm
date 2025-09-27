@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from litellm_proxy_extras._logging import logger
+from litellm.caching.redis_cache import RedisCache
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -23,7 +24,7 @@ class MigrationLockManager:
     MIGRATION_LOCK_KEY = "migration_lock"
     LOCK_TTL_SECONDS = 300  # 5 minutes TTL
 
-    def __init__(self, redis_cache=None):
+    def __init__(self, redis_cache: Optional[RedisCache] = None):
         self.redis_cache = redis_cache
         self.lock_acquired = False
         self.pod_id = f"pod_{os.getpid()}_{int(time.time())}"
@@ -326,7 +327,7 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def setup_database(use_migrate: bool = False, redis_cache=None) -> bool:
+    def setup_database(use_migrate: bool = False, redis_cache: Optional[RedisCache] = None) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
         Uses migrations from litellm-proxy-extras package.
