@@ -68,13 +68,14 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
+            pip uninstall fastuuid -y
             pip install "mypy==1.18.2"
       - run:
           name: MyPy Type Checking
           command: |
             cd litellm
             # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
-            python -m mypy . --ignore-missing-imports --exclude="fastuuid"
+            python -m mypy . --ignore-missing-imports
             cd ..
           no_output_timeout: 10m
   local_testing:
