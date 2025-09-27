@@ -7,7 +7,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1317,7 +1317,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
         # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["anthropic.claude-3-sonnet-20240229-v1:0", None],
-        # ["anthropic.claude-instant-v1", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         ["bedrock/amazon.titan-tg1-large", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
@@ -1422,8 +1421,6 @@ def test_bedrock_claude_3_streaming():
         "claude-3-opus-20240229",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
-        # "databricks/databricks-dbrx-instruct",  # databricks
-        "predibase/llama-3-8b-instruct",  # predibase
     ],
 )
 @pytest.mark.asyncio
@@ -1546,50 +1543,6 @@ def test_completion_replicate_stream_bad_key():
 
 
 # test_completion_replicate_stream_bad_key()
-
-
-def test_completion_bedrock_claude_stream():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?",
-                }
-            ],
-            temperature=1,
-            max_tokens=20,
-            stream=True,
-        )
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        first_chunk_id = None
-        for idx, chunk in enumerate(response):
-            # print
-            if idx == 0:
-                first_chunk_id = chunk.id
-            else:
-                assert (
-                    chunk.id == first_chunk_id
-                ), f"chunk ids do not match: {chunk.id} != first chunk id{first_chunk_id}"
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 # test_completion_bedrock_claude_stream()
 
@@ -2831,7 +2784,7 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    import uuid
+    from litellm._uuid import uuid
 
     tools = [
         {

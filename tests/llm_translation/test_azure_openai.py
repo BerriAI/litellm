@@ -633,14 +633,17 @@ def test_azure_openai_responses_bridge():
 
 
 def test_azure_openai_gpt_5_responses_api():
-    from litellm import responses
+    try:
+        from litellm import responses
 
-    litellm._turn_on_debug()
+        litellm._turn_on_debug()
 
-    response = responses(
-        model="azure/gpt-5",
-        input="Hello world",
-        api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-        api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
-    )
-    print(f"response: {response}")
+        response = responses(
+            model="azure/gpt-5",
+            input="Hi good morning",
+            api_key=os.getenv("AZURE_GPT5_API_KEY"),
+            api_base=os.getenv("AZURE_GPT5_API_BASE"),
+        )
+        print(f"response: {response}")
+    except litellm.RateLimitError:
+        pytest.skip("Skipping test due to RateLimitError")

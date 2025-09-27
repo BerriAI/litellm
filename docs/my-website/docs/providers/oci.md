@@ -44,7 +44,11 @@ response = completion(
     oci_user=<your_oci_user>,
     oci_fingerprint=<your_oci_fingerprint>,
     oci_tenancy=<your_oci_tenancy>,
+    # Provide either the private key string OR the path to the key file:
+    # Option 1: pass the private key as a string
     oci_key=<string_with_content_of_oci_key>,
+    # Option 2: pass the private key file path
+    # oci_key_file="<path/to/oci_key.pem>",
     oci_compartment_id=<oci_compartment_id>,
 )
 print(response)
@@ -67,7 +71,11 @@ response = completion(
     oci_user=<your_oci_user>,
     oci_fingerprint=<your_oci_fingerprint>,
     oci_tenancy=<your_oci_tenancy>,
+    # Provide either the private key string OR the path to the key file:
+    # Option 1: pass the private key as a string
     oci_key=<string_with_content_of_oci_key>,
+    # Option 2: pass the private key file path
+    # oci_key_file="<path/to/oci_key.pem>",
     oci_compartment_id=<oci_compartment_id>,
 )
 for chunk in response:

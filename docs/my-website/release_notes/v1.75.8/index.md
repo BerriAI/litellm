@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE]v1.75.8"
+title: "v1.75.8-stable - Team Member Rate Limits"
 slug: "v1-75-8"
 date: 2025-08-16T10:00:00
 authors:
@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.75.8
+ghcr.io/berriai/litellm:v1.75.8-stable
 ```
 </TabItem>
 
@@ -51,6 +51,22 @@ pip install litellm==1.75.8
 - **Azure AI Flux Image Generation** - Support for Azure AI's Flux image generation models.
 
 ---
+
+## Team Member Rate Limits
+
+<Image 
+  img={require('../../img/release_notes/team_member_rate_limits.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+<p style={{textAlign: 'left', color: '#666'}}>
+  LiteLLM MCP Architecture: Use MCP tools with all LiteLLM supported models
+</p>
+
+
+This release adds support for setting rate limits on individual members (including machine users) within a team. Teams can now give each agent its own rate limits—so that heavy-traffic agents don’t impact other agents or human users. 
+
+Agents can authenticate with LiteLLM using JWT and the same team role as human users, while still enforcing per-agent rate limits.
+
 
 ## New Models / Updated Models
 

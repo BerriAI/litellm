@@ -19,8 +19,6 @@ from litellm._logging import verbose_logger
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
@@ -48,7 +46,6 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
-        protocol_version: MCPSpecVersionType = MCPSpecVersion.jun_2025,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -62,7 +59,6 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-        self.protocol_version: MCPSpecVersionType = protocol_version
 
         # handle the basic auth value if provided
         if auth_value:
@@ -84,22 +80,24 @@ class MCPClient:
         """Initialize the transport and session."""
         if self._session:
             return  # Already connected
-            
+
         try:
             if self.transport_type == MCPTransport.stdio:
                 # For stdio transport, use stdio_client with command-line parameters
                 if not self.stdio_config:
                     raise ValueError("stdio_config is required for stdio transport")
-                    
+
                 server_params = StdioServerParameters(
                     command=self.stdio_config.get("command", ""),
                     args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {})
+                    env=self.stdio_config.get("env", {}),
                 )
-                
+
                 self._transport_ctx = stdio_client(server_params)
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             elif self.transport_type == MCPTransport.sse:
@@ -110,7 +108,9 @@ class MCPClient:
                     headers=headers,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             else:  # http
@@ -121,7 +121,9 @@ class MCPClient:
                     headers=headers,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
         except ValueError as e:
@@ -184,8 +186,10 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        headers = {}
-        
+        headers = {
+            "MCP-Protocol-Version": "2025-06-18"
+        }
+
         if self._mcp_auth_value:
             if self.auth_type == MCPAuth.bearer_token:
                 headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
@@ -193,18 +197,10 @@ class MCPClient:
                 headers["Authorization"] = f"Basic {self._mcp_auth_value}"
             elif self.auth_type == MCPAuth.api_key:
                 headers["X-API-Key"] = self._mcp_auth_value
+            elif self.auth_type == MCPAuth.authorization:
+                headers["Authorization"] = self._mcp_auth_value
 
-        # Handle protocol version - it might be a string or enum
-        if hasattr(self.protocol_version, 'value'):
-            # It's an enum
-            protocol_version_str = self.protocol_version.value
-        else:
-            # It's a string
-            protocol_version_str = str(self.protocol_version)
-        
-        headers["MCP-Protocol-Version"] = protocol_version_str
         return headers
-
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
@@ -214,7 +210,7 @@ class MCPClient:
             except Exception as e:
                 verbose_logger.warning(f"MCP client connection failed: {str(e)}")
                 return []
-        
+
         if self._session is None:
             verbose_logger.warning("MCP client session is not initialized")
             return []
@@ -243,17 +239,20 @@ class MCPClient:
             except Exception as e:
                 verbose_logger.warning(f"MCP client connection failed: {str(e)}")
                 return MCPCallToolResult(
-                    content=[TextContent(type="text", text=f"{str(e)}")],
-                    isError=True
+                    content=[TextContent(type="text", text=f"{str(e)}")], isError=True
                 )
 
         if self._session is None:
             verbose_logger.warning("MCP client session is not initialized")
             return MCPCallToolResult(
-                content=[TextContent(type="text", text="MCP client session is not initialized")],
+                content=[
+                    TextContent(
+                        type="text", text="MCP client session is not initialized"
+                    )
+                ],
                 isError=True,
             )
-        
+
         try:
             tool_result = await self._session.call_tool(
                 name=call_tool_request_params.name,
@@ -268,8 +267,8 @@ class MCPClient:
             await self.disconnect()
             # Return a default error result instead of raising
             return MCPCallToolResult(
-                content=[TextContent(type="text", text=f"{str(e)}")],  # Empty content for error case
+                content=[
+                    TextContent(type="text", text=f"{str(e)}")
+                ],  # Empty content for error case
                 isError=True,
             )
-        
-

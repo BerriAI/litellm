@@ -139,6 +139,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       }
 
       await organizationCreateCall(accessToken, values)
+      NotificationsManager.success("Organization created successfully")
       setIsOrgModalVisible(false)
       form.resetFields()
       // Refresh organizations list

@@ -92,6 +92,22 @@ def load_private_key_from_str(key_str: str):
     return key
 
 
+def load_private_key_from_file(file_path: str):
+    """Loads a private key from a file path"""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            key_str = f.read().strip()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Private key file not found: {file_path}")
+    except OSError as e:
+        raise OSError(f"Failed to read private key file '{file_path}': {e}") from e
+
+    if not key_str:
+        raise ValueError(f"Private key file is empty: {file_path}")
+
+    return load_private_key_from_str(key_str)
+
+
 def get_vendor_from_model(model: str) -> OCIVendors:
     """
     Extracts the vendor from the model name.
@@ -237,10 +253,17 @@ class OCIChatConfig(BaseConfig):
         oci_fingerprint = optional_params.get("oci_fingerprint")
         oci_tenancy = optional_params.get("oci_tenancy")
         oci_key = optional_params.get("oci_key")
+        oci_key_file = optional_params.get("oci_key_file")
 
-        if not oci_user or not oci_fingerprint or not oci_tenancy or not oci_key:
+        if (
+            not oci_user
+            or not oci_fingerprint
+            or not oci_tenancy
+            or not (oci_key or oci_key_file)
+        ):
             raise Exception(
-                "Missing one of the following parameters: oci_user, oci_fingerprint, oci_tenancy, oci_key"
+                "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, "
+                "and at least one of oci_key or oci_key_file."
             )
 
         method = str(optional_params.get("method", "POST")).upper()
@@ -283,7 +306,17 @@ class OCIChatConfig(BaseConfig):
                 "Please install it with: pip install cryptography"
             ) from e
 
-        private_key = load_private_key_from_str(oci_key)
+        private_key = (
+            load_private_key_from_str(oci_key)
+            if oci_key
+            else load_private_key_from_file(oci_key_file) if oci_key_file else None
+        )
+
+        if private_key is None:
+            raise Exception(
+                "Private key is required for OCI authentication. Please provide either oci_key or oci_key_file."
+            )
+
         signature = private_key.sign(
             signing_string.encode("utf-8"),
             padding.PKCS1v15(),
@@ -334,17 +367,19 @@ class OCIChatConfig(BaseConfig):
         oci_fingerprint = optional_params.get("oci_fingerprint")
         oci_tenancy = optional_params.get("oci_tenancy")
         oci_key = optional_params.get("oci_key")
+        oci_key_file = optional_params.get("oci_key_file")
         oci_compartment_id = optional_params.get("oci_compartment_id")
 
         if (
             not oci_user
             or not oci_fingerprint
             or not oci_tenancy
-            or not oci_key
+            or not (oci_key or oci_key_file)
             or not oci_compartment_id
         ):
             raise Exception(
-                "Missing one of the following parameters: oci_user, oci_fingerprint, oci_tenancy, oci_key, oci_compartment_id"
+                "Missing required parameters: oci_user, oci_fingerprint, oci_tenancy, oci_compartment_id "
+                "and at least one of oci_key or oci_key_file."
             )
 
         if not api_base:
@@ -737,20 +772,20 @@ def adapt_messages_to_generic_oci_standard(
         tool_calls = message.get("tool_calls")
         tool_call_id = message.get("tool_call_id")
 
-        if role in ["system", "user", "assistant"] and content is not None:
+        if role == "assistant" and tool_calls is not None:
+            if not isinstance(tool_calls, list):
+                raise Exception("Prop `tool_calls` must be a list of tool calls")
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
+            )
+
+        elif role in ["system", "user", "assistant"] and content is not None:
             if not isinstance(content, (str, list)):
                 raise Exception(
                     "Prop `content` must be a string or a list of content items"
                 )
             new_messages.append(
                 adapt_messages_to_generic_oci_standard_content_message(role, content)
-            )
-
-        elif role == "assistant" and tool_calls is not None:
-            if not isinstance(tool_calls, list):
-                raise Exception("Prop `tool_calls` must be a list of tool calls")
-            new_messages.append(
-                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
             )
 
         elif role == "tool":

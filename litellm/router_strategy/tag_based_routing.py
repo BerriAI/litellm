@@ -6,7 +6,7 @@ Use this to route requests between Teams
 - If no default_deployments are set, return all deployments
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
@@ -41,6 +41,7 @@ async def get_deployments_for_tag(
     model: str,  # used to raise the correct error
     healthy_deployments: Union[List[Any], Dict[Any, Any]],
     request_kwargs: Optional[Dict[Any, Any]] = None,
+    metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ):
     """
     Returns a list of deployments that match the requested model and tags in the request.
@@ -63,9 +64,9 @@ async def get_deployments_for_tag(
         )
         return healthy_deployments
 
-    verbose_logger.debug("request metadata: %s", request_kwargs.get("metadata"))
-    if "metadata" in request_kwargs:
-        metadata = request_kwargs["metadata"]
+    verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
+    if metadata_variable_name in request_kwargs:
+        metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
 
         new_healthy_deployments = []
@@ -120,7 +121,8 @@ async def get_deployments_for_tag(
 
 
 def _get_tags_from_request_kwargs(
-    request_kwargs: Optional[Dict[Any, Any]] = None
+    request_kwargs: Optional[Dict[Any, Any]] = None,
+    metadata_variable_name: Literal["metadata", "litellm_metadata"] = "metadata",
 ) -> List[str]:
     """
     Helper to get tags from request kwargs
@@ -133,11 +135,13 @@ def _get_tags_from_request_kwargs(
     """
     if request_kwargs is None:
         return []
-    if "metadata" in request_kwargs:
-        metadata = request_kwargs["metadata"]
-        return metadata.get("tags", [])
+    if metadata_variable_name in request_kwargs:
+        metadata = request_kwargs[metadata_variable_name] or {}
+        tags = metadata.get("tags", [])
+        return tags if tags is not None else []
     elif "litellm_params" in request_kwargs:
-        litellm_params = request_kwargs["litellm_params"]
-        _metadata = litellm_params.get("metadata", {})
-        return _metadata.get("tags", [])
+        litellm_params = request_kwargs["litellm_params"] or {}
+        _metadata = litellm_params.get(metadata_variable_name, {}) or {}
+        tags = _metadata.get("tags", [])
+        return tags if tags is not None else []
     return []

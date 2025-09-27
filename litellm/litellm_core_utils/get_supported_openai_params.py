@@ -94,9 +94,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.VLLMConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepseek":
         return litellm.DeepSeekChatConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "cohere":
-        return litellm.CohereConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "cohere_chat":
+    elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
         return litellm.CohereChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "maritalk":
         return litellm.MaritalkConfig().get_supported_openai_params(model=model)
@@ -131,6 +129,8 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "vercel_ai_gateway":
+        return litellm.VercelAIGatewayConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         # mistal and codestral api have the exact same params
         if request_type == "chat_completion":
@@ -149,6 +149,9 @@ def get_supported_openai_params(  # noqa: PLR0915
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "wandb":
+        if request_type == "chat_completion":
+            return litellm.WandbConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "replicate":
         return litellm.ReplicateConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "huggingface":
@@ -268,10 +271,9 @@ def get_supported_openai_params(  # noqa: PLR0915
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
             )
-            return (
-                ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
-                    model=model
-                )
+
+            return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
             )
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":

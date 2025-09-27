@@ -59,7 +59,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         server_name: mcpServer.server_name,
         url: mcpServer.url,
         transport: mcpServer.transport,
-        spec_version: mcpServer.spec_version,
         auth_type: mcpServer.auth_type,
         mcp_info: mcpServer.mcp_info,
       };
@@ -177,13 +176,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                 <Select.Option value="api_key">API Key</Select.Option>
                 <Select.Option value="bearer_token">Bearer Token</Select.Option>
                 <Select.Option value="basic">Basic Auth</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item label="MCP Version" name="spec_version" rules={[{ required: true }]}> 
-              <Select>
-                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
 

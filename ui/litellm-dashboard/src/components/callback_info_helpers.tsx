@@ -41,12 +41,12 @@ export const mapDisplayToInternalNames = (displayValues: string[]): string[] => 
   return displayValues.map(value => callback_map[value] || value);
 };
 
-const asset_logos_folder = '/assets/logos/';
+const asset_logos_folder = '/ui/assets/logos/';
 
 interface CallbackInfo {
   logo: string;
   supports_key_team_logging: boolean;
-  dynamic_params: Record<string, "text" | "password" | "select" | "upload">;
+  dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
   description: string | null;
 }
 
@@ -86,7 +86,8 @@ export const callbackInfo: Record<string, CallbackInfo> = {
       dynamic_params: {
         "langsmith_api_key": "password",
         "langsmith_project": "text",
-        "langsmith_base_url": "text"
+        "langsmith_base_url": "text",
+        "langsmith_sampling_rate": "number"
       },
       description: "Langsmith Logging Integration"
     },

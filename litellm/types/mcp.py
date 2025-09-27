@@ -31,13 +31,20 @@ class MCPAuth(str, enum.Enum):
     api_key = "api_key"
     bearer_token = "bearer_token"
     basic = "basic"
+    authorization = "authorization"
 
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
 MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
 MCPAuthType = Optional[
-    Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
+    Literal[
+        MCPAuth.none,
+        MCPAuth.api_key,
+        MCPAuth.bearer_token,
+        MCPAuth.basic,
+        MCPAuth.authorization,
+    ]
 ]
 
 

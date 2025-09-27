@@ -4,7 +4,7 @@ import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 import json
-import uuid
+from litellm._uuid import uuid
 
 
 async def chat_completion(

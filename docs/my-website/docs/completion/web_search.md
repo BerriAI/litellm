@@ -1,17 +1,32 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Using Web Search
+# Web Search
 
 Use web search with litellm
 
 | Feature | Details |
 |---------|---------|
 | Supported Endpoints | - `/chat/completions` <br/> - `/responses` |
-| Supported Providers | `openai`, `xai`, `vertex_ai`, `gemini`, `perplexity` |
+| Supported Providers | `openai`, `xai`, `vertex_ai`, `anthropic`, `gemini`, `perplexity` |
 | LiteLLM Cost Tracking | ✅ Supported |
 | LiteLLM Version | `v1.71.0+` |
 
+## Which Search Engine is Used?
+
+Each provider uses their own search backend:
+
+| Provider | Search Engine | Notes |
+|----------|---------------|-------|
+| **OpenAI** (`gpt-4o-search-preview`) | OpenAI's internal search | Real-time web data |
+| **xAI** (`grok-3`) | xAI's search + X/Twitter | Real-time social media data |
+| **Google AI/Vertex** (`gemini-2.0-flash`) | **Google Search** | Uses actual Google search results |
+| **Anthropic** (`claude-3-5-sonnet`) | Anthropic's web search | Real-time web data |
+| **Perplexity** | Perplexity's search engine | AI-powered search and reasoning |
+
+:::info
+**Anthropic Web Search Models**: Claude models that support web search: `claude-3-5-sonnet-latest`, `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`, `claude-3-7-sonnet-20250219`
+:::
 
 ## `/chat/completions` (litellm.completion)
 
@@ -55,6 +70,12 @@ model_list:
     litellm_params:
       model: xai/grok-3
       api_key: os.environ/XAI_API_KEY
+  
+  # Anthropic
+  - model_name: claude-3-5-sonnet-latest
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-latest
+      api_key: os.environ/ANTHROPIC_API_KEY
   
   # VertexAI
   - model_name: gemini-2-flash
@@ -139,6 +160,31 @@ response = completion(
     ],
     web_search_options={
         "search_context_size": "high"  # Options: "low", "medium" (default), "high"
+    }
+)
+```
+
+**Anthropic (using web_search_options)**
+```python showLineNumbers
+from litellm import completion
+
+# Customize search context size for Anthropic
+response = completion(
+    model="anthropic/claude-3-5-sonnet-latest",
+    messages=[
+        {
+            "role": "user",
+            "content": "What was a positive news story from today?",
+        }
+    ],
+    web_search_options={
+        "search_context_size": "medium",  # Options: "low", "medium" (default), "high"
+        "user_location": {
+            "type": "approximate",
+            "approximate": {
+                "city": "San Francisco",
+            },
+        }
     }
 )
 ```
@@ -375,6 +421,9 @@ assert litellm.supports_web_search(model="openai/gpt-4o-search-preview") == True
 # Check xAI models
 assert litellm.supports_web_search(model="xai/grok-3") == True
 
+# Check Anthropic models
+assert litellm.supports_web_search(model="anthropic/claude-3-5-sonnet-latest") == True
+
 # Check VertexAI models
 assert litellm.supports_web_search(model="gemini-2.0-flash") == True
 
@@ -402,6 +451,14 @@ model_list:
     litellm_params:
       model: xai/grok-3
       api_key: os.environ/XAI_API_KEY
+    model_info:
+      supports_web_search: True
+  
+  # Anthropic
+  - model_name: claude-3-5-sonnet-latest
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-latest
+      api_key: os.environ/ANTHROPIC_API_KEY
     model_info:
       supports_web_search: True
   

@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -543,6 +543,7 @@ async def test_get_user_info_from_db():
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd"
 
 
+@pytest.mark.asyncio
 async def test_get_user_info_from_db_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -1245,4 +1246,463 @@ class TestCustomUISSO:
                     # Verify the result is the redirect response
                     assert result == mock_redirect_response
                     assert result.status_code == 303
+
+
+class TestCLIKeyRegenerationFlow:
+    """Test the end-to-end CLI key regeneration flow"""
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_regenerate_existing_key(self):
+        """Test CLI SSO callback regenerating an existing key"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        # Mock request
+        mock_request = MagicMock(spec=Request)
+        
+        # Test data
+        existing_key = "sk-existing-key-123"
+        new_key = "sk-new-key-456"
+        
+        # Mock the regenerate helper function
+        with patch("litellm.proxy.management_endpoints.ui_sso._regenerate_cli_key") as mock_regenerate, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Act
+            result = await cli_sso_callback(
+                request=mock_request,
+                key=new_key,
+                existing_key=existing_key
+            )
+            
+            # Assert
+            mock_regenerate.assert_called_once_with(existing_key=existing_key, new_key=new_key, user_id=None)
+            assert result.status_code == 200
+            assert "Success" in result.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_create_new_key(self):
+        """Test CLI SSO callback creating a new key when no existing key provided"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        # Mock request
+        mock_request = MagicMock(spec=Request)
+        
+        # Test data
+        new_key = "sk-new-key-789"
+        
+        # Mock the create helper function
+        with patch("litellm.proxy.management_endpoints.ui_sso._create_new_cli_key") as mock_create, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Act
+            result = await cli_sso_callback(
+                request=mock_request,
+                key=new_key,
+                existing_key=None
+            )
+            
+            # Assert
+            mock_create.assert_called_once_with(key=new_key, user_id=None)
+            assert result.status_code == 200
+            assert "Success" in result.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_routes_to_cli_with_existing_key(self):
+        """Test that auth_callback properly routes CLI requests and preserves existing_key parameter"""
+        from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        # Mock request with existing_key query parameter
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params.get.return_value = "sk-existing-cli-key-123"
+        
+        # CLI state
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456"
+        
+        # Mock the CLI callback and required proxy server components
+        mock_result = {"user_id": "test-user", "email": "test@example.com"}
+        
+        with patch("litellm.proxy.management_endpoints.ui_sso.cli_sso_callback") as mock_cli_callback, \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.proxy_server.master_key", "test-master-key"), \
+             patch("litellm.proxy.proxy_server.general_settings", {}), \
+             patch("litellm.proxy.proxy_server.jwt_handler", MagicMock()), \
+             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), \
+             patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test-google-id"}, clear=True), \
+             patch("litellm.proxy.management_endpoints.ui_sso.GoogleSSOHandler.get_google_callback_response", return_value=mock_result):
+            mock_cli_callback.return_value = MagicMock()
+            
+            # Act
+            await auth_callback(request=mock_request, state=cli_state)
+            
+            # Assert
+            mock_cli_callback.assert_called_once_with(
+                request=mock_request,
+                key="sk-new-session-key-456",
+                existing_key="sk-existing-cli-key-123",
+                result=mock_result
+            )
+
+    def test_get_redirect_url_preserves_existing_key(self):
+        """Test that redirect URL generation preserves existing_key parameter"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.litellm.ai/"
+        
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
+            # Test with existing_key
+            redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+                request=mock_request,
+                sso_callback_route="sso/callback",
+                existing_key="sk-existing-123"
+            )
+            
+            assert "https://test.litellm.ai/sso/callback?existing_key=sk-existing-123" == redirect_url
+
+    def test_get_redirect_url_without_existing_key(self):
+        """Test that redirect URL generation works without existing_key parameter"""
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.litellm.ai/"
+        
+        with patch("litellm.proxy.utils.get_custom_url", return_value="https://test.litellm.ai"):
+            # Test without existing_key
+            redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
+                request=mock_request,
+                sso_callback_route="sso/callback"
+            )
+            
+            assert "https://test.litellm.ai/sso/callback" == redirect_url
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_callback_regenerate_vs_create_flow(self):
+        """Test CLI SSO callback calls regenerate_key_fn when existing_key provided, generate_key_helper_fn when not"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+        
+        mock_request = MagicMock(spec=Request)
+        
+        with patch("litellm.proxy.management_endpoints.key_management_endpoints.regenerate_key_fn") as mock_regenerate, \
+             patch("litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn") as mock_generate, \
+             patch("litellm.proxy._types.UserAPIKeyAuth.get_litellm_cli_user_api_key_auth"), \
+             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), \
+             patch("litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page", return_value="<html>Success</html>"):
+            
+            # Test regeneration path
+            await cli_sso_callback(mock_request, key="sk-new-123", existing_key="sk-existing-456")
+            mock_regenerate.assert_called_once()
+            mock_generate.assert_not_called()
+            
+            # Reset mocks
+            mock_regenerate.reset_mock()
+            mock_generate.reset_mock()
+            
+            # Test creation path
+            await cli_sso_callback(mock_request, key="sk-new-789", existing_key=None)
+            mock_regenerate.assert_not_called()
+            mock_generate.assert_called_once()
+
+
+class TestProcessSSOJWTAccessToken:
+    """Test the process_sso_jwt_access_token helper function"""
+
+    @pytest.fixture
+    def mock_jwt_handler(self):
+        """Create a mock JWT handler for testing"""
+        mock_handler = MagicMock(spec=JWTHandler)
+        mock_handler.get_team_ids_from_jwt.return_value = ["team1", "team2", "team3"]
+        return mock_handler
+
+    @pytest.fixture
+    def sample_jwt_token(self):
+        """Create a sample JWT token string"""
+        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+
+    @pytest.fixture
+    def sample_jwt_payload(self):
+        """Create a sample JWT payload"""
+        return {
+            "sub": "1234567890",
+            "name": "John Doe",
+            "iat": 1516239022,
+            "groups": ["team1", "team2", "team3"]
+        }
+
+    def test_process_sso_jwt_access_token_with_valid_token(self, mock_jwt_handler, sample_jwt_token, sample_jwt_payload):
+        """Test processing a valid JWT access token with team extraction"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        # Create a result object without team_ids
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            display_name="Test User",
+            provider="generic",
+            team_ids=[]
+        )
+
+        with patch("jwt.decode", return_value=sample_jwt_payload) as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+
+            # Assert
+            # Verify JWT was decoded correctly
+            mock_jwt_decode.assert_called_once_with(
+                sample_jwt_token, options={"verify_signature": False}
+            )
+            
+            # Verify team IDs were extracted from JWT
+            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(sample_jwt_payload)
+            
+            # Verify team IDs were set on the result object
+            assert result.team_ids == ["team1", "team2", "team3"]
+
+    def test_process_sso_jwt_access_token_with_existing_team_ids(self, mock_jwt_handler, sample_jwt_token):
+        """Test that existing team IDs are not overwritten"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        # Create a result object with existing team_ids
+        existing_team_ids = ["existing_team1", "existing_team2"]
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            first_name="Test",
+            last_name="User",
+            display_name="Test User",
+            provider="generic",
+            team_ids=existing_team_ids
+        )
+
+        with patch("jwt.decode") as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+
+            # Assert
+            # JWT should still be decoded
+            mock_jwt_decode.assert_called_once()
+            
+            # But team IDs should NOT be extracted since they already exist
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+            
+            # Existing team IDs should remain unchanged
+            assert result.team_ids == existing_team_ids
+
+    def test_process_sso_jwt_access_token_with_dict_result(self, mock_jwt_handler, sample_jwt_token, sample_jwt_payload):
+        """Test processing with a dictionary result object"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        # Create a dictionary result without team_ids
+        result = {
+            "id": "test_user",
+            "email": "test@example.com",
+            "name": "Test User"
+        }
+
+        with patch("jwt.decode", return_value=sample_jwt_payload) as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+
+            # Assert
+            mock_jwt_decode.assert_called_once_with(
+                sample_jwt_token, options={"verify_signature": False}
+            )
+            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(sample_jwt_payload)
+            
+            # Verify team_ids was added to the dict as a key
+            assert "team_ids" in result
+            assert result["team_ids"] == ["team1", "team2", "team3"]
+
+    def test_process_sso_jwt_access_token_with_dict_existing_team_ids(self, mock_jwt_handler, sample_jwt_token):
+        """Test that existing team IDs in dictionary are not overwritten"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        # Create a dictionary result with existing team_ids
+        existing_team_ids = ["dict_team1", "dict_team2"]
+        result = {
+            "id": "test_user",
+            "email": "test@example.com",
+            "name": "Test User",
+            "team_ids": existing_team_ids
+        }
+
+        with patch("jwt.decode") as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+
+            # Assert
+            # JWT should still be decoded
+            mock_jwt_decode.assert_called_once()
+            
+            # But team IDs should NOT be extracted since they already exist
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+            
+            # Existing team IDs should remain unchanged
+            assert result["team_ids"] == existing_team_ids
+
+    def test_process_sso_jwt_access_token_no_access_token(self, mock_jwt_handler):
+        """Test that nothing happens when access token is None or empty"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            team_ids=[]
+        )
+
+        # Test with None access token
+        with patch("jwt.decode") as mock_jwt_decode:
+            process_sso_jwt_access_token(
+                access_token_str=None,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+            
+            # Assert nothing was processed
+            mock_jwt_decode.assert_not_called()
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+            assert result.team_ids == []
+
+        # Test with empty string access token
+        with patch("jwt.decode") as mock_jwt_decode:
+            process_sso_jwt_access_token(
+                access_token_str="",
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+            
+            # Assert nothing was processed
+            mock_jwt_decode.assert_not_called()
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+            assert result.team_ids == []
+
+    def test_process_sso_jwt_access_token_no_sso_jwt_handler(self, sample_jwt_token):
+        """Test that nothing happens when sso_jwt_handler is None"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            team_ids=[]
+        )
+
+        with patch("jwt.decode") as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=None,
+                result=result
+            )
+
+            # Assert nothing was processed
+            mock_jwt_decode.assert_not_called()
+            assert result.team_ids == []
+
+    def test_process_sso_jwt_access_token_no_result(self, mock_jwt_handler, sample_jwt_token):
+        """Test that nothing happens when result is None"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        with patch("jwt.decode") as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=None
+            )
+
+            # Assert nothing was processed
+            mock_jwt_decode.assert_not_called()
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+
+    def test_process_sso_jwt_access_token_jwt_decode_exception(self, mock_jwt_handler, sample_jwt_token):
+        """Test that JWT decode exceptions are not caught (should propagate up)"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            team_ids=[]
+        )
+
+        with patch("jwt.decode", side_effect=Exception("JWT decode error")) as mock_jwt_decode:
+            # Act & Assert
+            with pytest.raises(Exception, match="JWT decode error"):
+                process_sso_jwt_access_token(
+                    access_token_str=sample_jwt_token,
+                    sso_jwt_handler=mock_jwt_handler,
+                    result=result
+                )
+
+            # Verify JWT decode was attempted
+            mock_jwt_decode.assert_called_once()
+            # But team extraction should not have been called
+            mock_jwt_handler.get_team_ids_from_jwt.assert_not_called()
+
+    def test_process_sso_jwt_access_token_empty_team_ids_from_jwt(self, mock_jwt_handler, sample_jwt_token, sample_jwt_payload):
+        """Test processing when JWT handler returns empty team IDs"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            process_sso_jwt_access_token,
+        )
+
+        # Configure mock to return empty team IDs
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        result = CustomOpenID(
+            id="test_user",
+            email="test@example.com",
+            team_ids=[]
+        )
+
+        with patch("jwt.decode", return_value=sample_jwt_payload) as mock_jwt_decode:
+            # Act
+            process_sso_jwt_access_token(
+                access_token_str=sample_jwt_token,
+                sso_jwt_handler=mock_jwt_handler,
+                result=result
+            )
+
+            # Assert
+            mock_jwt_decode.assert_called_once()
+            mock_jwt_handler.get_team_ids_from_jwt.assert_called_once_with(sample_jwt_payload)
+            
+            # Even empty team IDs should be set
+            assert result.team_ids == []
 

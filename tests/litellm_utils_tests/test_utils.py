@@ -338,7 +338,9 @@ def test_aget_valid_models():
     print(valid_models)
 
     # list of openai supported llms on litellm
-    expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+    expected_models = (
+        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+    )
 
     assert set(valid_models) == set(expected_models)
 
@@ -410,7 +412,12 @@ def test_validate_environment_api_key():
 
 
 def test_validate_environment_api_version():
-    response_obj = validate_environment(model="azure/openai-deployment", api_key="sk-my-test-key", api_base="https://fake.openai.azure.com/", api_version="2024-02-15")
+    response_obj = validate_environment(
+        model="azure/openai-deployment",
+        api_key="sk-my-test-key",
+        api_base="https://fake.openai.azure.com/",
+        api_version="2024-02-15",
+    )
     assert (
         response_obj["keys_in_environment"] is True
     ), f"Missing keys={response_obj['missing_keys']}"
@@ -513,7 +520,6 @@ def test_function_to_dict():
         ("gpt-3.5-turbo", True),
         ("azure/gpt-4-1106-preview", True),
         ("groq/gemma-7b-it", True),
-        ("anthropic.claude-instant-v1", False),
         ("gemini/gemini-1.5-flash", True),
     ],
 )
@@ -1054,7 +1060,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
         ("gpt-3.5-turbo", False),
-        ("groq/llama3-70b-8192", True),
+        ("groq/llama-3.3-70b-versatile", True),
     ],
 )
 def test_supports_response_schema(model, expected_bool):
@@ -1690,15 +1696,6 @@ def test_pick_cheapest_chat_model_from_llm_provider():
     assert len(pick_cheapest_chat_models_from_llm_provider("unknown", n=1)) == 0
 
 
-def test_get_potential_model_names():
-    from litellm.utils import _get_potential_model_names
-
-    assert _get_potential_model_names(
-        model="bedrock/ap-northeast-1/anthropic.claude-instant-v1",
-        custom_llm_provider="bedrock",
-    )
-
-
 @pytest.mark.parametrize("num_retries", [0, 1, 5])
 def test_get_num_retries(num_retries):
     from litellm.utils import _get_wrapper_num_retries
@@ -2329,3 +2326,62 @@ def test_get_whitelisted_models():
             file.write(f"{model}\n")
 
     print("whitelisted_models written to whitelisted_bedrock_models.txt")
+
+
+def test_delta_tool_calls_sequential_indices():
+    """
+    Test that multiple tool calls without explicit indices receive sequential indices.
+
+    When providers don't include index fields in tool calls, the Delta class
+    should automatically assign sequential indices (0, 1, 2, ...) instead of
+    defaulting all tool calls to index=0.
+    """
+    import json
+    from litellm.types.utils import Delta
+
+    # Simulate tool calls from streaming responses without explicit indices
+    tool_calls_without_indices = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "get_weather_for_dallas",
+                "arguments": json.dumps({})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        },
+        {
+            "id": "call_2",
+            "function": {
+                "name": "get_weather_precise",
+                "arguments": json.dumps({"location": "Dallas, TX"})
+            },
+            "type": "function",
+            # Note: no "index" field - simulates provider response
+        }
+    ]
+
+    # Create Delta object as LiteLLM would when processing streaming response
+    delta = Delta(
+        content=None,
+        tool_calls=tool_calls_without_indices
+    )
+
+    # Verify tool calls have sequential indices
+    assert delta.tool_calls is not None, "Tool calls should not be None"
+    assert len(delta.tool_calls) == 2
+    assert delta.tool_calls[0].index == 0, f"First tool call should have index 0, got {delta.tool_calls[0].index}"
+    assert delta.tool_calls[1].index == 1, f"Second tool call should have index 1, got {delta.tool_calls[1].index}"
+
+    # Verify tool call details are preserved
+    assert delta.tool_calls[0].function.name == "get_weather_for_dallas"
+    assert delta.tool_calls[1].function.name == "get_weather_precise"
+
+def test_completion_with_no_model():
+    """
+    Ensure error is raised when no model is provided
+    """
+    # test on empty
+    with pytest.raises(TypeError):
+        response = litellm.completion(messages=[{"role": "user", "content": "Hello, how are you?"}])
+        

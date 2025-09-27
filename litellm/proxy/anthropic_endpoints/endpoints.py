@@ -90,6 +90,17 @@ async def anthropic_response(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
         )
 
+        tasks = []
+        tasks.append(
+            proxy_logging_obj.during_call_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
+                    route_type="anthropic_messages"  # type: ignore
+                ),
+            )
+        )
+
         ### ROUTE THE REQUESTs ###
         router_model_names = llm_router.model_names if llm_router is not None else []
 
@@ -97,23 +108,21 @@ async def anthropic_response(  # noqa: PLR0915
         if (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None and data["model"] in llm_router.deployment_names
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
-                llm_router.aanthropic_messages(**data, specific_deployment=True)
-            )
+            llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
         elif (
             llm_router is not None and data["model"] in llm_router.get_model_ids()
         ):  # model in router model list
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -122,9 +131,9 @@ async def anthropic_response(  # noqa: PLR0915
                 or len(llm_router.pattern_router.patterns) > 0
             )
         ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(llm_router.aanthropic_messages(**data))
+            llm_coro = llm_router.aanthropic_messages(**data)
         elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_response = asyncio.create_task(litellm.anthropic_messages(**data))
+            llm_coro = litellm.anthropic_messages(**data)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -134,8 +143,16 @@ async def anthropic_response(  # noqa: PLR0915
                 },
             )
 
-        # Await the llm_response task
-        response = await llm_response
+        tasks.append(llm_coro)
+
+        # wait for call to end
+        llm_responses = asyncio.gather(
+            *tasks
+        )  # run the moderation check in parallel to the actual llm api call
+
+        responses = await llm_responses
+
+        response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -183,7 +200,12 @@ async def anthropic_response(  # noqa: PLR0915
                 headers=dict(fastapi_response.headers),
             )
 
-        verbose_proxy_logger.info("\nResponse from Litellm:\n{}".format(response))
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
+        )
+
+        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(

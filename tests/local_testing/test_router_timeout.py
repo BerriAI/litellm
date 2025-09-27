@@ -96,7 +96,7 @@ def test_router_timeouts():
 
 @pytest.mark.asyncio
 async def test_router_timeouts_bedrock():
-    import uuid
+    from litellm._uuid import uuid
 
     import openai
 
@@ -105,7 +105,7 @@ async def test_router_timeouts_bedrock():
         {
             "model_name": "bedrock",
             "litellm_params": {
-                "model": "bedrock/anthropic.claude-instant-v1",
+                "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                 "timeout": 0.00001,
             },
             "tpm": 80000,

@@ -72,6 +72,7 @@ On the LiteLLM UI, Navigate to `Teams`, You should see the new team `Production 
 
 <Image img={require('../../img/msft_auto_team.png')}  style={{ width: '900px', height: 'auto' }} />
 
+> **Note:** When a user is removed from your organization via SCIM, all API keys and access tokens associated with that user will be automatically deleted from LiteLLM. This ensures that removed users lose all access immediately and securely.
 
 
 
