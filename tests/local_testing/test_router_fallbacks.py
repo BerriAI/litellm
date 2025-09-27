@@ -250,10 +250,8 @@ def test_sync_fallbacks_embeddings():
         {  # list of model deployments
             "model_name": "good-azure-embedding-model",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/azure-embedding-model",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "model": "text-embedding-ada-002",
+                "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "tpm": 240000,
             "rpm": 1800,
@@ -302,10 +300,8 @@ async def test_async_fallbacks_embeddings():
         {  # list of model deployments
             "model_name": "good-azure-embedding-model",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/azure-embedding-model",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "model": "text-embedding-ada-002",
+                "api_key": os.getenv("OPENAI_API_KEY"),
             },
             "tpm": 240000,
             "rpm": 1800,
@@ -993,10 +989,8 @@ async def test_service_unavailable_fallbacks(sync_mode):
             {
                 "model_name": "gpt-3.5-turbo-0125-preview",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "model": "gpt-4.1-nano",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
         ],
@@ -1014,7 +1008,7 @@ async def test_service_unavailable_fallbacks(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    assert response.model == "gpt-3.5-turbo-0125"
+    assert "gpt-4.1-nano" in response.model
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
