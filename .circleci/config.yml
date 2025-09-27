@@ -1200,6 +1200,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pytest-mock
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
