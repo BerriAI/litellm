@@ -915,7 +915,6 @@ async def test_async_embedding_bedrock():
         pytest.fail(f"An exception occurred: {str(e)}")
 
 
-
 # Image Generation
 
 
