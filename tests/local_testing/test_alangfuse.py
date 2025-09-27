@@ -194,7 +194,7 @@ def create_async_task(**completion_kwargs):
     By default a standard set of arguments are used for the litellm.acompletion function.
     """
     completion_args = {
-        "model": "azure/chatgpt-v-3",
+        "model": "azure/gpt-4.1-nano",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test"}],
         "max_tokens": 5,
