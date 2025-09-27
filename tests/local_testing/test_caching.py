@@ -527,7 +527,7 @@ def test_embedding_caching_azure():
     print(api_key)
     print(api_base)
     embedding1 = embedding(
-        model="text-embedding-ada-002",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
@@ -540,7 +540,7 @@ def test_embedding_caching_azure():
     time.sleep(1)
     start_time = time.time()
     embedding2 = embedding(
-        model="text-embedding-ada-002",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
