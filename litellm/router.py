@@ -17,7 +17,6 @@ import logging
 import threading
 import time
 import traceback
-from litellm._uuid import uuid
 from collections import defaultdict
 from functools import lru_cache
 from typing import (
@@ -45,6 +44,7 @@ import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import (
     DualCache,
     InMemoryCache,
@@ -2005,11 +2005,17 @@ class Router:
 
         # Filter out prompt management specific parameters from data before merging
         prompt_management_params = {
-            "bitbucket_config", "dotprompt_config", "prompt_id", 
-            "prompt_variables", "prompt_label", "prompt_version"
+            "bitbucket_config",
+            "dotprompt_config",
+            "prompt_id",
+            "prompt_variables",
+            "prompt_label",
+            "prompt_version",
         }
-        filtered_data = {k: v for k, v in data.items() if k not in prompt_management_params}
-        
+        filtered_data = {
+            k: v for k, v in data.items() if k not in prompt_management_params
+        }
+
         kwargs = {**filtered_data, **kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
@@ -4108,7 +4114,9 @@ class Router:
         """
         model_group = kwargs.get("model")
         response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(
+            response
+        ):
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
@@ -4517,7 +4525,9 @@ class Router:
                 _time_to_cooldown = self.cooldown_time
 
             if isinstance(_model_info, dict):
-                deployment_id = _model_info.get("id", None)
+                deployment_id: Optional[str] = _model_info.get("id")
+                if deployment_id is None:
+                    return False
                 increment_deployment_failures_for_current_minute(
                     litellm_router_instance=self,
                     deployment_id=deployment_id,
@@ -5134,12 +5144,12 @@ class Router:
         # Check if this is a prompt management model before validating as LLM provider
         litellm_model = deployment.litellm_params.model
         is_prompt_management_model = False
-        
+
         if "/" in litellm_model:
             split_litellm_model = litellm_model.split("/")[0]
             if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
                 is_prompt_management_model = True
-        
+
         if is_prompt_management_model:
             # For prompt management models, skip LLM provider validation
             # The actual model will be resolved at runtime from the prompt file
@@ -5229,11 +5239,12 @@ class Router:
         #     litellm_router_instance=self, model=deployment.to_json(exclude_none=True)
         # )
 
-        self._initialize_deployment_for_pass_through(
-            deployment=deployment,
-            custom_llm_provider=custom_llm_provider,
-            model=deployment.litellm_params.model,
-        )
+        if custom_llm_provider is not None:
+            self._initialize_deployment_for_pass_through(
+                deployment=deployment,
+                custom_llm_provider=custom_llm_provider,
+                model=deployment.litellm_params.model,
+            )
 
         #########################################################
         # Check if this is an auto-router deployment

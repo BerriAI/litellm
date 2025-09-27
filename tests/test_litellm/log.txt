@@ -1,38 +1,28 @@
-============================= test session starts ==============================
-platform darwin -- Python 3.13.1, pytest-8.3.5, pluggy-1.5.0 -- /Users/krrishdholakia/Documents/litellm/myenv/bin/python3.13
-cachedir: .pytest_cache
-rootdir: /Users/krrishdholakia/Documents/litellm
-configfile: pyproject.toml
-plugins: respx-0.22.0, postgresql-7.0.1, anyio-4.4.0, asyncio-0.26.0, mock-3.14.0, ddtrace-2.19.0rc1, xdist-3.6.1
-asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collecting ... collected 8 items
-
-test_main.py::test_url_with_format_param[False-anthropic/claude-3-5-sonnet] PASSED [ 12%]
-test_main.py::test_url_with_format_param[False-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 25%]
-test_main.py::test_url_with_format_param[False-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 37%]
-test_main.py::test_url_with_format_param[False-gemini/gemini-1.5-flash] PASSED [ 50%]
-test_main.py::test_url_with_format_param[True-anthropic/claude-3-5-sonnet] PASSED [ 62%]
-test_main.py::test_url_with_format_param[True-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 75%]
-test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0] PASSED [ 87%]
-test_main.py::test_url_with_format_param[True-gemini/gemini-1.5-flash] PASSED [100%]
-
-=============================== warnings summary ===============================
-tests/litellm/test_main.py::test_url_with_format_param[False-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0]
-tests/litellm/test_main.py::test_url_with_format_param[False-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
-tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0]
-tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
-  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/botocore/auth.py:425: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
-    datetime_now = datetime.datetime.utcnow()
-
-tests/litellm/test_main.py::test_url_with_format_param[True-anthropic/claude-3-5-sonnet]
-  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/pydantic/main.py:421: UserWarning: Pydantic serializer warnings:
-    Expected `str` but got `MagicMock` with value `<MagicMock name='mock().j...em__()' id='5209845984'>` - serialized value may not be as expected
-    return self.__pydantic_serializer__.to_python(
-
-tests/litellm/test_main.py::test_url_with_format_param[True-bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0]
-  /Users/krrishdholakia/Documents/litellm/myenv/lib/python3.13/site-packages/pydantic/main.py:421: UserWarning: Pydantic serializer warnings:
-    Expected `str` but got `MagicMock` with value `<MagicMock name='mock().j...em__()' id='5210168288'>` - serialized value may not be as expected
-    return self.__pydantic_serializer__.to_python(
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 8 passed, 6 warnings in 2.33s =========================
+main.py:1377: error: Argument "mock_response" to "mock_completion" has incompatible type "str | Exception | dict[Any, Any] | None"; expected "str | Exception | dict[Any, Any]"  [arg-type]
+main.py:1509: error: Argument "azure_ad_token_provider" to "completion" of "AzureChatCompletion" has incompatible type "Any | None"; expected "Callable[..., Any]"  [arg-type]
+main.py:1580: error: Argument "api_base" to "completion" of "AzureTextCompletion" has incompatible type "str | None"; expected "str"  [arg-type]
+main.py:1581: error: Argument "api_version" to "completion" of "AzureTextCompletion" has incompatible type "str | None"; expected "str"  [arg-type]
+main.py:2862: error: Argument "custom_llm_provider" to "completion" of "VertexLLM" has incompatible type "str"; expected "Literal['vertex_ai', 'vertex_ai_beta', 'gemini']"  [arg-type]
+main.py:2931: error: Argument "custom_llm_provider" to "completion" of "VertexLLM" has incompatible type "str"; expected "Literal['vertex_ai', 'vertex_ai_beta', 'gemini']"  [arg-type]
+main.py:3212: error: Argument "api_base" to "completion" of "WatsonXChatHandler" has incompatible type "str | None"; expected "str"  [arg-type]
+litellm_core_utils/streaming_handler.py:1374: error: Item "None" of "Any | None" has no attribute "id"  [union-attr]
+litellm_core_utils/streaming_handler.py:1379: error: Argument 1 to "copy_model_response_level_provider_specific_fields" of "CustomStreamWrapper" has incompatible type "Any | None"; expected "ModelResponseStream | ChatCompletionChunk"  [arg-type]
+litellm_core_utils/streaming_handler.py:1382: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1383: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1389: error: Item "None" of "Any | None" has no attribute "system_fingerprint"  [union-attr]
+litellm_core_utils/streaming_handler.py:1393: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1398: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1403: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1406: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1408: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1410: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1454: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+litellm_core_utils/streaming_handler.py:1455: error: Item "None" of "Any | None" has no attribute "choices"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:381: error: Incompatible types in assignment (expression has type "RateLimitDescriptorRateLimitObject | dict[Never, Never]", variable has type "RateLimitDescriptorRateLimitObject | None")  [assignment]
+proxy/hooks/parallel_request_limiter_v3.py:383: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:384: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:385: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/hooks/parallel_request_limiter_v3.py:386: error: Item "None" of "RateLimitDescriptorRateLimitObject | None" has no attribute "get"  [union-attr]
+proxy/management_helpers/team_member_permission_checks.py:174: error: "str" has no attribute "value"  [attr-defined]
+proxy/management_endpoints/ui_sso.py:895: error: Item "dict[Any, Any]" of "Any | dict[Any, Any]" has no attribute "provider"  [union-attr]
+Found 27 errors in 5 files (checked 1114 source files)
