@@ -52,7 +52,7 @@ model_list:
     api_base: os.environ/AZURE_API_BASE
     api_key: os.environ/AZURE_API_KEY
     api_version: 2023-07-01-preview
-    model: azure/azure-embedding-model
+    model: azure/text-embedding-ada-002
   model_info:
     mode: embedding
   model_name: azure-embedding-model
@@ -105,7 +105,7 @@ model_list:
     api_base: os.environ/AZURE_API_BASE
     api_key: os.environ/AZURE_API_KEY
     api_version: 2023-07-01-preview
-    model: azure/azure-embedding-model
+    model: azure/text-embedding-ada-002
   model_info:
     base_model: text-embedding-ada-002
     mode: embedding
