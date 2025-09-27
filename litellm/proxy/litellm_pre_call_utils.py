@@ -45,6 +45,8 @@ else:
     ProxyConfig = Any
 
 
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
 def parse_cache_control(cache_control):
     cache_dict = {}
     directives = cache_control.split(", ")
@@ -1011,9 +1013,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         premium_user=premium_user,
     )
 
-    end_time = time.time()
-    asyncio.create_task(
-        service_logger_obj.async_service_success_hook(
+    end_time = time.time()    
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+        async_coroutine=service_logger_obj.async_service_success_hook(
             service=ServiceTypes.PROXY_PRE_CALL,
             duration=end_time - start_time,
             call_type="add_litellm_data_to_request",

@@ -34,6 +34,7 @@ from typing import (
     cast,
 )
 
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 import httpx
 import openai
 from openai import AsyncOpenAI
@@ -1054,9 +1055,9 @@ class Router:
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
             end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            _duration = end_time - start_time            
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
                     call_type="acompletion",
@@ -1242,8 +1243,8 @@ class Router:
             _timeout_debug_deployment_dict = deployment
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
                     call_type="async_get_available_deployment",
@@ -6973,8 +6974,8 @@ class Router:
 
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.ROUTER,
                     duration=_duration,
                     call_type="<routing_strategy>.async_get_available_deployments",
