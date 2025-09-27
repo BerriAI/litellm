@@ -75,7 +75,7 @@ jobs:
           command: |
             cd litellm
             # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
-            python -m mypy . --ignore-missing-imports
+            python -m mypy .
             cd ..
           no_output_timeout: 10m
   local_testing:
