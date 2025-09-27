@@ -151,6 +151,9 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    router as mcp_discoverable_endpoints_router,
+)
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -249,9 +252,7 @@ from litellm.proxy.management_endpoints.customer_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
+from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -298,9 +299,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    set_files_config,
-)
+from litellm.proxy.openai_files_endpoints.files_endpoints import set_files_config
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     passthrough_endpoint_router,
 )
@@ -9512,5 +9511,76 @@ app.include_router(ui_discovery_endpoints_router)
 ########################################################
 # MCP Server
 ########################################################
+
+
+# Dynamic MCP server routes - handle /{mcp_server_name}/mcp
+@app.api_route(
+    "/{mcp_server_name}/mcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def dynamic_mcp_route(mcp_server_name: str, request: Request):
+    """Handle dynamic MCP server routes like /github_mcp/mcp"""
+    try:
+        # Validate that the MCP server exists
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
+            )
+
+        # Create a new scope with the correct path format that the MCP handler expects
+        # Transform /{mcp_server_name}/mcp to /mcp/{mcp_server_name}
+        scope = dict(request.scope)
+        scope["path"] = f"/mcp/{mcp_server_name}"
+
+        # Import the MCP handler
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+
+        # Create a custom send function to capture the response
+        response_started = False
+        response_body = b""
+        response_status = 200
+        response_headers = []
+
+        async def custom_send(message):
+            nonlocal response_started, response_body, response_status, response_headers
+            if message["type"] == "http.response.start":
+                response_started = True
+                response_status = message["status"]
+                response_headers = message.get("headers", [])
+            elif message["type"] == "http.response.body":
+                response_body += message.get("body", b"")
+
+        # Call the existing MCP handler
+        await handle_streamable_http_mcp(
+            scope, receive=request.receive, send=custom_send
+        )
+
+        # Return the response
+        from starlette.responses import Response
+
+        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+        return Response(
+            content=response_body,
+            status_code=response_status,
+            headers=headers_dict,
+            media_type=headers_dict.get("content-type", "application/json"),
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
+app.include_router(mcp_discoverable_endpoints_router)
