@@ -308,6 +308,65 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Request Metadata
+
+Attach metadata to Bedrock requests for logging and cost attribution.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import os
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+    requestMetadata={
+        "cost_center": "engineering",
+        "user_id": "user123"
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on yaml**
+
+```yaml
+model_list:
+  - model_name: bedrock-claude-v1
+    litellm_params:
+      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      requestMetadata:
+        cost_center: "engineering"
+```
+
+**Set on request**
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="bedrock-claude-v1",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "requestMetadata": {"cost_center": "engineering"}
+    }
+)
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Function Calling / Tool calling
 
 LiteLLM supports tool calling via Bedrock's Converse and Invoke API's.
@@ -467,7 +526,7 @@ print(f"\nResponse: {resp}")
 
 ## Usage - 'thinking' / 'reasoning content'
 
-This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1.
+This is currently only supported for Anthropic's Claude 3.7 Sonnet + Deepseek R1 + GPT-OSS models.
 
 Works on v1.61.20+.
 
@@ -889,6 +948,19 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
 
+### Selective Content Moderation with `guarded_text`
+
+LiteLLM supports selective content moderation using the `guarded_text` content type. This allows you to wrap only specific content that should be moderated by Bedrock Guardrails, rather than evaluating the entire conversation.
+
+**How it works:**
+- Content with `type: "guarded_text"` gets automatically wrapped in `guardrailConverseContent` blocks
+- Only the wrapped content is evaluated by Bedrock Guardrails
+- Regular content with `type: "text"` bypasses guardrail evaluation
+
+:::note
+If `guarded_text` is not used, the entire conversation history will be sent to the guardrail for evaluation, which can increase latency and costs.
+:::
+
 <Tabs>
 <TabItem value="sdk" label="LiteLLM SDK">
 
@@ -914,6 +986,24 @@ response = completion(
         "guardrailVersion": "DRAFT",           # The version of the guardrail.
         "trace": "disabled",                   # The trace behavior for the guardrail. Can either be "disabled" or "enabled"
     },
+)
+
+# Selective guardrail usage with guarded_text - only specific content is evaluated
+response_guard = completion(
+    model="anthropic.claude-v2",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This      document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+        }
+    ],
+    guardrailConfig={
+        "guardrailIdentifier": "gr-abc123",
+        "guardrailVersion": "DRAFT"
+    }
 )
 ```
 </TabItem>
@@ -993,7 +1083,20 @@ response = client.chat.completions.create(model="bedrock-claude-v1", messages = 
 temperature=0.7
 )
 
-print(response)
+# For adding selective guardrail usage with guarded_text
+response_guard = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+   {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the main topic of this legal document?"},
+                {"type": "guarded_text", "text": "This document contains sensitive legal information that should be moderated by guardrails."}
+            ]
+  }
+],
+temperature=0.7
+) 
+
+print(response_guard)
 ```
 </TabItem>
 </Tabs>
@@ -1777,6 +1880,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+
 ## Bedrock Embedding
 
 ### API keys
@@ -1798,11 +1902,29 @@ response = embedding(
 print(response)
 ```
 
+#### Titan V2 - encoding_format support
+```python
+from litellm import embedding
+# Float format (default)
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="float"  # Returns float array
+)
+
+# Binary format
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v2:0",
+    input=["good morning from litellm"],
+    encoding_format="base64"  # Returns base64 encoded binary
+)
+```
+
 ## Supported AWS Bedrock Embedding Models
 
 | Model Name           | Usage                               | Supported Additional OpenAI params |
 |----------------------|---------------------------------------------|-----|
-| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_v2_transformation.py#L59) |
+| Titan Embeddings V2 | `embedding(model="bedrock/amazon.titan-embed-text-v2:0", input=input)` | `dimensions`, `encoding_format` |
 | Titan Embeddings - V1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_g1_transformation.py#L53)
 | Titan Multimodal Embeddings | `embedding(model="bedrock/amazon.titan-embed-image-v1", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/amazon_titan_multimodal_transformation.py#L28) |
 | Cohere Embeddings - English | `embedding(model="bedrock/cohere.embed-english-v3", input=input)` | [here](https://github.com/BerriAI/litellm/blob/f5905e100068e7a4d61441d7453d7cf5609c2121/litellm/llms/bedrock/embed/cohere_transformation.py#L18)
@@ -1886,6 +2008,39 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/images/generations' \
     "model": "amazon.nova-canvas-v1:0",
     "prompt": "A cute baby sea otter"
 }'
+```
+
+</TabItem>
+</Tabs>
+
+### Using Inference Profiles with Image Generation
+
+For AWS Bedrock Application Inference Profiles with image generation, use the `model_id` parameter to specify the inference profile ARN:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import image_generation
+
+response = image_generation(
+    model="bedrock/amazon.nova-canvas-v1:0",
+    model_id="arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+    prompt="A cute baby sea otter"
+)
+print(f"response: {response}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: nova-canvas-inference-profile
+    litellm_params:
+      model: bedrock/amazon.nova-canvas-v1:0
+      model_id: arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0
+      aws_region_name: "eu-west-1"
 ```
 
 </TabItem>
@@ -2184,6 +2339,39 @@ response = completion(
 
 
 Make the bedrock completion call
+
+---
+
+### Required AWS IAM Policy for AssumeRole
+
+To use `aws_role_name` (STS AssumeRole) with LiteLLM, your IAM user or role **must** have permission to call `sts:AssumeRole` on the target role. If you see an error like:
+
+```
+An error occurred (AccessDenied) when calling the AssumeRole operation: User: arn:aws:sts::...:assumed-role/litellm-ecs-task-role/... is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::...:role/Enterprise/BedrockCrossAccountConsumer
+```
+
+This means the IAM identity running LiteLLM does **not** have permission to assume the target role. You must update your IAM policy to allow this action.
+
+#### Example IAM Policy
+
+Replace `<TARGET_ROLE_ARN>` with the ARN of the role you want to assume (e.g., `arn:aws:iam::123456789012:role/Enterprise/BedrockCrossAccountConsumer`).
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "<TARGET_ROLE_ARN>"
+    }
+  ]
+}
+```
+
+**Note:** The target role itself must also trust the calling IAM identity (via its trust policy) for AssumeRole to succeed. See [AWS AssumeRole docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-api.html) for more details.
+
+---
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

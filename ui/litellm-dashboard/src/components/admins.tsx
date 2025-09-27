@@ -45,7 +45,6 @@ import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
 import SCIMConfig from "./SCIM";
 import UIAccessControlForm from "./UIAccessControlForm";
-import UsefulLinksManagement from "./useful_links_management";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface AdminPanelProps {
@@ -555,7 +554,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <TabList>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
-          <Tab>Useful Links</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -708,12 +706,6 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               accessToken={accessToken} 
               userID={userID}
               proxySettings={proxySettings}
-            />
-          </TabPanel>
-          <TabPanel>
-            <UsefulLinksManagement 
-              accessToken={accessToken}
-              userRole={userRole || null}
             />
           </TabPanel>
         </TabPanels>

@@ -5,7 +5,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
-import uuid
+from litellm._uuid import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 
@@ -550,7 +550,7 @@ async def test_proxy_all_models():
     async with aiohttp.ClientSession() as session:
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         await chat_completion(
-            session=session, key=LITELLM_MASTER_KEY, model="groq/llama3-8b-8192"
+            session=session, key=LITELLM_MASTER_KEY, model="groq/llama-3.1-8b-instant"
         )
 
         await chat_completion(

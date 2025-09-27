@@ -2,7 +2,7 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format. 
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import httpx

@@ -10,7 +10,7 @@
 
 import asyncio
 import json
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import (
     Any,
@@ -68,7 +68,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         output_parse_pii: Optional[bool] = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
-        pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None,
+        pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
         presidio_language: Optional[str] = None,
         **kwargs,
     ):
@@ -76,12 +76,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.logging_only = True
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
         super().__init__(**kwargs)
+        self.guardrail_provider = "presidio"
         self.pii_tokens: dict = (
             {}
         )  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
-        self.pii_entities_config: Dict[PiiEntityType, PiiAction] = (
+        self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
         self.presidio_language = presidio_language or "en"
@@ -301,10 +302,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             entity_type = result.get("entity_type")
 
             if entity_type:
-                casted_entity_type: PiiEntityType = cast(PiiEntityType, entity_type)
+                # Check if entity_type is in config (supports both enum and string)
                 if (
-                    casted_entity_type in self.pii_entities_config
-                    and self.pii_entities_config[casted_entity_type] == PiiAction.BLOCK
+                    entity_type in self.pii_entities_config
+                    and self.pii_entities_config[entity_type] == PiiAction.BLOCK
                 ):
                     raise BlockedPiiEntityError(
                         entity_type=entity_type,
@@ -369,6 +370,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             else:
                 guardrail_json_response = exception_str
             self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
                 guardrail_json_response=guardrail_json_response,
                 request_data=request_data,
                 guardrail_status=status,
@@ -400,10 +402,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
-            if call_type in [
-                LitellmCallTypes.completion.value,
-                LitellmCallTypes.acompletion.value,
-            ] or call_type == "mcp_call":
+            if (
+                call_type
+                in [
+                    LitellmCallTypes.completion.value,
+                    LitellmCallTypes.acompletion.value,
+                ]
+                or call_type == "mcp_call"
+            ):
                 messages = data["messages"]
                 tasks = []
                 for m in messages:
@@ -428,7 +434,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         messages[index][
                             "content"
                         ] = r  # replace content with redacted string
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.debug(
                     f"Presidio PII Masking: Redacted pii message: {data['messages']}"
                 )
                 data["messages"] = messages
@@ -513,7 +519,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[index][
                         "content"
                     ] = r  # replace content with redacted string
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Presidio PII Masking: Redacted pii message: {messages}"
             )
             kwargs["messages"] = messages
@@ -675,5 +681,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Update the guardrails litellm params in memory
         """
+        super().update_in_memory_litellm_params(litellm_params)
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config

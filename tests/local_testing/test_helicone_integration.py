@@ -97,7 +97,7 @@ def create_async_task(**completion_kwargs):
     reason="Authentication missing for openai",
 )
 async def test_helicone_logging_metadata():
-    import uuid
+    from litellm._uuid import uuid
 
     litellm.success_callback = ["helicone"]
 

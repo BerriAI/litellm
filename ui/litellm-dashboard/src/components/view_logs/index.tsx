@@ -17,7 +17,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list"
 import KeyInfoView from "../templates/key_info_view"
 import { SessionView } from "./SessionView"
 import { VectorStoreViewer } from "./VectorStoreViewer"
-import { GuardrailViewer } from "./GuardrailViewer"
+import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer"
 import FilterComponent from "../molecules/filter"
 import { FilterOption } from "../molecules/filter"
 import { useLogFilterLogic } from "./log_filter_logic"
@@ -80,6 +80,7 @@ export default function SpendLogsTable({
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null)
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null)
   const [selectedStatus, setSelectedStatus] = useState("")
+  const [selectedEndUser, setSelectedEndUser] = useState("")
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole))
   const [activeTab, setActiveTab] = useState("request logs")
 
@@ -193,6 +194,7 @@ export default function SpendLogsTable({
         currentPage,
         pageSize,
         filterByCurrentUser ? userID : undefined,
+        selectedEndUser,
         selectedStatus,
         selectedModel,
       )
@@ -280,6 +282,7 @@ export default function SpendLogsTable({
     }
     setSelectedStatus(filters["Status"] || "")
     setSelectedModel(filters["Model"] || "")
+    setSelectedEndUser(filters["End User"] || "")
 
     if (filters["Key Hash"]) {
       setSelectedKeyHash(filters["Key Hash"])
@@ -465,7 +468,7 @@ export default function SpendLogsTable({
   const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label
 
   return (
-    <div className="w-full p-6">
+    <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>
@@ -500,6 +503,7 @@ export default function SpendLogsTable({
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 premiumUser={premiumUser}
+                backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
               <div className="bg-white rounded-lg shadow">
@@ -518,11 +522,11 @@ export default function SpendLogsTable({
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow">
-                  <div className="border-b px-6 py-4">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative w-64">
+                <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+                  <div className="border-b px-6 py-4 w-full max-w-full box-border">
+                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
+                      <div className="flex flex-wrap items-center gap-3 w-full max-w-full box-border">
+                        <div className="relative w-64 min-w-0 flex-shrink-0">
                           <input
                             type="text"
                             placeholder="Search by Request ID"
@@ -545,8 +549,8 @@ export default function SpendLogsTable({
                           </svg>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <div className="relative" ref={quickSelectRef}>
+                        <div className="flex items-center gap-2 min-w-0 flex-shrink">
+                          <div className="relative z-50" ref={quickSelectRef}>
                             <button
                               onClick={() => setQuickSelectOpen(!quickSelectOpen)}
                               className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
@@ -654,7 +658,7 @@ export default function SpendLogsTable({
                       </div>
 
                       <div className="flex items-center space-x-4">
-                        <span className="text-sm text-gray-700">
+                        <span className="text-sm text-gray-700 whitespace-nowrap">
                           Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
                           {logs.isLoading
                             ? "..."
@@ -664,7 +668,7 @@ export default function SpendLogsTable({
                           of {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
                         </span>
                         <div className="flex items-center space-x-2">
-                          <span className="text-sm text-gray-700">
+                          <span className="text-sm text-gray-700 min-w-[90px]">
                             Page {logs.isLoading ? "..." : currentPage} of{" "}
                             {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
                           </span>
@@ -801,13 +805,13 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
   const totalMaskedEntities = getTotalMaskedEntities()
 
   return (
-    <div className="p-6 bg-gray-50 space-y-6">
+    <div className="p-6 bg-gray-50 space-y-6 w-full max-w-full overflow-hidden box-border">
       {/* Combined Info Card */}
-      <div className="bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="p-4 border-b">
           <h3 className="text-lg font-medium">Request Details</h3>
         </div>
-        <div className="grid grid-cols-2 gap-4 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 w-full max-w-full overflow-hidden">
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Request ID:</span>
@@ -916,15 +920,17 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <ConfigInfoMessage show={missingData} />
 
       {/* Request/Response Panel */}
-      <RequestResponsePanel
-        row={row}
-        hasMessages={hasMessages}
-        hasResponse={hasResponse}
-        hasError={hasError}
-        errorInfo={errorInfo}
-        getRawRequest={getRawRequest}
-        formattedResponse={formattedResponse}
-      />
+      <div className="w-full max-w-full overflow-hidden">
+        <RequestResponsePanel
+          row={row}
+          hasMessages={hasMessages}
+          hasResponse={hasResponse}
+          hasError={hasError}
+          errorInfo={errorInfo}
+          getRawRequest={getRawRequest}
+          formattedResponse={formattedResponse}
+        />
+      </div>
 
       {/* Guardrail Data - Show only if present */}
       {hasGuardrailData && <GuardrailViewer data={row.original.metadata!.guardrail_information} />}

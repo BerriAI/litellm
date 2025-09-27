@@ -1384,6 +1384,20 @@ const Teams: React.FC<TeamProps> = ({
                         <TextInput placeholder="e.g., 30d" />
                       </Form.Item>
                       <Form.Item
+                        label="Team Member RPM Limit"
+                        name="team_member_rpm_limit"
+                        tooltip="The RPM (Requests Per Minute) limit for individual team members"
+                      >
+                        <NumericalInput step={1} width={400} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Team Member TPM Limit"
+                        name="team_member_tpm_limit"
+                        tooltip="The TPM (Tokens Per Minute) limit for individual team members"
+                      >
+                        <NumericalInput step={1} width={400} />
+                      </Form.Item>
+                      <Form.Item
                         label="Metadata"
                         name="metadata"
                         help="Additional team metadata. Enter metadata as JSON object."

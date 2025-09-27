@@ -1557,8 +1557,37 @@ def test_azure_ai_cohere_embed_input_type_param():
 
 def test_optional_params_image_gen_with_aspect_ratio():
     optional_params = get_optional_params_image_gen(
-        model="imagen-4.0-ultra-generate-preview-06-06",
+        model="imagen-4.0-ultra-generate-001",
         custom_llm_provider="vertex_ai",
         aspect_ratio="16:9",
     )
     assert optional_params["aspect_ratio"] == "16:9"
+
+
+def test_optional_params_responses_api_allowed_openai_params():
+    from litellm import responses
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = litellm.responses(
+                model="openai/o1-pro",
+                input="Tell me a three sentence bedtime story about a unicorn.",
+                max_output_tokens=100,
+                top_logprobs=10,
+                allowed_openai_params=["top_logprobs"],
+                client=client,
+            )
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print("error: ", e)
+
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs
+        print("request_body: ", request_body)
+        assert "top_logprobs" in request_body["json"]

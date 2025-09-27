@@ -7,7 +7,7 @@ import random
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -240,7 +240,7 @@ def prisma_client():
 @pytest.fixture
 def team_token_tuple():
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -305,7 +305,7 @@ def team_token_tuple():
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience, monkeypatch):
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -478,7 +478,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 async def aaaatest_user_token_output(
     prisma_client, audience, team_id_set, default_team_id, user_id_upsert, monkeypatch
 ):
-    import uuid
+    from litellm._uuid import uuid
 
     args = locals()
     print(f"received args - {args}")
@@ -491,7 +491,7 @@ async def aaaatest_user_token_output(
     - retry -> it should pass now
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -726,7 +726,7 @@ async def test_allowed_routes_admin(
     - check if admin passes user_api_key_auth for them
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -1375,3 +1375,142 @@ async def test_custom_validate_called():
         pass
     # Assert custom_validate was called with the jwt token
     mock_custom_validate.assert_called_once_with({"sub": "test_user"})
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_es256_jwk_path(monkeypatch):
+    import time, base64, jwt
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+
+    def b64url_uint(n: int, size: int) -> str:
+        return base64.urlsafe_b64encode(n.to_bytes(size, "big")).rstrip(b"=").decode()
+
+    ec_key = ec.generate_private_key(ec.SECP256R1())
+    ec_priv_pem = ec_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    pub = ec_key.public_key().public_numbers()
+    ec_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": b64url_uint(pub.x, 32),
+        "y": b64url_uint(pub.y, 32),
+        "kid": "ec1",
+        "alg": "ES256",
+        "use": "sig",
+    }
+
+    now = int(time.time())
+    token = jwt.encode(
+        {"sub": "alice", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        ec_priv_pem,
+        algorithm="ES256",
+        headers={"kid": "ec1"},
+    )
+
+    h = JWTHandler()
+    with patch.object(h, "get_public_key", new=AsyncMock(return_value=ec_jwk)):
+        claims = await h.auth_jwt(token)
+        assert claims["sub"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_rs256_regression(monkeypatch):
+    """
+    Regression: RSA path must still work (kty RSA, n/e) after EC support.
+    """
+    import time, base64, jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rsa_priv_pem = rsa_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    pub = rsa_key.public_key().public_numbers()
+
+    def b64url(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    n = pub.n.to_bytes((pub.n.bit_length() + 7) // 8, "big")
+    e = pub.e.to_bytes((pub.e.bit_length() + 7) // 8, "big")
+    rsa_jwk = {
+        "kty": "RSA",
+        "n": b64url(n),
+        "e": b64url(e),
+        "kid": "rsa1",
+        "alg": "RS256",
+        "use": "sig",
+    }
+
+    now = int(time.time())
+    token = jwt.encode(
+        {"sub": "bob", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        rsa_priv_pem,
+        algorithm="RS256",
+        headers={"kid": "rsa1"},
+    )
+
+    h = JWTHandler()
+    with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
+        claims = await h.auth_jwt(token)
+        assert claims["sub"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_mismatched_key_fails(monkeypatch):
+    """
+    Negative: ES256 token must fail if JWKS returns an RSA key (mismatch).
+    """
+    import time, base64, jwt
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    from cryptography.hazmat.primitives import serialization
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+
+    # ES256 token
+    ec_key = ec.generate_private_key(ec.SECP256R1())
+    ec_priv_pem = ec_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    now = int(time.time())
+    token = jwt.encode(
+        {"sub": "mallory", "aud": "litellm-proxy", "iss": "http://example", "iat": now, "exp": now + 300},
+        ec_priv_pem,
+        algorithm="ES256",
+        headers={"kid": "ec1"},
+    )
+
+    # RSA JWK (wrong key)
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = rsa_key.public_key().public_numbers()
+
+    def b64url(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    rsa_jwk = {
+        "kty": "RSA",
+        "n": b64url(pub.n.to_bytes((pub.n.bit_length() + 7) // 8, "big")),
+        "e": b64url(pub.e.to_bytes((pub.e.bit_length() + 7) // 8, "big")),
+        "kid": "rsa1",
+        "alg": "RS256",
+        "use": "sig",
+    }
+
+    h = JWTHandler()
+    with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
+        with pytest.raises(Exception) as exc:
+            await h.auth_jwt(token)
+        assert "Validation fails" in str(exc.value)

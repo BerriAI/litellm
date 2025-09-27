@@ -1,5 +1,17 @@
 import base64
-from typing import Any, Dict, Optional, Union, cast, get_type_hints, overload
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
+
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -8,19 +20,46 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import SpecialEnums, Usage
+from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
 
 
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 
     @staticmethod
+    def _check_valid_arg(
+        supported_params: Optional[List[str]],
+        non_default_params: Dict,
+        drop_params: Optional[bool],
+        custom_llm_provider: Optional[str],
+        model: str,
+    ):
+        if supported_params is None:
+            return
+        unsupported_params = {}
+        for k in non_default_params.keys():
+            if k not in supported_params:
+                unsupported_params[k] = non_default_params[k]
+        if unsupported_params:
+            if litellm.drop_params is True or (
+                drop_params is not None and drop_params is True
+            ):
+                pass
+            else:
+                raise litellm.UnsupportedParamsError(
+                    status_code=500,
+                    message=f"{custom_llm_provider} does not support parameters: {unsupported_params}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n",
+                )
+
+    @staticmethod
     def get_optional_params_responses_api(
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        allowed_openai_params: Optional[List[str]] = None,
     ) -> Dict:
         """
         Get optional parameters for the responses API.
@@ -33,31 +72,36 @@ class ResponsesAPIRequestUtils:
         Returns:
             A dictionary of supported parameters for the responses API
         """
-        # Remove None values and internal parameters
+        from litellm.utils import _apply_openai_param_overrides
 
+        # Remove None values and internal parameters
         # Get supported parameters for the model
         supported_params = responses_api_provider_config.get_supported_openai_params(
             model
         )
 
+        non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
-        unsupported_params = [
-            param
-            for param in response_api_optional_params
-            if param not in supported_params
-        ]
-
-        if unsupported_params:
-            raise litellm.UnsupportedParamsError(
-                model=model,
-                message=f"The following parameters are not supported for model {model}: {', '.join(unsupported_params)}",
-            )
+        ResponsesAPIRequestUtils._check_valid_arg(
+            supported_params=supported_params + (allowed_openai_params or []),
+            non_default_params=non_default_params,
+            drop_params=litellm.drop_params,
+            custom_llm_provider=responses_api_provider_config.custom_llm_provider,
+            model=model,
+        )
 
         # Map parameters to provider-specific format
         mapped_params = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
             drop_params=litellm.drop_params,
+        )
+
+        # add any allowed_openai_params to the mapped_params
+        mapped_params = _apply_openai_param_overrides(
+            optional_params=mapped_params,
+            non_default_params=non_default_params,
+            allowed_openai_params=allowed_openai_params or [],
         )
 
         return mapped_params
@@ -75,34 +119,48 @@ class ResponsesAPIRequestUtils:
         Returns:
             ResponsesAPIOptionalRequestParams instance with only the valid parameters
         """
+        from litellm.utils import PreProcessNonDefaultParams
+
         valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        custom_llm_provider = params.pop("custom_llm_provider", None)
+        special_params = params.pop("kwargs", {})
+
+        additional_drop_params = params.pop("additional_drop_params", None)
+        non_default_params = (
+            PreProcessNonDefaultParams.base_pre_process_non_default_params(
+                passed_params=params,
+                special_params=special_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=additional_drop_params,
+                default_param_values={k: None for k in valid_keys},
+                additional_endpoint_specific_params=["input"],
+            )
+        )
 
         # decode previous_response_id if it's a litellm encoded id
-        if "previous_response_id" in filtered_params:
+        if "previous_response_id" in non_default_params:
             decoded_previous_response_id = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                filtered_params["previous_response_id"]
+                non_default_params["previous_response_id"]
             )
-            filtered_params["previous_response_id"] = decoded_previous_response_id
+            non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        if "metadata" in filtered_params:
+        if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            filtered_params["metadata"] = add_openai_metadata(
-                filtered_params["metadata"]
+            non_default_params["metadata"] = add_openai_metadata(
+                non_default_params["metadata"]
             )
 
-        return cast(ResponsesAPIOptionalRequestParams, filtered_params)
-    
+        return cast(ResponsesAPIOptionalRequestParams, non_default_params)
+
+    # fmt: off
     @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: Optional[str],
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> ResponsesAPIResponse:
+    ) -> ResponsesAPIResponse: 
         ...
 
     @overload
@@ -111,8 +169,10 @@ class ResponsesAPIRequestUtils:
         responses_api_response: Dict[str, Any],
         custom_llm_provider: Optional[str],
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any]: 
         ...
+
+    # fmt: on
 
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
@@ -254,6 +314,40 @@ class ResponsesAPIRequestUtils:
         )
         return decoded_response_id.get("response_id", previous_response_id)
 
+    @staticmethod
+    def convert_text_format_to_text_param(
+        text_format: Optional[Union[Type["BaseModel"], dict]],
+        text: Optional["ResponseText"] = None,
+    ) -> Optional["ResponseText"]:
+        """
+        Convert text_format parameter to text parameter for the responses API.
+
+        Args:
+            text_format: Pydantic model class or dict to convert to response format
+            text: Existing text parameter (if provided, text_format is ignored)
+
+        Returns:
+            ResponseText object with the converted format, or None if conversion fails
+        """
+        if text_format is not None and text is None:
+            from litellm.llms.base_llm.base_utils import type_to_response_format_param
+
+            # Convert Pydantic model to response format
+            response_format = type_to_response_format_param(text_format)
+            if response_format is not None:
+                # Create ResponseText object with the format
+                # The responses API expects the format to have name at the top level
+                text = {
+                    "format": {
+                        "type": response_format["type"],
+                        "name": response_format["json_schema"]["name"],
+                        "schema": response_format["json_schema"]["schema"],
+                        "strict": response_format["json_schema"]["strict"],
+                    }
+                }
+                return text
+        return text
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
@@ -281,8 +375,15 @@ class ResponseAPILoggingUtils:
         )
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
+        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        if response_api_usage.input_tokens_details:
+            prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
+                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            )
         return Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )

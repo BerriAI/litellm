@@ -56,7 +56,7 @@ def test_s3_cache_set_cache_with_ttl(mock_s3_dependencies):
     assert "max-age=3600" in call_args[1]["CacheControl"]
 
 
-def test_s3_cache_get_cache(mock_s3_dependencies):
+def test_s3_cache_get_cache_no_expires_info_in_response(mock_s3_dependencies):
     """Test basic get_cache functionality"""
     cache = S3Cache("test-bucket")
 
@@ -75,6 +75,54 @@ def test_s3_cache_get_cache(mock_s3_dependencies):
 
     assert result == {"key": "value", "number": 42}
 
+def test_s3_cache_get_cache_with_expires_valid(mock_s3_dependencies):
+    """Test get_cache when response contains Expires and cache entry is still valid"""
+    cache = S3Cache("test-bucket")
+
+    # Create a future expiration time (1 hour from now)
+    future_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+
+    mock_response = {
+        "Body": MagicMock(),
+        "Expires": future_time
+    }
+    mock_response["Body"].read.return_value = b'{"key": "value", "number": 42}'
+    cache.s3_client.get_object.return_value = mock_response
+
+    result = cache.get_cache("test_key")
+
+    cache.s3_client.get_object.assert_called_once_with(
+        Bucket="test-bucket",
+        Key="test_key"
+    )
+
+    # Should return the cached value since it's not expired
+    assert result == {"key": "value", "number": 42}
+
+
+def test_s3_cache_get_cache_with_expires_expired(mock_s3_dependencies):
+    """Test get_cache when response contains Expires and cache entry is no longer valid"""
+    cache = S3Cache("test-bucket")
+
+    # Create a past expiration time (1 hour ago)
+    past_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+
+    mock_response = {
+        "Body": MagicMock(),
+        "Expires": past_time
+    }
+    mock_response["Body"].read.return_value = b'{"key": "value", "number": 42}'
+    cache.s3_client.get_object.return_value = mock_response
+
+    result = cache.get_cache("test_key")
+
+    cache.s3_client.get_object.assert_called_once_with(
+        Bucket="test-bucket",
+        Key="test_key"
+    )
+
+    # Should return None since the cache entry is expired
+    assert result is None
 
 def test_s3_cache_get_cache_not_found(mock_s3_dependencies):
     """Test get_cache when key is not found"""
@@ -125,7 +173,6 @@ def test_s3_cache_initialization():
     # Test with s3_path
     cache_with_path = S3Cache("test-bucket", s3_path="my/cache/path")
     assert cache_with_path.key_prefix == "my/cache/path/"
-
 
 # ============================================================================
 # ASYNC TESTS

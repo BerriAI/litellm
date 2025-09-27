@@ -1,7 +1,5 @@
-import asyncio
 import json
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -282,3 +280,201 @@ class TestOpenMeterIntegration:
         result = logger._common_logic(kwargs, response_obj)
         
         assert result["type"] == "custom_event_type"
+
+    def test_common_logic_user_from_token_user_id(self):
+        """Test that _common_logic uses user_api_key_user_id when no user provided"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": "token-user-123"
+                }
+            }
+            # No "user" parameter - should use token user_id
+        }
+        
+        response_obj = {
+            "id": "test-response-id",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }
+        
+        result = logger._common_logic(kwargs, response_obj)
+        
+        # Verify user was set from token user_id
+        assert isinstance(result["subject"], str)
+        assert result["subject"] == "token-user-123"
+        assert result["data"]["model"] == "gpt-3.5-turbo"
+
+    def test_common_logic_direct_user_takes_priority_over_token(self):
+        """Test that direct user parameter takes priority over token user_id"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "user": "direct-user-456",  # Direct user should take priority
+            "model": "gpt-4",
+            "response_cost": 0.002,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": "token-user-123"  # This should be ignored
+                }
+            }
+        }
+        
+        response_obj = {
+            "id": "test-response-id",
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 10,
+                "total_tokens": 30
+            }
+        }
+        
+        result = logger._common_logic(kwargs, response_obj)
+        
+        # Verify direct user takes priority
+        assert isinstance(result["subject"], str)
+        assert result["subject"] == "direct-user-456"
+        assert result["subject"] != "token-user-123"
+
+    def test_common_logic_missing_user_and_token_user_id(self):
+        """Test that exception is raised when neither user nor token user_id available"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {
+                    # No user_api_key_user_id
+                }
+            }
+            # No "user" parameter
+        }
+        
+        response_obj = {"id": "test-response-id"}
+        
+        with pytest.raises(Exception, match="OpenMeter: user is required"):
+            logger._common_logic(kwargs, response_obj)
+
+    def test_common_logic_token_user_id_none(self):
+        """Test that exception is raised when token user_id is None"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": None  # Explicitly None
+                }
+            }
+        }
+        
+        response_obj = {"id": "test-response-id"}
+        
+        with pytest.raises(Exception, match="OpenMeter: user is required"):
+            logger._common_logic(kwargs, response_obj)
+
+    def test_common_logic_no_metadata(self):
+        """Test that exception is raised when no metadata is available"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001,
+            "litellm_call_id": "test-call-id",
+            # No litellm_params at all
+        }
+        
+        response_obj = {"id": "test-response-id"}
+        
+        with pytest.raises(Exception, match="OpenMeter: user is required"):
+            logger._common_logic(kwargs, response_obj)
+
+    def test_common_logic_integer_token_user_id(self):
+        """Test that integer token user_id is converted to string"""
+        logger = OpenMeterLogger()
+        
+        kwargs = {
+            "model": "gpt-4",
+            "response_cost": 0.003,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": 12345  # Integer user_id
+                }
+            }
+        }
+        
+        response_obj = {
+            "id": "test-response-id",
+            "usage": {
+                "prompt_tokens": 25,
+                "completion_tokens": 12,
+                "total_tokens": 37
+            }
+        }
+        
+        result = logger._common_logic(kwargs, response_obj)
+        
+        # Verify integer user_id is converted to string
+        assert isinstance(result["subject"], str)
+        assert result["subject"] == "12345"
+
+    @patch('litellm.integrations.openmeter.HTTPHandler')
+    def test_integration_token_user_id_scenario(self, mock_http_handler):
+        """Integration test simulating the exact scenario that was failing"""
+        mock_post = MagicMock()
+        mock_http_handler.return_value.post = mock_post
+        
+        logger = OpenMeterLogger()
+        
+        # Simulate the exact scenario: request with token that has user_id but no direct user param
+        kwargs = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "response_cost": 0.001,
+            "litellm_call_id": "test-integration-call-id",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_user_id": "user123-from-token",
+                    "user_api_key": "hashed-key-abc",
+                    "user_api_key_metadata": {}
+                }
+            }
+            # No "user" parameter - this was causing "OpenMeter: user is required" error
+        }
+        
+        response_obj = {
+            "id": "chatcmpl-test123",
+            "usage": {
+                "prompt_tokens": 15,
+                "completion_tokens": 10,
+                "total_tokens": 25
+            }
+        }
+        
+        # This should NOT raise "OpenMeter: user is required" anymore
+        logger.log_success_event(kwargs, response_obj, None, None)
+        
+        # Verify HTTP call was made
+        mock_post.assert_called_once()
+        
+        # Verify the data structure contains user from token
+        call_args = mock_post.call_args
+        data = json.loads(call_args[1]['data'])
+        
+        assert data["subject"] == "user123-from-token"
+        assert isinstance(data["subject"], str)
+        assert data["data"]["model"] == "gpt-3.5-turbo"

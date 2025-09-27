@@ -28,7 +28,6 @@ class GithubCopilotError(BaseLLMException):
         )
 
 
-
 class GetDeviceCodeError(GithubCopilotError):
     pass
 

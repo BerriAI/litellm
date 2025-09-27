@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-import uuid
+from litellm._uuid import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
@@ -216,6 +216,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_default_model: Optional[str] = None
     auto_router_embedding_model: Optional[str] = None
 
+    # Batch/File API Params
+    s3_bucket_name: Optional[str] = None
+    gcs_bucket_name: Optional[str] = None
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,
@@ -265,6 +269,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_config: Optional[str] = None,
         auto_router_default_model: Optional[str] = None,
         auto_router_embedding_model: Optional[str] = None,
+        # Batch/File API Params
+        s3_bucket_name: Optional[str] = None,
+        gcs_bucket_name: Optional[str] = None,
         **params,
     ):
         args = locals()

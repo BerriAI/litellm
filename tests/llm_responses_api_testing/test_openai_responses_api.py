@@ -1483,3 +1483,28 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         # Validate the response
         print("Response:", json.dumps(response, indent=4, default=str))
 
+
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+async def test_basic_openai_responses_with_websearch(stream):
+    litellm._turn_on_debug()
+    request_model = "gpt-4o"
+    response = await litellm.aresponses(
+        model=request_model,
+        stream=stream,
+        input="hi",
+        tools=[
+            {
+                "type": "web_search",
+                "search_context_size": "low"
+            }
+        ]
+    )
+    if stream:
+        async for chunk in response:
+            print("chunk=", json.dumps(chunk, indent=4, default=str))
+    else:
+        print("response=", json.dumps(response, indent=4, default=str))

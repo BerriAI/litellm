@@ -136,6 +136,11 @@ export default function CreateKeyPage() {
   }
 
   const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed(!sidebarCollapsed);
+  };
 
   const addKey = (data: any) => {
     setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
@@ -248,14 +253,17 @@ export default function CreateKeyPage() {
                 proxySettings={proxySettings}
                 accessToken={accessToken}
                 isPublicPage={false}
+                sidebarCollapsed={sidebarCollapsed}
+                onToggleSidebar={toggleSidebar}
               />
               <div className="flex flex-1 overflow-auto">
-                <div className="mt-8">
+                <div className="mt-2">
                   <Sidebar
                     accessToken={accessToken}
                     setPage={updatePage}
                     userRole={userRole}
                     defaultSelectedKey={page}
+                    collapsed={sidebarCollapsed}
                   />
                 </div>
 

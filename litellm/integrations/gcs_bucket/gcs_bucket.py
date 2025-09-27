@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import quote

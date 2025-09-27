@@ -5,7 +5,7 @@ import os
 import random
 import traceback
 import types
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +39,7 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_api_key: Optional[str] = None,
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
+        langsmith_sampling_rate: Optional[float] = None,
         **kwargs,
     ):
         self.flush_lock = asyncio.Lock()
@@ -49,7 +50,8 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_base_url=langsmith_base_url,
         )
         self.sampling_rate: float = (
-            float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            langsmith_sampling_rate
+            or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
             if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
             and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
             else 1.0
@@ -76,26 +78,14 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_base_url: Optional[str] = None,
     ) -> LangsmithCredentialsObject:
         _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
-        if _credentials_api_key is None:
-            raise Exception(
-                "Invalid Langsmith API Key given. _credentials_api_key=None."
-            )
         _credentials_project = (
             langsmith_project or os.getenv("LANGSMITH_PROJECT") or "litellm-completion"
         )
-        if _credentials_project is None:
-            raise Exception(
-                "Invalid Langsmith API Key given. _credentials_project=None."
-            )
         _credentials_base_url = (
             langsmith_base_url
             or os.getenv("LANGSMITH_BASE_URL")
             or "https://api.smith.langchain.com"
         )
-        if _credentials_base_url is None:
-            raise Exception(
-                "Invalid Langsmith API Key given. _credentials_base_url=None."
-            )
 
         return LangsmithCredentialsObject(
             LANGSMITH_API_KEY=_credentials_api_key,
@@ -200,12 +190,7 @@ class LangsmithLogger(CustomBatchLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = (
-                float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
-                if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-                and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
-                else 1.0
-            )
+            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
@@ -219,6 +204,7 @@ class LangsmithLogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
+
             credentials = self._get_credentials_to_use_for_request(kwargs=kwargs)
             data = self._prepare_log_data(
                 kwargs=kwargs,
@@ -245,7 +231,7 @@ class LangsmithLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            sampling_rate = self.sampling_rate
+            sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
@@ -286,7 +272,7 @@ class LangsmithLogger(CustomBatchLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        sampling_rate = self.sampling_rate
+        sampling_rate = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
         random_sample = random.random()
         if random_sample > sampling_rate:
             verbose_logger.info(
@@ -417,6 +403,17 @@ class LangsmithLogger(CustomBatchLogger):
 
         for queue_object in self.log_queue:
             credentials = queue_object["credentials"]
+            # if credential missing, skip - log warning
+            if (
+                credentials["LANGSMITH_API_KEY"] is None
+                or credentials["LANGSMITH_PROJECT"] is None
+            ):
+                verbose_logger.warning(
+                    "Langsmith Logging - credentials missing - api_key: %s, project: %s",
+                    credentials["LANGSMITH_API_KEY"],
+                    credentials["LANGSMITH_PROJECT"],
+                )
+                continue
             key = CredentialsKey(
                 api_key=credentials["LANGSMITH_API_KEY"],
                 project=credentials["LANGSMITH_PROJECT"],
@@ -432,6 +429,19 @@ class LangsmithLogger(CustomBatchLogger):
 
         return log_queue_by_credentials
 
+    def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
+        sampling_rate: float = self.sampling_rate
+        if standard_callback_dynamic_params is not None:
+            _sampling_rate = standard_callback_dynamic_params.get(
+                "langsmith_sampling_rate"
+            )
+            if _sampling_rate is not None:
+                sampling_rate = float(_sampling_rate)
+        return sampling_rate
+
     def _get_credentials_to_use_for_request(
         self, kwargs: Dict[str, Any]
     ) -> LangsmithCredentialsObject:
@@ -442,9 +452,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(

@@ -13,6 +13,23 @@ For more details on routing strategies / params, see [Routing](../routing.md)
 
 :::
 
+## How Load Balancing Works
+
+LiteLLM automatically distributes requests across multiple deployments of the same model using its built-in router. the proxy routes traffic to optimize performance and reliability.
+
+"simple-shuffle" routing strategy is used by default
+
+### Routing Strategies
+
+| Strategy | Description | When to Use |
+|----------|-------------|-------------|
+| **simple-shuffle** (recommended) | Randomly distributes requests | General purpose, good for even load distribution |
+| **least-busy** | Routes to deployment with fewest active requests | High concurrency scenarios |
+| **usage-based-routing** (bad for perf) | Routes to deployment with lowest current usage (RPM/TPM) | When you want to respect rate limits evenly |
+| **latency-based-routing** | Routes to fastest responding deployment | Latency-critical applications |
+| **cost-based-routing** | Routes to deployment with lowest cost | Cost-sensitive applications |
+
+
 ## Quick Start - Load Balancing
 #### Step 1 - Set deployments on config
 
@@ -107,48 +124,13 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 </TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-import os 
-
-os.environ["OPENAI_API_KEY"] = "anything"
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:4000",
-    model="gpt-3.5-turbo",
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
 
 </Tabs>
-
-
 ### Test - Loadbalancing
 
 In this request, the following will occur:
 1. A rate limit exception will be raised 
-2. LiteLLM proxy will retry the request on the model group (default is 3).
+2. LiteLLM proxy will retry the request on the model group (default retries are 3).
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -190,6 +172,9 @@ router_settings:
   redis_host: <your redis host>
   redis_password: <your redis password>
   redis_port: 1992
+  cache_params:
+    type: redis
+    max_connections: 100  # maximum Redis connections in the pool; tune based on expected concurrency/load
 ```
 
 ## Router settings on config - routing_strategy, model_group_alias
@@ -257,3 +242,15 @@ class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `/v1/models`, `/v1/model/info`, `/v1/model_group/info`
 ```
+
+### When You'll See Load Balancing in Action
+
+**Immediate Effects:**
+
+- Different deployments serve subsequent requests (visible in logs)
+- Better response times during high traffic
+
+**Observable Benefits:**
+- **Higher throughput**: More requests handled simultaneously across deployments
+- **Improved reliability**: If one deployment fails, traffic automatically routes to healthy ones
+- **Better resource utilization**: Load spread evenly across all available deployments

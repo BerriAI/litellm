@@ -14,7 +14,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
@@ -835,6 +835,16 @@ async def _update_single_user_helper(
         existing_user_row = LiteLLM_UserTable(
             **existing_user_row.model_dump(exclude_none=True)
         )
+        if not can_user_call_user_update(
+            user_api_key_dict=user_api_key_dict,
+            user_info=existing_user_row,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
+                },
+            )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
@@ -929,6 +939,20 @@ async def _update_single_user_helper(
     return response
 
 
+def can_user_call_user_update(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_info: LiteLLM_UserTable,
+) -> bool:
+    """
+    Helper to check if the user has access to the key's info
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+    elif user_api_key_dict.user_id == user_info.user_id:
+        return True
+    return False
+
+
 @router.post(
     "/user/update",
     tags=["Internal User management"],
@@ -988,6 +1012,7 @@ async def user_update(
     """
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
+
         response = await _update_single_user_helper(
             user_request=data,
             user_api_key_dict=user_api_key_dict,

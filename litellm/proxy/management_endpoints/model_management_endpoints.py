@@ -13,7 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-import uuid
+from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -987,7 +987,7 @@ async def update_public_model_groups(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.proxy_server import proxy_config
+        from litellm.proxy.proxy_server import proxy_config, store_model_in_db
 
         # Check if user has admin permissions
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -997,6 +997,15 @@ async def update_public_model_groups(
                     "error": "Only proxy admins can update public model groups. Your role={}".format(
                         user_api_key_dict.user_role
                     )
+                },
+            )
+
+        # Check if STORE_MODEL_IN_DB is enabled
+        if store_model_in_db is not True:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
                 },
             )
 
@@ -1014,7 +1023,7 @@ async def update_public_model_groups(
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Updated public model groups to: {request.model_groups} by user: {user_api_key_dict.user_id}"
         )
 
@@ -1081,7 +1090,7 @@ async def update_useful_links(
         # Save the updated config
         await proxy_config.save_config(new_config=config)
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
         )
 

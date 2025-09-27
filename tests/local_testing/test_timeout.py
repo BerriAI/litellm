@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
-import uuid
+from litellm._uuid import uuid
 
 import httpx
 import openai
@@ -22,7 +22,6 @@ import litellm
     "model, provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-instant-v1", "bedrock"),
         ("azure/chatgpt-v-3", "azure"),
     ],
 )
@@ -77,7 +76,7 @@ def test_bedrock_timeout():
     litellm.set_verbose = True
     try:
         response = litellm.completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             timeout=0.01,
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
         )

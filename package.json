@@ -5,6 +5,9 @@
     "react-copy-to-clipboard": "^5.1.0"
   },
   "devDependencies": {
-    "@types/react-copy-to-clipboard": "^5.0.7"
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^14.3.1",
+    "@types/react-copy-to-clipboard": "^5.0.7",
+    "jest": "^29.7.0"
   }
 }

@@ -1,8 +1,9 @@
 import os
-import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, TypedDict, Union
+from litellm._uuid import uuid
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

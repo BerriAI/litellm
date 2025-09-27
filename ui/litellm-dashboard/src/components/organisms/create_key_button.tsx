@@ -34,6 +34,7 @@ import { callback_map, mapDisplayToInternalNames } from "../callback_info_helper
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import ModelAliasManager from "../common_components/ModelAliasManager"
 import NotificationsManager from "../molecules/notifications_manager"
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
 
 const { Option } = Select;
 
@@ -169,6 +170,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("default");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
+  const [rotationInterval, setRotationInterval] = useState<string>("30d");
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -177,6 +180,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setDisabledCallbacks([]);
     setKeyType("default");
     setModelAliases({});
+    setAutoRotationEnabled(false);
+    setRotationInterval("30d");
   };
 
   const handleCancel = () => {
@@ -188,6 +193,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setDisabledCallbacks([]);
     setKeyType("default");
     setModelAliases({});
+    setAutoRotationEnabled(false);
+    setRotationInterval("30d");
   };
 
   useEffect(() => {
@@ -318,6 +325,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           ...metadata,
           litellm_disabled_callbacks: mappedDisabledCallbacks
         };
+      }
+      
+      // Add auto-rotation settings as top-level fields
+      if (autoRotationEnabled) {
+        formValues.auto_rotate = true;
+        formValues.rotation_interval = rotationInterval;
+      }
+
+      // Handle duration field for key expiry
+      if (formValues.duration) {
+        formValues.duration = formValues.duration;
       }
       
       // Update the formValues with the final metadata
@@ -823,20 +841,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Expire Key{' '}
-                        <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="duration"
-                    className="mt-4"
-                  >
-                    <TextInput placeholder="e.g., 30d" />
-                  </Form.Item>
                   <Form.Item 
                     label={
                       <span>
@@ -857,10 +861,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     className="mt-4"
                     help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
                   >
-                    <Tooltip 
-                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
-                      placement="top"
-                    >
                       <Select
                         mode="tags"
                         style={{ width: '100%' }}
@@ -872,7 +872,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         }
                         options={guardrailsList.map(name => ({ value: name, label: name }))}
                       />
-                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                     label={
@@ -894,10 +893,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     className="mt-4"
                     help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
                   >
-                    <Tooltip 
-                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
-                      placement="top"
-                    >
                       <Select
                         mode="tags"
                         style={{ width: '100%' }}
@@ -909,7 +904,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         }
                         options={promptsList.map(name => ({ value: name, label: name }))}
                       />
-                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                         label={
@@ -1059,6 +1053,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           initialModelAliases={modelAliases}
                           onAliasUpdate={setModelAliases}
                           showExampleConfig={false}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Key Lifecycle</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <KeyLifecycleSettings
+                          form={form}
+                          autoRotationEnabled={autoRotationEnabled}
+                          onAutoRotationChange={setAutoRotationEnabled}
+                          rotationInterval={rotationInterval}
+                          onRotationIntervalChange={setRotationInterval}
                         />
                       </div>
                     </AccordionBody>

@@ -78,7 +78,7 @@ async def test_aaateam_logging():
                 session, models=["fake-openai-endpoint"], team_id="team-1"
             )  # team-1 logs to project 1
 
-            import uuid
+            from litellm._uuid import uuid
 
             _trace_id = f"trace-{uuid.uuid4()}"
             _request_metadata = {
@@ -144,7 +144,7 @@ async def test_team_2logging():
                 session, models=["fake-openai-endpoint"], team_id="team-2"
             )  # team-1 logs to project 1
 
-            import uuid
+            from litellm._uuid import uuid
 
             _trace_id = f"trace-{uuid.uuid4()}"
             _request_metadata = {

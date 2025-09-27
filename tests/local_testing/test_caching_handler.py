@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -134,6 +134,7 @@ async def test_async_log_cache_hit_on_callbacks():
     mock_logging_obj = MagicMock()
     mock_logging_obj.async_success_handler = AsyncMock()
     mock_logging_obj.success_handler = MagicMock()
+    mock_logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
 
     cached_result = "Mocked cached result"
     start_time = datetime.now()
@@ -156,14 +157,14 @@ async def test_async_log_cache_hit_on_callbacks():
 
     # Assertions
     mock_logging_obj.async_success_handler.assert_called_once_with(
-        cached_result, start_time, end_time, cache_hit
+        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
     )
 
     # Wait for the thread to complete
     await asyncio.sleep(0.5)
 
-    mock_logging_obj.success_handler.assert_called_once_with(
-        cached_result, start_time, end_time, cache_hit
+    mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once_with(
+        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
     )
 
 

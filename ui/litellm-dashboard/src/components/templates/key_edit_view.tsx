@@ -11,6 +11,8 @@ import EditLoggingSettings from "../team/EditLoggingSettings"
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils"
 import { fetchMCPAccessGroups } from "../networking"
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
+import GuardrailSelector from "@/components/guardrails/GuardrailSelector"
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
 
 interface KeyEditViewProps {
   keyData: KeyResponse
@@ -64,6 +66,8 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   )
+  const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false)
+  const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "")
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return
@@ -144,6 +148,8 @@ export function KeyEditView({
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
+    auto_rotate: keyData.auto_rotate || false,
+    ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
   }
 
   useEffect(() => {
@@ -163,8 +169,21 @@ export function KeyEditView({
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
+      auto_rotate: keyData.auto_rotate || false,
+      ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }) 
     })
   }, [keyData, form])
+
+  // Sync auto-rotation state with form values
+  useEffect(() => {
+    form.setFieldValue("auto_rotate", autoRotationEnabled)
+  }, [autoRotationEnabled, form])
+
+  useEffect(() => {
+    if (rotationInterval) {
+      form.setFieldValue("rotation_interval", rotationInterval)
+    }
+  }, [rotationInterval, form])
 
   console.log("premiumUser:", premiumUser)
 
@@ -220,20 +239,9 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">
-        <Tooltip title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""} placement="top">
-          <Select
-            mode="tags"
-            style={{ width: "100%" }}
-            disabled={!premiumUser}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set guardrails by key"
-                : Array.isArray(keyData.metadata?.guardrails) && keyData.metadata.guardrails.length > 0
-                  ? `Current: ${keyData.metadata.guardrails.join(", ")}`
-                  : "Select or enter guardrails"
-            }
-          />
-        </Tooltip>
+        { accessToken &&
+          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} />
+        }
       </Form.Item>
 
       <Form.Item label="Prompts" name="prompts">
@@ -301,6 +309,17 @@ export function KeyEditView({
         <Input.TextArea rows={10} />
       </Form.Item>
 
+      {/* Auto-Rotation Settings */}
+      <div className="mb-4">
+        <KeyLifecycleSettings
+          form={form}
+          autoRotationEnabled={autoRotationEnabled}
+          onAutoRotationChange={setAutoRotationEnabled}
+          rotationInterval={rotationInterval}
+          onRotationIntervalChange={setRotationInterval}
+        />
+      </div>
+
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
         <Input />
@@ -308,6 +327,14 @@ export function KeyEditView({
 
       {/* Hidden form field for disabled callbacks */}
       <Form.Item name="disabled_callbacks" hidden>
+        <Input />
+      </Form.Item>
+
+      {/* Hidden form fields for auto-rotation */}
+      <Form.Item name="auto_rotate" hidden>
+        <Input />
+      </Form.Item>
+      <Form.Item name="rotation_interval" hidden>
         <Input />
       </Form.Item>
 

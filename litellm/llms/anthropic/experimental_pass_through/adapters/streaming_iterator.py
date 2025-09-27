@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
 
@@ -28,10 +28,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         TextBlock,
     )
 
-    def __init__(self, completion_stream: Any, model: str):
-        super().__init__(completion_stream)
-        self.model = model
-
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
@@ -39,6 +35,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_last_message: bool = False
     holding_chunk: Optional[Any] = None
     holding_stop_reason_chunk: Optional[Any] = None
+    queued_usage_chunk: bool = False
     current_content_block_index: int = 0
     current_content_block_start: ContentBlockContentBlockDict = TextBlock(
         type="text",
@@ -46,6 +43,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     )
     pending_new_content_block: bool = False
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
+
+    def __init__(self, completion_stream: Any, model: str):
+        super().__init__(completion_stream)
+        self.model = model
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -217,77 +218,83 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # Queue the merged chunk and reset
                     self.chunk_queue.append(merged_chunk)
+                    self.queued_usage_chunk = True
                     self.holding_stop_reason_chunk = None
                     return self.chunk_queue.popleft()
 
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
-                if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
+                if not self.queued_usage_chunk:
+                    if should_start_new_block and not self.sent_content_block_finish:
+                        # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
 
-                    # 1. Stop current content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": max(self.current_content_block_index - 1, 0),
-                        }
-                    )
+                        # 1. Stop current content block
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": max(self.current_content_block_index - 1, 0),
+                            }
+                        )
 
-                    # 2. Start new content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_start",
-                            "index": self.current_content_block_index,
-                            "content_block": self.current_content_block_start,
-                        }
-                    )
+                        # 2. Start new content block
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_start",
+                                "index": self.current_content_block_index,
+                                "content_block": self.current_content_block_start,
+                            }
+                        )
 
-                    # 3. Queue the current chunk (don't lose it!)
-                    self.chunk_queue.append(processed_chunk)
-
-                    # Reset state for new block
-                    self.sent_content_block_finish = False
-
-                    # Return the first queued item
-                    return self.chunk_queue.popleft()
-
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
-                    # Queue both the content_block_stop and the holding chunk
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": self.current_content_block_index,
-                        }
-                    )
-                    self.sent_content_block_finish = True
-                    if processed_chunk.get("delta", {}).get("stop_reason") is not None:
-
-                        self.holding_stop_reason_chunk = processed_chunk
-                    else:
+                        # 3. Queue the current chunk (don't lose it!)
                         self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
-                elif self.holding_chunk is not None:
-                    # Queue both chunks
-                    self.chunk_queue.append(self.holding_chunk)
-                    self.chunk_queue.append(processed_chunk)
-                    self.holding_chunk = None
-                    return self.chunk_queue.popleft()
-                else:
-                    # Queue the current chunk
-                    self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
+
+                        # Reset state for new block
+                        self.sent_content_block_finish = False
+
+                        # Return the first queued item
+                        return self.chunk_queue.popleft()
+
+                    if (
+                        processed_chunk["type"] == "message_delta"
+                        and self.sent_content_block_finish is False
+                    ):
+                        # Queue both the content_block_stop and the holding chunk
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                        if (
+                            processed_chunk.get("delta", {}).get("stop_reason")
+                            is not None
+                        ):
+
+                            self.holding_stop_reason_chunk = processed_chunk
+                        else:
+                            self.chunk_queue.append(processed_chunk)
+                        return self.chunk_queue.popleft()
+                    elif self.holding_chunk is not None:
+                        # Queue both chunks
+                        self.chunk_queue.append(self.holding_chunk)
+                        self.chunk_queue.append(processed_chunk)
+                        self.holding_chunk = None
+                        return self.chunk_queue.popleft()
+                    else:
+                        # Queue the current chunk
+                        self.chunk_queue.append(processed_chunk)
+                        return self.chunk_queue.popleft()
 
             # Handle any remaining held chunks after stream ends
-            if self.holding_stop_reason_chunk is not None:
-                self.chunk_queue.append(self.holding_stop_reason_chunk)
-                self.holding_stop_reason_chunk = None
+            if not self.queued_usage_chunk:
+                if self.holding_stop_reason_chunk is not None:
+                    self.chunk_queue.append(self.holding_stop_reason_chunk)
+                    self.holding_stop_reason_chunk = None
 
-            if self.holding_chunk is not None:
-                self.chunk_queue.append(self.holding_chunk)
-                self.holding_chunk = None
+                if self.holding_chunk is not None:
+                    self.chunk_queue.append(self.holding_chunk)
+                    self.holding_chunk = None
 
             if not self.sent_last_message:
                 self.sent_last_message = True

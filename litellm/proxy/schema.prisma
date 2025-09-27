@@ -171,7 +171,6 @@ model LiteLLM_MCPServerTable {
   description  String?
   url          String?
   transport    String         @default("sse")
-  spec_version String         @default("2025-03-26")
   auth_type    String?        
   created_at   DateTime?      @default(now()) @map("created_at")
   created_by   String?
@@ -222,6 +221,11 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    rotation_count   Int?       @default(0) // Number of times key has been rotated
+    auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
+    rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
+    last_rotation_at DateTime?  // When this key was last rotated
+    key_rotation_at  DateTime?  // When this key should next be rotated
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
