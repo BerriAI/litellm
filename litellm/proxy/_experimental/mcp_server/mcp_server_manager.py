@@ -561,6 +561,77 @@ class MCPServerManager:
         )
         return prefixed_tools
 
+    async def pre_call_tool_check(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        server_name_from_prefix: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        proxy_logging_obj: ProxyLogging,
+    ):
+        pre_hook_kwargs = {
+            "name": name,
+            "arguments": arguments,
+            "server_name": server_name_from_prefix,
+            "user_api_key_auth": user_api_key_auth,
+            "user_api_key_user_id": (
+                getattr(user_api_key_auth, "user_id", None)
+                if user_api_key_auth
+                else None
+            ),
+            "user_api_key_team_id": (
+                getattr(user_api_key_auth, "team_id", None)
+                if user_api_key_auth
+                else None
+            ),
+            "user_api_key_end_user_id": (
+                getattr(user_api_key_auth, "end_user_id", None)
+                if user_api_key_auth
+                else None
+            ),
+            "user_api_key_hash": (
+                getattr(user_api_key_auth, "api_key_hash", None)
+                if user_api_key_auth
+                else None
+            ),
+        }
+
+        # Create MCP request object for processing
+        mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(
+            pre_hook_kwargs
+        )
+
+        # Convert to LLM format for existing guardrail compatibility
+        synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
+            mcp_request_obj, pre_hook_kwargs
+        )
+
+        try:
+            # Use standard pre_call_hook with call_type="mcp_call"
+            modified_data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_auth,  # type: ignore
+                data=synthetic_llm_data,
+                call_type="mcp_call",  # type: ignore
+            )
+            if modified_data:
+                # Convert response back to MCP format and apply modifications
+                modified_kwargs = (
+                    proxy_logging_obj._convert_mcp_hook_response_to_kwargs(
+                        modified_data, pre_hook_kwargs
+                    )
+                )
+                if modified_kwargs.get("arguments") != arguments:
+                    arguments = modified_kwargs["arguments"]
+
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            # Re-raise guardrail exceptions to properly fail the MCP call
+            verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+            raise e
+
     async def call_tool(
         self,
         name: str,
@@ -614,70 +685,13 @@ class MCPServerManager:
         # Using standard pre_call_hook with call_type="mcp_call"
         #########################################################
         if proxy_logging_obj:
-            pre_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-                "user_api_key_auth": user_api_key_auth,
-                "user_api_key_user_id": (
-                    getattr(user_api_key_auth, "user_id", None)
-                    if user_api_key_auth
-                    else None
-                ),
-                "user_api_key_team_id": (
-                    getattr(user_api_key_auth, "team_id", None)
-                    if user_api_key_auth
-                    else None
-                ),
-                "user_api_key_end_user_id": (
-                    getattr(user_api_key_auth, "end_user_id", None)
-                    if user_api_key_auth
-                    else None
-                ),
-                "user_api_key_hash": (
-                    getattr(user_api_key_auth, "api_key_hash", None)
-                    if user_api_key_auth
-                    else None
-                ),
-            }
-
-            # Create MCP request object for processing
-            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(
-                pre_hook_kwargs
+            await self.pre_call_tool_check(
+                name=original_tool_name,
+                arguments=arguments,
+                server_name_from_prefix=server_name_from_prefix,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
             )
-
-            # Convert to LLM format for existing guardrail compatibility
-            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(
-                mcp_request_obj, pre_hook_kwargs
-            )
-
-            try:
-                # Use standard pre_call_hook with call_type="mcp_call"
-                modified_data = await proxy_logging_obj.pre_call_hook(
-                    user_api_key_dict=user_api_key_auth,  # type: ignore
-                    data=synthetic_llm_data,
-                    call_type="mcp_call",  # type: ignore
-                )
-                if modified_data:
-                    # Convert response back to MCP format and apply modifications
-                    modified_kwargs = (
-                        proxy_logging_obj._convert_mcp_hook_response_to_kwargs(
-                            modified_data, pre_hook_kwargs
-                        )
-                    )
-                    if modified_kwargs.get("arguments") != arguments:
-                        arguments = modified_kwargs["arguments"]
-
-            except (
-                BlockedPiiEntityError,
-                GuardrailRaisedException,
-                HTTPException,
-            ) as e:
-                # Re-raise guardrail exceptions to properly fail the MCP call
-                verbose_logger.error(
-                    f"Guardrail blocked MCP tool call pre call: {str(e)}"
-                )
-                raise e
 
         # Get server-specific auth header if available
         server_auth_header = None
