@@ -1029,7 +1029,7 @@ def test_vertex_ai_tool_call_id_format():
 def test_vertex_ai_code_line_length():
     """
     Test that the specific code line generating tool call IDs is within character limit.
-    
+
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
@@ -1040,19 +1040,117 @@ def test_vertex_ai_code_line_length():
 
     # Get the source code of the _transform_parts method
     source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
-    
+
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
         if 'id=f"call_{uuid.uuid4().hex' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
-    
+
     assert id_line is not None, "Could not find the ID generation line in source code"
-    
+
     # Check that the line is 40 characters or less (excluding indentation)
     line_length = len(id_line)
     assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
-    
+
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_streaming_with_stream_options():
+    """
+    Test that CustomStreamWrapper includes usage in final chunk when stream_options is enabled.
+
+    """
+    from unittest.mock import MagicMock, patch
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper, calculate_total_usage
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta, Usage
+
+    # Create mock chunks with usage data
+    mock_chunks = [
+        ModelResponseStream(
+            id="chunk1",
+            created=1742056047,
+            model="vertex_ai/gemini-pro",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant"),
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=10,
+                completion_tokens=1,
+                total_tokens=11,
+            ),
+        ),
+        ModelResponseStream(
+            id="chunk2",
+            created=1742056047,
+            model="vertex_ai/gemini-pro",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content=" world", role="assistant"),
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=10,
+                completion_tokens=3,
+                total_tokens=13,
+            ),
+        ),
+    ]
+
+    # Test CustomStreamWrapper with stream_options enabled
+    stream_wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="vertex_ai/gemini-pro",
+        custom_llm_provider="vertex_ai",
+        logging_obj=MagicMock(),
+        stream_options={"include_usage": True},
+    )
+
+    # Simulate chunks being added
+    stream_wrapper.chunks = mock_chunks
+
+    # Verify send_stream_usage is enabled
+    assert stream_wrapper.send_stream_usage is True
+
+    # Test model_response_creator includes usage when chunks are present
+    with patch('litellm.litellm_core_utils.streaming_handler.calculate_total_usage') as mock_calc_usage:
+        expected_usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=3,
+            total_tokens=13,
+        )
+        mock_calc_usage.return_value = expected_usage
+
+        model_response = stream_wrapper.model_response_creator()
+
+        # Verify calculate_total_usage was called with the chunks
+        mock_calc_usage.assert_called_once_with(chunks=mock_chunks)
+
+        # Verify usage was added to the response
+        assert hasattr(model_response, 'usage')
+        assert model_response.usage == expected_usage
+
+    # Test without stream_options - usage should not be included
+    stream_wrapper_no_usage = CustomStreamWrapper(
+        completion_stream=None,
+        model="vertex_ai/gemini-pro",
+        custom_llm_provider="vertex_ai",
+        logging_obj=MagicMock(),
+        stream_options=None,
+    )
+
+    stream_wrapper_no_usage.chunks = mock_chunks
+    assert stream_wrapper_no_usage.send_stream_usage is False
+
+    model_response_no_usage = stream_wrapper_no_usage.model_response_creator()
+    assert not hasattr(model_response_no_usage, 'usage') or model_response_no_usage.usage is None
