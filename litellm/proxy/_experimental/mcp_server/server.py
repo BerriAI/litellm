@@ -22,6 +22,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import StandardLoggingMCPToolCall
 from litellm.utils import client
@@ -178,6 +179,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = get_auth_context()
             verbose_logger.debug(
                 f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
@@ -195,6 +197,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
             )
             verbose_logger.info(
                 f"MCP list_tools - Successfully returned {len(tools)} tools"
@@ -235,6 +238,7 @@ if MCP_AVAILABLE:
             mcp_auth_header,
             _,
             mcp_server_auth_headers,
+            oauth2_headers,
         ) = get_auth_context()
 
         verbose_logger.debug(
@@ -357,15 +361,17 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
-        """
+        f"""
         Helper method to fetch tools from MCP servers based on server filtering criteria.
 
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_auth_header: Optional auth header for MCP server (deprecated)
             mcp_servers: Optional list of server names/aliases to filter by
-            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            mcp_server_auth_headers: Optional dict of server-specific auth headers 
+            oauth2_headers: Optional dict of oauth2 headers 
 
         Returns:
             List[MCPTool]: Combined list of tools from filtered servers
@@ -398,6 +404,10 @@ if MCP_AVAILABLE:
             elif mcp_server_auth_headers and server.server_name is not None:
                 server_auth_header = mcp_server_auth_headers.get(server.server_name)
 
+            extra_headers: Optional[Dict[str, str]] = None
+            if server.auth_type == MCPAuth.oauth2:
+                extra_headers = oauth2_headers
+
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
                 server_auth_header = mcp_auth_header
@@ -406,6 +416,7 @@ if MCP_AVAILABLE:
                 tools = await global_mcp_server_manager._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    extra_headers=extra_headers,
                 )
                 all_tools.extend(tools)
                 verbose_logger.debug(
@@ -427,6 +438,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -450,6 +462,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
             )
             verbose_logger.debug(
                 f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"
@@ -683,6 +696,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 _,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             mcp_servers = mcp_servers_from_path
         else:
@@ -691,8 +705,15 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
-        return user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers
+        return (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+        )
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -705,6 +726,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = await extract_mcp_auth_context(scope, path)
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
@@ -718,6 +740,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
             )
 
             # Ensure session managers are initialized
@@ -756,6 +779,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header,
                 mcp_servers,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = await extract_mcp_auth_context(scope, path)
             verbose_logger.debug(
                 f"MCP request mcp_servers (header/path): {mcp_servers}"
@@ -768,6 +792,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
             )
 
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -829,6 +854,7 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -844,6 +870,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
         )
         auth_context_var.set(auth_user)
 
@@ -851,6 +878,7 @@ if MCP_AVAILABLE:
         Optional[UserAPIKeyAuth],
         Optional[str],
         Optional[List[str]],
+        Optional[Dict[str, str]],
         Optional[Dict[str, str]],
     ]:
         """
@@ -867,8 +895,9 @@ if MCP_AVAILABLE:
                 auth_user.mcp_auth_header,
                 auth_user.mcp_servers,
                 auth_user.mcp_server_auth_headers,
+                auth_user.oauth2_headers,
             )
-        return None, None, None, None
+        return None, None, None, None, None
 
     ########################################################
     ############ End of Auth Context Functions #############

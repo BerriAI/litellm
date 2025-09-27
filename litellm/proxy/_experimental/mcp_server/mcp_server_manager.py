@@ -39,7 +39,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.mcp import MCPStdioConfig
+from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
 
@@ -382,6 +382,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -411,6 +412,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
+                extra_headers=extra_headers,
             )
         else:
             # For HTTP/SSE transports
@@ -421,12 +423,14 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
+                extra_headers=extra_headers,
             )
 
     async def _get_tools_from_server(
         self,
         server: MCPServer,
         mcp_auth_header: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -447,6 +451,7 @@ class MCPServerManager:
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
             )
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
@@ -564,6 +569,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -684,9 +690,15 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
+        # oauth2 headers
+        extra_headers: Optional[Dict[str, str]] = None
+        if mcp_server.auth_type == MCPAuth.oauth2:
+            extra_headers = oauth2_headers
+
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
         )
 
         async with client:
