@@ -204,7 +204,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
 class TestAzureEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
         return {
-            "model": "azure/azure-embedding-model",
+            "model": "azure/text-embedding-ada-002",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
         }
