@@ -2,10 +2,9 @@
 Translate from OpenAI's `/v1/chat/completions` to IO Intelligence's `/v1/chat/completions`
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 

@@ -7194,6 +7194,8 @@ class ProviderConfigManager:
             return VolcEngineEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
+        elif litellm.LlmProviders.IO_INTELLIGENCE == provider:
+            return litellm.IOIntelligenceEmbeddingConfig()
         return None
 
     @staticmethod
