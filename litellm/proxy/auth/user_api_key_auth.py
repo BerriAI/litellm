@@ -391,17 +391,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             "pass_through_endpoints", None
         )
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        # api_key, passed_in_key = get_api_key(
-        #     custom_litellm_key_header=custom_litellm_key_header,
-        #     api_key=api_key,
-        #     azure_api_key_header=azure_api_key_header,
-        #     anthropic_api_key_header=anthropic_api_key_header,
-        #     google_ai_studio_api_key_header=google_ai_studio_api_key_header,
-        #     azure_apim_header=azure_apim_header,
-        #     pass_through_endpoints=pass_through_endpoints,
-        #     route=route,
-        #     request=request,
-        # )
+        api_key, passed_in_key = get_api_key(
+            custom_litellm_key_header=custom_litellm_key_header,
+            api_key=api_key,
+            azure_api_key_header=azure_api_key_header,
+            anthropic_api_key_header=anthropic_api_key_header,
+            google_ai_studio_api_key_header=google_ai_studio_api_key_header,
+            azure_apim_header=azure_apim_header,
+            pass_through_endpoints=pass_through_endpoints,
+            route=route,
+            request=request,
+        )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
