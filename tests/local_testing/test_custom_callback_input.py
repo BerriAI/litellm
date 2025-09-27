@@ -450,12 +450,12 @@ def test_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
         )
         # test streaming
         response = litellm.completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
             stream=True,
         )
@@ -464,7 +464,7 @@ def test_chat_azure_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="azure/gpt-4o-new-test",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
                 api_key="my-bad-key",
                 stream=True,
