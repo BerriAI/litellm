@@ -214,7 +214,6 @@ const Teams: React.FC<TeamProps> = ({
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
     console.log(`models: ${models}`);
     setModelsToPick(models);
-    form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
 
   // Add this useEffect to fetch guardrails
