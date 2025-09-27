@@ -1,5 +1,5 @@
 ---
-title: "v1.77.5-stable - Enhanced Model Support & Performance Improvements"
+title: "[Preview] v1.77.5-stable - MCP OAuth 2.0 Support"
 slug: "v1-77-5"
 date: 2025-09-29T10:00:00
 authors:
@@ -25,10 +25,6 @@ import TabItem from '@theme/TabItem';
 <TabItem value="docker" label="Docker">
 
 ``` showLineNumbers title="docker run litellm"
-docker run \
--e STORE_MODEL_IN_DB=True \
--p 4000:4000 \
-ghcr.io/berriai/litellm:v1.77.5-stable
 ```
 
 </TabItem>
@@ -36,7 +32,6 @@ ghcr.io/berriai/litellm:v1.77.5-stable
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.77.5
 ```
 
 </TabItem>
@@ -46,11 +41,10 @@ pip install litellm==1.77.5
 
 ## Key Highlights
 
-- **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
 - **MCP OAuth 2.0 Support** - Enhanced authentication for Model Context Protocol integrations
+- **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
 - **New Gemini 2.5 Flash & Flash-lite Models** - Latest September 2025 preview models with improved pricing and features
-- **Enhanced Claude Sonnet 4 Support** - Million-token context window with tiered pricing
-- **Memory Leak Fixes** - Critical InMemoryCache unbounded growth resolution
+- **Performance Improvements** - Critical InMemoryCache unbounded growth resolution
 
 ## New Models / Updated Models
 
@@ -133,7 +127,6 @@ pip install litellm==1.77.5
 - **General**
     - Add SDK support for additional headers - [PR #14761](https://github.com/BerriAI/litellm/pull/14761)
     - Add shared_session parameter for aiohttp ClientSession reuse - [PR #14721](https://github.com/BerriAI/litellm/pull/14721)
-    - Fix: get metadata info from both metadata and litellm_metadata fields - [PR #14783](https://github.com/BerriAI/litellm/pull/14783)
 
 #### Bugs
 
@@ -173,7 +166,7 @@ pip install litellm==1.77.5
 - **[Opik](../../docs/proxy/logging#opik)**
     - Improve opik integration code - [PR #14888](https://github.com/BerriAI/litellm/pull/14888)
 - **[SQS](../../docs/proxy/logging#sqs)**
-    - Error logging in SQS - [PR #14974](https://github.com/BerriAI/litellm/pull/14974)
+    - Error logging support for SQS Logger - [PR #14974](https://github.com/BerriAI/litellm/pull/14974)
 
 #### Guardrails
 
@@ -186,7 +179,9 @@ pip install litellm==1.77.5
 
 - **Service Tier Pricing** - Add service_tier based pricing support for openai (BOTH Service & Priority Support) - [PR #14796](https://github.com/BerriAI/litellm/pull/14796)
 - **Cost Tracking** - Show input, output, tool call cost breakdown in StandardLoggingPayload - [PR #14921](https://github.com/BerriAI/litellm/pull/14921)
-- **Parallel Request Limiter v3** - Ensure Lua scripts can execute on redis cluster - [PR #14968](https://github.com/BerriAI/litellm/pull/14968)
+- **Parallel Request Limiter v3** 
+    - Ensure Lua scripts can execute on redis cluster - [PR #14968](https://github.com/BerriAI/litellm/pull/14968)
+    - Fix: get metadata info from both metadata and litellm_metadata fields - [PR #14783](https://github.com/BerriAI/litellm/pull/14783)
 - **Priority Reservation** - Fix: Priority Reservation: keys without priority metadata receive higher priority than keys with explicit priority configurations - [PR #14832](https://github.com/BerriAI/litellm/pull/14832)
 
 ---
@@ -206,14 +201,14 @@ pip install litellm==1.77.5
 - **Concurrency Fix** - Fix concurrency/scaling when many Python threads do streaming using *sync* completions - [PR #14816](https://github.com/BerriAI/litellm/pull/14816)
 - **Performance Optimization** - Fix: reduce get_deployment cost to O(1) - [PR #14967](https://github.com/BerriAI/litellm/pull/14967)
 - **Performance Optimization** - Fix: remove slow string operation - [PR #14955](https://github.com/BerriAI/litellm/pull/14955)
+- **DB Connection Management** - Fix: DB connection state retries - [PR #14925](https://github.com/BerriAI/litellm/pull/14925)
 
 ---
 
 ## General Proxy Improvements
 
-- **Dependencies** - Make `fastuuid` an optional dependency for `proxy`, graceful fallback to stdlib `uuid` - [PR #14818](https://github.com/BerriAI/litellm/pull/14818)
-- **Dependencies** - Revert `fastuuid` optional dependency, always use `fastuuid` in `.__uid` helper - [PR #14941](https://github.com/BerriAI/litellm/pull/14941)
-- **Prisma Client** - Fix: prisma client state retries - [PR #14925](https://github.com/BerriAI/litellm/pull/14925)
+
+
 
 ---
 
