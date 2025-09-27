@@ -46,10 +46,10 @@ pip install litellm==1.77.5
 
 ## Key Highlights
 
+- **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
+- **MCP OAuth 2.0 Support** - Enhanced authentication for Model Context Protocol integrations
 - **New Gemini 2.5 Flash & Flash-lite Models** - Latest September 2025 preview models with improved pricing and features
 - **Enhanced Claude Sonnet 4 Support** - Million-token context window with tiered pricing
-- **W&B Inference Integration** - New provider support for Weights & Biases inference platform
-- **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
 - **Memory Leak Fixes** - Critical InMemoryCache unbounded growth resolution
 
 ## New Models / Updated Models
@@ -97,7 +97,6 @@ pip install litellm==1.77.5
 - **[SambaNova](../../docs/providers/sambanova)**
     - Add sambanova deepseek v3.1 and gpt-oss-120b - [PR #14866](https://github.com/BerriAI/litellm/pull/14866)
 - **[OpenAI](../../docs/providers/openai)**
-    - Add service_tier based pricing support for openai (BOTH Service & Priority Support) - [PR #14796](https://github.com/BerriAI/litellm/pull/14796)
     - Fix inconsistent token configs for gpt-5 models - [PR #14942](https://github.com/BerriAI/litellm/pull/14942)
     - GPT-3.5-Turbo price updated - [PR #14858](https://github.com/BerriAI/litellm/pull/14858)
 - **[OpenRouter](../../docs/providers/openrouter)**
@@ -173,6 +172,8 @@ pip install litellm==1.77.5
     - Adding langfuse usage details for cached tokens - [PR #10955](https://github.com/BerriAI/litellm/pull/10955)
 - **[Opik](../../docs/proxy/logging#opik)**
     - Improve opik integration code - [PR #14888](https://github.com/BerriAI/litellm/pull/14888)
+- **[SQS](../../docs/proxy/logging#sqs)**
+    - Error logging in SQS - [PR #14974](https://github.com/BerriAI/litellm/pull/14974)
 
 #### Guardrails
 
@@ -181,11 +182,26 @@ pip install litellm==1.77.5
 
 ---
 
+## Spend Tracking, Budgets and Rate Limiting
+
+- **Service Tier Pricing** - Add service_tier based pricing support for openai (BOTH Service & Priority Support) - [PR #14796](https://github.com/BerriAI/litellm/pull/14796)
+- **Cost Tracking** - Show input, output, tool call cost breakdown in StandardLoggingPayload - [PR #14921](https://github.com/BerriAI/litellm/pull/14921)
+- **Parallel Request Limiter v3** - Ensure Lua scripts can execute on redis cluster - [PR #14968](https://github.com/BerriAI/litellm/pull/14968)
+- **Priority Reservation** - Fix: Priority Reservation: keys without priority metadata receive higher priority than keys with explicit priority configurations - [PR #14832](https://github.com/BerriAI/litellm/pull/14832)
+
+---
+
+## MCP Gateway
+
+- **MCP Configuration** - Enable custom fields in mcp_info configuration - [PR #14794](https://github.com/BerriAI/litellm/pull/14794)
+- **MCP Tools** - Remove server_name prefix from list_tools - [PR #14720](https://github.com/BerriAI/litellm/pull/14720)
+- **OAuth Flow** - Initial commit for v2 oauth flow - [PR #14964](https://github.com/BerriAI/litellm/pull/14964)
+
+---
+
 ## Performance / Loadbalancing / Reliability improvements
 
 - **Memory Leak Fix** - Fix InMemoryCache unbounded growth when TTLs are set - [PR #14869](https://github.com/BerriAI/litellm/pull/14869)
-- **Parallel Request Limiter v3** - Ensure Lua scripts can execute on redis cluster - [PR #14968](https://github.com/BerriAI/litellm/pull/14968)
-- **Priority Reservation** - Fix: Priority Reservation: keys without priority metadata receive higher priority than keys with explicit priority configurations - [PR #14832](https://github.com/BerriAI/litellm/pull/14832)
 - **Cache Performance** - Fix: cache root cause - [PR #14827](https://github.com/BerriAI/litellm/pull/14827)
 - **Concurrency Fix** - Fix concurrency/scaling when many Python threads do streaming using *sync* completions - [PR #14816](https://github.com/BerriAI/litellm/pull/14816)
 - **Performance Optimization** - Fix: reduce get_deployment cost to O(1) - [PR #14967](https://github.com/BerriAI/litellm/pull/14967)
@@ -195,14 +211,9 @@ pip install litellm==1.77.5
 
 ## General Proxy Improvements
 
-- **Cost Tracking** - Show input, output, tool call cost breakdown in StandardLoggingPayload - [PR #14921](https://github.com/BerriAI/litellm/pull/14921)
-- **MCP Configuration** - Enable custom fields in mcp_info configuration - [PR #14794](https://github.com/BerriAI/litellm/pull/14794)
-- **MCP Tools** - Remove server_name prefix from list_tools - [PR #14720](https://github.com/BerriAI/litellm/pull/14720)
 - **Dependencies** - Make `fastuuid` an optional dependency for `proxy`, graceful fallback to stdlib `uuid` - [PR #14818](https://github.com/BerriAI/litellm/pull/14818)
 - **Dependencies** - Revert `fastuuid` optional dependency, always use `fastuuid` in `.__uid` helper - [PR #14941](https://github.com/BerriAI/litellm/pull/14941)
 - **Prisma Client** - Fix: prisma client state retries - [PR #14925](https://github.com/BerriAI/litellm/pull/14925)
-- **OAuth Flow** - Initial commit for v2 oauth flow - [PR #14964](https://github.com/BerriAI/litellm/pull/14964)
-- **Error Logging** - Error logging in SQS - [PR #14974](https://github.com/BerriAI/litellm/pull/14974)
 
 ---
 
