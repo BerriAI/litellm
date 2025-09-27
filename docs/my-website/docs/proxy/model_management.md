@@ -33,6 +33,44 @@ curl -X GET "http://0.0.0.0:4000/model/info" \
   </TabItem>
 </Tabs>
 
+## Enable/Disable Models
+
+Toggle models between active and inactive states without deleting them. Inactive models are excluded from request routing but retain all their configuration.
+
+<Tabs>
+<TabItem value="API">
+
+```bash
+# Toggle model status (enable/disable)
+curl -X PATCH "http://0.0.0.0:4000/model/{model_id}/toggle-status" \
+    -H "accept: application/json" \
+    -H "Authorization: Bearer sk-your-api-key"
+```
+
+**Response:**
+```json
+{
+  "model_id": "model_123",
+  "model_name": "gpt-3.5-turbo",
+  "is_active": false,
+  "message": "Model disabled successfully"
+}
+```
+
+</TabItem>
+<TabItem value="UI">
+
+In the LiteLLM UI, you can toggle models on/off using the switch in the Actions column of the models table. The model status is shown with a green (Active) or gray (Inactive) badge.
+
+</TabItem>
+</Tabs>
+
+### Notes:
+- Only DB models can be toggled (config.yaml models cannot be disabled)
+- Disabled models are immediately excluded from routing
+- Model configurations are preserved when disabled
+- Only Proxy Admins and model creators can toggle status
+
 ## Add a New Model
 
 Add a new model to the proxy via the `/model/new` API, to add models without restarting the proxy.

@@ -39,6 +39,7 @@ import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  modelToggleStatusCall,
 } from "../networking"
 import { BarChart, AreaChart } from "@tremor/react"
 import { Popover, Form, InputNumber, message } from "antd"
@@ -463,6 +464,32 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     // Update the 'lastRefreshed' state to the current date and time
     const currentDate = new Date()
     setLastRefreshed(currentDate.toLocaleString())
+  }
+
+  const handleToggleStatus = async (modelId: string) => {
+    try {
+      const response = await modelToggleStatusCall(accessToken, modelId)
+      
+      // Update local state
+      setModelData((prev: any) => ({
+        ...prev,
+        data: prev.data.map((model: any) => 
+          model.model_info.id === modelId 
+            ? { ...model, is_active: response.is_active }
+            : model
+        ),
+      }))
+      
+      NotificationsManager.success(
+        `Model ${response.is_active ? 'enabled' : 'disabled'} successfully`
+      )
+      
+      // Trigger a refresh to update UI
+      handleRefreshClick()
+    } catch (error) {
+      NotificationsManager.error('Failed to toggle model status')
+      console.error('Error toggling model status:', error)
+    }
   }
 
   const handleSaveRetrySettings = async () => {
@@ -1319,6 +1346,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             setEditModel,
                             expandedRows,
                             setExpandedRows,
+                            handleToggleStatus,
                           )}
                           data={paginatedData}
                           isLoading={false}

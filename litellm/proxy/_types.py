@@ -894,6 +894,7 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     model_name: str
     litellm_params: dict
     model_info: dict
+    is_active: bool = True  # New field for enable/disable functionality
     created_by: str
     updated_by: str
 
@@ -3294,6 +3295,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
     litellm_params: str
     model_info: str
+    is_active: bool  # Support for enable/disable functionality
     updated_at: str
     updated_by: str
 
