@@ -380,8 +380,16 @@ def test_openai_azure_embedding_optional_arg():
             azure_ad_token="test",
         )
 
-        assert mock_client.called_once_with(model="test", input=["test"], timeout=600)
+        mock_client.assert_called_once_with(
+            model="test", 
+            input=["test"], 
+            extra_body={"azure_ad_token": "test"}, 
+            timeout=600, 
+            extra_headers={"X-Stainless-Raw-Response": "true"}
+        )
+        # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
+        assert mock_client.call_args.kwargs["extra_body"]["azure_ad_token"] == "test"
 
 
 # test_openai_azure_embedding()
