@@ -113,6 +113,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "anthropic"
 
+    @property
+    def supports_defs(self) -> bool:
+        """
+        Anthropic fully supports $defs in JSON schemas and needs them for proper tool calling.
+        """
+        return True
+
     @classmethod
     def get_config(cls):
         return super().get_config()
