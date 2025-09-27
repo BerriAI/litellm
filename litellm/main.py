@@ -3936,7 +3936,7 @@ def embedding(  # noqa: PLR0915
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-    aembedding = kwargs.get("aembedding", None)
+    aembedding: Optional[bool] = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None)
     ### CUSTOM MODEL COST ###
@@ -5616,7 +5616,7 @@ def speech(  # noqa: PLR0915
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict = get_litellm_params(**kwargs)
-    logging_obj = kwargs.get("litellm_logging_obj", None)
+    logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
         user=user,
