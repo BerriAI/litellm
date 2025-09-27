@@ -266,6 +266,7 @@ print(response)
 | Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
 | Cohere Embeddings - English | `embedding(model="cohere.embed-english-v3", input=input)` |
 | Cohere Embeddings - Multilingual | `embedding(model="cohere.embed-multilingual-v3", input=input)` |
+| TwelveLabs Marengo (Async) | `embedding(model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0", input=input)` | [Async Invoke Docs](../providers/bedrock_embedding#async-invoke-embedding) |
 
 
 ## Cohere Embedding Models
