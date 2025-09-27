@@ -627,18 +627,14 @@ def _handle_mock_potential_exceptions(
         raise litellm.MockException(
             status_code=getattr(mock_response, "status_code", 500),  # type: ignore
             message=getattr(mock_response, "text", str(mock_response)),
-            llm_provider=getattr(
-                mock_response, "llm_provider", custom_llm_provider or "openai"
-            ),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
             model=model,  # type: ignore
             request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
         )
     elif isinstance(mock_response, str) and mock_response == "litellm.RateLimitError":
         raise litellm.RateLimitError(
             message="this is a mock rate limit error",
-            llm_provider=getattr(
-                mock_response, "llm_provider", custom_llm_provider or "openai"
-            ),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
             model=model,
         )
     elif (
@@ -647,9 +643,7 @@ def _handle_mock_potential_exceptions(
     ):
         raise litellm.ContextWindowExceededError(
             message="this is a mock context window exceeded error",
-            llm_provider=getattr(
-                mock_response, "llm_provider", custom_llm_provider or "openai"
-            ),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
             model=model,
         )
     elif (
@@ -658,9 +652,7 @@ def _handle_mock_potential_exceptions(
     ):
         raise litellm.InternalServerError(
             message="this is a mock internal server error",
-            llm_provider=getattr(
-                mock_response, "llm_provider", custom_llm_provider or "openai"
-            ),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
             model=model,
         )
     elif isinstance(mock_response, str) and mock_response.startswith(
@@ -897,6 +889,19 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    # Auto-route GPT-5 models to responses API
+    def is_gpt5_model(model_name: str) -> bool:
+        """Check if model is a GPT-5 variant, handling Azure deployment names like 'gpt5_series/gpt-5'."""
+        import re
+
+        # Use word boundaries to avoid matching gpt-50, gpt-5x, etc.
+        gpt5_patterns = [r"\bgpt-5\b", r"\bgpt-5-mini\b", r"\bgpt-5-turbo\b"]
+        return any(re.search(pattern, model_name) for pattern in gpt5_patterns)
+
+    if custom_llm_provider in ["openai", "azure"] and is_gpt5_model(model):
+        model_info["mode"] = "responses"
+
     return model_info, model
 
 
@@ -1094,7 +1099,6 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
-
         (
             model,
             messages,
@@ -1389,23 +1393,29 @@ def completion(  # type: ignore # noqa: PLR0915
         if model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
-            return responses_api_bridge.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                timeout=timeout,  # type: ignore
-                client=client,  # pass AsyncOpenAI, OpenAI client
-                custom_llm_provider=custom_llm_provider,
-                encoding=encoding,
-                stream=stream,
-            )
+            try:
+                return responses_api_bridge.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                )
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Responses API failed for model '{model}': {e}"
+                )
+                raise
 
         if custom_llm_provider == "azure":
             # azure configs
@@ -2059,7 +2069,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             try:
                 if use_base_llm_http_handler:
-
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
@@ -2545,15 +2554,10 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "compactifai":
             api_key = (
-                api_key
-                or get_secret_str("COMPACTIFAI_API_KEY")
-                or litellm.api_key
+                api_key or get_secret_str("COMPACTIFAI_API_KEY") or litellm.api_key
             )
 
-            api_base = (
-                api_base
-                or "https://api.compactif.ai/v1"
-            )
+            api_base = api_base or "https://api.compactif.ai/v1"
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(
@@ -3141,9 +3145,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3491,7 +3495,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
         elif custom_llm_provider == "gradient_ai":
-
             api_base = litellm.api_base or api_base
             response = base_llm_http_handler.completion(
                 model=model,
@@ -4125,12 +4128,7 @@ def embedding(  # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")  # type: ignore
 
             # set API KEY
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.databricks_key
-                or get_secret("DATABRICKS_API_KEY")
-            )  # type: ignore
+            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")  # type: ignore
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(
@@ -4210,12 +4208,7 @@ def embedding(  # noqa: PLR0915
                 headers=headers,
             )
         elif custom_llm_provider == "huggingface":
-            api_key = (
-                api_key
-                or litellm.huggingface_key
-                or get_secret("HUGGINGFACE_API_KEY")
-                or litellm.api_key
-            )  # type: ignore
+            api_key = api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY") or litellm.api_key  # type: ignore
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
@@ -4376,12 +4369,7 @@ def embedding(  # noqa: PLR0915
                 api_key=api_key,
             )
         elif custom_llm_provider == "ollama":
-            api_base = (
-                litellm.api_base
-                or api_base
-                or get_secret_str("OLLAMA_API_BASE")
-                or "http://localhost:11434"
-            )  # type: ignore
+            api_base = litellm.api_base or api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"  # type: ignore
 
             if isinstance(input, str):
                 input = [input]
@@ -5152,9 +5140,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -6142,9 +6130,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -6155,9 +6143,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -6168,9 +6156,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk

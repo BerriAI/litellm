@@ -3,7 +3,7 @@ import sys
 import pytest
 import asyncio
 from typing import Optional, cast
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -14,12 +14,20 @@ sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 import json
-from litellm.types.utils import StandardLoggingPayload
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponseAPIUsage,
     IncompleteDetails,
+)
+from openai.types.responses import (
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from base_responses_api import BaseResponsesAPITest, validate_responses_api_response
@@ -1508,3 +1516,182 @@ async def test_basic_openai_responses_with_websearch(stream):
             print("chunk=", json.dumps(chunk, indent=4, default=str))
     else:
         print("response=", json.dumps(response, indent=4, default=str))
+
+
+class TestGPT5AutoRoutingResponsesAPI:
+    """Test auto-routing of GPT-5 models to responses API."""
+
+    @pytest.mark.asyncio
+    async def test_auto_routed_gpt5_with_reasoning_effort(self):
+        """Test that auto-routed GPT-5 properly handles reasoning_effort parameter."""
+        # Mock at the responses bridge level instead of litellm.aresponses
+        with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.acompletion") as mock_bridge_acompletion:
+            # Mock a typical ModelResponse that would come from responses API transformation
+            from litellm.types.utils import ModelResponse, Choices, Message
+
+            mock_response = ModelResponse(
+                id="resp_auto_route_test",
+                created=int(time.time()),
+                model="gpt-5",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=Message(
+                            content="2+2 equals 4. Let me explain step by step.",
+                            role="assistant",
+                            reasoning_content="Step 1: I need to add 2 and 2. Step 2: 2 + 2 = 4."
+                        )
+                    )
+                ]
+            )
+            mock_bridge_acompletion.return_value = mock_response
+
+            # Use completion() which should auto-route GPT-5 to responses API
+            response = await litellm.acompletion(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "Solve 2+2 step by step"}],
+                reasoning_effort="high",
+            )
+
+            # Verify auto-routing worked (responses bridge was called)
+            mock_bridge_acompletion.assert_called_once()
+
+            # Verify response structure
+            assert response.provider_specific_fields is not None
+            assert response.provider_specific_fields["responses_api_id"] == "resp_auto_route_test"
+            assert response.choices[0].message.content == "2+2 equals 4. Let me explain step by step."
+            assert response.choices[0].message.reasoning_content == "Step 1: I need to add 2 and 2. Step 2: 2 + 2 = 4."
+
+    @pytest.mark.asyncio
+    async def test_auto_routed_azure_gpt5_with_complex_deployment(self):
+        """Test auto-routing for Azure GPT-5 with complex deployment names."""
+        # Mock at the responses bridge level for Azure
+        with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.acompletion") as mock_bridge_acompletion:
+            # Mock Azure responses API response
+            from litellm.types.utils import ModelResponse, Choices, Message
+
+            mock_response = ModelResponse(
+                id="resp_azure_complex",
+                created=int(time.time()),
+                model="gpt-5",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=Message(
+                            content="Azure deployment auto-routing successful.",
+                            role="assistant",
+                            reasoning_content="Complex deployment names are properly handled by the regex matching."
+                        )
+                    )
+                ]
+            )
+            mock_bridge_acompletion.return_value = mock_response
+
+            # Test complex Azure deployment name auto-routing
+            response = await litellm.acompletion(
+                model="azure/company-gpt-5-turbo-deployment",
+                messages=[{"role": "user", "content": "Test complex deployment"}],
+                reasoning_effort="medium",
+                api_base="https://test.openai.azure.com/",
+                api_key="fake-azure-key",
+            )
+
+            # Verify auto-routing to Azure responses API worked
+            mock_bridge_acompletion.assert_called_once()
+
+            # Verify response structure
+            assert response.provider_specific_fields is not None
+            assert response.provider_specific_fields["responses_api_id"] == "resp_azure_complex"
+            assert response.choices[0].message.content == "Azure deployment auto-routing successful."
+
+    def test_reasoning_content_scoped_per_choice(self):
+        """Reasoning snippets should apply only to the subsequent message choice."""
+        handler = LiteLLMResponsesTransformationHandler()
+
+        reasoning_item_1 = ResponseReasoningItem(
+            id="reasoning-1",
+            summary=[{"type": "summary_text", "text": "summary-1"}],
+            type="reasoning",
+            content=[{"type": "reasoning_text", "text": "Step A"}],
+            status="completed",
+        )
+        message_item_1 = ResponseOutputMessage(
+            id="message-1",
+            role="assistant",
+            type="message",
+            status="completed",
+            content=[
+                ResponseOutputText(
+                    annotations=[],
+                    text="Answer A",
+                    type="output_text",
+                )
+            ],
+        )
+
+        reasoning_item_2 = ResponseReasoningItem(
+            id="reasoning-2",
+            summary=[{"type": "summary_text", "text": "summary-2"}],
+            type="reasoning",
+            content=[{"type": "reasoning_text", "text": "Step B"}],
+            status="completed",
+        )
+        message_item_2 = ResponseOutputMessage(
+            id="message-2",
+            role="assistant",
+            type="message",
+            status="completed",
+            content=[
+                ResponseOutputText(
+                    annotations=[],
+                    text="Answer B",
+                    type="output_text",
+                )
+            ],
+        )
+
+        raw_response = ResponsesAPIResponse.model_validate(
+            {
+                "id": "resp-multi",
+                "created_at": 123,
+                "model": "gpt-5",
+                "object": "response",
+                "output": [
+                    reasoning_item_1,
+                    message_item_1,
+                    reasoning_item_2,
+                    message_item_2,
+                ],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": 1,
+                "status": "completed",
+                "usage": None,
+            }
+        )
+
+        transformed = handler.transform_response(
+            model="gpt-5",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(transformed.choices) == 2
+        first_message = transformed.choices[0].message
+        second_message = transformed.choices[1].message
+
+        assert first_message.content == "Answer A"
+        assert first_message.reasoning_content == "Step A"
+        assert second_message.content == "Answer B"
+        assert second_message.reasoning_content == "Step B"

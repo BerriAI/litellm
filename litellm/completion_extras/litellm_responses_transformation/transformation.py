@@ -72,7 +72,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             "type": "message",
                             "role": role,
                             "content": self._convert_content_to_responses_format(
-                                content, role  # type: ignore
+                                content,
+                                role,  # type: ignore
                             ),
                         }
                     )
@@ -146,10 +147,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 # Convert chat completion tools to responses API tools format
-                responses_api_request["tools"] = (
-                    self._convert_tools_to_responses_format(
-                        cast(List[Dict[str, Any]], value)
-                    )
+                responses_api_request[
+                    "tools"
+                ] = self._convert_tools_to_responses_format(
+                    cast(List[Dict[str, Any]], value)
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
@@ -239,21 +240,35 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raise ValueError(f"Error in response: {raw_response.error}")
 
         choices: List[Choices] = []
+        pending_reasoning_chunks: List[str] = []
         index = 0
         for item in raw_response.output:
             if isinstance(item, ResponseReasoningItem):
-                pass  # ignore for now.
+                # Extract reasoning content for inclusion in response
+                if item.content:
+                    for content in item.content:
+                        reasoning_text = getattr(content, "text", "")
+                        if reasoning_text:
+                            pending_reasoning_chunks.append(reasoning_text)
             elif isinstance(item, ResponseOutputMessage):
-                for content in item.content:
-                    response_text = getattr(content, "text", "")
+                for content_item in item.content:
+                    response_text = getattr(content_item, "text", "")
                     msg = Message(
                         role=item.role, content=response_text if response_text else ""
                     )
+
+                    if pending_reasoning_chunks:
+                        setattr(
+                            msg,
+                            "reasoning_content",
+                            "\n".join(pending_reasoning_chunks),
+                        )
 
                     choices.append(
                         Choices(message=msg, finish_reason="stop", index=index)
                     )
                     index += 1
+                pending_reasoning_chunks = []
             elif isinstance(item, ResponseFunctionToolCall):
                 msg = Message(
                     content=None,
@@ -293,6 +308,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         model_response.model = model
 
+        provider_specific_fields = getattr(
+            model_response, "provider_specific_fields", None
+        ) or {}
+        provider_specific_fields.update({"responses_api_id": raw_response.id})
+        setattr(model_response, "provider_specific_fields", provider_specific_fields)
+
         setattr(
             model_response,
             "usage",
@@ -300,6 +321,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.usage
             ),
         )
+
         return model_response
 
     def get_model_response_iterator(
@@ -359,6 +381,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             Iterable[
                 Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]
             ],
+            None,
         ],
         role: str,
     ) -> List[Dict[str, Any]]:
@@ -369,7 +392,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             f"Chat provider: Converting content to responses format - input type: {type(content)}"
         )
 
-        if isinstance(content, str):
+        if content is None:
+            return []
+        elif isinstance(content, str):
             result = [self._convert_content_str_to_input_text(content, role)]
             verbose_logger.debug(f"Chat provider: String content -> {result}")
             return result

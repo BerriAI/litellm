@@ -660,13 +660,92 @@ def test_openai_tool_calling():
 
 @pytest.mark.asyncio
 async def test_openai_gpt5_reasoning():
-    response = await litellm.acompletion(
-        model="openai/gpt-5-mini",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        reasoning_effort="minimal",
-    )
-    print("response: ", response)
-    assert response.choices[0].message.content is not None
+    """Test GPT-5 reasoning with auto-routing to responses API."""
+    # Mock the responses_api_bridge completion method instead of litellm.responses
+    with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.completion") as mock_bridge_completion:
+        # Mock a typical ModelResponse that would come from responses API transformation
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        mock_response = ModelResponse(
+            id="resp_test_reasoning",
+            created=1234567890,
+            model="gpt-5-mini",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Paris is the capital of France.",
+                        role="assistant",
+                        reasoning_content="I need to recall basic geography. France is a country in Europe, and its capital city is Paris."
+                    )
+                )
+            ]
+        )
+        mock_bridge_completion.return_value = mock_response
+
+        # Test that auto-routing works with reasoning_effort
+        response = await litellm.acompletion(
+            model="openai/gpt-5-mini",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            reasoning_effort="minimal",
+        )
+
+        # Verify responses API bridge was called (auto-routing worked)
+        mock_bridge_completion.assert_called_once()
+
+        # Verify response has expected structure
+        assert response.provider_specific_fields is not None
+        assert response.provider_specific_fields["responses_api_id"] == "resp_test_reasoning"
+        assert response.choices[0].message.content == "Paris is the capital of France."
+        assert response.choices[0].message.reasoning_content == "I need to recall basic geography. France is a country in Europe, and its capital city is Paris."
+
+
+@pytest.mark.asyncio
+async def test_azure_gpt5_auto_routing():
+    """Test Azure GPT-5 auto-routing with complex deployment names."""
+    # Mock the responses_api_bridge acompletion method for Azure
+    with patch("litellm.completion_extras.litellm_responses_transformation.handler.responses_api_bridge.acompletion") as mock_bridge_acompletion:
+        # Mock a typical ModelResponse that would come from Azure responses API transformation
+        from litellm.types.utils import ModelResponse, Choices, Message
+
+        mock_response = ModelResponse(
+            id="resp_azure_test",
+            created=1234567890,
+            model="gpt-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Azure auto-routing is working correctly.",
+                        role="assistant",
+                        reasoning_content="The user is testing Azure GPT-5 auto-routing with a complex deployment name. I should confirm that the functionality works."
+                    )
+                )
+            ]
+        )
+        mock_bridge_acompletion.return_value = mock_response
+
+        # Test complex Azure deployment name with GPT-5
+        response = await litellm.acompletion(
+            model="azure/gpt5_series/gpt-5",
+            messages=[{"role": "user", "content": "Test Azure auto-routing"}],
+            reasoning_effort="medium",
+            api_base="https://test.openai.azure.com/",
+            api_key="fake-azure-key",
+        )
+
+        # Verify azure responses API bridge was called (auto-routing worked)
+        mock_bridge_acompletion.assert_called_once()
+
+        # Verify response has expected structure
+        assert response.provider_specific_fields is not None
+        assert response.provider_specific_fields["responses_api_id"] == "resp_azure_test"
+        assert response.choices[0].message.content == "Azure auto-routing is working correctly."
+        assert response.choices[0].message.reasoning_content == "The user is testing Azure GPT-5 auto-routing with a complex deployment name. I should confirm that the functionality works."
 
 
 @pytest.mark.asyncio

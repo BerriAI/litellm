@@ -77,7 +77,9 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(self, *args, **kwargs) -> Union[
+    def completion(
+        self, *args, **kwargs
+    ) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
@@ -109,9 +111,16 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        result = responses(
-            **request_data,
-        )
+        try:
+            result = responses(
+                **request_data,
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+
+            verbose_logger.warning(f"Responses API failed: {e}")
+            # Re-raise to let the main completion function handle fallback
+            raise e
 
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
@@ -170,10 +179,17 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        result = await aresponses(
-            **request_data,
-            aresponses=True,
-        )
+        try:
+            result = await aresponses(
+                **request_data,
+                aresponses=True,
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+
+            verbose_logger.warning(f"Responses API failed: {e}")
+            # Re-raise to let the main completion function handle fallback
+            raise e
 
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(

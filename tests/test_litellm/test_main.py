@@ -499,35 +499,174 @@ def test_bedrock_llama():
     )
 
 
-def test_responses_api_bridge_check_strips_responses_prefix():
-    """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
-    from litellm.main import responses_api_bridge_check
+class TestResponsesAPIBridgeAutoRouting:
+    """Consolidated tests for responses_api_bridge_check auto-routing functionality."""
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
-        mock_get_model_info.return_value = {"max_tokens": 4096}
+    def test_strips_responses_prefix(self):
+        """Test that responses_api_bridge_check strips 'responses/' prefix and sets mode."""
+        from litellm.main import responses_api_bridge_check
 
-        model_info, model = responses_api_bridge_check(
-            model="responses/gpt-4-responses",
-            custom_llm_provider="openai",
-        )
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
 
-        assert model == "gpt-4-responses"
-        assert model_info["mode"] == "responses"
+            model_info, model = responses_api_bridge_check(
+                model="responses/gpt-4-responses",
+                custom_llm_provider="openai",
+            )
+
+            assert model == "gpt-4-responses"
+            assert model_info["mode"] == "responses"
+
+    def test_handles_exception(self):
+        """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.side_effect = Exception("Model not found")
+
+            model_info, model = responses_api_bridge_check(
+                model="responses/custom-model", custom_llm_provider="custom"
+            )
+
+            assert model == "custom-model"
+            assert model_info["mode"] == "responses"
+
+    def test_auto_routes_openai_gpt5(self):
+        """Test that responses_api_bridge_check automatically routes OpenAI gpt-5 models to responses API."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+
+            # Test various gpt-5 model names
+            test_models = ["gpt-5", "gpt-5-turbo", "gpt-5-mini"]
+
+            for model in test_models:
+                model_info, returned_model = responses_api_bridge_check(
+                    model=model,
+                    custom_llm_provider="openai",
+                )
+
+                assert returned_model == model  # Model name should remain unchanged
+                assert model_info["mode"] == "responses"  # Should be routed to responses API
+
+    def test_does_not_auto_route_non_gpt5(self):
+        """Test that responses_api_bridge_check does not auto-route non-gpt-5 OpenAI models."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096, "mode": "chat"}
+
+            # Test non-gpt-5 OpenAI models
+            test_models = ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-4o"]
+
+            for model in test_models:
+                model_info, returned_model = responses_api_bridge_check(
+                    model=model,
+                    custom_llm_provider="openai",
+                )
+
+                assert returned_model == model  # Model name should remain unchanged
+                assert model_info.get("mode") != "responses"  # Should NOT be routed to responses API
+
+    def test_auto_routes_azure_gpt5(self):
+        """Test that responses_api_bridge_check auto-routes Azure GPT-5 models to responses API."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+
+            # Test Azure GPT-5 models including complex deployment names
+            test_models = [
+                "gpt-5",                    # Simple Azure deployment
+                "gpt-5-turbo",             # Simple Azure deployment
+                "gpt-5-mini",              # Simple Azure deployment
+                "gpt5_series/gpt-5",       # Complex Azure deployment name
+                "my-gpt-5-deployment",     # Complex Azure deployment name
+                "company-gpt-5-turbo-prod" # Complex Azure deployment name
+            ]
+
+            for model in test_models:
+                model_info, returned_model = responses_api_bridge_check(
+                    model=model,
+                    custom_llm_provider="azure",
+                )
+
+                assert returned_model == model  # Model name should remain unchanged
+                assert model_info["mode"] == "responses", f"Model {model} should be routed to responses API"
+
+    def test_does_not_auto_route_non_openai_azure_gpt5(self):
+        """Test that responses_api_bridge_check does not auto-route gpt-5 models from non-OpenAI/Azure providers."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+
+            # Test gpt-5 model name with non-OpenAI/Azure providers
+            non_supported_providers = ["anthropic", "gemini", "mistral", "cohere"]
+
+            for provider in non_supported_providers:
+                model_info, returned_model = responses_api_bridge_check(
+                    model="gpt-5",
+                    custom_llm_provider=provider,
+                )
+
+                assert returned_model == "gpt-5"  # Model name should remain unchanged
+                assert model_info.get("mode") != "responses"  # Should NOT be routed to responses API
+
+    def test_precise_gpt5_matching(self):
+        """Test that responses_api_bridge_check only matches exact GPT-5 model names."""
+        from litellm.main import responses_api_bridge_check
+
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+
+            # Test models that should NOT be routed (false positives)
+            non_matching_models = [
+                "gpt-50",            # Similar but different
+                "claude-3",          # Completely different model
+                "gemini-pro",        # Completely different model
+            ]
+
+            for model in non_matching_models:
+                model_info, returned_model = responses_api_bridge_check(
+                    model=model,
+                    custom_llm_provider="openai",
+                )
+
+                assert returned_model == model  # Model name should remain unchanged
+                assert model_info.get("mode") != "responses", f"Model {model} should NOT be routed to responses API"
+
+            # Test models that SHOULD be routed (exact matches)
+            matching_models = ["gpt-5", "gpt-5-mini", "gpt-5-turbo"]
+
+            for model in matching_models:
+                model_info, returned_model = responses_api_bridge_check(
+                    model=model,
+                    custom_llm_provider="openai",
+                )
+
+                assert returned_model == model  # Model name should remain unchanged
+                assert model_info["mode"] == "responses", f"Model {model} should be routed to responses API"
 
 
-def test_responses_api_bridge_check_handles_exception():
-    """Test that responses_api_bridge_check handles exceptions and still processes responses/ models."""
-    from litellm.main import responses_api_bridge_check
+def test_responses_api_failure_propagates():
+    """Test that responses API failures bubble up for auto-routed GPT-5 models."""
+    from unittest.mock import patch
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
-        mock_get_model_info.side_effect = Exception("Model not found")
+    from litellm.main import completion
 
-        model_info, model = responses_api_bridge_check(
-            model="responses/custom-model", custom_llm_provider="custom"
-        )
+    with patch("litellm.completion_extras.responses_api_bridge.completion") as mock_responses_completion:
+        mock_responses_completion.side_effect = Exception("Responses API unavailable")
 
-        assert model == "custom-model"
-        assert model_info["mode"] == "responses"
+        with pytest.raises(Exception) as exc_info:
+            completion(
+                model="gpt-5",
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+        mock_responses_completion.assert_called_once()
+        assert "Responses API unavailable" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -1125,8 +1264,9 @@ async def test_retrying() -> None:
 
 def test_anthropic_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/messages suffix."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
@@ -1185,8 +1325,9 @@ def test_anthropic_disable_url_suffix_env_var():
 
 def test_anthropic_text_disable_url_suffix_env_var():
     """Test that LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX prevents /v1/complete suffix for anthropic_text."""
-    from unittest.mock import patch, MagicMock
     import os
+    from unittest.mock import MagicMock, patch
+
     from litellm import completion
 
     # Test with environment variable disabled (default behavior)
