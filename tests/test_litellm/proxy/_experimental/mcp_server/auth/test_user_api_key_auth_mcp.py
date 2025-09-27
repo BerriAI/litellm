@@ -543,6 +543,7 @@ class TestMCPRequestHandler:
                 mcp_auth_header,
                 mcp_servers_result,
                 mcp_server_auth_headers,
+                oauth2_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
