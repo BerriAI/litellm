@@ -1154,3 +1154,186 @@ async def test_async_increment_tokens_fallback_behavior():
     
     # Verify fallback was called
     assert fallback_called, "Fallback method should be called when Lua script is not available"
+
+
+# Redis Cluster Compatibility Tests
+def test_group_keys_by_hash_tag():
+    """
+    Test that keys are correctly grouped by Redis hash tag for cluster compatibility.
+    
+    This ensures that keys with the same hash tag (e.g., {api_key:sk-123}) are grouped 
+    together so they can be processed in the same Redis cluster slot.
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    
+    # Test keys with different hash tags that would cause cluster slot conflicts
+    test_keys = [
+        "{api_key:sk-123}:window",
+        "{api_key:sk-123}:requests", 
+        "{api_key:sk-123}:tokens",
+        "{user:user-456}:window",
+        "{user:user-456}:requests",
+        "{team:team-789}:window",
+        "{team:team-789}:tokens",
+        "no_hash_tag_key"
+    ]
+    
+    # Group the keys
+    groups = handler._group_keys_by_hash_tag(test_keys)
+    
+    # Verify correct grouping
+    expected_groups = {
+        "{api_key:sk-123}": [
+            "{api_key:sk-123}:window",
+            "{api_key:sk-123}:requests", 
+            "{api_key:sk-123}:tokens"
+        ],
+        "{user:user-456}": [
+            "{user:user-456}:window",
+            "{user:user-456}:requests"
+        ],
+        "{team:team-789}": [
+            "{team:team-789}:window",
+            "{team:team-789}:tokens"
+        ],
+        "no_hash_tag": ["no_hash_tag_key"]
+    }
+    
+    assert len(groups) == 4, f"Expected 4 groups, got {len(groups)}"
+    
+    for expected_tag, expected_keys in expected_groups.items():
+        assert expected_tag in groups, f"Missing group {expected_tag}"
+        assert set(groups[expected_tag]) == set(expected_keys), f"Group {expected_tag} keys mismatch"
+
+
+@pytest.mark.asyncio
+async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
+    """
+    Test that the Redis batch rate limiter script execution handles cluster compatibility
+    by grouping keys and falling back gracefully on errors.
+    
+    This simulates the Redis cluster error scenario and verifies fallback behavior.
+    """
+    from unittest.mock import AsyncMock
+    
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    
+    # Mock script that simulates Redis cluster slot conflict
+    mock_script = AsyncMock()
+    mock_script.side_effect = [
+        Exception("EVALSHA - all keys must map to the same key slot"),  # First group fails
+        [1234, 1, 1234, 2]  # Second group succeeds
+    ]
+    handler.batch_rate_limiter_script = mock_script
+    
+    # Mock in-memory fallback (returns 2 values for 2 keys: window_start, counter)
+    handler.in_memory_cache_sliding_window = AsyncMock(return_value=[1234, 1])
+    
+    # Test keys from different hash tags (would fail in cluster without grouping)
+    test_keys = [
+        "{api_key:sk-123}:window",
+        "{api_key:sk-123}:requests",
+        "{user:user-456}:window", 
+        "{user:user-456}:requests"
+    ]
+    
+    # Execute the method
+    results = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=test_keys,
+        now_int=1234
+    )
+    
+    # Verify results: 2 from fallback + 4 from successful script = 6 total
+    assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+    
+    # Verify script was called twice (once per hash tag group)
+    assert mock_script.call_count == 2
+    
+    # Verify fallback was called for the failed group
+    handler.in_memory_cache_sliding_window.assert_called_once()
+    
+    # Verify the calls were made with grouped keys
+    call_args_list = mock_script.call_args_list
+    
+    # First call should have api_key group keys
+    first_call_keys = call_args_list[0][1]['keys']
+    assert all(key.startswith("{api_key:sk-123}") for key in first_call_keys)
+    
+    # Second call should have user group keys  
+    second_call_keys = call_args_list[1][1]['keys']
+    assert all(key.startswith("{user:user-456}") for key in second_call_keys)
+
+
+@pytest.mark.asyncio
+async def test_execute_token_increment_script_cluster_compatibility():
+    """
+    Test that token increment script execution handles Redis cluster compatibility
+    by grouping operations by hash tag.
+    
+    This ensures token increments work correctly in cluster environments.
+    """
+    from typing import List
+    from unittest.mock import AsyncMock
+
+    from litellm.types.caching import RedisPipelineIncrementOperation
+    
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    
+    # Mock script
+    mock_script = AsyncMock()
+    handler.token_increment_script = mock_script
+    
+    # Create pipeline operations with different hash tags
+    pipeline_operations: List[RedisPipelineIncrementOperation] = [
+        {
+            "key": "{api_key:sk-123}:tokens",
+            "increment_value": 100,
+            "ttl": 60
+        },
+        {
+            "key": "{api_key:sk-123}:max_parallel_requests", 
+            "increment_value": -1,
+            "ttl": 60
+        },
+        {
+            "key": "{user:user-456}:tokens",
+            "increment_value": 50,
+            "ttl": 60
+        }
+    ]
+    
+    # Execute the method
+    await handler._execute_token_increment_script(pipeline_operations)
+    
+    # Verify script was called twice (once per hash tag group)
+    assert mock_script.call_count == 2
+    
+    call_args_list = mock_script.call_args_list
+    
+    # Verify first call has api_key operations
+    first_call_keys = call_args_list[0][1]['keys']
+    assert len(first_call_keys) == 2
+    assert all(key.startswith("{api_key:sk-123}") for key in first_call_keys)
+    
+    # Verify second call has user operations
+    second_call_keys = call_args_list[1][1]['keys']
+    assert len(second_call_keys) == 1
+    assert second_call_keys[0] == "{user:user-456}:tokens"
+    
+    # Verify args are correctly mapped
+    first_call_args = call_args_list[0][1]['args']
+    assert len(first_call_args) == 4  # 2 operations * 2 args each (increment_value, ttl)
+    assert first_call_args == [100, 60, -1, 60]  # increment_value, ttl for each operation
+    
+    second_call_args = call_args_list[1][1]['args'] 
+    assert len(second_call_args) == 2  # 1 operation * 2 args
+    assert second_call_args == [50, 60]

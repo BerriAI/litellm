@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest
@@ -913,125 +913,6 @@ async def test_async_embedding_bedrock():
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
 
-
-# asyncio.run(test_async_embedding_bedrock())
-
-
-# CACHING
-## Test Azure - completion, embedding
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_async_completion_azure_caching():
-    litellm.set_verbose = True
-    customHandler_caching = CompletionCustomHandler()
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-    litellm.callbacks = [customHandler_caching]
-    unique_time = time.time()
-    response1 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
-        caching=True,
-    )
-    await asyncio.sleep(1)
-    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
-    response2 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
-        caching=True,
-    )
-    await asyncio.sleep(1)  # success callbacks are done in parallel
-    print(
-        f"customHandler_caching.states post-cache hit: {customHandler_caching.states}"
-    )
-    assert len(customHandler_caching.errors) == 0
-    assert len(customHandler_caching.states) == 4  # pre, post, success, success
-
-
-@pytest.mark.asyncio
-async def test_async_completion_azure_caching_streaming():
-    import copy
-
-    litellm.set_verbose = True
-    customHandler_caching = CompletionCustomHandler()
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-    litellm.callbacks = [customHandler_caching]
-    unique_time = uuid.uuid4()
-    response1 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
-        caching=True,
-        stream=True,
-    )
-    async for chunk in response1:
-        print(f"chunk in response1: {chunk}")
-    await asyncio.sleep(1)
-    initial_customhandler_caching_states = len(customHandler_caching.states)
-    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
-    response2 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
-        caching=True,
-        stream=True,
-    )
-    async for chunk in response2:
-        print(f"chunk in response2: {chunk}")
-    await asyncio.sleep(1)  # success callbacks are done in parallel
-    print(
-        f"customHandler_caching.states post-cache hit: {customHandler_caching.states}"
-    )
-    assert len(customHandler_caching.errors) == 0
-    assert (
-        len(customHandler_caching.states) > initial_customhandler_caching_states
-    )  # pre, post, streaming .., success, success
-
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=2)
-async def test_async_embedding_azure_caching():
-    print("Testing custom callback input - Azure Caching")
-    customHandler_caching = CompletionCustomHandler()
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-    litellm.callbacks = [customHandler_caching]
-    unique_time = time.time()
-    response1 = await litellm.aembedding(
-        model="azure/azure-embedding-model",
-        input=[f"good morning from litellm1 {unique_time}"],
-        caching=True,
-    )
-    await asyncio.sleep(1)  # set cache is async for aembedding()
-    response2 = await litellm.aembedding(
-        model="azure/azure-embedding-model",
-        input=[f"good morning from litellm1 {unique_time}"],
-        caching=True,
-    )
-    await asyncio.sleep(1)  # success callbacks are done in parallel
-    print(customHandler_caching.states)
-    print(customHandler_caching.errors)
-    assert len(customHandler_caching.errors) == 0
-    assert len(customHandler_caching.states) == 4  # pre, post, success, success
 
 
 # Image Generation

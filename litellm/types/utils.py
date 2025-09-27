@@ -2060,12 +2060,23 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
 
+class CostBreakdown(TypedDict):
+    """
+    Detailed cost breakdown for a request
+    """
+    input_cost: float  # Cost of input/prompt tokens
+    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    total_cost: float  # Total cost (input + output + tool usage)
+    tool_usage_cost: float  # Cost of usage of built-in tools
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     call_type: str
     stream: Optional[bool]
     response_cost: float
+    cost_breakdown: Optional[CostBreakdown]  # Detailed cost breakdown
     response_cost_failure_debug_info: Optional[
         StandardLoggingModelCostFailureDebugInformation
     ]

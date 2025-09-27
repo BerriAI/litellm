@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import datetime as dt
 from datetime import datetime
 
@@ -228,7 +228,7 @@ async def test_regenerate_api_key_with_new_alias_and_expiration(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
+    from litellm._uuid import uuid
 
     # generate new key
     key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
@@ -279,7 +279,7 @@ async def test_regenerate_key_ui(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
-    import uuid
+    from litellm._uuid import uuid
 
     # generate new key
     key_alias = f"test_alias_regenerate_key-{uuid.uuid4()}"
@@ -1076,7 +1076,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _list_key_helper,
     )
-    import uuid
+    from litellm._uuid import uuid
 
     # Setup
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)

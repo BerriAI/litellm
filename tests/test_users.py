@@ -318,7 +318,7 @@ async def test_user_model_access():
 
 
 import json
-import uuid
+from litellm._uuid import uuid
 import pytest
 import aiohttp
 from typing import Dict, Tuple

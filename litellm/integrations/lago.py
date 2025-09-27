@@ -3,7 +3,7 @@
 
 import json
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import Literal, Optional
 
 import httpx

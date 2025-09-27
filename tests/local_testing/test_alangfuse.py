@@ -212,7 +212,7 @@ def create_async_task(**completion_kwargs):
 @pytest.mark.flaky(retries=12, delay=2)
 async def test_langfuse_logging_without_request_response(stream, langfuse_client):
     try:
-        import uuid
+        from litellm._uuid import uuid
 
         _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
         litellm.set_verbose = True
@@ -276,7 +276,7 @@ async def test_langfuse_logging_audio_transcriptions(langfuse_client):
     """
     Test that creates a trace with masked input and output
     """
-    import uuid
+    from litellm._uuid import uuid
 
     _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
     litellm.set_verbose = True
@@ -314,7 +314,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
     """
     Test that creates a trace with masked input and output
     """
-    import uuid
+    from litellm._uuid import uuid
 
     for mask_value in [True, False]:
         _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
@@ -364,7 +364,7 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
     Release is just set for the trace
     Tags is just set for the trace
     """
-    import uuid
+    from litellm._uuid import uuid
 
     litellm.set_verbose = True
     litellm.success_callback = ["langfuse"]
@@ -939,7 +939,7 @@ def test_aaalangfuse_dynamic_logging():
 
     Covers the team-logging scenario.
     """
-    import uuid
+    from litellm._uuid import uuid
 
     import langfuse
 

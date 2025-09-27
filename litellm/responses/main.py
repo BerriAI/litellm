@@ -211,7 +211,7 @@ async def aresponses_api_with_mcp(
     # Handle MCP streaming if requested
     if stream and mcp_tools_with_litellm_proxy:
         # Generate MCP discovery events using the already processed tools
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm.responses.mcp.mcp_streaming_iterator import (
             create_mcp_list_tools_events,

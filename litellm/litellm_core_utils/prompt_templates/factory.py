@@ -2,7 +2,7 @@ import copy
 import json
 import mimetypes
 import re
-import uuid
+from litellm._uuid import uuid
 import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any, List, Optional, Tuple, cast, overload

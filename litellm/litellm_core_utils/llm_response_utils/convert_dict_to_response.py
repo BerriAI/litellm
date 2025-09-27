@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 
 import litellm

@@ -13,7 +13,7 @@
 # from concurrent.futures import ThreadPoolExecutor
 # from collections import defaultdict
 # from dotenv import load_dotenv
-# import uuid
+# from litellm._uuid import uuid
 # import tracemalloc
 # import objgraph
 

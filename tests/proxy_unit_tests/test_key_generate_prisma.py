@@ -22,7 +22,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -1236,7 +1236,7 @@ def test_generate_and_update_key(prisma_client):
     # 11. Generate a Key, cal key/info, call key/update, call key/info
     # Check if data gets updated
     # Check if untouched data does not get updated
-    import uuid
+    from litellm._uuid import uuid
 
     print("prisma client=", prisma_client)
 
@@ -1554,7 +1554,7 @@ def test_call_with_key_over_budget(prisma_client):
 
             litellm.cache = Cache()
             import time
-            import uuid
+            from litellm._uuid import uuid
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
@@ -1676,7 +1676,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
 
             litellm.cache = Cache()
             import time
-            import uuid
+            from litellm._uuid import uuid
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
 
@@ -1900,7 +1900,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -1991,7 +1991,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
         from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -2440,7 +2440,7 @@ async def test_key_with_no_permissions(prisma_client):
 
 
 async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
-    import uuid
+    from litellm._uuid import uuid
 
     from litellm import Choices, Message, ModelResponse, Usage
     from litellm.proxy.proxy_server import _ProxyDBLogger
@@ -2549,7 +2549,7 @@ async def test_proxy_load_test_db(prisma_client):
 @pytest.mark.asyncio()
 async def test_master_key_hashing(prisma_client):
     try:
-        import uuid
+        from litellm._uuid import uuid
 
         print("prisma client=", prisma_client)
 

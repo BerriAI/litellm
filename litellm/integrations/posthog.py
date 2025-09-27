@@ -11,7 +11,7 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, Optional
 
 

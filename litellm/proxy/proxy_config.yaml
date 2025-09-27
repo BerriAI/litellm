@@ -36,3 +36,15 @@ guardrails:
       breakdown: true
       payload: true
       dev_info: true
+
+litellm_settings:
+  callbacks: ["datadog"]
+  datadog_params:
+    turn_off_message_logging: true
+  datadog_llm_observability_params:
+    turn_off_message_logging: true
+
+  cache: True
+  cache_params:
+    type: redis
+    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7000"}, {"host": "127.0.0.1", "port": "7001"}, {"host": "127.0.0.1", "port": "7002"}, {"host": "127.0.0.1", "port": "7003"}] 

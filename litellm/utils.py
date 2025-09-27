@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+from io import StringIO
 import ast
 import asyncio
 import base64
@@ -724,17 +725,21 @@ def function_setup(  # noqa: PLR0915
                 messages = kwargs["messages"]
             ### PRE-CALL RULES ###
             if (
-                isinstance(messages, list)
+                Rules.has_pre_call_rules()
+                and isinstance(messages, list)
                 and len(messages) > 0
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
+
+                buffer = StringIO()
+                for m in messages:
+                    content = m.get("content", "")
+                    if content is not None and isinstance(content, str):
+                        buffer.write(content)
+
                 rules_obj.pre_call_rules(
-                    input="".join(
-                        m.get("content", "")
-                        for m in messages
-                        if "content" in m and isinstance(m["content"], str)
-                    ),
+                    input=buffer.getvalue(),
                     model=model,
                 )
         elif (
