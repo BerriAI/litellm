@@ -1381,7 +1381,7 @@ class Router:
         )
 
     def _update_kwargs_with_default_litellm_params(
-        self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
+        self, model: str, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
     ) -> None:
         """
         Adds default litellm params to kwargs, if set.
@@ -1400,6 +1400,7 @@ class Router:
 
         # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
+        kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict, function_name: Optional[str] = None
@@ -1448,6 +1449,8 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name = deployment["model_name"]
+        model_group_name = deployment["model_name"]
+        
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
@@ -1474,8 +1477,11 @@ class Router:
             kwargs=kwargs, data=deployment["litellm_params"]
         )
 
-        self._update_kwargs_with_default_litellm_params(
+        self._update_kwargs_with_default_litellm_params(model=model_group_name,
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
+        )
+        self._update_kwargs_with_default_litellm_params(model=model_group_name,
+            kwargs=kwargs, metadata_variable_name="metadata"
         )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
