@@ -15,7 +15,7 @@ USER root
 RUN apk add --no-cache gcc python3-dev openssl openssl-dev
 
 
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip>=24.3.1 && \
     pip install build
 
 # Copy the current directory contents into the container at /app
