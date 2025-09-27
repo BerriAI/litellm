@@ -891,8 +891,10 @@ async def insert_sso_user(
         auto_create_key=False,
     )
 
-    if result_openid and isinstance(result_openid, OpenID):
-        new_user_request.metadata = {"auth_provider": result_openid.provider}
+    if result_openid and hasattr(result_openid, "provider"):
+        new_user_request.metadata = {
+            "auth_provider": getattr(result_openid, "provider")
+        }
 
     response = await new_user(
         data=new_user_request,
