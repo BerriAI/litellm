@@ -565,7 +565,7 @@ async def test_azure_embedding_max_retries_0(
     from litellm import aembedding, embedding
 
     args = {
-        "model": "text-embedding-ada-002",
+        "model": "azure/text-embedding-ada-002",
         "input": "Hello world",
         "max_retries": max_retries,
     }
