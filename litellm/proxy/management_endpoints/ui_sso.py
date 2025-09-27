@@ -1189,7 +1189,9 @@ class SSOAuthenticationHandler:
                 )
             return user_info
         except Exception as e:
-            verbose_proxy_logger.error(f"Error upserting SSO user into LiteLLM DB: {e}")
+            verbose_proxy_logger.exception(
+                f"Error upserting SSO user into LiteLLM DB: {e}"
+            )
             return user_info
 
     @staticmethod
