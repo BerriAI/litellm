@@ -6,6 +6,10 @@ import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -134,19 +138,20 @@ async def token_endpoint(
     proxy_base_url = str(request.base_url).rstrip("/")
 
     # Exchange code for real GitHub token
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            mcp_server.token_url,
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": mcp_server.client_id,
-                "client_secret": mcp_server.client_secret,
-                "code": code,
-                "redirect_uri": f"{proxy_base_url}/callback",
-            },
-        )
-    resp.raise_for_status()
-    github_token = resp.json()["access_token"]
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    response = await async_client.post(
+        mcp_server.token_url,
+        headers={"Accept": "application/json"},
+        data={
+            "client_id": mcp_server.client_id,
+            "client_secret": mcp_server.client_secret,
+            "code": code,
+            "redirect_uri": f"{proxy_base_url}/callback",
+        },
+    )
+
+    response.raise_for_status()
+    github_token = response.json()["access_token"]
 
     # Return to Claude in expected OAuth 2 format
 
