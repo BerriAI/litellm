@@ -392,7 +392,7 @@ async def test_async_custom_handler_embedding_optional_param():
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
-        model="azure/azure-embedding-model", input=["hello world"], user="John"
+        model="text-embedding-ada-002", input=["hello world"], user="John"
     )
     await asyncio.sleep(1)  # success callback is async
     assert customHandler_optional_params.user == "John"
