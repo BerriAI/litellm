@@ -33,7 +33,7 @@ def test_async_fallbacks(caplog):
         {
             "model_name": "azure/gpt-3.5-turbo",
             "litellm_params": {
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-nano",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -93,7 +93,7 @@ def test_async_fallbacks(caplog):
     # - error request, falling back notice, success notice
     expected_logs = [
         "Falling back to model_group = azure/gpt-3.5-turbo",
-        "litellm.acompletion(model=azure/chatgpt-v-3)\x1b[32m 200 OK\x1b[0m",
+        "litellm.acompletion(model=azure/gpt-4.1-nano)\x1b[32m 200 OK\x1b[0m",
         "Successful fallback b/w models.",
     ]
 

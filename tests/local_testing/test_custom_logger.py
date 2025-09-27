@@ -160,7 +160,7 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4.1-nano",
                 messages=messages,
                 mock_response="Exception: content_filter_policy",
                 stream=True,
@@ -195,7 +195,7 @@ def test_async_custom_handler_stream():
         async def test_1():
             nonlocal complete_streaming_response
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-3", messages=messages, stream=True
+                model="azure/gpt-4.1-nano", messages=messages, stream=True
             )
             async for chunk in response:
                 complete_streaming_response += (
@@ -239,7 +239,7 @@ def test_azure_completion_stream():
         complete_streaming_response = ""
 
         response = litellm.completion(
-            model="azure/chatgpt-v-3", messages=messages, stream=True
+            model="azure/gpt-4.1-nano", messages=messages, stream=True
         )
         for chunk in response:
             complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
@@ -392,7 +392,7 @@ async def test_async_custom_handler_embedding_optional_param():
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
-        model="azure/azure-embedding-model", input=["hello world"], user="John"
+        model="text-embedding-ada-002", input=["hello world"], user="John"
     )
     await asyncio.sleep(1)  # success callback is async
     assert customHandler_optional_params.user == "John"
