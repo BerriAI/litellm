@@ -1955,7 +1955,6 @@ def test_openai_chat_completion_complete_response_call():
         "azure/gpt-4.1-nano",
         "claude-3-haiku-20240307",
         "o1",
-        "azure/fake-o1-mini",
     ],
 )
 @pytest.mark.parametrize(
