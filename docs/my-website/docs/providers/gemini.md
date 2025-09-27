@@ -177,7 +177,7 @@ This is translated to Gemini's [`thinkingConfig` parameter](https://ai.google.de
 response = litellm.completion(
   model="gemini/gemini-2.5-flash-preview-04-17",
   messages=[{"role": "user", "content": "What is the capital of France?"}],
-  thinking={"type": "enabled", "budget_tokens": 1024},
+  thinking={"type": "enabled", "budget_tokens": 1024, "include_thoughts": True},
 )
 ```
 
@@ -191,7 +191,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
   -d '{
     "model": "gemini/gemini-2.5-flash-preview-04-17",
     "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
+    "thinking": {"type": "enabled", "budget_tokens": 1024, "include_thoughts": True}
   }'
 ```
 

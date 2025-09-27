@@ -947,6 +947,145 @@ def test_gemini_reasoning_effort_minimal():
         pass
 
 
+def test_gemini_thinking_include_thoughts_true():
+    """
+    Test that thinking parameter with include_thoughts=True correctly maps to includeThoughts=true in request
+    """
+    litellm._turn_on_debug()
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain quantum physics",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 1000, "include_thoughts": True},
+        },
+    )
+    print(json.dumps(raw_request, indent=4, default=str))
+    
+    # Verify that includeThoughts is set to true
+    request_body = raw_request["raw_request_body"]
+    assert "generationConfig" in request_body, "Request should have generationConfig"
+    assert "thinkingConfig" in request_body["generationConfig"], "generationConfig should have thinkingConfig"
+    thinking_config = request_body["generationConfig"]["thinkingConfig"]
+    assert "includeThoughts" in thinking_config, "thinkingConfig should have includeThoughts"
+    assert thinking_config["includeThoughts"] is True, "includeThoughts should be True when include_thoughts=True"
+    assert thinking_config["thinkingBudget"] == 1000, "thinkingBudget should be 1000"
+
+
+def test_gemini_thinking_include_thoughts_false():
+    """
+    Test that thinking parameter with include_thoughts=False correctly maps to includeThoughts=false in request
+    """
+    litellm._turn_on_debug()
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain quantum physics",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 500, "include_thoughts": False},
+        },
+    )
+    print(json.dumps(raw_request, indent=4, default=str))
+    
+    # Verify that includeThoughts is set to false
+    request_body = raw_request["raw_request_body"]
+    assert "generationConfig" in request_body, "Request should have generationConfig"
+    assert "thinkingConfig" in request_body["generationConfig"], "generationConfig should have thinkingConfig"
+    thinking_config = request_body["generationConfig"]["thinkingConfig"]
+    assert "includeThoughts" in thinking_config, "thinkingConfig should have includeThoughts"
+    assert thinking_config["includeThoughts"] is False, "includeThoughts should be False when include_thoughts=False"
+    assert thinking_config["thinkingBudget"] == 500, "thinkingBudget should be 500"
+
+
+def test_gemini_thinking_include_thoughts_default():
+    """
+    Test that thinking parameter without include_thoughts uses default value (True)
+    """
+    litellm._turn_on_debug()
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain quantum physics",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 200},  # No include_thoughts specified
+        },
+    )
+    print(json.dumps(raw_request, indent=4, default=str))
+    
+    # Verify that includeThoughts defaults to true
+    request_body = raw_request["raw_request_body"]
+    assert "generationConfig" in request_body, "Request should have generationConfig"
+    assert "thinkingConfig" in request_body["generationConfig"], "generationConfig should have thinkingConfig"
+    thinking_config = request_body["generationConfig"]["thinkingConfig"]
+    assert "includeThoughts" in thinking_config, "thinkingConfig should have includeThoughts"
+    assert thinking_config["includeThoughts"] is True, "includeThoughts should default to True when not specified"
+    assert thinking_config["thinkingBudget"] == 200, "thinkingBudget should be 200"
+
+
+def test_gemini_thinking_include_thoughts_with_budget_zero():
+    """
+    Test that when budget_tokens=0, includeThoughts is not included even if include_thoughts=True
+    This tests the _is_thinking_budget_zero logic
+    """
+    litellm._turn_on_debug()
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain quantum physics",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 0, "include_thoughts": True},
+        },
+    )
+    print(json.dumps(raw_request, indent=4, default=str))
+    
+    # When budget is 0, includeThoughts should not be included according to the logic
+    request_body = raw_request["raw_request_body"]
+    assert "generationConfig" in request_body, "Request should have generationConfig"
+    assert "thinkingConfig" in request_body["generationConfig"], "generationConfig should have thinkingConfig"
+    thinking_config = request_body["generationConfig"]["thinkingConfig"]
+    
+    # The budget should still be set to 0
+    assert thinking_config["thinkingBudget"] == 0, "thinkingBudget should be 0"
+    # But includeThoughts should not be included when budget is zero
+    assert "includeThoughts" not in thinking_config, "includeThoughts should not be present when budget is zero"
+
+
 def test_gemini_exception_message_format():
     """
     Test that Gemini provider exceptions show as 'GeminiException' not 'VertexAIException'.
