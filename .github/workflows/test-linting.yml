@@ -44,7 +44,7 @@ jobs:
     - name: Run MyPy type checking
       run: |
         cd litellm
-        poetry run mypy . --ignore-missing-imports
+        poetry run mypy . --config-file=mypy.ini
         cd ..
 
     - name: Check for circular imports
