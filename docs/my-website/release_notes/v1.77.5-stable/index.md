@@ -149,7 +149,8 @@ import TabItem from '@theme/TabItem';
 **Virtual Keys**    
     - Initial support for scheduled key rotations - [PR #14877](https://github.com/BerriAI/litellm/pull/14877)
     - Allow scheduling key rotations when creating virtual keys - [PR #14960](https://github.com/BerriAI/litellm/pull/14960)
-- **Models + Endpoints** 
+
+**Models + Endpoints**
     - Fix: added Oracle to provider's list - [PR #14835](https://github.com/BerriAI/litellm/pull/14835)
 
 
