@@ -51,6 +51,33 @@ jobs:
           command: |
             python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
     
+  mypy_linting:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip uninstall fastuuid -y
+            pip install "mypy==1.18.2"
+      - run:
+          name: MyPy Type Checking
+          command: |
+            cd litellm
+            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
+            python -m mypy . --ignore-missing-imports
+            cd ..
+          no_output_timeout: 10m
   local_testing:
     docker:
       - image: cimg/python:3.12
@@ -139,13 +166,6 @@ jobs:
             cd litellm
             python -m pip install black
             python -m black .
-            cd ..
-      - run:
-          name: Linting Testing
-          command: |
-            cd litellm
-            # Use the same simple approach that works in GitHub Actions
-            python -m mypy . --ignore-missing-imports --show-traceback
             cd ..
 
       # Run pytest and generate JUnit XML report
@@ -3071,6 +3091,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - mypy_linting:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - local_testing:
           filters:
             branches:
@@ -3317,6 +3343,7 @@ workflows:
                 - main
       - publish_to_pypi:
           requires:
+            - mypy_linting
             - local_testing
             - build_and_test
             - e2e_openai_endpoints
