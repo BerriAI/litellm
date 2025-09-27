@@ -407,7 +407,7 @@ async def test_async_chat_azure():
         ]
         router = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
         print("got response, sleeping 5 seconds....")
@@ -422,7 +422,7 @@ async def test_async_chat_azure():
         litellm.callbacks = [customHandler_streaming_azure_router]
         router2 = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router2.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
             stream=True,
         )
