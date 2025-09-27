@@ -1101,7 +1101,7 @@ def test_vertex_ai_stream(provider):
     litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
-    test_models = ["gemini-1.5-pro"]
+    test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
         try:
             print("making request", model)
