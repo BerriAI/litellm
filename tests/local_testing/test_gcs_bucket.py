@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import tempfile
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest

@@ -9,7 +9,7 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 

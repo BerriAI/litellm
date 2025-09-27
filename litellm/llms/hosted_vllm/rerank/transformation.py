@@ -2,7 +2,7 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from litellm.types.rerank import (
@@ -42,8 +42,11 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/rerank"):
-                api_base = f"{api_base}/v1/rerank"
+            # Preserve backward compatibility
+            if api_base.endswith("/v1/rerank"):
+                api_base = api_base.replace("/v1/rerank", "/rerank")
+            elif not api_base.endswith("/rerank"):
+                api_base = f"{api_base}/rerank"
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 

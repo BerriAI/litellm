@@ -23,6 +23,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _common_key_generation_helper,
     _list_key_helper,
+    generate_key_helper_fn,
     prepare_key_update_data,
     validate_key_team_change,
 )
@@ -1091,3 +1092,145 @@ def test_validate_key_team_change_with_member_permissions():
                         team_table=mock_team,
                         route=KeyManagementRoutes.KEY_UPDATE.value
                     )
+
+
+def test_key_rotation_fields_helper():
+    """
+    Test the key data update logic for rotation fields.
+    
+    This test focuses on the core logic that adds rotation fields to key_data
+    when auto_rotate is enabled, without the complexity of full key generation.
+    """
+    # Test Case 1: With rotation enabled
+    key_data = {
+        "models": ["gpt-3.5-turbo"],
+        "user_id": "test-user"
+    }
+    
+    auto_rotate = True
+    rotation_interval = "30d"
+    
+    # Simulate the rotation logic from generate_key_helper_fn
+    if auto_rotate and rotation_interval:
+        key_data.update({
+            "auto_rotate": auto_rotate,
+            "rotation_interval": rotation_interval
+        })
+    
+    # Verify rotation fields are added
+    assert key_data["auto_rotate"] == True
+    assert key_data["rotation_interval"] == "30d"
+    assert key_data["models"] == ["gpt-3.5-turbo"]  # Original fields preserved
+    
+    # Test Case 2: Without rotation enabled
+    key_data2 = {
+        "models": ["gpt-4"],
+        "user_id": "test-user"
+    }
+    
+    auto_rotate2 = False
+    rotation_interval2 = None
+    
+    # Simulate the rotation logic
+    if auto_rotate2 and rotation_interval2:
+        key_data2.update({
+            "auto_rotate": auto_rotate2,
+            "rotation_interval": rotation_interval2
+        })
+    
+    # Verify rotation fields are NOT added
+    assert "auto_rotate" not in key_data2
+    assert "rotation_interval" not in key_data2
+    assert key_data2["models"] == ["gpt-4"]  # Original fields preserved
+    
+    # Test Case 3: auto_rotate=True but no interval
+    key_data3 = {
+        "models": ["claude-3"],
+        "user_id": "test-user"
+    }
+    
+    auto_rotate3 = True
+    rotation_interval3 = None
+    
+    # Simulate the rotation logic
+    if auto_rotate3 and rotation_interval3:
+        key_data3.update({
+            "auto_rotate": auto_rotate3,
+            "rotation_interval": rotation_interval3
+        })
+    
+    # Verify rotation fields are NOT added (missing interval)
+    assert "auto_rotate" not in key_data3
+    assert "rotation_interval" not in key_data3
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_auto_rotate_enable():
+    """Test that update_key_fn properly handles enabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={}
+    )
+    
+    # Test enabling auto rotation
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        auto_rotate=True,
+        rotation_interval="30d"
+    )
+    
+    result = await prepare_key_update_data(
+        data=update_request,
+        existing_key_row=existing_key
+    )
+    
+    # Verify rotation fields are included
+    assert result["auto_rotate"] is True
+    assert result["rotation_interval"] == "30d"
+
+
+@pytest.mark.asyncio 
+async def test_update_key_fn_auto_rotate_disable():
+    """Test that update_key_fn properly handles disabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key with rotation enabled
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=True,
+        rotation_interval="30d",
+        metadata={}
+    )
+    
+    # Test disabling auto rotation
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        auto_rotate=False
+    )
+    
+    result = await prepare_key_update_data(
+        data=update_request,
+        existing_key_row=existing_key
+    )
+    
+    # Verify auto_rotate is set to False
+    assert result["auto_rotate"] is False

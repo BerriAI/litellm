@@ -1,6 +1,6 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import Any, List, Optional, Union
 
 import aiohttp
