@@ -2514,31 +2514,6 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_azure_key_completion_arg()
-
-
-def test_azure_instruct():
-    litellm.set_verbose = True
-    response = completion(
-        model="azure_text/instruct-model",
-        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-        max_tokens=10,
-    )
-    print("response", response)
-
-
-@pytest.mark.asyncio
-async def test_azure_instruct_stream():
-    litellm.set_verbose = False
-    response = await litellm.acompletion(
-        model="azure_text/instruct-model",
-        messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-        max_tokens=10,
-        stream=True,
-    )
-    print("response", response)
-    async for chunk in response:
-        print(chunk)
 
 
 async def test_re_use_azure_async_client():
