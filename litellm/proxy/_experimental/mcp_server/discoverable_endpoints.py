@@ -2,7 +2,6 @@ import json
 from typing import Optional
 from urllib.parse import urlencode, urlparse, urlunparse
 
-import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
