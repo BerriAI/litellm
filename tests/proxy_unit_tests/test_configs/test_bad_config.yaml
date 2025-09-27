@@ -5,17 +5,17 @@ model_list:
       model: gpt-3.5-turbo
   - model_name: working-azure-gpt-3.5-turbo
     litellm_params:
-      model: azure/chatgpt-v-3
+      model: azure/gpt-4.1-nano
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
   - model_name: azure-gpt-3.5-turbo
     litellm_params:
-      model: azure/chatgpt-v-3
+      model: azure/gpt-4.1-nano
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
   - model_name: azure-embedding
     litellm_params:
-      model: azure/azure-embedding-model
+      model: azure/text-embedding-ada-002
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
     

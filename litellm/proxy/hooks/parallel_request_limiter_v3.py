@@ -297,7 +297,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Group keys by their Redis hash tag to ensure cluster compatibility.
         Keys with the same hash tag will be processed together.
         """
-        groups = {}
+        groups: Dict[str, List[str]] = {}
         for key in keys:
             # Extract hash tag from key like "{api_key:sk-123}:requests"
             if "{" in key and "}" in key:
@@ -378,7 +378,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
-            rate_limit = descriptor.get("rate_limit", {}) or {}
+            rate_limit: Optional[RateLimitDescriptorRateLimitObject] = descriptor.get("rate_limit", {}) or {}
             requests_limit = rate_limit.get("requests_per_unit")
             tokens_limit = rate_limit.get("tokens_per_unit")
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
