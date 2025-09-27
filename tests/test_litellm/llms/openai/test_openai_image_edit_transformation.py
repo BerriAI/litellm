@@ -1,6 +1,8 @@
 from io import BufferedReader, BytesIO
 from typing import Dict
+
 import pytest
+
 from litellm import image_edit
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -37,7 +39,7 @@ def test_transform_image_edit_request_basic(image_edit_config: OpenAIImageEditCo
 
     # Check that files contains the image
     assert len(files) == 1
-    assert files[0][0] == "image"  # field name
+    assert files[0][0] == "image[]"  # field name
     assert files[0][1][0] == "image.png"  # filename
     assert files[0][1][1] == image  # image data
     assert "image/png" in files[0][1][2]  # content type
@@ -73,7 +75,7 @@ def test_transform_image_edit_request_with_mask(image_edit_config: OpenAIImageEd
     assert len(files) == 2
     
     # Find image and mask in files
-    image_file = next(f for f in files if f[0] == "image")
+    image_file = next(f for f in files if f[0] == "image[]")
     mask_file = next(f for f in files if f[0] == "mask")
     
     assert image_file[1][0] == "image.png"
@@ -87,8 +89,8 @@ def test_transform_image_edit_request_with_mask(image_edit_config: OpenAIImageEd
 
 def test_transform_image_edit_request_with_buffered_reader(image_edit_config: OpenAIImageEditConfig):
     """Test transformation with BufferedReader as image input"""
-    import tempfile
     import os
+    import tempfile
     
     model = "dall-e-2"
     prompt = "Make the background blue"
@@ -122,7 +124,7 @@ def test_transform_image_edit_request_with_buffered_reader(image_edit_config: Op
 
             # Check that files contains the image with the original filename
             assert len(files) == 1
-            assert files[0][0] == "image"
+            assert files[0][0] == "image[]"
             # Should use the buffer's name (full path from the BufferedReader.name)
             assert files[0][1][0] == temp_file_path  # Uses full path from buffer.name
             assert files[0][1][1] == image_buffer  # Should be the buffer object
@@ -168,7 +170,7 @@ def test_transform_image_edit_request_with_optional_params(image_edit_config: Op
 
     # Check that files contains only the image
     assert len(files) == 1
-    assert files[0][0] == "image"
+    assert files[0][0] == "image[]"
     assert files[0][1][1] == image
 
 
@@ -204,8 +206,8 @@ def test_transform_image_edit_request_with_multiple_images(image_edit_config: Op
     # Check that files contains all three images and no mask
     assert len(files) == 3
     
-    # All files should be image entries
-    image_files = [f for f in files if f[0] == "image"]
+    # All files should be image entries with image[] key
+    image_files = [f for f in files if f[0] == "image[]"]
     assert len(image_files) == 3
     
     # Check that all image data is present
