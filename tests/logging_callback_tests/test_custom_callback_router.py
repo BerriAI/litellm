@@ -725,16 +725,22 @@ async def test_async_embedding_azure_caching():
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
     )
+    router = Router(model_list=[{
+        "model_name": "text-embedding-ada-002",
+        "litellm_params": {
+            "model": "openai/text-embedding-ada-002",
+        },
+    }])
     litellm.callbacks = [customHandler_caching]
     unique_time = time.time()
-    response1 = await litellm.aembedding(
-        model="azure/text-embedding-ada-002",
+    response1 = await router.aembedding(
+        model="text-embedding-ada-002",
         input=[f"good morning from litellm1 {unique_time}"],
         caching=True,
     )
     await asyncio.sleep(1)  # set cache is async for aembedding()
-    response2 = await litellm.aembedding(
-        model="azure/text-embedding-ada-002",
+    response2 = await router.aembedding(
+        model="text-embedding-ada-002",
         input=[f"good morning from litellm1 {unique_time}"],
         caching=True,
     )
