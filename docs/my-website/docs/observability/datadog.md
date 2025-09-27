@@ -56,9 +56,16 @@ litellm_settings:
 
 **Step 2**: Set Required env variables for datadog
 
+**Option 1 - Direct API Access:**
 ```shell
 DD_API_KEY="5f2d0f310***********" # your datadog API Key
 DD_SITE="us5.datadoghq.com"       # your datadog base url
+DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
+```
+
+**Option 2 - Agent-based Access (for security):**
+```shell
+DD_AGENT_HOST="datadog-agent:8126" # your datadog agent host and port
 DD_SOURCE="litellm_dev"       # [OPTIONAL] your datadog source. use to differentiate dev vs. prod deployments
 ```
 
@@ -169,12 +176,15 @@ LiteLLM supports customizing the following Datadog environment variables
 
 | Environment Variable | Description | Default Value | Required |
 |---------------------|-------------|---------------|----------|
-| `DD_API_KEY` | Your Datadog API key for authentication | None | ✅ Yes |
-| `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") | None | ✅ Yes |
+| `DD_API_KEY` | Your Datadog API key for authentication (Option 1) | None | ✅ Yes* |
+| `DD_SITE` | Your Datadog site (e.g., "us5.datadoghq.com") (Option 1) | None | ✅ Yes* |
+| `DD_AGENT_HOST` | Your Datadog agent host and port (Option 2) | None | ✅ Yes* |
 | `DD_ENV` | Environment tag for your logs (e.g., "production", "staging") | "unknown" | ❌ No |
 | `DD_SERVICE` | Service name for your logs | "litellm-server" | ❌ No |
 | `DD_SOURCE` | Source name for your logs | "litellm" | ❌ No |
 | `DD_VERSION` | Version tag for your logs | "unknown" | ❌ No |
 | `HOSTNAME` | Hostname tag for your logs | "" | ❌ No |
 | `POD_NAME` | Pod name tag (useful for Kubernetes deployments) | "unknown" | ❌ No |
+
+*Choose either Option 1 (DD_API_KEY + DD_SITE) OR Option 2 (DD_AGENT_HOST)
 

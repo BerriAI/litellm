@@ -1,6 +1,7 @@
 import enum
 import json
 from datetime import datetime
+from litellm._uuid import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1931,7 +1932,7 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
-    
+
     @classmethod
     def get_litellm_cli_user_api_key_auth(cls) -> "UserAPIKeyAuth":
         """
@@ -2350,7 +2351,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     datadog: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="datadog",
-        litellm_callback_params=["DD_API_KEY", "DD_SITE"],
+        litellm_callback_params=["DD_API_KEY", "DD_SITE", "DD_AGENT_HOST"],
         ui_callback_name="Datadog",
     )
 

@@ -9,8 +9,8 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-from litellm._uuid import uuid
 from datetime import datetime
+from litellm._uuid import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -40,20 +40,32 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
-            if os.getenv("DD_API_KEY", None) is None:
-                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
-            if os.getenv("DD_SITE", None) is None:
-                raise Exception(
-                    "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
+            
+            # Check for DD_AGENT_HOST first (new option)
+            dd_agent_host = os.getenv("DD_AGENT_HOST")
+            if dd_agent_host:
+                # Agent-based configuration
+                self.use_agent_mode = True
+                self.DD_API_KEY = None  # No API key needed for agent mode
+                self.intake_url = self._get_agent_endpoint()
+            else:
+                # Original direct API configuration (backward compatibility)
+                if os.getenv("DD_API_KEY", None) is None:
+                    raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
+                if os.getenv("DD_SITE", None) is None:
+                    raise Exception(
+                        "DD_SITE is not set, set 'DD_SITE=<>', example site = `us5.datadoghq.com`"
+                    )
+                
+                self.use_agent_mode = False
+                self.DD_API_KEY = os.getenv("DD_API_KEY")
+                self.DD_SITE = os.getenv("DD_SITE")
+                self.intake_url = (
+                    f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
                 )
 
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
-            )
-            self.DD_API_KEY = os.getenv("DD_API_KEY")
-            self.DD_SITE = os.getenv("DD_SITE")
-            self.intake_url = (
-                f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
             )
 
             # testing base url
@@ -74,6 +86,24 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
+
+
+    def _get_agent_endpoint(self) -> str:
+        """
+        Get the agent endpoint URL for LLM observability.
+
+        Returns:
+            str: Agent endpoint URL
+        """
+        dd_agent_host = os.getenv("DD_AGENT_HOST")
+        if not dd_agent_host:
+            raise Exception("DD_AGENT_HOST is not set")
+
+        # Ensure the agent host has the correct port if not specified
+        if ":" not in dd_agent_host:
+            dd_agent_host = f"{dd_agent_host}:8126"
+
+        return f"http://{dd_agent_host}/v1/input"
 
     def _get_datadog_llm_obs_params(self) -> Dict:
         """
@@ -161,13 +191,17 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
             json_payload = safe_dumps(payload)
 
+            # Prepare headers based on configuration mode
+            headers = {
+                "Content-Type": "application/json",
+            }
+            if not self.use_agent_mode:
+                headers["DD-API-KEY"] = self.DD_API_KEY
+
             response = await self.async_client.post(
                 url=self.intake_url,
                 content=json_payload,
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
             )
 
             if response.status_code != 202:
@@ -498,7 +532,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "guardrail_information": standard_logging_payload.get(
                 "guardrail_information", None
             ),
-            "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
+            "is_streamed_request": self._get_stream_value_from_payload(
+                standard_logging_payload
+            ),
         }
 
         #########################################################
@@ -562,7 +598,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         return latency_metrics
 
-    def _get_stream_value_from_payload(self, standard_logging_payload: StandardLoggingPayload) -> bool:
+    def _get_stream_value_from_payload(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> bool:
         """
         Extract the stream value from standard logging payload.
 
