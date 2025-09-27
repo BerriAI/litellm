@@ -605,9 +605,9 @@ async def test_async_completion_azure_caching():
     unique_time = time.time()
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",  # openai model name
+            "model_name": "gpt-4.1-nano",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-nano",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -626,7 +626,7 @@ async def test_async_completion_azure_caching():
     ]
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -635,7 +635,7 @@ async def test_async_completion_azure_caching():
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -652,6 +652,7 @@ async def test_async_completion_azure_caching():
 @pytest.mark.asyncio
 async def test_async_completion_azure_caching_streaming():
     import copy
+    import uuid
 
     litellm.set_verbose = True
     customHandler_caching = CompletionCustomHandler()
@@ -664,7 +665,7 @@ async def test_async_completion_azure_caching_streaming():
     litellm.callbacks = [customHandler_caching]
     unique_time = uuid.uuid4()
     response1 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
+        model="azure/gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -677,7 +678,7 @@ async def test_async_completion_azure_caching_streaming():
     initial_customhandler_caching_states = len(customHandler_caching.states)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await litellm.acompletion(
-        model="azure/chatgpt-v-3",
+        model="azure/gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -710,13 +711,13 @@ async def test_async_embedding_azure_caching():
     litellm.callbacks = [customHandler_caching]
     unique_time = time.time()
     response1 = await litellm.aembedding(
-        model="azure/azure-embedding-model",
+        model="azure/text-embedding-ada-002",
         input=[f"good morning from litellm1 {unique_time}"],
         caching=True,
     )
     await asyncio.sleep(1)  # set cache is async for aembedding()
     response2 = await litellm.aembedding(
-        model="azure/azure-embedding-model",
+        model="azure/text-embedding-ada-002",
         input=[f"good morning from litellm1 {unique_time}"],
         caching=True,
     )
