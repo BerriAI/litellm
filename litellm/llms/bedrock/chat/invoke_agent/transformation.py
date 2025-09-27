@@ -401,8 +401,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not pre_processing:
             return
 
-        model_output: Optional[InvokeAgentModelInvocationOutput] = pre_processing.get(
-            "modelInvocationOutput" or InvokeAgentModelInvocationOutput()
+        model_output: Optional[InvokeAgentModelInvocationOutput] = (
+            pre_processing.get("modelInvocationOutput")
+            or InvokeAgentModelInvocationOutput()
         )
         if not model_output:
             return
