@@ -1547,13 +1547,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
             )
 
             azure_ad_token = optional_params.get("extra_body", {}).pop(
                 "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
+            ) or get_secret_str("AZURE_AD_TOKEN")
 
             azure_ad_token_provider = litellm_params.get(
                 "azure_ad_token_provider", None
@@ -1579,7 +1579,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=headers,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=api_version,
+                api_version=cast(str, api_version),
                 api_type=api_type,
                 azure_ad_token=azure_ad_token,
                 azure_ad_token_provider=azure_ad_token_provider,
@@ -2861,7 +2861,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=custom_llm_provider,  # type: ignore
                 client=client,
                 api_base=api_base,
                 extra_headers=extra_headers,
@@ -2930,7 +2930,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=custom_llm_provider,  # type: ignore
                     client=client,
                     api_base=api_base,
                     extra_headers=extra_headers,
