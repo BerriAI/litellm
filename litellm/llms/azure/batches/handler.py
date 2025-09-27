@@ -62,7 +62,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         )
         if azure_client is None:
             raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -108,7 +108,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         )
         if azure_client is None:
             raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:
@@ -156,7 +156,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         )
         if azure_client is None:
             raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
         response = azure_client.batches.cancel(**cancel_batch_data)
         return response
@@ -195,7 +195,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         )
         if azure_client is None:
             raise ValueError(
-                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+                "Azure OpenAI client is not initialized. Make sure api_key is passed or AZURE_API_KEY/AZURE_OPENAI_API_KEY is set in the environment."
             )
 
         if _is_async is True:

@@ -39,6 +39,7 @@ try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:
     PrometheusLogger = None
+from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.s3_v2 import S3Logger
@@ -90,6 +91,7 @@ class CustomLoggerRegistry:
         "dynamic_rate_limiter_v3": _PROXY_DynamicRateLimitHandlerV3,
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
+        "bitbucket": BitBucketPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
     }
@@ -157,7 +159,6 @@ class CustomLoggerRegistry:
             if callback_class == class_type:
                 callback_strs.append(callback_str)
         return callback_strs
-    
 
     @classmethod
     def get_class_type_for_custom_logger_name(

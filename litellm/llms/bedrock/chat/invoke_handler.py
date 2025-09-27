@@ -7,7 +7,7 @@ import json
 import time
 import types
 import urllib.parse
-import uuid
+from litellm._uuid import uuid
 from functools import partial
 from typing import (
     Any,

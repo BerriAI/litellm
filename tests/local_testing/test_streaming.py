@@ -7,7 +7,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2784,7 +2784,7 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    import uuid
+    from litellm._uuid import uuid
 
     tools = [
         {

@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from functools import wraps
 from typing import Optional, Tuple

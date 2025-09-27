@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -17,7 +17,7 @@ import logging
 import threading
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from collections import defaultdict
 from functools import lru_cache
 from typing import (
@@ -2003,7 +2003,14 @@ class Router:
             prompt_label=prompt_label,
         )
 
-        kwargs = {**data, **kwargs, **optional_params}
+        # Filter out prompt management specific parameters from data before merging
+        prompt_management_params = {
+            "bitbucket_config", "dotprompt_config", "prompt_id", 
+            "prompt_variables", "prompt_label", "prompt_version"
+        }
+        filtered_data = {k: v for k, v in data.items() if k not in prompt_management_params}
+        
+        kwargs = {**filtered_data, **kwargs, **optional_params}
         kwargs["model"] = model
         kwargs["messages"] = messages
         kwargs["litellm_logging_obj"] = litellm_logging_object
@@ -5124,21 +5131,38 @@ class Router:
         import os
 
         #### VALIDATE MODEL ########
-        # check if model provider in supported providers
-        (
-            _model,
-            custom_llm_provider,
-            dynamic_api_key,
-            api_base,
-        ) = litellm.get_llm_provider(
-            model=deployment.litellm_params.model,
-            custom_llm_provider=deployment.litellm_params.get(
-                "custom_llm_provider", None
-            ),
-        )
-        # done reading model["litellm_params"]
-        if custom_llm_provider not in litellm.provider_list:
-            raise Exception(f"Unsupported provider - {custom_llm_provider}")
+        # Check if this is a prompt management model before validating as LLM provider
+        litellm_model = deployment.litellm_params.model
+        is_prompt_management_model = False
+        
+        if "/" in litellm_model:
+            split_litellm_model = litellm_model.split("/")[0]
+            if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
+                is_prompt_management_model = True
+        
+        if is_prompt_management_model:
+            # For prompt management models, skip LLM provider validation
+            # The actual model will be resolved at runtime from the prompt file
+            _model = litellm_model
+            custom_llm_provider = None
+            dynamic_api_key = None
+            api_base = None
+        else:
+            # check if model provider in supported providers
+            (
+                _model,
+                custom_llm_provider,
+                dynamic_api_key,
+                api_base,
+            ) = litellm.get_llm_provider(
+                model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.get(
+                    "custom_llm_provider", None
+                ),
+            )
+            # done reading model["litellm_params"]
+            if custom_llm_provider not in litellm.provider_list:
+                raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########
         self.deployment_names.append(deployment.litellm_params.model)

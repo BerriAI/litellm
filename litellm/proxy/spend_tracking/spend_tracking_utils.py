@@ -370,7 +370,7 @@ def _get_session_id_for_spend_log(
     This ensures each spend log is associated with a unique session id.
 
     """
-    import uuid
+    from litellm._uuid import uuid
 
     if (
         standard_logging_payload is not None
