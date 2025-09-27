@@ -30,6 +30,7 @@ import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_ut
 import { CopyIcon, CheckIcon } from "lucide-react"
 import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
 import { parseErrorMessage } from "../shared/errorUtils"
+import AutoRotationView from "../common_components/AutoRotationView"
 
 interface KeyInfoViewProps {
   keyId: string
@@ -43,6 +44,7 @@ interface KeyInfoViewProps {
   teams: any[] | null
   premiumUser: boolean
   setAccessToken?: (token: string) => void
+  backButtonText?: string
 }
 
 export default function KeyInfoView({
@@ -57,6 +59,7 @@ export default function KeyInfoView({
   onDelete,
   premiumUser,
   setAccessToken,
+  backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [form] = Form.useForm()
@@ -92,7 +95,7 @@ export default function KeyInfoView({
     return (
       <div className="p-4">
         <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-          Back to Keys
+          {backButtonText}
         </Button>
         <Text>Key not found</Text>
       </div>
@@ -261,7 +264,7 @@ export default function KeyInfoView({
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            Back to Keys
+            {backButtonText}
           </Button>
           <Title>{currentKeyData.key_alias || "API Key"}</Title>
 
@@ -482,6 +485,15 @@ export default function KeyInfoView({
                 }
                 variant="card"
               />
+
+              <AutoRotationView
+                autoRotate={currentKeyData.auto_rotate}
+                rotationInterval={currentKeyData.rotation_interval}
+                lastRotationAt={currentKeyData.last_rotation_at}
+                keyRotationAt={currentKeyData.key_rotation_at}
+                nextRotationAt={currentKeyData.next_rotation_at}
+                variant="card"
+              />
             </Grid>
           </TabPanel>
 
@@ -556,6 +568,16 @@ export default function KeyInfoView({
                     <Text className="font-medium">Expires</Text>
                     <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
+
+                  <AutoRotationView
+                    autoRotate={currentKeyData.auto_rotate}
+                    rotationInterval={currentKeyData.rotation_interval}
+                    lastRotationAt={currentKeyData.last_rotation_at}
+                    keyRotationAt={currentKeyData.key_rotation_at}
+                    nextRotationAt={currentKeyData.next_rotation_at}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                  />
 
                   <div>
                     <Text className="font-medium">Spend</Text>

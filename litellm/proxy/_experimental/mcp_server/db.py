@@ -1,4 +1,4 @@
-import uuid
+from litellm._uuid import uuid
 from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
 from litellm._logging import verbose_proxy_logger

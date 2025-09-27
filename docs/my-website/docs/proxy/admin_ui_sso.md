@@ -5,6 +5,10 @@ import TabItem from '@theme/TabItem';
 # ✨ SSO for Admin UI
 
 :::info
+From v1.76.0, SSO is now Free for up to 5 users.
+:::
+
+:::info
 
 ✨ SSO is on LiteLLM Enterprise
 
@@ -235,6 +239,13 @@ Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```
+
+#### Or set your logo directly from Admin UI:
+<div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+  <Image img={require('../../img/admin_settings_ui_theme.png')} />
+  <Image img={require('../../img/admin_settings_ui_theme_logo.png')} />
+</div>
+
 #### Set Custom Color Theme
 - Navigate to [/enterprise/enterprise_ui](https://github.com/BerriAI/litellm/blob/main/enterprise/enterprise_ui/_enterprise_colors.json)
 - Inside the `enterprise_ui` directory, rename `_enterprise_colors.json` to `enterprise_colors.json`

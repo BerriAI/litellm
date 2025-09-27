@@ -108,7 +108,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):

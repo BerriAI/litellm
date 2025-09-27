@@ -5,10 +5,13 @@ This test verifies that the OpenAI-like handler correctly handles
 UTF-8 encoded content in streaming responses, specifically fixing
 the ASCII encoding error described in issue #12660.
 """
-import pytest
 import asyncio
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
 from litellm.llms.openai_like.chat.handler import make_call, make_sync_call
+
 
 class MockResponse:
     """Mock httpx response for testing UTF-8 handling."""
@@ -23,6 +26,14 @@ class MockResponse:
         
     async def aiter_text(self, encoding='utf-8'):
         """Mock aiter_text that yields content with the specified encoding."""
+        yield self.test_content
+        
+    def iter_lines(self):
+        """Mock iter_lines method for synchronous streaming."""
+        yield self.test_content
+        
+    async def aiter_lines(self):
+        """Mock aiter_lines method for asynchronous streaming."""
         yield self.test_content
         
     def json(self):

@@ -49,15 +49,8 @@ async def make_call(
         model_response = ModelResponse(**response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        # Use aiter_text with explicit UTF-8 encoding to avoid ASCII encoding errors
-        async def utf8_aiter_lines():
-            async for line in response.aiter_text(encoding='utf-8'):
-                for line_part in line.splitlines(keepends=True):
-                    if line_part.strip():
-                        yield line_part.rstrip('\r\n')
-        
         completion_stream = ModelResponseIterator(
-            streaming_response=utf8_aiter_lines(), sync_stream=False
+            streaming_response=response.aiter_lines(), sync_stream=False
         )
     # LOGGING
     logging_obj.post_call(
@@ -100,15 +93,8 @@ def make_sync_call(
         model_response = ModelResponse(**response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        # Use iter_text with explicit UTF-8 encoding to avoid ASCII encoding errors
-        def utf8_iter_lines():
-            for line in response.iter_text(encoding='utf-8'):
-                for line_part in line.splitlines(keepends=True):
-                    if line_part.strip():
-                        yield line_part.rstrip('\r\n')
-        
         completion_stream = ModelResponseIterator(
-            streaming_response=utf8_iter_lines(), sync_stream=True
+            streaming_response=response.iter_lines(), sync_stream=True
         )
 
     # LOGGING

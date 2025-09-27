@@ -233,7 +233,17 @@ class BedrockImageGeneration(BaseAWSLLM):
         Returns:
             dict: The request body to use for the Bedrock Image Generation API
         """
-        provider = model.split(".")[0]
+        # Use the existing ARN-aware provider detection method
+        bedrock_provider = self.get_bedrock_invoke_provider(model)
+
+        if bedrock_provider == "amazon" or bedrock_provider == "nova":
+            # Handle Amazon Nova Canvas models
+            provider = "amazon"
+        elif bedrock_provider == "stability":
+            provider = "stability"
+        else:
+            # Fallback to original logic for backward compatibility
+            provider = model.split(".")[0]
         inference_params = copy.deepcopy(optional_params)
         inference_params.pop(
             "user", None

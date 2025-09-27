@@ -27,13 +27,13 @@ Tutorial on how to get to 1K+ RPS with LiteLLM Proxy on locust
 
 **Use this config for testing:**
 
-**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `aiohttp_openai/` provider for load testing.
+**Note:**  we're currently migrating to aiohttp which has 10x higher throughput. We recommend using the `openai/` provider for load testing.
 
 ```yaml
 model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
-      model: aiohttp_openai/any
+      model: openai/any
       api_base: https://your-fake-openai-endpoint.com/chat/completions
       api_key: "test"
 ```
@@ -58,7 +58,7 @@ litellm provides a hosted `fake-openai-endpoint` you can load test against
 model_list:
   - model_name: fake-openai-endpoint
     litellm_params:
-      model: aiohttp_openai/fake
+      model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 

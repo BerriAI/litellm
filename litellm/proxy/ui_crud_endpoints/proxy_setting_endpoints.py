@@ -493,21 +493,32 @@ async def update_sso_settings(sso_config: SSOConfig):
         config["general_settings"] = {}
 
     # Update environment variables in config and in memory
-    sso_data = sso_config.model_dump(exclude_none=True)
+    sso_data = sso_config.model_dump()
     for field_name, value in sso_data.items():
-
-        if field_name == "user_email" and value is not None:
-            # Store user_email in general_settings instead of environment variables
-            config["general_settings"]["proxy_admin_email"] = value
-        elif field_name == "ui_access_mode" and value is not None:
-
-            config["general_settings"]["ui_access_mode"] = value
-        elif field_name in env_var_mapping and value is not None:
+        if field_name == "user_email":
+            if value:
+                # Store user_email in general_settings instead of environment variables
+                config["general_settings"]["proxy_admin_email"] = value
+            else:
+                # Clear user_email if null/empty
+                config["general_settings"].pop("proxy_admin_email", None)
+        elif field_name == "ui_access_mode":
+            if value:
+                config["general_settings"]["ui_access_mode"] = value
+            else:
+                # Clear ui_access_mode if null/empty
+                config["general_settings"].pop("ui_access_mode", None)
+        elif field_name in env_var_mapping and value:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
             # Update in runtime environment
             os.environ[env_var_name] = value
+        elif field_name in env_var_mapping:
+            # Clear environment variable if value is null/empty
+            env_var_name = env_var_mapping[field_name]
+            config["environment_variables"].pop(env_var_name, None)
+            os.environ.pop(env_var_name, None)
 
     stored_config = config
     if len(config["environment_variables"]) > 0:
@@ -660,7 +671,7 @@ async def upload_logo(file: UploadFile = File(...)):
     os.makedirs(upload_dir, exist_ok=True)
     
     # Generate unique filename
-    import uuid
+    from litellm._uuid import uuid
     unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
     

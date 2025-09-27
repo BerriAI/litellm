@@ -10,7 +10,7 @@ Has all /sso/* routes
 
 import asyncio
 import os
-import uuid
+from litellm._uuid import uuid
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -67,6 +67,7 @@ from litellm.proxy.utils import (
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
+from litellm.types.proxy.ui_sso import ParsedOpenIDResult
 
 if TYPE_CHECKING:
     from fastapi_sso.sso.base import OpenID
@@ -76,8 +77,46 @@ else:
 router = APIRouter()
 
 
+def process_sso_jwt_access_token(
+    access_token_str: Optional[str],
+    sso_jwt_handler: Optional[JWTHandler],
+    result: Union[OpenID, dict, None],
+) -> None:
+    """
+    Process SSO JWT access token and extract team IDs if available.
+
+    This function decodes the JWT access token and extracts team IDs using the
+    sso_jwt_handler, then sets the team_ids attribute on the result object.
+
+    Args:
+        access_token_str: The JWT access token string
+        sso_jwt_handler: SSO-specific JWT handler for team ID extraction
+        result: The SSO result object to update with team IDs
+    """
+    if access_token_str and sso_jwt_handler and result:
+        import jwt
+
+        access_token_payload = jwt.decode(
+            access_token_str, options={"verify_signature": False}
+        )
+
+        # Handle both dict and object result types
+        if isinstance(result, dict):
+            result_team_ids: Optional[List[str]] = result.get("team_ids", [])
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                result["team_ids"] = team_ids
+        else:
+            result_team_ids = getattr(result, "team_ids", []) if result else []
+            if not result_team_ids:
+                team_ids = sso_jwt_handler.get_team_ids_from_jwt(access_token_payload)
+                setattr(result, "team_ids", team_ids)
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
-async def google_login(request: Request, source: Optional[str] = None, key: Optional[str] = None):  # noqa: PLR0915
+async def google_login(
+    request: Request, source: Optional[str] = None, key: Optional[str] = None, existing_key: Optional[str] = None
+):  # noqa: PLR0915
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
@@ -85,6 +124,7 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
     """
     from litellm.proxy.proxy_server import (
         premium_user,
+        prisma_client,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -106,12 +146,23 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
         or generic_client_id is not None
     ):
         if premium_user is not True:
-            raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                type=ProxyErrorTypes.auth_error,
-                param="premium_user",
-                code=status.HTTP_403_FORBIDDEN,
-            )
+            # Check if under 'free SSO user' limit
+            if prisma_client is not None:
+                total_users = await prisma_client.db.litellm_usertable.count()
+                if total_users and total_users > 5:
+                    raise ProxyException(
+                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        type=ProxyErrorTypes.auth_error,
+                        param="premium_user",
+                        code=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                raise ProxyException(
+                    message=CommonProxyErrors.db_not_connected_error.value,
+                    type=ProxyErrorTypes.auth_error,
+                    param="premium_user",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
 
     ####### Detect DB + MASTER KEY in .env #######
     missing_env_vars = show_missing_vars_in_env()
@@ -123,12 +174,14 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
+        existing_key=existing_key,
     )
-    
+
     # Store CLI key in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
+        existing_key=existing_key,
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -137,11 +190,14 @@ async def google_login(request: Request, source: Optional[str] = None, key: Opti
             from litellm_enterprise.proxy.auth.custom_sso_handler import (
                 EnterpriseCustomSSOHandler,
             )
+
             return await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
                 request=request,
             )
         except ImportError:
-            raise ValueError("Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise.")
+            raise ValueError(
+                "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
+            )
 
     # Check if we should use SSO handler
     if (
@@ -176,7 +232,7 @@ def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
-):
+) -> CustomOpenID:
     generic_user_id_attribute_name = os.getenv(
         "GENERIC_USER_ID_ATTRIBUTE", "preferred_username"
     )
@@ -209,6 +265,7 @@ def generic_response_convertor(
 
     team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
     all_teams.extend(team_ids)
+
     return CustomOpenID(
         id=response.get(generic_user_id_attribute_name),
         display_name=response.get(generic_user_display_name_attribute_name),
@@ -323,6 +380,10 @@ async def get_generic_sso_response(
             params={"include_client_id": generic_include_client_id},
             headers=additional_generic_sso_headers_dict,
         )
+
+        access_token_str: Optional[str] = generic_sso.access_token
+        process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
+
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Error verifying and processing generic SSO: {e}. Passed in headers: {additional_generic_sso_headers_dict}"
@@ -525,15 +586,9 @@ async def check_and_update_if_proxy_admin_id(
 async def auth_callback(request: Request, state: Optional[str] = None):  # noqa: PLR0915
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
-    
+
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
-    if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID from the state
-        key_id = state.split(":", 1)[1]
-        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}")
-        return await cli_sso_callback(request, key=key_id)
-    
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
@@ -594,6 +649,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
         )
+
     elif generic_client_id is not None:
         result, received_response = await get_generic_sso_response(
             request=request,
@@ -609,6 +665,17 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
             detail="Result not returned by SSO provider.",
         )
     
+
+    if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+        # Extract the key ID from the state
+        key_id = state.split(":", 1)[1]
+        
+        # Get existing_key from query parameters if provided
+        existing_key = request.query_params.get("existing_key")
+            
+        verbose_proxy_logger.info(f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}")
+        return await cli_sso_callback(request=request, key=key_id, existing_key=existing_key, result=result)
+
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=result,
         request=request,
@@ -618,98 +685,142 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     )
 
 
+async def _regenerate_cli_key(existing_key: str, new_key: str, user_id: Optional[str] = None) -> None:
+    """Regenerate an existing CLI key with a new token"""
+    from litellm.proxy._types import RegenerateKeyRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
     
+    verbose_proxy_logger.info(f"Regenerating existing CLI key: {existing_key}")
+    
+    admin_user_dict = UserAPIKeyAuth.get_litellm_cli_user_api_key_auth()
+    
+    regenerate_request = RegenerateKeyRequest(
+        key=existing_key,
+        new_key=new_key,
+        duration="24hr",
+        user_id=user_id,
+    )
+    
+    await regenerate_key_fn(
+        key=existing_key,
+        data=regenerate_request,
+        user_api_key_dict=admin_user_dict
+    )
+    
+    verbose_proxy_logger.info(f"Regenerated CLI key: {new_key}")
 
-async def cli_sso_callback(request: Request, key: Optional[str] = None):
-    """CLI SSO callback - generates the key with pre-specified ID"""
-    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}")
-    
+
+async def _create_new_cli_key(
+    key: str,
+    user_id: Optional[str] = None,
+) -> None:
+    """Create a new CLI key"""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
-    from litellm.proxy.proxy_server import prisma_client
     
-    if not key or not key.startswith('sk-'):
+    verbose_proxy_logger.info("Creating new CLI key")
+    
+    await generate_key_helper_fn(
+        request_type="key",
+        duration="24hr",
+        key_max_budget=litellm.max_ui_session_budget,
+        aliases={},
+        config={},
+        spend=0,
+        user_id=user_id,
+        table_name="key",
+        token=key,
+    )
+    
+    verbose_proxy_logger.info(f"Created new CLI key: {key}")
+
+
+async def cli_sso_callback(request: Request, key: Optional[str] = None, existing_key: Optional[str] = None, result: Optional[Union[OpenID, dict]] = None):
+    """CLI SSO callback - regenerates existing CLI key or creates new one"""
+    verbose_proxy_logger.info(f"CLI SSO callback for key: {key}, existing_key: {existing_key}")
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not key or not key.startswith("sk-"):
         raise HTTPException(
             status_code=400,
-            detail="Invalid key parameter. Must be a valid key ID starting with 'sk-'"
+            detail="Invalid key parameter. Must be a valid key ID starting with 'sk-'",
         )
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
     
-    # Generate a simple key for CLI usage with the pre-specified key ID
+    parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(result=result)
+    verbose_proxy_logger.debug(f"parsed_openid_result: {parsed_openid_result}")
+
     try:
-        await generate_key_helper_fn(
-            request_type="key",
-            duration="24hr",
-            key_max_budget=litellm.max_ui_session_budget,
-            aliases={},
-            config={},
-            spend=0,
-            team_id="litellm-cli",
-            table_name="key",
-            token=key,  # Use the pre-specified key ID
-        )
-        
-        verbose_proxy_logger.info(f"Generated CLI key: {key}")
-        
+        if existing_key:
+            await _regenerate_cli_key(
+                existing_key=existing_key,
+                new_key=key,
+                user_id=parsed_openid_result.get("user_id"),
+            )
+        else:
+            await _create_new_cli_key(
+                key=key,
+                user_id=parsed_openid_result.get("user_id"),
+            )
+
         # Return success page
         from fastapi.responses import HTMLResponse
 
         from litellm.proxy.common_utils.html_forms.cli_sso_success import (
             render_cli_sso_success_page,
         )
-        
+
         html_content = render_cli_sso_success_page()
         return HTMLResponse(content=html_content, status_code=200)
-        
+
     except Exception as e:
-        verbose_proxy_logger.error(f"Error generating CLI key: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate key: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error with CLI key: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process CLI key: {str(e)}")
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
 async def cli_poll_key(key_id: str):
     """CLI polling endpoint - checks if key exists in DB"""
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.proxy_server import prisma_client
-    
-    if not key_id.startswith('sk-'):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid key ID format"
-        )
-    
+
+    if not key_id.startswith("sk-"):
+        raise HTTPException(status_code=400, detail="Invalid key ID format")
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
-    
+
     try:
         # Check if key exists in database
         from litellm.proxy.utils import hash_token
+
         hashed_token = hash_token(key_id)
-        
+
         key_obj = await prisma_client.db.litellm_verificationtoken.find_unique(
             where={"token": hashed_token}
         )
-        
+        key_obj = cast(LiteLLM_VerificationToken, key_obj)
+
         if key_obj:
             verbose_proxy_logger.info(f"CLI key found: {key_id}")
-            return {"status": "ready", "key": key_id}
+            return {"status": "ready", "key": key_id, "user_id": key_obj.user_id}
         else:
             return {"status": "pending"}
-            
+
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI key: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error checking key status: {str(e)}"
+            status_code=500, detail=f"Error checking key status: {str(e)}"
         )
 
 
@@ -811,6 +922,7 @@ class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
     """
+
     @staticmethod
     async def get_sso_login_redirect(
         redirect_url: str,
@@ -940,19 +1052,50 @@ class SSOAuthenticationHandler:
                 # or a cryptographicly signed state that we can verify stateless
                 # For simplification we are using a static state, this is not perfect but some
                 # SSO providers do not allow stateless verification
-                redirect_params = {}
-                state = os.getenv("GENERIC_CLIENT_STATE", None)
-
-                if state:
-                    redirect_params["state"] = state
-                elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
+                redirect_params = SSOAuthenticationHandler._get_generic_sso_redirect_params(
+                    state=state,
+                    generic_authorization_endpoint=generic_authorization_endpoint
+                )
+                
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
         )
+
+    @staticmethod
+    def _get_generic_sso_redirect_params(
+        state: Optional[str] = None, 
+        generic_authorization_endpoint: Optional[str] = None
+    ) -> dict:
+        """
+        Get redirect parameters for Generic SSO with proper state priority handling.
+        
+        Priority order:
+        1. CLI state (if provided)
+        2. GENERIC_CLIENT_STATE environment variable
+        3. Generated UUID for Okta (if Okta endpoint detected)
+        
+        Args:
+            state: Optional state parameter (e.g., CLI state)
+            generic_authorization_endpoint: Authorization endpoint URL
+            
+        Returns:
+            dict: Redirect parameters for SSO login
+        """
+        redirect_params = {}
+        
+        if state:
+            # CLI state takes priority
+            # the litellm proxy cli sends the "state" parameter to the proxy server for auth. We should maintain the state parameter for the cli if it is provided
+            redirect_params["state"] = state
+        else:
+            generic_client_state = os.getenv("GENERIC_CLIENT_STATE", None)
+            if generic_client_state:
+                redirect_params["state"] = generic_client_state
+            elif generic_authorization_endpoint and "okta" in generic_authorization_endpoint:
+                redirect_params["state"] = uuid.uuid4().hex  # set state param for okta - required
+
+        return redirect_params
 
     @staticmethod
     def should_use_sso_handler(
@@ -972,6 +1115,7 @@ class SSOAuthenticationHandler:
     def get_redirect_url_for_sso(
         request: Request,
         sso_callback_route: str,
+        existing_key: Optional[str] = None,
     ) -> str:
         """
         Get the redirect URL for SSO
@@ -983,6 +1127,11 @@ class SSOAuthenticationHandler:
             redirect_url += sso_callback_route
         else:
             redirect_url += "/" + sso_callback_route
+            
+        # Append existing_key as query parameter if provided
+        if existing_key:
+            redirect_url += f"?existing_key={existing_key}"
+            
         return redirect_url
 
     @staticmethod
@@ -1163,10 +1312,9 @@ class SSOAuthenticationHandler:
             _new_team_request.update(_default_team_params)
             team_request = NewTeamRequest(**_new_team_request)
         return team_request
-    
 
     @staticmethod
-    def _get_cli_state(source: Optional[str], key: Optional[str]) -> Optional[str]:
+    def _get_cli_state(source: Optional[str], key: Optional[str], existing_key: Optional[str] = None) -> Optional[str]:
         """
         Checks the request 'source' if a cli state token was passed in
 
@@ -1176,40 +1324,26 @@ class SSOAuthenticationHandler:
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
             LITELLM_CLI_SOURCE_IDENTIFIER,
         )
-        return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}" if source == LITELLM_CLI_SOURCE_IDENTIFIER and key else None
-    
 
-
+        if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
+            # Just use the key - existing_key will be passed separately via query params
+            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+        else:
+            return None
 
     @staticmethod
-    async def get_redirect_response_from_openid( # noqa: PLR0915
-        result: Union[OpenID, dict, CustomOpenID],
-        request: Request,
-        received_response: Optional[dict] = None,
+    def _get_user_email_and_id_from_result(
+        result: Optional[Union[OpenID, dict]],
         generic_client_id: Optional[str] = None,
-        ui_access_mode: Optional[Dict] = None,
-    ) -> RedirectResponse:
-        import jwt
-
-        from litellm.proxy.proxy_server import (
-            general_settings,
-            generate_key_helper_fn,
-            master_key,
-            premium_user,
-            proxy_logging_obj,
-            user_api_key_cache,
-            user_custom_sso,
-        )
-        from litellm.proxy.utils import get_prisma_client_or_throw
-        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
-        prisma_client = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
-
-
-        # User is Authe'd in - generate key for the UI to access Proxy
-        verbose_proxy_logger.info(f"SSO callback result: {result}")
-
+    ) -> ParsedOpenIDResult:
+        """
+        Gets the user email and id from the OpenID result after validating the email domain
+        """
         user_email: Optional[str] = getattr(result, "email", None)
-        user_id: Optional[str] = getattr(result, "id", None) if result is not None else None
+        user_id: Optional[str] = (
+            getattr(result, "id", None) if result is not None else None
+        )
+        user_role: Optional[str] = None
 
         if user_email is not None and os.getenv("ALLOWED_EMAIL_DOMAINS") is not None:
             email_domain = user_email.split("@")[1]
@@ -1240,6 +1374,46 @@ class SSOAuthenticationHandler:
 
         if user_email is not None and (user_id is None or len(user_id) == 0):
             user_id = user_email
+        
+        return ParsedOpenIDResult(
+            user_email=user_email,
+            user_id=user_id,
+            user_role=user_role,
+        )
+
+    @staticmethod
+    async def get_redirect_response_from_openid(  # noqa: PLR0915
+        result: Union[OpenID, dict, CustomOpenID],
+        request: Request,
+        received_response: Optional[dict] = None,
+        generic_client_id: Optional[str] = None,
+        ui_access_mode: Optional[Dict] = None,
+    ) -> RedirectResponse:
+        import jwt
+
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            generate_key_helper_fn,
+            master_key,
+            premium_user,
+            proxy_logging_obj,
+            user_api_key_cache,
+            user_custom_sso,
+        )
+        from litellm.proxy.utils import get_prisma_client_or_throw
+        from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+        prisma_client = get_prisma_client_or_throw(
+            "Prisma client is None, connect a database to your proxy"
+        )
+
+        # User is Authe'd in - generate key for the UI to access Proxy
+        parsed_openid_result = SSOAuthenticationHandler._get_user_email_and_id_from_result(result=result, generic_client_id=generic_client_id)
+        user_email = parsed_openid_result.get("user_email")
+        user_id = parsed_openid_result.get("user_id")
+        user_role = parsed_openid_result.get("user_role")
+        verbose_proxy_logger.info(f"SSO callback result: {result}")
+
 
         user_info = None
         user_id_models: List = []
@@ -1328,7 +1502,7 @@ class SSOAuthenticationHandler:
         ## CHECK IF ROLE ALLOWED TO USE PROXY ##
         is_admin_only_access = check_is_admin_only_access(ui_access_mode or {})
         if is_admin_only_access:
-            has_access = has_admin_ui_access(user_role)
+            has_access = has_admin_ui_access(user_role or "")
             if not has_access:
                 raise HTTPException(
                     status_code=401,
@@ -1372,7 +1546,7 @@ class SSOAuthenticationHandler:
             user_id=cast(str, user_id),
             key=key,
             user_email=user_email,
-            user_role=user_role,
+            user_role=user_role or LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
             login_method="sso",
             premium_user=premium_user,
             auth_header_name=general_settings.get(
@@ -1394,7 +1568,8 @@ class SSOAuthenticationHandler:
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
         redirect_response.set_cookie(key="token", value=jwt_token)
         return redirect_response
-        
+
+
 class MicrosoftSSOHandler:
     """
     Handles Microsoft SSO callback response and returns a CustomOpenID object

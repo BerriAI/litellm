@@ -2,6 +2,7 @@
 Enterprise internal user management endpoints
 """
 
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -21,7 +22,7 @@ async def available_enterprise_users(
     """
     For keys with `max_users` set, return the list of users that are allowed to use the key.
     """
-    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy._types import CommonProxyErrors, EnterpriseLicenseData
     from litellm.proxy.proxy_server import (
         premium_user,
         premium_user_data,
@@ -34,10 +35,14 @@ async def available_enterprise_users(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if premium_user is None:
-        raise HTTPException(
-            status_code=500, detail={"error": CommonProxyErrors.not_premium_user.value}
-        )
+    if not premium_user:
+        # check if SSO is enabled - show 5 user limit
+        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+        if _has_user_setup_sso():
+            premium_user_data = EnterpriseLicenseData(
+                max_users=5,
+            )
 
     # Count number of rows in LiteLLM_UserTable
     user_count = await prisma_client.db.litellm_usertable.count()

@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest
@@ -550,91 +550,6 @@ async def test_async_chat_openai_stream_options():
             await asyncio.sleep(1)
             print("mock client args list=", mock_client.await_args_list)
             mock_client.assert_awaited_once()
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {str(e)}")
-
-
-## Test Bedrock + sync
-def test_chat_bedrock_stream():
-    try:
-        customHandler = CompletionCustomHandler()
-        litellm.callbacks = [customHandler]
-        response = litellm.completion(
-            model="bedrock/anthropic.claude-v2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
-        )
-        # test streaming
-        response = litellm.completion(
-            model="bedrock/anthropic.claude-v2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
-            stream=True,
-        )
-        for chunk in response:
-            continue
-        # test failure callback
-        try:
-            response = litellm.completion(
-                model="bedrock/anthropic.claude-v2",
-                messages=[{"role": "user", "content": "Hi 👋 - i'm sync bedrock"}],
-                aws_region_name="my-bad-region",
-                stream=True,
-            )
-            for chunk in response:
-                continue
-        except Exception:
-            pass
-        time.sleep(1)
-        print(f"customHandler.errors: {customHandler.errors}")
-        assert len(customHandler.errors) == 0
-        litellm.callbacks = []
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {str(e)}")
-
-
-# test_chat_bedrock_stream()
-
-
-## Test Bedrock + Async
-@pytest.mark.asyncio
-async def test_async_chat_bedrock_stream():
-    try:
-        litellm.set_verbose = True
-        customHandler = CompletionCustomHandler()
-        litellm.callbacks = [customHandler]
-        response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
-        )
-        # test streaming
-        response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-v2",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
-            stream=True,
-        )
-        print(f"response: {response}")
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            continue
-
-        await asyncio.sleep(1)
-        ## test failure callback
-        try:
-            response = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v2",
-                messages=[{"role": "user", "content": "Hi 👋 - i'm async bedrock"}],
-                aws_region_name="my-bad-key",
-                stream=True,
-            )
-            async for chunk in response:
-                continue
-
-            await asyncio.sleep(1)
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-        print(f"customHandler.errors: {customHandler.errors}")
-        assert len(customHandler.errors) == 0
-        litellm.callbacks = []
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
 

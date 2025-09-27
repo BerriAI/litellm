@@ -162,9 +162,32 @@ class PassThroughEndpointLogging:
                 cohere_passthrough_logging_handler_result["result"]
             )
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        return_dict["standard_logging_response_object"] = (
-            standard_logging_response_object
-        )
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
+            from .llm_provider_handlers.openai_passthrough_logging_handler import (
+                OpenAIPassthroughLoggingHandler,
+            )
+
+            openai_passthrough_logging_handler_result = (
+                OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+                    httpx_response=httpx_response,
+                    response_body=response_body or {},
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    request_body=request_body,
+                    **kwargs,
+                )
+            )
+            standard_logging_response_object = (
+                openai_passthrough_logging_handler_result["result"]
+            )
+            kwargs = openai_passthrough_logging_handler_result["kwargs"]
+        return_dict[
+            "standard_logging_response_object"
+        ] = standard_logging_response_object
         return_dict["kwargs"] = kwargs
         return return_dict
 
@@ -185,9 +208,9 @@ class PassThroughEndpointLogging:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        logging_obj.model_call_details["passthrough_logging_payload"] = (
-            passthrough_logging_payload
-        )
+        logging_obj.model_call_details[
+            "passthrough_logging_payload"
+        ] = passthrough_logging_payload
         if self.is_assemblyai_route(url_route):
             if (
                 AssemblyAIPassthroughLoggingHandler._should_log_request(
@@ -286,6 +309,28 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_openai_route(self, url_route: str):
+        """Check if the URL route is an OpenAI API route."""
+        if not url_route:
+            return False
+        parsed_url = urlparse(url_route)
+        return parsed_url.hostname and (
+            "api.openai.com" in parsed_url.hostname
+            or "openai.azure.com" in parsed_url.hostname
+        )
+
+    def _is_supported_openai_endpoint(self, url_route: str) -> bool:
+        """Check if the OpenAI endpoint is supported by the passthrough logging handler."""
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+        
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route) or
+            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route) or
+            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+        )
+
     def _set_cost_per_request(
         self,
         logging_obj: LiteLLMLoggingObj,
@@ -305,8 +350,8 @@ class PassThroughEndpointLogging:
             kwargs["response_cost"] = passthrough_logging_payload.get(
                 "cost_per_request"
             )
-            logging_obj.model_call_details["response_cost"] = (
-                passthrough_logging_payload.get("cost_per_request")
-            )
+            logging_obj.model_call_details[
+                "response_cost"
+            ] = passthrough_logging_payload.get("cost_per_request")
 
         return kwargs

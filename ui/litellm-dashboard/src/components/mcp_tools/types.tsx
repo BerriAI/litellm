@@ -132,7 +132,6 @@ export interface MCPServer {
   description?: string | null;
   url: string;
   transport?: string | null;
-  spec_version?: string | null;
   auth_type?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;

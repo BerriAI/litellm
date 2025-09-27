@@ -6,6 +6,7 @@ import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Card, TextInput } from '@tremor/react';
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from '@heroicons/react/outline';
 import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from '../callback_info_helpers';
+import NumericalInput from '../shared/numerical_input';
 
 const { Option } = Select;
 
@@ -126,13 +127,33 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     Sensitive
                   </span>
                 )}
+                {paramType === 'number' && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                    Number
+                  </span>
+                )}
               </label>
-              <TextInput
-                type={paramType === 'password' ? 'password' : 'text'}
-                placeholder={`os.environ/${paramName.toUpperCase()}`}
-                value={config.callback_vars[paramName] || ''}
-                onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
-              />
+              {paramType === 'number' && (
+                <span className="text-xs text-gray-500">
+                  Value must be between 0 and 1
+                </span>
+              )}
+              {paramType === 'number' ? (
+                <NumericalInput
+                  step={0.01}
+                  width={400}
+                  placeholder={`os.environ/${paramName.toUpperCase()}`}
+                  value={config.callback_vars[paramName] || ''}
+                  onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
+                />
+              ) : (
+                <TextInput
+                  type={paramType === 'password' ? 'password' : 'text'}
+                  placeholder={`os.environ/${paramName.toUpperCase()}`}
+                  value={config.callback_vars[paramName] || ''}
+                  onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -173,7 +194,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                         <img 
                           src={logo} 
                           alt={callbackName} 
-                          className="w-4 h-4 object-contain" 
+                          className="w-4 h-4 object-contain"
+                          onError={(e) => {
+                            // Create a div with callback initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement('div');
+                              fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                              fallbackDiv.textContent = callbackName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
                         />
                       )}
                       <span>{callbackName}</span>
@@ -269,7 +301,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                                   <img 
                                     src={logo} 
                                     alt={callbackName} 
-                                    className="w-4 h-4 object-contain" 
+                                    className="w-4 h-4 object-contain"
+                                    onError={(e) => {
+                                      // Create a div with callback initial as fallback
+                                      const target = e.target as HTMLImageElement;
+                                      const parent = target.parentElement;
+                                      if (parent) {
+                                        const fallbackDiv = document.createElement('div');
+                                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                        fallbackDiv.textContent = callbackName.charAt(0);
+                                        parent.replaceChild(fallbackDiv, target);
+                                      }
+                                    }}
                                   />
                                 )}
                                 <span>{callbackName}</span>

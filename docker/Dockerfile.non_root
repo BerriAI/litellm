@@ -33,11 +33,12 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-  apk add --no-cache bash libstdc++ ca-certificates openssl
+  apk add --no-cache bash libstdc++ ca-certificates openssl supervisor
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY . .
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/

@@ -48,7 +48,6 @@ const MCPConnectionTest: React.FC<MCPConnectionTestProps> = ({
         alias: formValues.alias || "",
         url: formValues.url,
         transport: formValues.transport,
-        spec_version: formValues.spec_version,
         auth_type: formValues.auth_type,
         mcp_info: formValues.mcp_info,
       };

@@ -60,13 +60,22 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
     setLoading(true);
     try {
       // Transform form data to match API expected structure
-      const apiPayload = {
-        ui_access_mode: {
-          type: formValues.ui_access_mode_type,
-          restricted_sso_group: formValues.restricted_sso_group,
-          sso_group_jwt_field: formValues.sso_group_jwt_field,
-        }
-      };
+      let apiPayload;
+      
+      if (formValues.ui_access_mode_type === 'all_authenticated_users') {
+        // Set ui_access_mode to none when all_authenticated_users is selected
+        apiPayload = {
+          ui_access_mode: "none"
+        };
+      } else {
+        apiPayload = {
+          ui_access_mode: {
+            type: formValues.ui_access_mode_type,
+            restricted_sso_group: formValues.restricted_sso_group,
+            sso_group_jwt_field: formValues.sso_group_jwt_field,
+          }
+        };
+      }
 
       await updateSSOSettings(accessToken, apiPayload);
       onSuccess();

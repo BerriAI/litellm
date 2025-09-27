@@ -3,6 +3,7 @@ Opik Logger that logs LLM events to an Opik server
 """
 
 import asyncio
+from datetime import timezone
 import json
 import traceback
 from typing import Dict, List
@@ -191,9 +192,25 @@ class OpikLogger(CustomBatchLogger):
 
         # Extract opik metadata
         litellm_opik_metadata = litellm_params_metadata.get("opik", {})
+        
+        # Use standard_logging_object to create metadata and input/output data
+        standard_logging_object = kwargs.get("standard_logging_object", None)
+        if standard_logging_object is None:
+            verbose_logger.debug(
+                "OpikLogger skipping event; no standard_logging_object found"
+            )
+            return []
+
+        # Update litellm_opik_metadata with opik metadata from requester
+        standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
+        requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
+        requester_opik_metadata = requester_metadata.get("opik", {}) or {}
+        litellm_opik_metadata.update(requester_opik_metadata)
+
         verbose_logger.debug(
             f"litellm_opik_metadata - {json.dumps(litellm_opik_metadata, default=str)}"
         )
+        
         project_name = litellm_opik_metadata.get("project_name", self.opik_project_name)
 
         # Extract trace_id and parent_span_id
@@ -207,19 +224,33 @@ class OpikLogger(CustomBatchLogger):
         else:
             trace_id = None
             parent_span_id = None
+        
         # Create Opik tags
         opik_tags = litellm_opik_metadata.get("tags", [])
         if kwargs.get("custom_llm_provider"):
             opik_tags.append(kwargs["custom_llm_provider"])
+        
+        # Get thread_id if present
+        thread_id = litellm_opik_metadata.get("thread_id", None)
 
-        # Use standard_logging_object to create metadata and input/output data
-        standard_logging_object = kwargs.get("standard_logging_object", None)
-        if standard_logging_object is None:
-            verbose_logger.debug(
-                "OpikLogger skipping event; no standard_logging_object found"
-            )
-            return []
-
+        # Override with any opik_ headers from proxy request
+        proxy_server_request = _litellm_params.get("proxy_server_request", {}) or {}
+        proxy_headers = proxy_server_request.get("headers", {}) or {}
+        for key, value in proxy_headers.items():
+            if key.startswith("opik_"):
+                param_key = key.replace("opik_", "", 1)
+                if param_key == "project_name" and value:
+                    project_name = value
+                elif param_key == "thread_id" and value:
+                    thread_id = value
+                elif param_key == "tags" and value:
+                    try:
+                        parsed_tags = json.loads(value)
+                        if isinstance(parsed_tags, list):
+                            opik_tags.extend(parsed_tags)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    
         # Create input and output data
         input_data = standard_logging_object.get("messages", {})
         output_data = standard_logging_object.get("response", {})
@@ -242,7 +273,7 @@ class OpikLogger(CustomBatchLogger):
             del metadata["current_span_data"]
         metadata["created_from"] = "litellm"
 
-        metadata.update(standard_logging_object.get("metadata", {}))
+        metadata.update(standard_logging_metadata)
         if "call_type" in standard_logging_object:
             metadata["type"] = standard_logging_object["call_type"]
         if "status" in standard_logging_object:
@@ -285,20 +316,20 @@ class OpikLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"OpikLogger creating payload for trace with id {trace_id}"
             )
-
-            payload.append(
-                {
-                    "project_name": project_name,
-                    "id": trace_id,
-                    "name": trace_name,
-                    "start_time": start_time.isoformat() + "Z",
-                    "end_time": end_time.isoformat() + "Z",
-                    "input": input_data,
-                    "output": output_data,
-                    "metadata": metadata,
-                    "tags": opik_tags,
-                }
-            )
+        payload.append(
+            {
+                "project_name": project_name,
+                "id": trace_id,
+                "name": trace_name,
+                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "input": input_data,
+                "output": output_data,
+                "metadata": metadata,
+                "tags": opik_tags,
+                "thread_id": thread_id,
+            }
+        )
 
         span_id = create_uuid7()
         verbose_logger.debug(
@@ -312,12 +343,13 @@ class OpikLogger(CustomBatchLogger):
                 "parent_span_id": parent_span_id,
                 "name": span_name,
                 "type": "llm",
-                "start_time": start_time.isoformat() + "Z",
-                "end_time": end_time.isoformat() + "Z",
+                "start_time": start_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "end_time": end_time.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "input": input_data,
                 "output": output_data,
                 "metadata": metadata,
                 "tags": opik_tags,
+                "thread_id": thread_id,
                 "usage": usage,
             }
         )

@@ -230,6 +230,13 @@ curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5
 ```
 
 
+## **Example 4: Video Generation with Veo**
+
+Generate videos using Google's Veo model through LiteLLM pass-through routes.
+
+[**→ Complete Veo Video Generation Guide**](../proxy/veo_video_generation.md)
+
+
 ## Advanced 
 
 Pre-requisites

@@ -52,8 +52,8 @@ export function DataTable<TData, TValue>({
   });
 
   return (
-    <div className="rounded-lg custom-border">
-      <Table className="[&_td]:py-0.5 [&_th]:py-1">
+    <div className="rounded-lg custom-border overflow-x-auto w-full max-w-full box-border">
+      <Table className="[&_td]:py-0.5 [&_th]:py-1 table-fixed w-full box-border" style={{minWidth: '800px'}}>
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
@@ -100,8 +100,10 @@ export function DataTable<TData, TValue>({
 
                 {row.getIsExpanded() && (
                   <TableRow>
-                    <TableCell colSpan={row.getVisibleCells().length}>
-                      {renderSubComponent({ row })}
+                    <TableCell colSpan={row.getVisibleCells().length} className="p-0">
+                      <div className="w-full max-w-full overflow-hidden box-border">
+                        {renderSubComponent({ row })}
+                      </div>
                     </TableCell>
                   </TableRow>
                 )}

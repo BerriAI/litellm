@@ -14,7 +14,6 @@ import copy
 import json
 import secrets
 import traceback
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Tuple, cast
 
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching import DualCache
 from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -85,6 +85,38 @@ def _get_user_in_team(
             return member
 
     return None
+
+
+def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
+    """
+    Helper function to calculate the next rotation time for a key based on the rotation interval.
+    
+    Args:
+        rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
+        
+    Returns:
+        datetime: The calculated next rotation time in UTC
+    """
+    now = datetime.now(timezone.utc)
+    interval_seconds = duration_in_seconds(rotation_interval)
+    return now + timedelta(seconds=interval_seconds)
+
+
+def _set_key_rotation_fields(data: dict, auto_rotate: bool, rotation_interval: Optional[str]) -> None:
+    """
+    Helper function to set rotation fields in key data if auto_rotate is enabled.
+    
+    Args:
+        data: Dictionary to update with rotation fields
+        auto_rotate: Whether auto rotation is enabled
+        rotation_interval: The rotation interval string (required if auto_rotate is True)
+    """
+    if auto_rotate and rotation_interval:
+        data.update({
+            "auto_rotate": auto_rotate,
+            "rotation_interval": rotation_interval,
+            "key_rotation_at": _calculate_key_rotation_time(rotation_interval)
+        })
 
 
 def _is_allowed_to_make_key_request(
@@ -347,6 +379,37 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     return data_json
 
 
+async def validate_team_id_used_in_service_account_request(
+    team_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+):
+    """
+    Validate team_id is used in the request body for generating a service account key
+    """
+    if team_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="prisma_client is required for service account keys. Please specify `prisma_client` in the request body.",
+        )
+
+    # check if team_id exists in the database
+    team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id},
+    )
+    if team is None:
+        raise HTTPException(
+            status_code=400,
+            detail="team_id does not exist in the database. Please specify a valid `team_id` in the request body.",
+        )
+    return True
+
+
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -372,9 +435,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         and data.metadata.get("service_account_id") is not None
         and data.team_id is None
     ):
-        raise HTTPException(
-            status_code=400,
-            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        await validate_team_id_used_in_service_account_request(
+            team_id=data.team_id,
+            prisma_client=prisma_client,
         )
 
     # check if user set default key/generate params on config.yaml
@@ -444,7 +507,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
         data = apply_enterprise_key_management_params(data, team_table)
     except Exception as e:
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
                 str(e)
             )
@@ -521,6 +584,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
     )
+
+    # Validate user-provided key format
+    if data.key is not None and not data.key.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {data.key}"
+            },
+        )
 
     response = await generate_key_helper_fn(
         request_type="key", **data_json, table_name="key"
@@ -602,6 +674,9 @@ async def generate_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
+    - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -756,6 +831,11 @@ async def generate_service_account_key_fn(
         user_custom_key_generate,
     )
 
+    await validate_team_id_used_in_service_account_request(
+        team_id=data.team_id,
+        prisma_client=prisma_client,
+    )
+
     verbose_proxy_logger.debug("entered /key/generate")
 
     if user_custom_key_generate is not None:
@@ -880,6 +960,15 @@ async def prepare_key_update_data(
             detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
         )
     non_default_values = {}
+    # ADD METADATA FIELDS
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
     for k, v in data_json.items():
         if (
             k in LiteLLM_ManagementEndpoint_MetadataFields
@@ -1014,6 +1103,8 @@ async def update_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
+    - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1092,6 +1183,9 @@ async def update_key_fn(
                 change_initiated_by=user_api_key_dict,
                 llm_router=llm_router,
             )
+
+            # Set Management Endpoint Metadata Fields
+
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row
         )
@@ -1100,6 +1194,13 @@ async def update_key_fn(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
             existing_key_token=existing_key_row.token,
+        )
+
+        # Handle rotation fields if auto_rotate is being enabled
+        _set_key_rotation_fields(
+            non_default_values, 
+            non_default_values.get("auto_rotate", False), 
+            non_default_values.get("rotation_interval")
         )
 
         _data = {**non_default_values, "token": key}
@@ -1175,13 +1276,11 @@ def validate_key_team_change(
             )
 
     # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
     if key.user_id is not None:
-        is_member = False
-        for member in team.members_with_roles:
-            if member.user_id == key.user_id:
-                is_member = True
-                break
-        if not is_member:
+        if not member_object:
             raise HTTPException(
                 status_code=403,
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
@@ -1208,10 +1307,17 @@ def validate_key_team_change(
         team_obj=team,
     ):
         return
+    # this teams member permissions allow updating a
+    elif TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=member_object,
+        team_table=cast(LiteLLM_TeamTableCachedObj, team),
+        route=KeyManagementRoutes.KEY_UPDATE.value,
+    ):
+        return
     else:
         raise HTTPException(
             status_code=403,
-            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}. Please ask your Proxy Admin to allow this action under 'Member Permissions' for this team.",
         )
 
 
@@ -1496,6 +1602,8 @@ def _check_model_access_group(
     return True
 
 
+
+
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1549,6 +1657,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
+    auto_rotate: Optional[bool] = None,
+    rotation_interval: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1566,14 +1676,12 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if duration is None:  # allow tokens that never expire
         expires = None
     else:
-        duration_s = duration_in_seconds(duration=duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        expires = get_budget_reset_time(budget_duration=duration)
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
     else:
-        duration_s = duration_in_seconds(duration=key_budget_duration)
-        key_reset_at = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
+        key_reset_at = get_budget_reset_time(budget_duration=key_budget_duration)
 
     if budget_duration is None:  # one-time budget
         reset_at = None
@@ -1658,6 +1766,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
+        
+        # Add rotation fields if auto_rotate is enabled
+        _set_key_rotation_fields(
+            data=key_data,
+            auto_rotate=auto_rotate or False,
+            rotation_interval=rotation_interval
+        )
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True
@@ -1972,7 +2087,7 @@ async def _rotate_master_key(
     # 2. process model table
     if models:
         decrypted_models = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             "ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models)
         )
         new_models = []
@@ -1986,9 +2101,9 @@ async def _rotate_master_key(
             )
             if new_model:
                 new_models.append(jsonify_object(new_model.model_dump()))
-        verbose_proxy_logger.info("Resetting proxy model table")
+        verbose_proxy_logger.debug("Resetting proxy model table")
         await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.info("Creating %s models", len(new_models))
+        verbose_proxy_logger.debug("Creating %s models", len(new_models))
         await prisma_client.db.litellm_proxymodeltable.create_many(
             data=new_models,
         )
@@ -2407,6 +2522,9 @@ async def list_keys(
     include_team_keys: bool = Query(
         False, description="Include all keys for teams that user is an admin of."
     ),
+    include_created_by_keys: bool = Query(
+        False, description="Include keys created by the user"
+    ),
     sort_by: Optional[str] = Query(
         default=None,
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
@@ -2469,6 +2587,7 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
         )
@@ -2546,6 +2665,7 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
 ) -> KeyListResponseObject:
@@ -2594,6 +2714,10 @@ async def _list_key_helper(
 
     if user_condition:
         or_conditions.append(user_condition)
+
+    # Add condition for created by keys if provided
+    if include_created_by_keys and user_id:
+        or_conditions.append({"created_by": user_id})
 
     # Add condition for admin team keys if provided
     if admin_team_ids:
@@ -2844,7 +2968,10 @@ async def unblock_key(
             param="key",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    hashed_token = hash_token(token=data.key)
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

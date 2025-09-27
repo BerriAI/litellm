@@ -576,8 +576,19 @@ class BaseAzureLLM(BaseOpenAILLM):
         verbose_logger.debug(
             f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{_api_key}"
         )
+        
+        # Extract API key from multiple sources with proper precedence
+        resolved_api_key = (
+            api_key
+            or litellm_params.get("api_key")
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+            or get_secret_str("AZURE_API_KEY")
+        )
+
         azure_client_params = {
-            "api_key": api_key,
+            "api_key": resolved_api_key,
             "azure_endpoint": api_base,
             "api_version": api_version,
             "azure_ad_token": azure_ad_token,

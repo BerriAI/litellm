@@ -173,15 +173,24 @@ async def google_count_tokens(request: Request, model_name: str):
     """
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     data = await _read_request_body(request=request)
     contents = data.get("contents", [])
     #Create TokenCountRequest for the internal endpoint
     from litellm.proxy._types import TokenCountRequest
 
+    # Translate contents to openai format messages using the adapter
+    messages = (
+        GoogleGenAIAdapter()
+        .translate_generate_content_to_completion(model_name, contents)
+        .get("messages", [])
+    )
+
     token_request = TokenCountRequest(
         model=model_name,
-        contents=contents
+        contents=contents,
+        messages=messages,  # compatibility when use openai-like endpoint
     )
 
     # Call the internal token counter function with direct request flag set to False
@@ -192,11 +201,17 @@ async def google_count_tokens(request: Request, model_name: str):
     if token_response is not None:
         # cast the response to the well known format
         original_response: dict = token_response.original_response or {}
-        return TokenCountDetailsResponse(
-            totalTokens=original_response.get("totalTokens", 0),
-            promptTokensDetails=original_response.get("promptTokensDetails", []),
-        )
-    
+        if original_response:
+            return TokenCountDetailsResponse(
+                totalTokens=original_response.get("totalTokens", 0),
+                promptTokensDetails=original_response.get("promptTokensDetails", []),
+            )
+        else:
+            return TokenCountDetailsResponse(
+                totalTokens=token_response.total_tokens or 0,
+                promptTokensDetails=[],
+            )
+
     #########################################################
     # Return the response in the well known format
     #########################################################
