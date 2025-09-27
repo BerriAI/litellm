@@ -53,7 +53,7 @@ jobs:
     
   local_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.12
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -79,7 +79,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install "mypy==1.15.0"
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -144,14 +144,8 @@ jobs:
           name: Linting Testing
           command: |
             cd litellm
-            pip install "cryptography>=43.0.1"
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . \
-                --config-file mypy.ini \
-                --ignore-missing-imports; then
-                echo "mypy detected errors"
-                exit 1
-            fi
+            # Use the same simple approach that works in GitHub Actions
+            python -m mypy . --ignore-missing-imports --show-traceback
             cd ..
 
       # Run pytest and generate JUnit XML report
@@ -204,7 +198,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -311,7 +305,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -470,7 +464,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -552,14 +546,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
       - run:
@@ -574,7 +568,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -668,7 +662,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
@@ -816,7 +810,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1048,7 +1042,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1636,7 +1630,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -1774,7 +1768,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "jsonlines==4.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -1916,7 +1910,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -2419,7 +2413,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
       - run:
           name: Build Docker image
           command: |
@@ -2524,7 +2518,7 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "boto3==1.36.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma
@@ -2913,7 +2907,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma

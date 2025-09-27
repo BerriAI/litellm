@@ -17,7 +17,7 @@ import random
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy

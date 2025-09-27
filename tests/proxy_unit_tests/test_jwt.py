@@ -7,7 +7,7 @@ import random
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 
 from dotenv import load_dotenv
 
@@ -240,7 +240,7 @@ def prisma_client():
 @pytest.fixture
 def team_token_tuple():
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -305,7 +305,7 @@ def team_token_tuple():
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience, monkeypatch):
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -478,7 +478,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 async def aaaatest_user_token_output(
     prisma_client, audience, team_id_set, default_team_id, user_id_upsert, monkeypatch
 ):
-    import uuid
+    from litellm._uuid import uuid
 
     args = locals()
     print(f"received args - {args}")
@@ -491,7 +491,7 @@ async def aaaatest_user_token_output(
     - retry -> it should pass now
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend
@@ -726,7 +726,7 @@ async def test_allowed_routes_admin(
     - check if admin passes user_api_key_auth for them
     """
     import json
-    import uuid
+    from litellm._uuid import uuid
 
     import jwt
     from cryptography.hazmat.backends import default_backend

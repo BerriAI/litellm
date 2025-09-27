@@ -84,6 +84,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     CostResponseTypes,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
@@ -343,6 +344,9 @@ class Logging(LiteLLMLoggingBaseClass):
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
+        
+        # Initialize cost breakdown field
+        self.cost_breakdown: Optional[CostBreakdown] = None
 
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
@@ -1155,6 +1159,33 @@ class Logging(LiteLLMLoggingBaseClass):
             - self.model_call_details.get("start_time", datetime.datetime.now())
         ).total_seconds() * 1000
 
+    def set_cost_breakdown(
+        self,
+        input_cost: float,
+        output_cost: float,
+        total_cost: float,
+        cost_for_built_in_tools_cost_usd_dollar: float,
+    ) -> None:
+        """
+        Helper method to store cost breakdown in the logging object.
+        
+        Args:
+            input_cost: Cost of input/prompt tokens
+            output_cost: Cost of output/completion tokens 
+            cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
+            total_cost: Total cost of request
+        """
+        
+        self.cost_breakdown = CostBreakdown(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar
+        )
+        verbose_logger.debug(
+            f"Cost breakdown set - input: {input_cost}, output: {output_cost}, cost_for_built_in_tools_cost_usd_dollar: {cost_for_built_in_tools_cost_usd_dollar}, total: {total_cost}"
+        )
+
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1228,7 +1259,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
-                "service_tier": self.optional_params.get("service_tier") if self.optional_params else None,
+                "service_tier": self.optional_params.get("service_tier")
+                if self.optional_params
+                else None,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -3606,6 +3639,25 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             dotprompt_logger = DotpromptManager()
             _in_memory_loggers.append(dotprompt_logger)
             return dotprompt_logger  # type: ignore
+        elif logging_integration == "bitbucket":
+            from litellm.integrations.bitbucket.bitbucket_prompt_manager import (
+                BitBucketPromptManager,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, BitBucketPromptManager):
+                    return callback
+
+            # Get global BitBucket config
+            bitbucket_config = getattr(litellm, "global_bitbucket_config", None)
+            if bitbucket_config is None:
+                raise ValueError(
+                    "BitBucket configuration not found. Please set litellm.global_bitbucket_config first."
+                )
+
+            bitbucket_logger = BitBucketPromptManager(bitbucket_config=bitbucket_config)
+            _in_memory_loggers.append(bitbucket_logger)
+            return bitbucket_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4191,16 +4243,22 @@ class StandardLoggingPayloadSetup:
 
             # Get the actual s3_path from the configured cold storage logger instance
             s3_path = ""  # default value
-            
+
             # Try to get the actual logger instance from the logger name
             try:
-                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(configured_cold_storage_logger)
-                if custom_logger and hasattr(custom_logger, 's3_path') and custom_logger.s3_path:
+                custom_logger = litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(
+                    configured_cold_storage_logger
+                )
+                if (
+                    custom_logger
+                    and hasattr(custom_logger, "s3_path")
+                    and custom_logger.s3_path
+                ):
                     s3_path = custom_logger.s3_path
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path
                 pass
-            
+
             s3_object_key = get_s3_object_key(
                 s3_path=s3_path,  # Use actual s3_path from logger configuration
                 team_alias_prefix="",  # Don't split by team alias for cold storage
@@ -4533,6 +4591,7 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
+            cost_breakdown=logging_obj.cost_breakdown,
             total_tokens=usage.total_tokens,
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
