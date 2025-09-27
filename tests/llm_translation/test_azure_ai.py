@@ -283,7 +283,7 @@ async def test_azure_ai_request_format():
     # Set up the test parameters
     api_key = os.getenv("AZURE_API_KEY")
     api_base = f"{os.getenv('AZURE_API_BASE')}/openai/deployments/gpt-4o-new-test/chat/completions?api-version=2024-08-01-preview"
-    model = "azure_ai/gpt-4o"
+    model = "azure_ai/gpt-4.1-nano"
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "Hello! How can I assist you today?"},
