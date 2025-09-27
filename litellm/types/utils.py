@@ -924,10 +924,10 @@ class ServerToolUse(BaseModel):
 
 class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
-        0
+        default_factory=int
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
     _cache_read_input_tokens: int = PrivateAttr(
-        0
+        default_factory=int
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
     server_tool_use: Optional[ServerToolUse] = None
@@ -1164,7 +1164,7 @@ class ModelResponseBase(OpenAIObject):
     backend changes have been made that might impact determinism.
     """
 
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     _response_headers: Optional[dict] = None
 
@@ -1382,7 +1382,7 @@ class EmbeddingResponse(OpenAIObject):
     usage: Optional[Usage] = None
     """Usage statistics for the embedding request."""
 
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
     _response_headers: Optional[Dict] = None
     _response_ms: Optional[float] = None
 
@@ -1671,7 +1671,7 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     usage: Optional[ImageUsage] = None  # type: ignore
     """
@@ -1750,7 +1750,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
 
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
     _response_headers: Optional[dict] = None
 
     def __init__(self, text=None):
@@ -2482,7 +2482,7 @@ class SelectTokenizerResponse(TypedDict):
 
 
 class LiteLLMFineTuningJob(FineTuningJob):
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
     seed: Optional[int] = None  # type: ignore
 
     def __init__(self, **kwargs):
@@ -2495,7 +2495,7 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 
 class LiteLLMBatch(Batch):
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
     usage: Optional[Usage] = None
 
     def __contains__(self, key):
@@ -2521,7 +2521,7 @@ class LiteLLMBatch(Batch):
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     results: OpenAIRealtimeStreamList
     usage: Usage
-    _hidden_params: dict = {}
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
