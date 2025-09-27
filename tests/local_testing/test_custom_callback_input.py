@@ -775,6 +775,8 @@ async def test_async_embedding_openai():
         litellm.callbacks = [customHandler_success]
         response = await litellm.aembedding(
             model="azure/text-embedding-ada-002",
+            input=["good morning from litellm"],
+        )
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
@@ -911,7 +913,6 @@ async def test_async_embedding_bedrock():
         assert len(customHandler_failure.states) == 3  # pre, post, success
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
-
 
 
 # Image Generation
