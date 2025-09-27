@@ -59,7 +59,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
-            if "gateway.ai.cloudflare.com" in api_base:
+            if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
                 ## build base url - assume api base includes resource name
                 client = self._init_azure_client_for_cloudflare_ai_gateway(
                     api_key=api_key,
