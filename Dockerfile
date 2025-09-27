@@ -50,6 +50,9 @@ USER root
 # Install runtime dependencies
 RUN apk add --no-cache openssl tzdata
 
+# Upgrade pip to fix CVE-2025-8869
+RUN pip install --upgrade pip>=24.3.1
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .

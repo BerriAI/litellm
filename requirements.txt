@@ -41,7 +41,7 @@ opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
-cryptography==43.0.1
+cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
 litellm-proxy-extras==0.2.21 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
