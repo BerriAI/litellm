@@ -544,7 +544,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4o-new-test",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -555,7 +555,7 @@ def test_call_one_endpoint():
             {
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.environ["AZURE_API_KEY"],
                     "api_base": os.environ["AZURE_API_BASE"],
                 },
@@ -574,7 +574,7 @@ def test_call_one_endpoint():
 
         async def call_azure_completion():
             response = await router.acompletion(
-                model="azure/gpt-4o-new-test",
+                model="azure/gpt-4.1-nano",
                 messages=[{"role": "user", "content": "hello this request will pass"}],
                 specific_deployment=True,
             )
@@ -582,7 +582,7 @@ def test_call_one_endpoint():
 
         async def call_azure_embedding():
             response = await router.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm"],
                 specific_deployment=True,
             )
