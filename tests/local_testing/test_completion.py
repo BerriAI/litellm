@@ -712,7 +712,7 @@ def encode_image(image_path):
     "model",
     [
         "gpt-4o",
-        "azure/gpt-4o-new-test",
+        "azure/gpt-4.1-nano",
         "anthropic/claude-3-opus-20240229",
     ],
 )  #
