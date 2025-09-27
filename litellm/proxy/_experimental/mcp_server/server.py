@@ -270,6 +270,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
                 **data,  # for logging
             )
         except BlockedPiiEntityError as e:
@@ -505,6 +506,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """
@@ -552,6 +554,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
                 litellm_logging_obj=litellm_logging_obj,
             )
 
@@ -604,6 +607,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
@@ -616,6 +620,7 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
             proxy_logging_obj=proxy_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
