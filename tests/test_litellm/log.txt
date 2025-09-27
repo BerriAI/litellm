@@ -1,14 +1,3 @@
-types/llms/openai.py:46: error: Module "openai.types.responses.response_create_params" has no attribute "Text"  [attr-defined]
-router.py:3445: error: Need type annotation for "final_results"  [var-annotated]
-main.py:1581: error: Argument "api_base" to "completion" of "AzureTextCompletion" has incompatible type "str | None"; expected "str"  [arg-type]
-llms/gemini/google_genai/transformation.py:111: error: TypedDict key must be a string literal; expected one of ("http_options", "system_instruction", "temperature", "top_p", "top_k", ...)  [literal-required]
-llms/bedrock/chat/invoke_agent/transformation.py:392: error: Need type annotation for "pre_processing"  [var-annotated]
-llms/bedrock/chat/invoke_agent/transformation.py:396: error: Need type annotation for "model_output"  [var-annotated]
-llms/bedrock/chat/invoke_agent/transformation.py:400: error: Need type annotation for "metadata"  [var-annotated]
-llms/bedrock/chat/invoke_agent/transformation.py:415: error: Need type annotation for "orchestration_trace"  [var-annotated]
-llms/bedrock/chat/invoke_agent/transformation.py:419: error: Need type annotation for "model_invocation"  [var-annotated]
-llms/vertex_ai/google_genai/transformation.py:67: error: TypedDict key must be a string literal; expected one of ("http_options", "system_instruction", "temperature", "top_p", "top_k", ...)  [literal-required]
-proxy/spend_tracking/spend_tracking_utils.py:300: error: Need type annotation for "mcp_tool_call_metadata"  [var-annotated]
-proxy/spend_tracking/spend_tracking_utils.py:571: error: Need type annotation for "vector_store_search_response"  [var-annotated]
-proxy/pass_through_endpoints/pass_through_endpoints.py:499: error: Unsupported type "dict[str, Any]" for ** expansion in TypedDict  [typeddict-item]
-Found 13 errors in 8 files (checked 1114 source files)
+llms/bedrock/chat/invoke_agent/transformation.py:404: error: Incompatible types in assignment (expression has type "InvokeAgentModelInvocationOutput | dict[Never, Never] | None", variable has type "InvokeAgentModelInvocationOutput | None")  [assignment]
+llms/bedrock/chat/invoke_agent/transformation.py:410: error: Incompatible types in assignment (expression has type "InvokeAgentMetadata | dict[Never, Never] | None", variable has type "InvokeAgentMetadata | None")  [assignment]
+Found 2 errors in 1 file (checked 1114 source files)

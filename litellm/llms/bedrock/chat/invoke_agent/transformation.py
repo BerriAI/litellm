@@ -402,12 +402,14 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             return
 
         model_output: Optional[InvokeAgentModelInvocationOutput] = pre_processing.get(
-            "modelInvocationOutput", {}
+            "modelInvocationOutput" or InvokeAgentModelInvocationOutput()
         )
         if not model_output:
             return
 
-        metadata: Optional[InvokeAgentMetadata] = model_output.get("metadata", {})
+        metadata: Optional[InvokeAgentMetadata] = (
+            model_output.get("metadata") or InvokeAgentMetadata()
+        )
         if not metadata:
             return
 
