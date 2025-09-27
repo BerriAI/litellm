@@ -9483,6 +9483,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.types.mcp import MCPAuth
 
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
         if mcp_server is None:
