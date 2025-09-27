@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import threading
 import time
 import traceback
@@ -1039,7 +1040,11 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority = kwargs.get("priority") or self.default_priority
+            raw_priority = kwargs.get("priority")
+            request_priority = self._normalize_priority(raw_priority, self.default_priority)
+            # Update kwargs with normalized priority
+            if request_priority is not None:
+                kwargs["priority"] = request_priority
             start_time = time.time()
             _is_prompt_management_model = self._is_prompt_management_model(model)
 
@@ -1358,6 +1363,59 @@ class Router:
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
+
+    def _normalize_priority(self, priority: Any, default_priority: Optional[int] = None) -> Optional[int]:
+        """
+        Normalize priority value to ensure it's a valid integer for scheduler.
+
+        Args:
+            priority: Raw priority value from request (can be int, float, str, list, tuple, None)
+            default_priority: Default priority to use if normalization fails
+
+        Returns:
+            Optional[int]: Normalized integer priority or None if invalid and no default
+        """
+        if priority is None:
+            return default_priority
+
+        # Handle different priority types
+        try:
+            if isinstance(priority, int):
+                # Ensure priority is within valid range (0-255 as per FlowItem)
+                return max(0, min(255, priority))
+            elif isinstance(priority, float):
+                # Handle special float values (inf, -inf, nan)
+                if not math.isfinite(priority):
+                    return default_priority
+                # Convert float to int, ensuring valid range
+                return max(0, min(255, int(priority)))
+            elif isinstance(priority, str):
+                # Try to parse string as number
+                if priority.strip():
+                    parsed = float(priority.strip())
+                    return max(0, min(255, int(parsed)))
+                else:
+                    return default_priority
+            elif isinstance(priority, (list, tuple)):
+                # For list/tuple, try to use first numeric element
+                for item in priority:
+                    try:
+                        if isinstance(item, (int, float)):
+                            return max(0, min(255, int(item)))
+                        elif isinstance(item, str) and item.strip():
+                            parsed = float(item.strip())
+                            return max(0, min(255, int(parsed)))
+                    except (ValueError, TypeError):
+                        continue
+                # If no valid item found, use default
+                return default_priority
+            else:
+                # For any other type, use default
+                return default_priority
+
+        except (ValueError, TypeError, AttributeError):
+            # If any conversion fails, use default priority
+            return default_priority
 
     def _update_kwargs_before_fallbacks(
         self,
