@@ -377,7 +377,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for descriptor in descriptors:
             descriptor_key = descriptor["key"]
             descriptor_value = descriptor["value"]
-            rate_limit: Optional[RateLimitDescriptorRateLimitObject] = (
+            rate_limit: RateLimitDescriptorRateLimitObject = (
                 descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
             )
             requests_limit = rate_limit.get("requests_per_unit")
