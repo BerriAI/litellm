@@ -282,7 +282,7 @@ def test_azure_embedding_exceptions():
     try:
 
         response = litellm.embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input="hello",
             mock_response="error",
         )

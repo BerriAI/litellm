@@ -107,7 +107,7 @@ def test_openai_embedding_3():
 @pytest.mark.parametrize(
     "model, api_base, api_key",
     [
-        # ("azure/azure-embedding-model", None, None),
+        # ("azure/text-embedding-ada-002", None, None),
         ("together_ai/togethercomputer/m2-bert-80M-8k-retrieval", None, None),
     ],
 )
@@ -253,7 +253,7 @@ async def test_azure_ai_embedding_image(model, api_base, api_key, sync_mode):
 def test_openai_azure_embedding_timeouts():
     try:
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             timeout=0.00001,
         )
@@ -301,7 +301,7 @@ def test_openai_azure_embedding():
         os.environ["AZURE_API_KEY"] = ""
 
         response = embedding(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm", "this is another item"],
             api_key=api_key,
             api_base=api_base,
@@ -726,7 +726,7 @@ def test_aembedding_azure():
         async def embedding_call():
             try:
                 response = await litellm.aembedding(
-                    model="azure/azure-embedding-model",
+                    model="azure/text-embedding-ada-002",
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
@@ -1099,7 +1099,7 @@ async def test_lm_studio_embedding(monkeypatch, sync_mode):
     "model",
     [
         "text-embedding-ada-002",
-        "azure/azure-embedding-model",
+        "azure/text-embedding-ada-002",
     ],
 )
 def test_embedding_response_ratelimit_headers(model):

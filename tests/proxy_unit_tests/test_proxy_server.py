@@ -541,14 +541,14 @@ def test_embedding(mock_aembedding, client_no_auth):
 
     try:
         test_data = {
-            "model": "azure/azure-embedding-model",
+            "model": "azure/text-embedding-ada-002",
             "input": ["good morning from litellm"],
         }
 
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         mock_aembedding.assert_called_once_with(
-            model="azure/azure-embedding-model",
+            model="azure/text-embedding-ada-002",
             input=["good morning from litellm"],
             specific_deployment=True,
             metadata=mock.ANY,

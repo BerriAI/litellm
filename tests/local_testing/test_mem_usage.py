@@ -51,7 +51,7 @@
 #     {
 #         "model_name": "text-embedding-ada-002",
 #         "litellm_params": {
-#             "model": "azure/azure-embedding-model",
+#             "model": "azure/text-embedding-ada-002",
 #             "api_key": os.environ["AZURE_API_KEY"],
 #             "api_base": os.environ["AZURE_API_BASE"],
 #         },

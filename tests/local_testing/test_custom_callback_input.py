@@ -774,8 +774,7 @@ async def test_async_embedding_openai():
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
         response = await litellm.aembedding(
-            model="azure/azure-embedding-model", input=["good morning from litellm"]
-        )
+            model="azure/text-embedding-ada-002",
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
@@ -811,7 +810,7 @@ def test_amazing_sync_embedding():
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
         response = litellm.embedding(
-            model="azure/azure-embedding-model", input=["good morning from litellm"]
+            model="azure/text-embedding-ada-002", input=["good morning from litellm"]
         )
         print(f"customHandler_success.errors: {customHandler_success.errors}")
         print(f"customHandler_success.states: {customHandler_success.states}")
@@ -823,7 +822,7 @@ def test_amazing_sync_embedding():
         litellm.callbacks = [customHandler_failure]
         try:
             response = litellm.embedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm"],
                 api_key="my-bad-key",
             )
@@ -846,7 +845,7 @@ async def test_async_embedding_azure():
         customHandler_failure = CompletionCustomHandler()
         litellm.callbacks = [customHandler_success]
         response = await litellm.aembedding(
-            model="azure/azure-embedding-model", input=["good morning from litellm"]
+            model="azure/text-embedding-ada-002", input=["good morning from litellm"]
         )
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
@@ -858,7 +857,7 @@ async def test_async_embedding_azure():
         litellm.callbacks = [customHandler_failure]
         try:
             response = await litellm.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm"],
                 api_key="my-bad-key",
             )

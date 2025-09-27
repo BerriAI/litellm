@@ -15,7 +15,7 @@ model_list:
       api_key: bad-key
   - model_name: azure-embedding
     litellm_params:
-      model: azure/azure-embedding-model
+      model: azure/text-embedding-ada-002
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
     

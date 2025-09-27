@@ -503,7 +503,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),

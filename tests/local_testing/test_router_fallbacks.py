@@ -239,7 +239,7 @@ def test_sync_fallbacks_embeddings():
         {  # list of model deployments
             "model_name": "bad-azure-embedding-model",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -289,7 +289,7 @@ async def test_async_fallbacks_embeddings():
         {  # list of model deployments
             "model_name": "bad-azure-embedding-model",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
