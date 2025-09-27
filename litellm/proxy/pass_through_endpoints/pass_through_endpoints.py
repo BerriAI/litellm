@@ -814,6 +814,7 @@ async def pass_through_request(  # noqa: PLR0915
         response_body: Optional[dict] = get_response_body(response)
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
+        verbose_proxy_logger.info("🔍 adding async success handler")
         asyncio.create_task(
             pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,
@@ -828,7 +829,7 @@ async def pass_through_request(  # noqa: PLR0915
                 **kwargs,
             )
         )
-
+        verbose_proxy_logger.info("🔍 async success handler added")
         ## CUSTOM HEADERS - `x-litellm-*`
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
