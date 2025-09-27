@@ -42,6 +42,19 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     return False
 
 
+def _strip_null_values(data: Any) -> Any:
+    """Recursively remove keys with None values from dictionaries.
+
+    This keeps list items intact (only removes dict entries where the value is None),
+    so structure is preserved while avoiding null-heavy payloads.
+    """
+    if isinstance(data, dict):
+        return {k: _strip_null_values(v) for k, v in data.items() if v is not None}
+    if isinstance(data, list):
+        return [_strip_null_values(item) for item in data]
+    return data
+
+
 def _get_spend_logs_metadata(
     metadata: Optional[dict],
     applied_guardrails: Optional[List[str]] = None,
@@ -56,6 +69,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
+        # Return a minimal object; downstream we prune None values before serializing
         return SpendLogsMetadata(
             user_api_key=None,
             user_api_key_alias=None,
@@ -102,7 +116,8 @@ def _get_spend_logs_metadata(
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
 
-    return clean_metadata
+    # Remove all None values to avoid null-heavy metadata in DB/logging
+    return cast(SpendLogsMetadata, _strip_null_values(clean_metadata))
 
 
 def generate_hash_from_response(response_obj: Any) -> str:
@@ -315,7 +330,8 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
-            metadata=safe_dumps(clean_metadata),
+            # Ensure null keys are pruned before serializing to string
+            metadata=safe_dumps(_strip_null_values(clean_metadata)),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
