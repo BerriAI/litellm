@@ -3442,7 +3442,7 @@ class Router:
             *[try_retrieve_batch(model) for model in filtered_model_list]
         )
 
-        final_results = {
+        final_results: Dict = {
             "object": "list",
             "data": [],
             "first_id": None,
