@@ -1308,7 +1308,7 @@ class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
-# MCP Call Events  
+# MCP Call Events
 class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
     sequence_number: int
