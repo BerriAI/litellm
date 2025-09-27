@@ -59,3 +59,47 @@ class TestRouterIndexManagement:
         # Verify: model_id_to_deployment_index_map is correctly built
         assert router.model_id_to_deployment_index_map["model-1"] == 0
         assert router.model_id_to_deployment_index_map["model-2"] == 1
+
+    def test_add_model_to_list_and_index_map_from_model_info(self, router):
+        """Test _add_model_to_list_and_index_map extracting model_id from model_info"""
+        # Setup: Empty router
+        router.model_list = []
+        router.model_id_to_deployment_index_map = {}
+        
+        # Test: Add model without explicit model_id
+        model = {"model": "test-model", "model_info": {"id": "model-info-id"}}
+        router._add_model_to_list_and_index_map(model=model)
+        
+        # Verify: Model added to list
+        assert len(router.model_list) == 1
+        assert router.model_list[0] == model
+        
+        # Verify: Index map uses model_info.id
+        assert router.model_id_to_deployment_index_map["model-info-id"] == 0
+
+
+    def test_add_model_to_list_and_index_map_multiple_models(self, router):
+        """Test _add_model_to_list_and_index_map with multiple models to verify indexing"""
+        # Setup: Empty router
+        router.model_list = []
+        router.model_id_to_deployment_index_map = {}
+        
+        # Test: Add multiple models
+        model1 = {"model": "model1", "model_info": {"id": "id-1"}}
+        model2 = {"model": "model2", "model_info": {"id": "id-2"}}
+        model3 = {"model": "model3", "model_info": {"id": "id-3"}}
+        
+        router._add_model_to_list_and_index_map(model=model1, model_id="id-1")
+        router._add_model_to_list_and_index_map(model=model2, model_id="id-2")
+        router._add_model_to_list_and_index_map(model=model3, model_id="id-3")
+        
+        # Verify: All models added to list
+        assert len(router.model_list) == 3
+        assert router.model_list[0] == model1
+        assert router.model_list[1] == model2
+        assert router.model_list[2] == model3
+        
+        # Verify: Correct indices in map
+        assert router.model_id_to_deployment_index_map["id-1"] == 0
+        assert router.model_id_to_deployment_index_map["id-2"] == 1
+        assert router.model_id_to_deployment_index_map["id-3"] == 2
