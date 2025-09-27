@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -36,7 +36,7 @@ def encode_state_with_base_url(base_url: str, original_state: str) -> str:
     return encrypted_state
 
 
-def decode_state_hash(encrypted_state: str) -> tuple[str, str]:
+def decode_state_hash(encrypted_state: str) -> Tuple[str, str]:
     """
     Decode an encrypted state to retrieve the base_url and original state.
 
