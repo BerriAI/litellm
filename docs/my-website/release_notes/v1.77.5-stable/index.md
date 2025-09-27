@@ -142,7 +142,7 @@ import TabItem from '@theme/TabItem';
 - **Scheduled Key Rotations** - Initial support for scheduled key rotations - [PR #14877](https://github.com/BerriAI/litellm/pull/14877)
 - **UI Key Rotations** - Allow scheduling key rotations when creating virtual keys - [PR #14960](https://github.com/BerriAI/litellm/pull/14960)
 - **Proxy CLI Fixes** - Fixes for LiteLLM Proxy CLI to Auth to Gateway - [PR #14836](https://github.com/BerriAI/litellm/pull/14836)
-- **Noma Guardrail** - Add noma guardrail provider to ui - [PR #14415](https://github.com/BerriAI/litellm/pull/14415)
+
 
 #### Bugs
 
@@ -168,6 +168,7 @@ import TabItem from '@theme/TabItem';
 
 - **LakeraAI v2 Guardrail** - Ensure exception is raised correctly - [PR #14867](https://github.com/BerriAI/litellm/pull/14867)
 - **Presidio Guardrail** - Support custom entity types in Presidio guardrail with Union[PiiEntityType, str] - [PR #14899](https://github.com/BerriAI/litellm/pull/14899)
+- **Noma Guardrail** - Add noma guardrail provider to ui - [PR #14415](https://github.com/BerriAI/litellm/pull/14415)
 
 #### Prompt Management
 
