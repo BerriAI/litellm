@@ -40,17 +40,17 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     Reference: https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/compat_generate
     """
 
-    hf_task: Optional[
-        hf_tasks
-    ] = None  # litellm-specific param, used to know the api spec to use when calling huggingface api
+    hf_task: Optional[hf_tasks] = (
+        None  # litellm-specific param, used to know the api spec to use when calling huggingface api
+    )
     best_of: Optional[int] = None
     decoder_input_details: Optional[bool] = None
     details: Optional[bool] = True  # enables returning logprobs + best of
     max_new_tokens: Optional[int] = None
     repetition_penalty: Optional[float] = None
-    return_full_text: Optional[
-        bool
-    ] = False  # by default don't return the input as part of the output
+    return_full_text: Optional[bool] = (
+        False  # by default don't return the input as part of the output
+    )
     seed: Optional[int] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None
@@ -120,9 +120,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params[
-                    "do_sample"
-                ] = True  # Need to sample if you want best of for hf inference endpoints
+                optional_params["do_sample"] = (
+                    True  # Need to sample if you want best of for hf inference endpoints
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -268,7 +268,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 # check if the model has a registered custom prompt
                 model_prompt_details = litellm.custom_prompt_dict[model]
                 prompt = custom_prompt(
-                    role_dict=model_prompt_details.get("roles", None),
+                    role_dict=model_prompt_details.get("roles") or {},
                     initial_prompt_value=model_prompt_details.get(
                         "initial_prompt_value", ""
                     ),
@@ -363,9 +363,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             "content-type": "application/json",
         }
         if api_key is not None:
-            default_headers[
-                "Authorization"
-            ] = f"Bearer {api_key}"  # Huggingface Inference Endpoint default is to accept bearer tokens
+            default_headers["Authorization"] = (
+                f"Bearer {api_key}"  # Huggingface Inference Endpoint default is to accept bearer tokens
+            )
 
         headers = {**headers, **default_headers}
         return headers
