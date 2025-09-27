@@ -1,0 +1,32 @@
+name: Model Context Files - 2 Team Approvals Required
+description: Requires 2 team member approvals for changes to model context JSON files
+enforcement: active
+target: branch
+conditions:
+  ref_name:
+    include:
+      - main
+      - master
+      - develop
+  changed_files:
+    include:
+      - "model_prices_and_context_window.json"
+      - "**/model_context*.json"
+      - "**/context_window*.json"
+rules:
+  - type: required_pull_request_reviews
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_reviews: false
+      require_last_push_approval: true
+      bypass_pull_request_allowances:
+        users: []
+        teams: []
+        apps: []
+bypass_actors:
+  - actor_id: 1
+    actor_type: OrganizationAdmin
+  - actor_id: 2
+    actor_type: RepositoryRole
+    repository_role: maintainer

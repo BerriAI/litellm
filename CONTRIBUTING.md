@@ -12,6 +12,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Model Context Changes** - If modifying model context JSON files, ensure you have [2 approvals and cited sources](#model-context-approval-process)
 
 ## **Contributor License Agreement (CLA)**
 
@@ -261,6 +262,25 @@ If you need help:
 - 💬 [Join our Slack](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
 - 📧 Email us: ishaan@berri.ai / krrish@berri.ai
 - 🐛 [Create an issue](https://github.com/BerriAI/litellm/issues/new)
+
+## Model Context Approval Process
+
+**Important:** Changes to model context JSON files (like `model_prices_and_context_window.json`) require special approval due to their critical nature.
+
+### Requirements for Model Context Changes
+
+- **2 team member approvals required** from different reviewers
+- **Enforced by GitHub Rulesets** at the repository level
+- **Simple approval process** - no complex validation required
+
+### Quick Reference
+
+```bash
+# Request reviews from 2 team members for model context changes
+# The GitHub Ruleset will automatically enforce this requirement
+```
+
+**GitHub Rulesets:** The repository uses GitHub Rulesets to automatically enforce the 2-approval requirement. See [Model Context Approval Process](docs/MODEL_CONTEXT_APPROVAL.md) for details.
 
 ## What to Contribute
 

@@ -21,7 +21,13 @@ jobs:
           git add model_prices_and_context_window.json 
           git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
           gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
+            --body "Automated update for model_prices_and_context_window.json
+
+**Sources:**
+- OpenRouter API: https://openrouter.ai/api/v1/models
+- Vercel AI Gateway API: https://ai-gateway.vercel.sh/v1/models
+
+**Note:** This PR requires 2 approvals due to changes to model context configuration." \
             --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
             --base main
         env:

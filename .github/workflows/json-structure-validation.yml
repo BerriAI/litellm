@@ -1,0 +1,103 @@
+name: JSON Structure Validation
+
+on:
+  pull_request:
+    paths:
+      - 'model_prices_and_context_window.json'
+      - '**/model_context*.json'
+      - '**/context_window*.json'
+
+jobs:
+  validate-json:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate JSON Files
+        run: |
+          echo "🔍 Validating JSON structure for model context files..."
+          
+          # Validate main model context file
+          if [ -f "model_prices_and_context_window.json" ]; then
+            echo "Validating model_prices_and_context_window.json..."
+            python -c "
+            import json
+            import sys
+            
+            try:
+                with open('model_prices_and_context_window.json', 'r') as f:
+                    data = json.load(f)
+                print('✅ model_prices_and_context_window.json is valid JSON')
+                
+                # Basic structure validation
+                if isinstance(data, dict):
+                    print('✅ File contains a valid JSON object')
+                    
+                    # Check for required fields in model entries
+                    required_fields = ['litellm_provider', 'mode']
+                    optional_fields = ['max_tokens', 'input_cost_per_token', 'output_cost_per_token']
+                    
+                    for model_name, model_data in data.items():
+                        if isinstance(model_data, dict):
+                            # Check for required fields
+                            missing_required = [field for field in required_fields if field not in model_data]
+                            if missing_required:
+                                print(f'⚠️  Model {model_name} missing required fields: {missing_required}')
+                            
+                            # Check for at least one cost field
+                            cost_fields = [field for field in optional_fields if field in model_data]
+                            if not cost_fields and 'mode' in model_data and model_data['mode'] != 'image_generation':
+                                print(f'⚠️  Model {model_name} has no cost information')
+                        else:
+                            print(f'❌ Model {model_name} data is not a valid object')
+                else:
+                    print('❌ File is not a valid JSON object')
+                    sys.exit(1)
+                    
+            except json.JSONDecodeError as e:
+                print(f'❌ JSON validation failed: {e}')
+                sys.exit(1)
+            except Exception as e:
+                print(f'❌ Validation error: {e}')
+                sys.exit(1)
+            "
+          fi
+          
+          # Validate other model context files
+          for file in $(find . -name "*model_context*.json" -o -name "*context_window*.json" | grep -v node_modules | grep -v ".git"); do
+            if [ -f "$file" ]; then
+              echo "Validating $file..."
+              python -c "
+              import json
+              import sys
+              
+              try:
+                  with open('$file', 'r') as f:
+                      data = json.load(f)
+                  print('✅ $file is valid JSON')
+              except json.JSONDecodeError as e:
+                  print(f'❌ $file JSON validation failed: {e}')
+                  sys.exit(1)
+              except Exception as e:
+                  print(f'❌ $file validation error: {e}')
+                  sys.exit(1)
+              "
+            fi
+          done
+          
+          echo "✅ All JSON files are valid"
+
+      - name: Check File Size
+        run: |
+          echo "🔍 Checking file sizes..."
+          
+          if [ -f "model_prices_and_context_window.json" ]; then
+            FILE_SIZE=$(wc -c < model_prices_and_context_window.json)
+            echo "model_prices_and_context_window.json size: $FILE_SIZE bytes"
+            
+            # Warn if file is unusually large (over 10MB)
+            if [ "$FILE_SIZE" -gt 10485760 ]; then
+              echo "⚠️  Warning: model_prices_and_context_window.json is larger than 10MB"
+            fi
+          fi
