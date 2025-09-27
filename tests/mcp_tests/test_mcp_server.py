@@ -98,9 +98,9 @@ async def test_mcp_server_manager_https_server():
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
 
         # Manually set up the tool mapping for the call_tool test
-        mcp_server_manager.tool_name_to_mcp_server_name_mapping[
-            "gmail_send_email"
-        ] = expected_prefix
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            expected_prefix
+        )
         mcp_server_manager.tool_name_to_mcp_server_name_mapping[
             f"{expected_prefix}-gmail_send_email"
         ] = expected_prefix
@@ -260,9 +260,9 @@ async def test_mcp_http_transport_call_tool_mock():
         )
 
         # Manually set up tool mapping (normally done by list_tools)
-        test_manager.tool_name_to_mcp_server_name_mapping[
-            "gmail_send_email"
-        ] = "test_http_server"
+        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            "test_http_server"
+        )
 
         # Call the tool
         result = await test_manager.call_tool(
@@ -326,9 +326,9 @@ async def test_mcp_http_transport_call_tool_error_mock():
         )
 
         # Manually set up tool mapping
-        test_manager.tool_name_to_mcp_server_name_mapping[
-            "gmail_send_email"
-        ] = "test_http_server"
+        test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+            "test_http_server"
+        )
 
         # Call the tool with invalid data
         result = await test_manager.call_tool(
@@ -792,18 +792,18 @@ async def test_get_tools_from_mcp_servers():
             assert len(result) == 1, "Should only return tools from server1"
             assert result[0].name == "tool1", "Should return tool from server1"
 
-        # Test Case 2: Without specific MCP servers
-        # Create a different mock manager for the second test case
-        mock_manager_2 = AsyncMock()
-        mock_manager_2.get_allowed_mcp_servers = AsyncMock(
-            return_value=["server1_id", "server2_id"]
-        )
-        mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
-        mock_manager_2._get_tools_from_server = AsyncMock(
-            side_effect=lambda server, mcp_auth_header=None: [mock_tool_1]
-            if server.server_id == "server1_id"
-            else [mock_tool_2]
-        )
+            # Test Case 2: Without specific MCP servers
+            # Create a different mock manager for the second test case
+            mock_manager_2 = AsyncMock()
+            mock_manager_2.get_allowed_mcp_servers = AsyncMock(
+                return_value=["server1_id", "server2_id"]
+            )
+            mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
+            mock_manager_2._get_tools_from_server = AsyncMock(
+                side_effect=lambda server, mcp_auth_header=None, extra_headers=None: (
+                    [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
+                )
+            )
 
         with patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
