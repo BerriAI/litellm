@@ -473,16 +473,12 @@ def test_reading_key_from_model_list():
 
     try:
         print("testing if router raises an exception")
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ.pop("AZURE_API_KEY", None)
         model_list = [
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": old_api_key,
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "model": "gpt-4.1-nano",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -521,10 +517,8 @@ def test_reading_key_from_model_list():
         print("\n completed_response", completed_response)
         assert len(completed_response) > 0
         print("\n Passed Streaming")
-        os.environ["AZURE_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_api_key
         print(f"FAILED TEST")
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
