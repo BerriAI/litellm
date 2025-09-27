@@ -95,7 +95,6 @@ class CustomLoggerRegistry:
         "bitbucket": BitBucketPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
-        "bitbucket": BitBucketPromptManager,
     }
 
     try:
