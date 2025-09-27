@@ -102,6 +102,28 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     return _presidio_callback
 
 
+def initialize_superagent(litellm_params: LitellmParams, guardrail: Guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.superagent import (
+        SuperAgentGuardrail,
+    )
+
+    _superagent_callback = SuperAgentGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", ""),
+        event_hook=litellm_params.mode,
+        default_on=litellm_params.default_on,
+        api_base=litellm_params.superagent_api_base or litellm_params.api_base,
+        api_key=litellm_params.superagent_api_key or litellm_params.api_key,
+        model=litellm_params.model,
+        system_prompt=litellm_params.superagent_system_prompt,
+        temperature=litellm_params.superagent_temperature,
+        top_p=litellm_params.superagent_top_p,
+        max_tokens=litellm_params.superagent_max_tokens,
+        mock_decision=getattr(litellm_params, "mock_decision", None),
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_superagent_callback)
+    return _superagent_callback
+
+
 def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
     try:
         from litellm_enterprise.enterprise_callbacks.secret_detection import (
