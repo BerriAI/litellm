@@ -1280,6 +1280,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                 try:
                     # Wait for the first response from upstream
                     raw_response = await upstream_ws.recv(decode=False)
+                    # Ensure raw_response is bytes before decoding
+                    if isinstance(raw_response, str):
+                        raw_response = raw_response.encode("ascii")
                     setup_response = json.loads(raw_response.decode("ascii"))
                     verbose_proxy_logger.debug(f"Setup response: {setup_response}")
 
