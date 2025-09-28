@@ -527,7 +527,7 @@ def test_embedding_caching_azure():
     print(api_key)
     print(api_base)
     embedding1 = embedding(
-        model="text-embedding-ada-002",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
@@ -540,7 +540,7 @@ def test_embedding_caching_azure():
     time.sleep(1)
     start_time = time.time()
     embedding2 = embedding(
-        model="text-embedding-ada-002",
+        model="azure/text-embedding-ada-002",
         input=["good morning from litellm", "this is another item"],
         api_key=api_key,
         api_base=api_base,
@@ -1627,7 +1627,7 @@ def test_get_cache_key():
 
         embedding_cache_key = cache_instance.get_cache_key(
             **{
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_key": "",
                 "api_version": "2023-07-01-preview",
@@ -1642,19 +1642,19 @@ def test_get_cache_key():
         print(embedding_cache_key)
 
         embedding_cache_key_str = (
-            "model: azure/azure-embedding-modelinput: ['hi who is ishaan']"
+            "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
         )
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert (
             embedding_cache_key == hash_hex
-        ), f"{embedding_cache_key} != 'model: azure/azure-embedding-modelinput: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+        ), f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
 
         # Proxy - embedding cache, test if embedding key, gets model_group and not model
         embedding_cache_key_2 = cache_instance.get_cache_key(
             **{
-                "model": "azure/azure-embedding-model",
+                "model": "azure/text-embedding-ada-002",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                 "api_key": "",
                 "api_version": "2023-07-01-preview",
@@ -1689,7 +1689,7 @@ def test_get_cache_key():
                         "content-length": "80",
                     },
                     "model_group": "EMBEDDING_MODEL_GROUP",
-                    "deployment": "azure/azure-embedding-model-ModelID-azure/azure-embedding-modelhttps://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview",
+                    "deployment": "azure/text-embedding-ada-002-ModelID-azure/text-embedding-ada-002https://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview",
                 },
                 "model_info": {
                     "mode": "embedding",

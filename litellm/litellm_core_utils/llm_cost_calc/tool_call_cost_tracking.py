@@ -123,7 +123,7 @@ class StandardBuiltInToolCostTracking:
         model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
-        file_search_raw = standard_built_in_tools_params.get("file_search", {})
+        file_search_raw: Any = standard_built_in_tools_params.get("file_search", {})
         file_search_usage: Optional[FileSearchTool] = (
             FileSearchTool(**file_search_raw) if file_search_raw else None
         )
@@ -427,7 +427,7 @@ class StandardBuiltInToolCostTracking:
         if model_info is None:
             return 0.0
 
-        search_context_raw = model_info.get("search_context_cost_per_query", {})
+        search_context_raw: Any = model_info.get("search_context_cost_per_query", {})
         search_context_pricing: SearchContextCostPerQuery = (
             SearchContextCostPerQuery(**search_context_raw)
             if search_context_raw
@@ -454,7 +454,7 @@ class StandardBuiltInToolCostTracking:
         """
         if model_info is None:
             return 0.0
-        search_context_raw = model_info.get("search_context_cost_per_query", {}) or {}
+        search_context_raw: Any = model_info.get("search_context_cost_per_query", {}) or {}
         search_context_pricing: SearchContextCostPerQuery = (
             SearchContextCostPerQuery(**search_context_raw)
             if search_context_raw
