@@ -186,7 +186,7 @@ class MCPRequestHandler:
                     if len(parts) == 2:
                         server_alias, auth_header_name = parts
 
-                        # Convert header name to proper case (e.g., "authorization" -> "Authorization")
+                        # Convert common header names to proper case
                         if auth_header_name == "authorization":
                             auth_header_name = "Authorization"
 
