@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import logging
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call, patch
 
@@ -223,6 +223,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
@@ -235,6 +236,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_input_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
@@ -249,6 +251,7 @@ def test_increment_token_metrics(prometheus_logger):
     prometheus_logger.litellm_output_tokens_metric.labels.assert_called_once_with(
         end_user=None,
         user=None,
+        user_email=None,
         hashed_api_key="test_hash",
         api_key_alias="test_alias",
         team="test_team",
@@ -583,8 +586,16 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
+    # The spend metric uses keyword arguments (same as requests metric)
     prometheus_logger.litellm_spend_metric.labels.assert_called_once_with(
-        "user1", "key1", "alias1", "gpt-3.5-turbo", "team1", "team_alias1", "user1"
+        end_user=None,
+        user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        team="test_team",
+        team_alias="test_team_alias",
+        model="gpt-3.5-turbo",
+        user_email=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
@@ -716,12 +727,13 @@ async def test_async_post_call_failure_hook(prometheus_logger):
     # Assert failed requests metric was incremented with correct labels
     prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
         end_user=None,
+        user="test_user",
+        user_email=None,
         hashed_api_key="test_key",
         api_key_alias="test_alias",
-        requested_model="gpt-3.5-turbo",
         team="test_team",
         team_alias="test_team_alias",
-        user="test_user",
+        requested_model="gpt-3.5-turbo",
         exception_status="429",
         exception_class="Openai.RateLimitError",
         route=user_api_key_dict.request_route,

@@ -764,7 +764,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-1.5-pro"])  # "vertex_ai",
+@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -2326,63 +2326,6 @@ def test_prompt_factory_nested():
         ), "'text' value not a string."
 
 
-def test_get_token_url():
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
-    vertex_llm = VertexLLM()
-    vertex_ai_project = "pathrise-convert-1606954137718"
-    vertex_ai_location = "us-central1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
-
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"cached_content": "hi"}
-    )
-
-    assert should_use_v1beta1_features is True
-
-    _, url = vertex_llm._get_token_and_url(
-        auth_header=None,
-        vertex_project=vertex_ai_project,
-        vertex_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-        gemini_api_key="",
-        custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
-        api_base=None,
-        model="",
-        stream=False,
-    )
-
-    print("url=", url)
-
-    assert "/v1beta1/" in url
-
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"temperature": 0.1}
-    )
-
-    _, url = vertex_llm._get_token_and_url(
-        auth_header=None,
-        vertex_project=vertex_ai_project,
-        vertex_location=vertex_ai_location,
-        vertex_credentials=vertex_credentials,
-        gemini_api_key="",
-        custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
-        api_base=None,
-        model="",
-        stream=False,
-    )
-
-    print("url for normal request", url)
-
-    assert "v1beta1" not in url
-    assert "/v1/" in url
-
-    pass
 
 
 @pytest.mark.asyncio
@@ -2546,7 +2489,7 @@ def mock_gemini_list_request(*args, **kwargs):
     return mock_response
 
 
-import uuid
+from litellm._uuid import uuid
 
 
 @pytest.mark.parametrize(

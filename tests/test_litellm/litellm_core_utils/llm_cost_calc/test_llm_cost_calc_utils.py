@@ -226,7 +226,7 @@ def test_string_cost_values():
         completion_tokens=500,
         total_tokens=1500,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None
+            audio_tokens=100, cached_tokens=200, text_tokens=700, image_tokens=None, cache_creation_tokens=150
         ),
         completion_tokens_details=CompletionTokensDetailsWrapper(
             audio_tokens=50,
@@ -235,7 +235,6 @@ def test_string_cost_values():
             accepted_prediction_tokens=None,
             rejected_prediction_tokens=None,
         ),
-        _cache_creation_input_tokens=150,
     )
 
     # Mock get_model_info to return our mock model info
@@ -464,3 +463,166 @@ def test_calculate_cache_writing_cost():
     )
 
     assert result_zero == 0.0
+
+
+def test_service_tier_flex_pricing():
+    """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-5-nano which has flex pricing
+    model = "gpt-5-nano"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test standard pricing
+    std_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    std_total = std_cost[0] + std_cost[1]
+    
+    # Test flex pricing
+    flex_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="flex"
+    )
+    flex_total = flex_cost[0] + flex_cost[1]
+    
+    # Verify flex is approximately 50% of standard
+    assert std_total > 0, "Standard cost should be greater than 0"
+    assert flex_total > 0, "Flex cost should be greater than 0"
+    
+    flex_ratio = flex_total / std_total
+    assert 0.45 <= flex_ratio <= 0.55, f"Flex pricing should be ~50% of standard, got {flex_ratio:.2f}"
+    
+    # Verify specific costs match expected values
+    # gpt-5-nano flex: input=2.5e-08, output=2e-07
+    expected_flex_prompt = 1000 * 2.5e-08  # 0.000025
+    expected_flex_completion = 500 * 2e-07  # 0.0001
+    expected_flex_total = expected_flex_prompt + expected_flex_completion
+    
+    assert abs(flex_cost[0] - expected_flex_prompt) < 1e-10, f"Flex prompt cost mismatch: {flex_cost[0]} vs {expected_flex_prompt}"
+    assert abs(flex_cost[1] - expected_flex_completion) < 1e-10, f"Flex completion cost mismatch: {flex_cost[1]} vs {expected_flex_completion}"
+    assert abs(flex_total - expected_flex_total) < 1e-10, f"Flex total cost mismatch: {flex_total} vs {expected_flex_total}"
+
+
+def test_service_tier_default_pricing():
+    """Test that when no service tier is provided, standard pricing is used."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-5-nano
+    model = "gpt-5-nano"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test with no service tier (should use standard)
+    default_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    
+    # Test with explicit standard service tier
+    standard_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="standard"
+    )
+    
+    # Both should be identical
+    assert abs(default_cost[0] - standard_cost[0]) < 1e-10, "Default and standard prompt costs should be identical"
+    assert abs(default_cost[1] - standard_cost[1]) < 1e-10, "Default and standard completion costs should be identical"
+    
+    # Verify specific costs match expected standard values
+    # gpt-5-nano standard: input=5e-08, output=4e-07
+    expected_standard_prompt = 1000 * 5e-08  # 0.00005
+    expected_standard_completion = 500 * 4e-07  # 0.0002
+    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    
+    assert abs(default_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
+    assert abs(default_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
+
+
+def test_service_tier_fallback_pricing():
+    """Test that when service tier is provided but model doesn't have those keys, it falls back to standard pricing."""
+    # Set up environment for local model cost map
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Test with gpt-4 which doesn't have flex pricing keys
+    model = "gpt-4"
+    custom_llm_provider = "openai"
+    
+    # Create usage object
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500
+    )
+    
+    # Test standard pricing
+    std_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=None
+    )
+    std_total = std_cost[0] + std_cost[1]
+    
+    # Test flex pricing (should fall back to standard since gpt-4 doesn't have flex keys)
+    flex_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="flex"
+    )
+    flex_total = flex_cost[0] + flex_cost[1]
+    
+    # Test priority pricing (should fall back to standard since gpt-4 doesn't have priority keys)
+    priority_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="priority"
+    )
+    priority_total = priority_cost[0] + priority_cost[1]
+    
+    # All should be identical (fallback to standard)
+    assert abs(std_total - flex_total) < 1e-10, f"Standard and flex costs should be identical (fallback): {std_total} vs {flex_total}"
+    assert abs(std_total - priority_total) < 1e-10, f"Standard and priority costs should be identical (fallback): {std_total} vs {priority_total}"
+    
+    # Verify costs are reasonable (not zero)
+    assert std_total > 0, "Standard cost should be greater than 0"
+    assert flex_total > 0, "Flex cost should be greater than 0 (fallback)"
+    assert priority_total > 0, "Priority cost should be greater than 0 (fallback)"
+    
+    # Verify specific costs match expected gpt-4 values
+    # gpt-4 standard: input=3e-05, output=6e-05
+    expected_standard_prompt = 1000 * 3e-05  # 0.03
+    expected_standard_completion = 500 * 6e-05  # 0.03
+    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    
+    assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
+    assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"

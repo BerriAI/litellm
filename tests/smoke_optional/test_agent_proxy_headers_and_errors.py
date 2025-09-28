@@ -43,13 +43,15 @@ def test_agent_proxy_errors_and_headers(monkeypatch):
     class _FakeInvoker:
         def __init__(self, base_url, headers=None):
             recorded["base_url"] = base_url
-            recorded["headers"] = headers or {}
+            recorded["headers"] = dict(headers or {})
+
         async def list_openai_tools(self):
             return []
+
         async def call_openai_tool(self, openai_tool):
             return json.dumps({"ok": True, "text": "hi"})
 
-    ap_mod.HttpToolsInvoker = _FakeInvoker
+    monkeypatch.setattr(ap_mod, "HttpToolsInvoker", _FakeInvoker, raising=True)
 
     client = TestClient(app)
 
@@ -71,4 +73,3 @@ def test_agent_proxy_errors_and_headers(monkeypatch):
     })
     assert r2.status_code == 200
     assert recorded.get("headers", {}).get("Authorization") == "Bearer X"
-

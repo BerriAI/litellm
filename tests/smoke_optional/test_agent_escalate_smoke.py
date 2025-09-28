@@ -8,16 +8,22 @@ async def test_agent_escalate_on_last_step(monkeypatch):
 
     called = []
 
+    # First call: force a budget-exceeded message so the agent sets escalate_next.
+    # Second call: normal content; the model used should be the escalate_model.
+    state = {"n": 0}
+
     async def fake_call(*, model, messages, stream=False, **kwargs):
         called.append(model)
-        # Return plain assistant message without tool calls so loop can consider final
+        if state["n"] == 0:
+            state["n"] += 1
+            return {"choices":[{"message":{"role":"assistant","content":"Budget exceeded. Please escalate."}}]}
         return {"choices":[{"message":{"role":"assistant","content":"ok"}}]}
 
     monkeypatch.setattr(agent, 'arouter_call', fake_call)
 
     cfg = agent.AgentConfig(
         model='base/x',
-        max_iterations=1,
+        max_iterations=2,
         use_tools=True,  # so the loop won't immediately finalize without a nudge
         enable_repair=False,
         auto_run_code_on_code_block=False,
