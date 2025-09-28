@@ -212,7 +212,7 @@ class MCPServerManager:
                     "authentication_token", server_config.get("auth_value", None)
                 ),
                 mcp_info=mcp_info,
-                forwardable_headers=server_config.get("forwardable_headers", None),
+                extra_headers=server_config.get("extra_headers", None),
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -265,7 +265,7 @@ class MCPServerManager:
                 transport=cast(MCPTransportType, mcp_server.transport),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=mcp_info,
-                forwardable_headers=getattr(mcp_server, "forwardable_headers", None),
+                extra_headers=getattr(mcp_server, "extra_headers", None),
                 # oauth specific fields
                 client_id=getattr(mcp_server, "client_id", None),
                 client_secret=getattr(mcp_server, "client_secret", None),
@@ -718,10 +718,10 @@ class MCPServerManager:
         if mcp_server.auth_type == MCPAuth.oauth2:
             extra_headers = oauth2_headers
 
-        if mcp_server.forwardable_headers and raw_headers:
+        if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
                 extra_headers = {}
-            for header in mcp_server.forwardable_headers:
+            for header in mcp_server.extra_headers:
                 if header in raw_headers:
                     extra_headers[header] = raw_headers[header]
 
