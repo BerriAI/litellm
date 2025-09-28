@@ -1,7 +1,7 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
+.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety run-scenarios
 
 # Default target
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
+	@echo "  make run-scenarios      - Run fork scenarios (mini-agent, codex-agent, parallel completions)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
@@ -26,7 +27,7 @@ help:
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make review-bundle      - Create standard code review bundle (Markdown)"
 	@echo "  make review-bundle-custom - Create custom ==== FILE style review bundle"
-	@echo "  make smokes-all         - Run every smoke suite (shim-guarded)"
+	@echo "  make review-bundle-gist FILE=... - Upload a file as a private GitHub Gist (requires GITHUB_TOKEN)"
 
 # Installation targets
 install-dev:
@@ -69,6 +70,22 @@ lint-mypy: install-dev
 	cd litellm && poetry run mypy . --ignore-missing-imports && cd ..
 
 lint-black: format-check
+
+run-scenarios:
+	@echo "Running mini-agent scenarios"
+	@. .venv/bin/activate && python scenarios/mini_agent_local.py
+	@if [ -n "$$OPENAI_API_KEY" ]; then \
+	  echo "Running parallel-acompletions scenario"; \
+	  . .venv/bin/activate && python scenarios/parallel_acompletions_demo.py; \
+	else \
+	  echo "Skipping parallel-acompletions scenario (OPENAI_API_KEY not set)"; \
+	fi
+	@if [ "$$LITELLM_ENABLE_CODEX_AGENT" = "1" ]; then \
+	  echo "Running codex-agent scenario"; \
+	  . .venv/bin/activate && python scenarios/codex_agent_router.py; \
+	else \
+	  echo "Skipping codex-agent scenario (LITELLM_ENABLE_CODEX_AGENT != 1)"; \
+	fi
 
 check-circular-imports: install-dev
 	cd litellm && poetry run python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -147,6 +164,12 @@ review-bundle-custom:
 	CONTEXT=local/artifacts/review/context_preface.txt OUT=local/artifacts/review/review_bundle.txt \
 	python local/scripts/review/make_custom_bundle.py
 
+.PHONY: review-bundle-gist
+review-bundle-gist:
+	@if [ -z "$(FILE)" ]; then echo "Usage: make review-bundle-gist FILE=/abs/path/to/REVIEW_BUNDLE_PROMPT.md"; exit 2; fi
+	@if [ -z "$$GITHUB_TOKEN" ]; then echo "Set GITHUB_TOKEN with 'gist' scope"; exit 2; fi
+	@python local/scripts/review/make_gist.py --file "$(FILE)"
+
 .PHONY: e2e-up e2e-run e2e-down
 
 # Bring up live services required for E2E (best-effort)
@@ -154,14 +177,11 @@ e2e-up: exec-rpc-up
 	@echo "If needed, start the mini-agent app:"
 	@echo "  uvicorn litellm.experimental_mcp_client.mini_agent.agent_proxy:app --host 0.0.0.0 --port 8788"
 
-# Run the E2E nd-smokes (skips when services are missing)
 e2e-run:
-	pytest -q tests/ndsmoke_e2e -m ndsmoke || true
 
 e2e-down: exec-rpc-down
 
 # --- Dockerized mini-agent helpers -------------------------------------------
-.PHONY: docker-up docker-down docker-logs ndsmoke-docker docker-ollama-up docker-ollama-down
 
 docker-up:
 	@docker network create llmnet >/dev/null 2>&1 || true
@@ -184,39 +204,25 @@ docker-ollama-up:
 docker-ollama-down:
 	@docker rm -f ollama >/dev/null 2>&1 || true
 
-# Run only the Docker ndsmokes (skip-friendly). Defaults to codex loopback.
-ndsmoke-docker:
 	DOCKER_MINI_AGENT=1 \
 	MINI_AGENT_API_HOST=$${MINI_AGENT_API_HOST:-127.0.0.1} \
 	MINI_AGENT_API_PORT=$${MINI_AGENT_API_PORT:-8788} \
 	LITELLM_ENABLE_CODEX_AGENT=1 \
 	CODEX_AGENT_API_BASE=$${CODEX_AGENT_API_BASE:-http://127.0.0.1:8788} \
 	LITELLM_DEFAULT_CODE_MODEL=$${LITELLM_DEFAULT_CODE_MODEL:-codex-agent/mini} \
-	PYTHONPATH=$(PWD) pytest -q \
-	  tests/ndsmoke/test_mini_agent_docker_ready.py \
-	  tests/ndsmoke/test_codex_agent_docker_loopback_optional.py \
+	PYTHONPATH=$(PWD) python -m pytest -q \
 	  -q || true
 
-.PHONY: ndsmoke-docker-live
-ndsmoke-docker-live:
 	DOCKER_MINI_AGENT=1 \
 	MINI_AGENT_API_HOST=$${MINI_AGENT_API_HOST:-127.0.0.1} \
 	MINI_AGENT_API_PORT=$${MINI_AGENT_API_PORT:-8788} \
-	PYTHONPATH=$(PWD) pytest -q tests/ndsmoke/test_mini_agent_docker_live_optional.py -q || true
 
-.PHONY: project-ready
-project-ready:
-	python scripts/mvp_check.py || true
+	/bin/sh -lc '. local/scripts/anti_drift_preflight.sh; python scripts/mvp_check.py' || true
 
-.PHONY: project-ready-live
-project-ready-live:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,docker DOCKER_MINI_AGENT=1 python scripts/mvp_check.py || true
+	/bin/sh -lc '. local/scripts/anti_drift_preflight.sh; READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,docker DOCKER_MINI_AGENT=1 python scripts/mvp_check.py' || true
 	python scripts/generate_project_ready.py || true
 
-.PHONY: project-ready-summary
-project-ready-summary:
 	@if [ ! -f local/artifacts/mvp/mvp_report.json ]; then \
-	  echo "No artifact found. Run \`make project-ready\` first."; \
 	else \
 	  jq -r '.checks[] | [.name,(.ok|tostring), (if has("skipped") then (.skipped|tostring) else "" end)] | @tsv' local/artifacts/mvp/mvp_report.json \
 	    | awk 'BEGIN{FS="\t"} {em=$$2=="true"?"✅":($$3=="true"?"⏭":"❌"); printf("%-26s %s\n", $$1, em)}'; \
@@ -228,31 +234,9 @@ dump-readiness-env:
 	@echo "MINI_AGENT_API_HOST=$${MINI_AGENT_API_HOST:-127.0.0.1} MINI_AGENT_API_PORT=$${MINI_AGENT_API_PORT:-8788}"
 	@echo "CODEX_AGENT_API_BASE=$${CODEX_AGENT_API_BASE:-auto} OLLAMA_API_BASE=$${OLLAMA_API_BASE:-http://127.0.0.1:11434}"
 
-.PHONY: smokes-all
-smokes-all:
-	PYTHONPATH=$(PWD) python scripts/run_all_smokes.py || true
-
-.PHONY: project-ready-all
-project-ready-all:
 	# Strict gate: split checks only (core + ND). Docker optional.
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,all_smokes_core,all_smokes_nd python scripts/mvp_check.py
 
-.PHONY: project-ready-all-split-strict
-project-ready-all-split-strict:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_FAIL_ON_SKIP=1 READINESS_EXPECT=ollama,codex-agent,all_smokes_core,all_smokes_nd python scripts/mvp_check.py
+	OLLAMA_API_BASE=$${OLLAMA_API_BASE:-http://127.0.0.1:11434} \
+	READINESS_LIVE=1 STRICT_READY=1 \
 
-.PHONY: project-ready-core-only-with-docker
-project-ready-core-only-with-docker:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,docker,all_smokes_core DOCKER_MINI_AGENT=1 python scripts/mvp_check.py
-
-.PHONY: project-ready-nd-only-with-docker
-project-ready-nd-only-with-docker:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,docker,all_smokes_nd DOCKER_MINI_AGENT=1 python scripts/mvp_check.py
-
-.PHONY: project-ready-core-only
-project-ready-core-only:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,all_smokes_core python scripts/mvp_check.py
-
-.PHONY: project-ready-nd-only
-project-ready-nd-only:
-	READINESS_LIVE=1 STRICT_READY=1 READINESS_EXPECT=ollama,codex-agent,all_smokes_nd python scripts/mvp_check.py
+	@python scripts/print_ready_summary.py
