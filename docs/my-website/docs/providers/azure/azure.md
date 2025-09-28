@@ -931,7 +931,7 @@ curl http://localhost:4000/v1/batches \
 ```python
 retrieved_batch = client.batches.retrieve(
     batch.id,
-    extra_body={"custom_llm_provider": "azure"}
+    extra_query={"custom_llm_provider": "azure"}
 )
 ```
 
@@ -978,7 +978,7 @@ curl http://localhost:4000/v1/batches/batch_abc123/cancel \
 <TabItem value="sdk" label="OpenAI Python SDK">
 
 ```python
-client.batches.list(extra_body={"custom_llm_provider": "azure"})
+client.batches.list(extra_query={"custom_llm_provider": "azure"})
 ```
 
 </TabItem>
