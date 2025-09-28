@@ -861,6 +861,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     className="mt-4"
                     help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
                   >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+                      placement="top"
+                    >
                       <Select
                         mode="tags"
                         style={{ width: '100%' }}
@@ -872,6 +876,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         }
                         options={guardrailsList.map(name => ({ value: name, label: name }))}
                       />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                     label={
@@ -893,6 +898,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     className="mt-4"
                     help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
                   >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+                      placement="top"
+                    >
                       <Select
                         mode="tags"
                         style={{ width: '100%' }}
@@ -904,6 +913,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         }
                         options={promptsList.map(name => ({ value: name, label: name }))}
                       />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                         label={
