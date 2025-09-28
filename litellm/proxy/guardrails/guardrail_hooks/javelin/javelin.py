@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union, Type
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -17,6 +17,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
     JavelinGuardInput,
 )
 from fastapi import HTTPException
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 class JavelinGuardrail(CustomGuardrail):
@@ -284,3 +287,15 @@ class JavelinGuardrail(CustomGuardrail):
         )
 
         return data
+
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        """
+        Get the config model for the Javelin guardrail.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
+            JavelinGuardrailConfigModel,
+        )
+        return JavelinGuardrailConfigModel
+
+
