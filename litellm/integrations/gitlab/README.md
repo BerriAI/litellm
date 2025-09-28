@@ -57,10 +57,11 @@ import litellm
 
 # Configure gitlab access
 gitlab_config = {
-    "workspace": "your-workspace",
-    "repository": "your-repo",
+    "project": "a/b/<repo_name>",
     "access_token": "your-access-token",
-    "branch": "main"  # optional, defaults to main
+    "base_url": "gitlab url",
+    "prompts_path": "src/prompts", # folder to point to, defaults to root
+    "branch":"main"  # optional, defaults to main
 }
 
 # Set global gitlab configuration
@@ -74,12 +75,11 @@ import litellm
 
 # Configure gitlab access with basic auth
 gitlab_config = {
-    "workspace": "your-workspace",
-    "repository": "your-repo",
-    "username": "your-username",
+    "project": "a/b/<repo_name>",
+    "base_url": "base url",
     "access_token": "your-app-password",  # Use app password for basic auth
-    "auth_method": "basic",
-    "branch": "main"
+    "branch": "main",
+    "prompts_path": "src/prompts", # folder to point to, defaults to root
 }
 
 litellm.set_global_gitlab_config(gitlab_config)
