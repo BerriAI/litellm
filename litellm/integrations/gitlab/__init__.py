@@ -56,7 +56,7 @@ def prompt_initializer(
 
 
 prompt_initializer_registry = {
-    SupportedPromptIntegrations.BITBUCKET.value: prompt_initializer,
+    SupportedPromptIntegrations.GITLAB.value: prompt_initializer,
 }
 
 # Export public API

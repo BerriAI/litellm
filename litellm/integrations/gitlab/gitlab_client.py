@@ -29,17 +29,22 @@ class GitLabClient:
         Args:
             config: Dictionary containing:
                 - project: Project path ("group/subgroup/repo") or numeric project ID (str|int) [required]
-                - access_token: GitLab personal/access token or OAuth token [required]
+                - access_token: GitLab personal/access token or OAuth token [required] (str)
                 - auth_method: 'token' (default; sends Private-Token) or 'oauth' (Authorization: Bearer)
                 - tag: Tag name to fetch from (takes precedence over branch if provided)
                 - branch: Branch to fetch from (default: "main")
                 - base_url: Base GitLab API URL (default: "https://gitlab.com/api/v4")
         """
-        self.project = config.get("project")
-        self.access_token = config.get("access_token")
+        project = config.get("project")
+        access_token = config.get("access_token")
+        if project is None or access_token is None:
+            raise ValueError("project and access_token are required")
+
+        self.project: str | int = project
+        self.access_token: str = str(access_token)
         self.auth_method = config.get("auth_method", "token")  # 'token' or 'oauth'
         self.branch = config.get("branch", "main")
-        self.tag = config.get("tag")  # NEW: optional tag
+        self.tag = config.get("tag")
         self.base_url = config.get("base_url", "https://gitlab.com/api/v4")
 
         if not all([self.project, self.access_token]):
