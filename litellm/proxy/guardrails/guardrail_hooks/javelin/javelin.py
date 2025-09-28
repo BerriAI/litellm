@@ -31,7 +31,6 @@ class JavelinGuardrail(CustomGuardrail):
         metadata: Optional[Dict] = None,
         config: Optional[Dict] = None,
         application: Optional[str] = None,
-        event_hook: Optional[str] = None,
         **kwargs,
     ):
         f"""
@@ -73,7 +72,8 @@ class JavelinGuardrail(CustomGuardrail):
             self.api_base,
             self.api_version,
         )
-        super().__init__(guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on, **kwargs)
+
+        super().__init__(guardrail_name=guardrail_name, default_on=default_on, **kwargs)
 
     async def call_javelin_guard(
         self,
@@ -105,7 +105,7 @@ class JavelinGuardrail(CustomGuardrail):
             response = await self.async_handler.post(
                 url=url,
                 headers=headers,
-                json=request,
+                json=dict(request),
             )
             verbose_proxy_logger.debug(
                 "Javelin Guardrail: Javelin guard API response: %s", response.json()
@@ -178,8 +178,9 @@ class JavelinGuardrail(CustomGuardrail):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (get_last_user_message)
-
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
 
         verbose_proxy_logger.debug("Javelin Guardrail: pre_call_hook")
         verbose_proxy_logger.debug("Javelin Guardrail: Request data: %s", data)
@@ -270,14 +271,14 @@ class JavelinGuardrail(CustomGuardrail):
 
             # Raise HTTPException to prevent the request from going to the LLM
             raise HTTPException(
-                status_code=400,
+                status_code=500,
                 detail={
                     "error": "Violated guardrail policy",
                     "javelin_guardrail_response": javelin_response,
                     "reject_prompt": reject_prompt,
                 },
             )
-            
+
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
