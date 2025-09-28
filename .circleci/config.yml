@@ -51,9 +51,36 @@ jobs:
           command: |
             python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
     
+  mypy_linting:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip uninstall fastuuid -y
+            pip install "mypy==1.18.2"
+      - run:
+          name: MyPy Type Checking
+          command: |
+            cd litellm
+            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
+            python -m mypy .
+            cd ..
+          no_output_timeout: 10m
   local_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.12
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -79,7 +106,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install "mypy==1.15.0"
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -140,20 +167,6 @@ jobs:
             python -m pip install black
             python -m black .
             cd ..
-      - run:
-          name: Linting Testing
-          command: |
-            cd litellm
-            pip install "cryptography>=43.0.1"
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . \
-                --config-file mypy.ini \
-                --ignore-missing-imports \
-                --no-incremental; then
-                echo "mypy detected errors"
-                exit 1
-            fi
-            cd ..
 
       # Run pytest and generate JUnit XML report
       - run:
@@ -161,7 +174,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -205,7 +218,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -312,7 +325,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -471,7 +484,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -553,14 +566,14 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker-ce docker-ce-cli containerd.io
       - run:
-          name: Install Python 3.9
+          name: Install Python 3.13
           command: |
             curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
             bash miniconda.sh -b -p $HOME/miniconda
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
       - run:
@@ -575,7 +588,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -669,7 +682,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
@@ -817,7 +830,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1049,7 +1062,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1187,6 +1200,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
+            pip install pytest-mock
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1637,7 +1651,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -1775,7 +1789,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "jsonlines==4.0.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
@@ -1917,7 +1931,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -2420,7 +2434,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
       - run:
           name: Build Docker image
           command: |
@@ -2525,7 +2539,7 @@ jobs:
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "boto3==1.36.0"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma
@@ -2914,7 +2928,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install mypy
+            pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
             pip install prisma
@@ -3073,6 +3087,12 @@ workflows:
   build_and_test:
     jobs:
       - using_litellm_on_windows:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - mypy_linting:
           filters:
             branches:
               only:
@@ -3324,6 +3344,7 @@ workflows:
                 - main
       - publish_to_pypi:
           requires:
+            - mypy_linting
             - local_testing
             - build_and_test
             - e2e_openai_endpoints

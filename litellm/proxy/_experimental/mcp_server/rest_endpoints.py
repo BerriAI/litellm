@@ -177,9 +177,9 @@ if MCP_AVAILABLE:
             return {
                 "tools": list_tools_result,
                 "error": "partial_failure" if error_message else None,
-                "message": error_message
-                if error_message
-                else "Successfully retrieved tools",
+                "message": (
+                    error_message if error_message else "Successfully retrieved tools"
+                ),
             }
 
         except Exception as e:
