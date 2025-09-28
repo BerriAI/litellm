@@ -20,6 +20,11 @@ class MCPServer(BaseModel):
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
+    extra_headers: Optional[List[str]] = (
+        None  # allow admin to specify which headers to forward to the MCP server
+    )
+    allowed_tools: Optional[List[str]] = None
+    disallowed_tools: Optional[List[str]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
