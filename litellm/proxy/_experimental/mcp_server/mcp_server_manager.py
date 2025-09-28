@@ -213,6 +213,8 @@ class MCPServerManager:
                 ),
                 mcp_info=mcp_info,
                 extra_headers=server_config.get("extra_headers", None),
+                allowed_tools=server_config.get("allowed_tools", None),
+                disallowed_tools=server_config.get("disallowed_tools", None),
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -277,6 +279,8 @@ class MCPServerManager:
                 args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
                 access_groups=getattr(mcp_server, "mcp_access_groups", None),
+                allowed_tools=getattr(mcp_server, "allowed_tools", None),
+                disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
@@ -569,6 +573,16 @@ class MCPServerManager:
         )
         return prefixed_tools
 
+    def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
+        """
+        Check if the tool is allowed or banned for the given server
+        """
+        if server.allowed_tools:
+            return tool_name in server.allowed_tools
+        if server.disallowed_tools:
+            return tool_name not in server.disallowed_tools
+        return True
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -576,7 +590,18 @@ class MCPServerManager:
         server_name_from_prefix: str,
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
+        server: MCPServer,
     ):
+
+        ## check if the tool is allowed or banned for the given server
+        if not self.check_allowed_or_banned_tools(name, server):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool {name} is not allowed for server {server.name}. Contact proxy admin to allow this tool."
+                },
+            )
+
         pre_hook_kwargs = {
             "name": name,
             "arguments": arguments,
@@ -700,6 +725,7 @@ class MCPServerManager:
                 server_name_from_prefix=server_name_from_prefix,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
+                server=mcp_server,
             )
 
         # Get server-specific auth header if available
