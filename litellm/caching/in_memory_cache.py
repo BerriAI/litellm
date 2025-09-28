@@ -117,12 +117,20 @@ class InMemoryCache(BaseCache):
         """
         current_time = time.time()
 
-        # Step 1: Remove expired items
-        while self.expiration_heap and self.expiration_heap[0][0] <= current_time:
-            expiration_time, key = heapq.heappop(self.expiration_heap)
-            # Skip if this key was already removed or updated with a new TTL
-            if self.ttl_dict.get(key) == expiration_time:
+        # Step 1: Remove expired or outdated items
+        while self.expiration_heap:
+            expiration_time, key = self.expiration_heap[0]
+
+            # Case 1: Heap entry is outdated
+            if expiration_time != self.ttl_dict.get(key):
+                heapq.heappop(self.expiration_heap)
+            # Case 2: Entry is valid but expired
+            elif expiration_time <= current_time:
+                heapq.heappop(self.expiration_heap)
                 self._remove_key(key)
+            else:
+                # Case 3: Entry is valid and not expired
+                break
 
         # Step 2: Evict if cache is still full
         while len(self.cache_dict) >= self.max_size_in_memory:
