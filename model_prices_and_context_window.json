@@ -16257,7 +16257,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss-120b-cloud" : {
+    "ollama/gpt-oss:120b-cloud" : {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
@@ -16267,7 +16267,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true
     },
-    "ollama/gpt-oss-20b-cloud" : {
+    "ollama/gpt-oss:20b-cloud" : {
         "input_cost_per_token": 0.0,
         "litellm_provider": "ollama",
         "max_input_tokens": 131072,
