@@ -26,12 +26,12 @@ from .base_cache import BaseCache
 
 class InMemoryCache(BaseCache):
     def __init__(
-            self,
-            max_size_in_memory: Optional[int] = 200,
-            default_ttl: Optional[
-                int
-            ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
-            max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
+        self,
+        max_size_in_memory: Optional[int] = 200,
+        default_ttl: Optional[
+            int
+        ] = 600,  # default ttl is 10 minutes. At maximum litellm rate limiting logic requires objects to be in memory for 1 minute
+        max_size_per_item: Optional[int] = 1024,  # 1MB = 1024KB
     ):
         """
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
@@ -41,7 +41,7 @@ class InMemoryCache(BaseCache):
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
         self.max_size_per_item = (
-                max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+            max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
         )  # 1MB = 1024KB
 
         # in-memory cache
