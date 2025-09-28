@@ -164,6 +164,11 @@ export default function KeyInfoView({
 
       delete formValues.logging_settings
 
+      if (!premiumUser) {
+        delete formValues.guardrails
+        delete formValues.prompts
+      }
+
       // Convert budget_duration to API format
       if (formValues.budget_duration) {
         const durationMap: Record<string, string> = {
