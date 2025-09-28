@@ -39,6 +39,7 @@ class MCPRequestHandler:
         UserAPIKeyAuth,
         Optional[str],
         Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
         Optional[Dict[str, str]],
         Optional[Dict[str, str]],
     ]:
@@ -49,6 +50,7 @@ class MCPRequestHandler:
         2. Processing MCP server configuration
         3. Handling MCP-specific headers
         4. Handling oauth2 headers
+        5. Raw headers - allows forwarding specific headers to the MCP server, specified by the admin.
 
         Args:
             scope: ASGI scope containing request information
@@ -58,7 +60,8 @@ class MCPRequestHandler:
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional[List[str]] List of MCP servers and access groups to use
             mcp_server_auth_headers: Optional[Dict[str, str]] Server-specific auth headers in format {server_alias: auth_value}
-
+            oauth2_headers: Optional[Dict[str, str]] OAuth2 headers
+            raw_headers: Optional[Dict[str, str]] Raw headers to be forwarded to the MCP server
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
@@ -116,6 +119,7 @@ class MCPRequestHandler:
             mcp_servers,
             mcp_server_auth_headers,
             oauth2_headers,
+            dict(headers),
         )
 
     @staticmethod
@@ -145,7 +149,9 @@ class MCPRequestHandler:
         return auth_header
 
     @staticmethod
-    def _get_mcp_server_auth_headers_from_headers(headers: Headers) -> Dict[str, str]:
+    def _get_mcp_server_auth_headers_from_headers(
+        headers: Headers,
+    ) -> Dict[str, Dict[str, str]]:
         """
         Parse server-specific MCP auth headers from the request headers.
 
@@ -156,7 +162,7 @@ class MCPRequestHandler:
         - x-mcp-deepwiki-authorization: Basic base64_encoded_creds
 
         Returns:
-            Dict[str, str]: Mapping of server alias to auth value
+            Dict[str, Dict[str, str]]: Mapping of server alias to header dict
         """
         server_auth_headers = {}
         prefix = "x-mcp-"
@@ -175,11 +181,22 @@ class MCPRequestHandler:
                 # Extract server_alias and header_name from x-mcp-{server_alias}-{header_name}
                 remaining = header_name[len(prefix) :].lower()
                 if "-" in remaining:
-                    # Split on the last dash to separate server_alias from header_name
-                    parts = remaining.rsplit("-", 1)
+                    # Split on the first dash to separate server_alias from header_name
+                    parts = remaining.split("-", 1)
                     if len(parts) == 2:
                         server_alias, auth_header_name = parts
-                        server_auth_headers[server_alias] = header_value
+
+                        # Convert common header names to proper case
+                        if auth_header_name == "authorization":
+                            auth_header_name = "Authorization"
+
+                        # Initialize server dict if not exists
+                        if server_alias not in server_auth_headers:
+                            server_auth_headers[server_alias] = {}
+
+                        server_auth_headers[server_alias][
+                            auth_header_name
+                        ] = header_value
                         verbose_logger.debug(
                             f"Found server auth header: {server_alias} -> {auth_header_name}: {header_value[:10]}..."
                         )

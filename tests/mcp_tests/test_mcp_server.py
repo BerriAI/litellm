@@ -1349,6 +1349,11 @@ def test_add_update_server_with_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    # OAuth fields - set explicitly to None to avoid MagicMock objects
+    mock_mcp_server.client_id = None
+    mock_mcp_server.client_secret = None
+    mock_mcp_server.authorization_url = None
+    mock_mcp_server.token_url = None
 
     # Add server to manager
     test_manager.add_update_server(mock_mcp_server)
@@ -1380,6 +1385,11 @@ def test_add_update_server_without_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    # OAuth fields - set explicitly to None to avoid MagicMock objects
+    mock_mcp_server.client_id = None
+    mock_mcp_server.client_secret = None
+    mock_mcp_server.authorization_url = None
+    mock_mcp_server.token_url = None
 
     # Add server to manager
     test_manager.add_update_server(mock_mcp_server)
@@ -1411,6 +1421,11 @@ def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    # OAuth fields - set explicitly to None to avoid MagicMock objects
+    mock_mcp_server.client_id = None
+    mock_mcp_server.client_secret = None
+    mock_mcp_server.authorization_url = None
+    mock_mcp_server.token_url = None
 
     # Add server to manager
     test_manager.add_update_server(mock_mcp_server)
@@ -1980,6 +1995,302 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     # Second call should be for slack server with slack auth
                     assert calls[1][0][0] == mock_slack_server  # server
                     assert calls[1][0][1] == "Bearer slack_token"  # server_auth_header
+
+
+@pytest.mark.asyncio
+async def test_filter_tools_by_allowed_tools_integration():
+    """Test that filter_tools_by_allowed_tools works correctly via _get_tools_from_mcp_servers"""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_tools_from_mcp_servers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from mcp.types import Tool as MCPTool
+
+    # Create a mock user auth
+    mock_user_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    # Create mock tools that will be returned by the server
+    mock_tools = [
+        MCPTool(
+            name="allowed_tool_1",
+            description="This tool should be allowed",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="allowed_tool_2",
+            description="This tool should also be allowed",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="blocked_tool_1",
+            description="This tool should be blocked",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="blocked_tool_2",
+            description="This tool should also be blocked",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    # Create a mock server with allowed_tools restriction
+    mock_server = MCPServer(
+        server_id="test-server-123",
+        name="test_server_with_allowed_tools",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        allowed_tools=[
+            "allowed_tool_1",
+            "allowed_tool_2",
+        ],  # Only these tools should be returned
+        disallowed_tools=None,
+    )
+
+    # Create a mock MCPClient that returns all tools
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    # Mock the global MCP server manager
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+    ) as mock_manager:
+        # Mock manager methods
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-123"]
+        )
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+
+        # Mock the _get_tools_from_server method to return all tools
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        # Mock the MCPClient constructor
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            mock_client_constructor,
+        ):
+            # Call _get_tools_from_mcp_servers which should apply the filtering
+            filtered_tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+                mcp_servers=None,  # Get from all servers
+            )
+
+            # Verify that only allowed tools are returned
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
+
+            tool_names = [tool.name for tool in filtered_tools]
+            assert (
+                "allowed_tool_1" in tool_names
+            ), "allowed_tool_1 should be in filtered results"
+            assert (
+                "allowed_tool_2" in tool_names
+            ), "allowed_tool_2 should be in filtered results"
+            assert (
+                "blocked_tool_1" not in tool_names
+            ), "blocked_tool_1 should be filtered out"
+            assert (
+                "blocked_tool_2" not in tool_names
+            ), "blocked_tool_2 should be filtered out"
+
+            # Verify the manager methods were called correctly
+            mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
+            mock_manager.get_mcp_server_by_id.assert_called_once_with("test-server-123")
+            mock_manager._get_tools_from_server.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_filter_tools_by_disallowed_tools_integration():
+    """Test that filter_tools_by_allowed_tools works correctly with disallowed_tools via _get_tools_from_mcp_servers"""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_tools_from_mcp_servers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from mcp.types import Tool as MCPTool
+
+    # Create a mock user auth
+    mock_user_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    # Create mock tools that will be returned by the server
+    mock_tools = [
+        MCPTool(
+            name="safe_tool_1",
+            description="This tool should be allowed",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="safe_tool_2",
+            description="This tool should also be allowed",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="dangerous_tool_1",
+            description="This tool should be blocked",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="dangerous_tool_2",
+            description="This tool should also be blocked",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    # Create a mock server with disallowed_tools restriction
+    mock_server = MCPServer(
+        server_id="test-server-456",
+        name="test_server_with_disallowed_tools",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        allowed_tools=None,
+        disallowed_tools=[
+            "dangerous_tool_1",
+            "dangerous_tool_2",
+        ],  # These tools should be filtered out
+    )
+
+    # Create a mock MCPClient that returns all tools
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    # Mock the global MCP server manager
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+    ) as mock_manager:
+        # Mock manager methods
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-456"]
+        )
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+
+        # Mock the _get_tools_from_server method to return all tools
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        # Mock the MCPClient constructor
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            mock_client_constructor,
+        ):
+            # Call _get_tools_from_mcp_servers which should apply the filtering
+            filtered_tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+                mcp_servers=None,  # Get from all servers
+            )
+
+            # Verify that only safe tools are returned (dangerous tools filtered out)
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
+
+            tool_names = [tool.name for tool in filtered_tools]
+            assert (
+                "safe_tool_1" in tool_names
+            ), "safe_tool_1 should be in filtered results"
+            assert (
+                "safe_tool_2" in tool_names
+            ), "safe_tool_2 should be in filtered results"
+            assert (
+                "dangerous_tool_1" not in tool_names
+            ), "dangerous_tool_1 should be filtered out"
+            assert (
+                "dangerous_tool_2" not in tool_names
+            ), "dangerous_tool_2 should be filtered out"
+
+            # Verify the manager methods were called correctly
+            mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
+            mock_manager.get_mcp_server_by_id.assert_called_once_with("test-server-456")
+            mock_manager._get_tools_from_server.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_filter_tools_no_restrictions_integration():
+    """Test that filter_tools_by_allowed_tools returns all tools when no restrictions are set"""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_tools_from_mcp_servers,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from mcp.types import Tool as MCPTool
+
+    # Create a mock user auth
+    mock_user_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    # Create mock tools that will be returned by the server
+    mock_tools = [
+        MCPTool(
+            name="tool_1",
+            description="Tool 1",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="tool_2",
+            description="Tool 2",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    # Create a mock server with no tool restrictions
+    mock_server = MCPServer(
+        server_id="test-server-000",
+        name="test_server_no_restrictions",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        allowed_tools=None,  # No restrictions
+        disallowed_tools=None,  # No restrictions
+    )
+
+    # Create a mock MCPClient that returns all tools
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    # Mock the global MCP server manager
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+    ) as mock_manager:
+        # Mock manager methods
+        mock_manager.get_allowed_mcp_servers = AsyncMock(
+            return_value=["test-server-000"]
+        )
+        mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
+
+        # Mock the _get_tools_from_server method to return all tools
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        # Mock the MCPClient constructor
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            mock_client_constructor,
+        ):
+            # Call _get_tools_from_mcp_servers which should apply the filtering
+            filtered_tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+                mcp_servers=None,  # Get from all servers
+            )
+
+            # Should return all tools when no restrictions
+            assert (
+                len(filtered_tools) == 2
+            ), f"Expected 2 tools, got {len(filtered_tools)}"
+
+            tool_names = [tool.name for tool in filtered_tools]
+            assert "tool_1" in tool_names, "tool_1 should be in filtered results"
+            assert "tool_2" in tool_names, "tool_2 should be in filtered results"
 
 
 @pytest.mark.asyncio
