@@ -61,7 +61,7 @@ jobs:
     - name: Run MyPy type checking
       run: |
         cd litellm
-        poetry run mypy . --ignore-missing-imports --disable-error-code=var-annotated
+        poetry run mypy . 
         cd ..
 
     - name: Check for circular imports

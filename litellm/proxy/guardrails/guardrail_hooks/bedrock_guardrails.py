@@ -22,9 +22,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -597,11 +595,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################
@@ -652,11 +650,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        data[
-            "messages"
-        ] = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=new_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        data["messages"] = (
+            self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=new_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
 
         #########################################################

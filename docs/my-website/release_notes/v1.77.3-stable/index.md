@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.3-stable - Priority Based Rate Limiting"
+title: "v1.77.3-stable - Priority Based Rate Limiting"
 slug: "v1-77-3"
 date: 2025-09-21T10:00:00
 authors:
@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-v1.77.3.rc.1
+ghcr.io/berriai/litellm:v1.77.3-stable
 ```
 
 </TabItem>
@@ -51,11 +51,27 @@ pip install litellm==1.77.3
 
 ## Priority Quota Reservation
 
+This release adds support for priority quota reservation. This allows Proxy Admins to reserve specific percentages of model capacity for different use cases. 
+ 
+This is great for use cases where you want to ensure your realtime use cases must always get priority responses and background development jobs can take longer. 
+
+<Image img={require('../../img/release_notes/quota.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
 This release adds support for priority quota reservation. This allows **Proxy Admins** to reserve TPM/RPM capacity for keys based on metadata priority levels, ensuring critical production workloads get guaranteed access regardless of development traffic volume.
 
 Get started [here](../../docs/proxy/dynamic_rate_limit#priority-quota-reservation)
 
-<iframe width="700" height="500" src="https://www.loom.com/embed/1b54b93139ee415d959402cc0629f3f7" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+## +550 RPS Performance Improvements
+
+<Image img={require('../../img/release_notes/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release delivers significant RPS improvements through targeted optimizations. 
+ 
+We've achieved a +500 RPS boost by fixing cache type inconsistencies that were causing frequent cache misses, plus an additional +50 RPS by removing unnecessary coroutine checks from the hot path. 
 
 
 ## New Models / Updated Models

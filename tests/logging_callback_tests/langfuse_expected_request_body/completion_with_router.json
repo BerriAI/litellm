@@ -72,7 +72,7 @@
                     "input": 10,
                     "output": 10,
                     "unit": "TOKENS",
-                    "totalCost": 3.5e-05
+                    "totalCost": 1.9999999999999998e-05
                 },
                 "usageDetails": {
                     "cache_creation_input_tokens": 0,
