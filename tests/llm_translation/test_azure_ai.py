@@ -318,6 +318,7 @@ async def test_azure_gpt5_reasoning(model):
 
 def test_completion_azure():
     try:
+        from litellm import completion_cost
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
