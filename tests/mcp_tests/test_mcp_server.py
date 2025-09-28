@@ -1385,6 +1385,11 @@ def test_add_update_server_without_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    # OAuth fields - set explicitly to None to avoid MagicMock objects
+    mock_mcp_server.client_id = None
+    mock_mcp_server.client_secret = None
+    mock_mcp_server.authorization_url = None
+    mock_mcp_server.token_url = None
 
     # Add server to manager
     test_manager.add_update_server(mock_mcp_server)
