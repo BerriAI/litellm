@@ -57,9 +57,9 @@ class InMemoryCache(BaseCache):
         try:
             # Fast path for common primitive types that are typically small
             if (
-                    isinstance(value, (bool, int, float, str))
-                    and len(str(value))
-                    < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+                isinstance(value, (bool, int, float, str))
+                and len(str(value))
+                < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
             ):  # Conservative estimate
                 return True
 
@@ -74,7 +74,7 @@ class InMemoryCache(BaseCache):
 
             # Fallback for complex types
             if isinstance(value, BaseModel) and hasattr(
-                    value, "model_dump"
+                value, "model_dump"
             ):  # Pydantic v2
                 value = value.model_dump()
             elif hasattr(value, "isoformat"):  # datetime objects
@@ -252,7 +252,7 @@ class InMemoryCache(BaseCache):
         return value
 
     async def async_increment_pipeline(
-            self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
+        self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
     ) -> Optional[List[float]]:
         results = []
         for increment in increment_list:
