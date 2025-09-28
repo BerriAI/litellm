@@ -2436,13 +2436,13 @@ def get_optional_params_transcription(
     # retrieve all parameters passed to the function
     passed_params = locals()
 
-    passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     drop_params = passed_params.pop("drop_params")
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
 
+    passed_params = {k: v for k, v in passed_params.items() if k not in {"OPENAI_TRANSCRIPTION_PARAMS", "atranscription"}}
     default_params = {
         "language": None,
         "prompt": None,
