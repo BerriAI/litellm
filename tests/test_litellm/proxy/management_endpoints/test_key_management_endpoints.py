@@ -1162,3 +1162,75 @@ def test_key_rotation_fields_helper():
     # Verify rotation fields are NOT added (missing interval)
     assert "auto_rotate" not in key_data3
     assert "rotation_interval" not in key_data3
+
+
+@pytest.mark.asyncio
+async def test_update_key_fn_auto_rotate_enable():
+    """Test that update_key_fn properly handles enabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=False,
+        rotation_interval=None,
+        metadata={}
+    )
+    
+    # Test enabling auto rotation
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        auto_rotate=True,
+        rotation_interval="30d"
+    )
+    
+    result = await prepare_key_update_data(
+        data=update_request,
+        existing_key_row=existing_key
+    )
+    
+    # Verify rotation fields are included
+    assert result["auto_rotate"] is True
+    assert result["rotation_interval"] == "30d"
+
+
+@pytest.mark.asyncio 
+async def test_update_key_fn_auto_rotate_disable():
+    """Test that update_key_fn properly handles disabling auto rotation."""
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    # Mock existing key with rotation enabled
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=["gpt-3.5-turbo"],
+        user_id="test-user",
+        team_id=None,
+        auto_rotate=True,
+        rotation_interval="30d",
+        metadata={}
+    )
+    
+    # Test disabling auto rotation
+    update_request = UpdateKeyRequest(
+        key="test-token",
+        auto_rotate=False
+    )
+    
+    result = await prepare_key_update_data(
+        data=update_request,
+        existing_key_row=existing_key
+    )
+    
+    # Verify auto_rotate is set to False
+    assert result["auto_rotate"] is False

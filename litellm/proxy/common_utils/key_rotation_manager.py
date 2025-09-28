@@ -4,7 +4,7 @@ Key Rotation Manager - Automated key rotation based on rotation schedules
 Handles finding keys that need rotation based on their individual schedules.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List
 
 from litellm._logging import verbose_proxy_logger
@@ -16,6 +16,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _calculate_key_rotation_time,
     regenerate_key_fn,
 )
 from litellm.proxy.utils import PrismaClient
@@ -60,49 +61,39 @@ class KeyRotationManager:
     
     async def _find_keys_needing_rotation(self) -> List[LiteLLM_VerificationToken]:
         """
-        Find keys that are due for rotation based on their rotation interval.
+        Find keys that are due for rotation based on their key_rotation_at timestamp.
         
         Logic:
         - Key has auto_rotate = true
-        - Key has rotation_interval set
-        - Either: never been rotated (last_rotation_at is null) OR
-        - Time since last rotation >= rotation_interval
+        - key_rotation_at is null (needs initial setup) OR key_rotation_at <= now
         """
+        now = datetime.now(timezone.utc)
+        
         keys_with_rotation = await self.prisma_client.db.litellm_verificationtoken.find_many(
             where={
                 "auto_rotate": True,  # Only keys marked for auto rotation
-                "rotation_interval": {"not": None}  # Must have rotation interval set
+                "OR": [
+                    {"key_rotation_at": None},  # Keys that need initial rotation time setup
+                    {"key_rotation_at": {"lte": now}}  # Keys where rotation time has passed
+                ]
             }
         )
         
-        # Filter keys that need rotation based on last_rotation_at + interval
-        keys_needing_rotation = []
-        now = datetime.now(timezone.utc)
-        
-        for key in keys_with_rotation:
-            if self._should_rotate_key(key, now):
-                keys_needing_rotation.append(key)
-        
-        return keys_needing_rotation
+        return keys_with_rotation
     
     def _should_rotate_key(self, key: LiteLLM_VerificationToken, now: datetime) -> bool:
         """
-        Determine if a key should be rotated based on last rotation time and interval.
+        Determine if a key should be rotated based on key_rotation_at timestamp.
         """
         if not key.rotation_interval:
             return False
         
-        # If never rotated, rotate immediately
-        if key.last_rotation_at is None:
+        # If key_rotation_at is not set, rotate immediately (and set it)
+        if key.key_rotation_at is None:
             return True
         
-        # Calculate if enough time has passed since last rotation
-        from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-        
-        interval_seconds = duration_in_seconds(key.rotation_interval)
-        next_rotation_time = key.last_rotation_at + timedelta(seconds=interval_seconds)
-        
-        return now >= next_rotation_time
+        # Check if the rotation time has passed
+        return now >= key.key_rotation_at
     
     async def _rotate_key(self, key: LiteLLM_VerificationToken):
         """
@@ -125,12 +116,16 @@ class KeyRotationManager:
         )
        
         # Update the NEW key with rotation info (regenerate_key_fn creates a new token)
-        if isinstance(response, GenerateKeyResponse) and response.token_id:
+        if isinstance(response, GenerateKeyResponse) and response.token_id and key.rotation_interval:
+            # Calculate next rotation time using helper function
+            now = datetime.now(timezone.utc)
+            next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
             await self.prisma_client.db.litellm_verificationtoken.update(
                 where={"token": response.token_id},
                 data={
                     "rotation_count": (key.rotation_count or 0) + 1,
-                    "last_rotation_at": datetime.now(timezone.utc)
+                    "last_rotation_at": now,
+                    "key_rotation_at": next_rotation_time
                 }
             )
         

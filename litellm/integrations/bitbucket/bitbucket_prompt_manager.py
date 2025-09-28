@@ -116,7 +116,7 @@ class BitBucketTemplateManager:
             template_content = content
 
         # Parse YAML frontmatter
-        metadata = {}
+        metadata: Dict[str, Any] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -136,7 +136,7 @@ class BitBucketTemplateManager:
 
     def _parse_yaml_basic(self, yaml_str: str) -> Dict[str, Any]:
         """Basic YAML parser for simple cases when PyYAML is not available."""
-        result = {}
+        result: Dict[str, Any] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):
@@ -156,7 +156,7 @@ class BitBucketTemplateManager:
         return result
 
     def render_template(
-        self, template_id: str, variables: Dict[str, Any] = None
+        self, template_id: str, variables: Optional[Dict[str, Any]] = None
     ) -> str:
         """Render a template with the given variables."""
         if template_id not in self.prompts:
@@ -209,7 +209,7 @@ class BitBucketPromptManager(CustomPromptManagement):
     ):
         self.bitbucket_config = bitbucket_config
         self.prompt_id = prompt_id
-        self._prompt_manager: Optional[BitBucketPromptManager] = None
+        self._prompt_manager: Optional[BitBucketTemplateManager] = None
 
     @property
     def integration_name(self) -> str:
@@ -288,11 +288,11 @@ class BitBucketPromptManager(CustomPromptManagement):
             # Merge with existing messages
             if parsed_messages:
                 # If we have parsed messages, use them instead of the original messages
-                final_messages = parsed_messages
+                final_messages: List[AllMessageValues] = parsed_messages
             else:
                 # If no messages were parsed, prepend the prompt to existing messages
                 final_messages = [
-                    {"role": "user", "content": rendered_prompt}
+                    {"role": "user", "content": rendered_prompt}  # type: ignore
                 ] + messages
 
             # Update litellm_params with prompt metadata
@@ -346,7 +346,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "system"
                 current_content = [line[7:].strip()]  # Remove "System:" prefix
@@ -356,7 +356,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "user"
                 current_content = [line[5:].strip()]  # Remove "User:" prefix
@@ -366,7 +366,7 @@ class BitBucketPromptManager(CustomPromptManagement):
                         {
                             "role": current_role,
                             "content": "\n".join(current_content).strip(),
-                        }
+                        }  # type: ignore
                     )
                 current_role = "assistant"
                 current_content = [line[10:].strip()]  # Remove "Assistant:" prefix
@@ -382,9 +382,9 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         # If no role indicators found, treat as a single user message
         if not messages and prompt_content.strip():
-            messages = [{"role": "user", "content": prompt_content.strip()}]
+            messages = [{"role": "user", "content": prompt_content.strip()}]  # type: ignore
 
-        return messages
+        return messages  # type: ignore
 
     def post_call_hook(
         self,
