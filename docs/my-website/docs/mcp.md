@@ -199,6 +199,65 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+## MCP Tool Filtering
+
+Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
+
+<Tabs>
+<TabItem value="allowed" label="Only Allow Specific Tools">
+
+Use `allowed_tools` to specify exactly which tools users can access. All other tools will be blocked.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    allowed_tools: ["list_tools"]
+    # only list_tools will be available
+```
+
+**Use this when:**
+- You want strict control over which tools are available
+- You're in a high-security environment
+- You're testing a new MCP server with limited tools
+
+</TabItem>
+<TabItem value="blocked" label="Block Specific Tools">
+
+Use `disallowed_tools` to block specific tools. All other tools will be available.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    disallowed_tools: ["repo_delete"]
+    # only repo_delete will be blocked
+```
+
+**Use this when:**
+- Most tools are safe, but you want to block a few dangerous ones
+- You want to prevent expensive API calls
+- You're gradually adding restrictions to an existing server
+
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+- If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
+- Tool names are case-sensitive
 
 ## Using your MCP
 
