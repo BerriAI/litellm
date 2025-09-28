@@ -1355,6 +1355,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
