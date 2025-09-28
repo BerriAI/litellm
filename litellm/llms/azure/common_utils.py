@@ -162,8 +162,8 @@ def get_azure_ad_token_from_username_password(
 
 def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
-    azure_client_id: Optional[str],
-    azure_tenant_id: Optional[str],
+    azure_client_id: Optional[str] = None,
+    azure_tenant_id: Optional[str] = None,
     scope: Optional[str] = None,
 ) -> str:
     """

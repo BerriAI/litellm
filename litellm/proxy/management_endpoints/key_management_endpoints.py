@@ -87,6 +87,38 @@ def _get_user_in_team(
     return None
 
 
+def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
+    """
+    Helper function to calculate the next rotation time for a key based on the rotation interval.
+    
+    Args:
+        rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
+        
+    Returns:
+        datetime: The calculated next rotation time in UTC
+    """
+    now = datetime.now(timezone.utc)
+    interval_seconds = duration_in_seconds(rotation_interval)
+    return now + timedelta(seconds=interval_seconds)
+
+
+def _set_key_rotation_fields(data: dict, auto_rotate: bool, rotation_interval: Optional[str]) -> None:
+    """
+    Helper function to set rotation fields in key data if auto_rotate is enabled.
+    
+    Args:
+        data: Dictionary to update with rotation fields
+        auto_rotate: Whether auto rotation is enabled
+        rotation_interval: The rotation interval string (required if auto_rotate is True)
+    """
+    if auto_rotate and rotation_interval:
+        data.update({
+            "auto_rotate": auto_rotate,
+            "rotation_interval": rotation_interval,
+            "key_rotation_at": _calculate_key_rotation_time(rotation_interval)
+        })
+
+
 def _is_allowed_to_make_key_request(
     user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
 ) -> bool:
@@ -1071,6 +1103,8 @@ async def update_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
+    - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1160,6 +1194,13 @@ async def update_key_fn(
             key_alias=non_default_values.get("key_alias", None),
             prisma_client=prisma_client,
             existing_key_token=existing_key_row.token,
+        )
+
+        # Handle rotation fields if auto_rotate is being enabled
+        _set_key_rotation_fields(
+            non_default_values, 
+            non_default_values.get("auto_rotate", False), 
+            non_default_values.get("rotation_interval")
         )
 
         _data = {**non_default_values, "token": key}
@@ -1727,12 +1768,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         }
         
         # Add rotation fields if auto_rotate is enabled
-        if auto_rotate and rotation_interval:
-            key_data.update({
-                "auto_rotate": auto_rotate,
-                "rotation_interval": rotation_interval
-                # last_rotation_at will be null initially - rotation happens on first check
-            })
+        _set_key_rotation_fields(
+            data=key_data,
+            auto_rotate=auto_rotate or False,
+            rotation_interval=rotation_interval
+        )
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True

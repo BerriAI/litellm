@@ -43,9 +43,12 @@ from openai.types.responses.response import (
 
 # Handle OpenAI SDK version compatibility for Text type
 try:
-    from openai.types.responses.response_create_params import (
-        Text as ResponseText,  # type: ignore
+    # fmt: off
+    from openai.types.responses.response_create_params import ( # type: ignore[attr-defined]
+        Text as ResponseText,  # type: ignore[attr-defined]
     )
+
+    # fmt: on
 except (ImportError, AttributeError):
     # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import (
@@ -1308,7 +1311,7 @@ class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
-# MCP Call Events  
+# MCP Call Events
 class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
     sequence_number: int
