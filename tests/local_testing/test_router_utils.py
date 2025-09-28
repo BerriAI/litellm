@@ -32,7 +32,7 @@ def test_returned_settings():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -96,7 +96,7 @@ def test_update_kwargs_before_fallbacks_unit_test():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -133,7 +133,7 @@ async def test_update_kwargs_before_fallbacks(call_type):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
