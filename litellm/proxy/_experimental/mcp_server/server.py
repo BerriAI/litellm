@@ -361,6 +361,24 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def filter_tools_by_allowed_tools(
+        tools: List[MCPTool],
+        mcp_server: MCPServer,
+    ) -> List[MCPTool]:
+        """
+        Filter tools by allowed tools
+        """
+        tools_to_return = tools
+        if mcp_server.allowed_tools:
+            tools_to_return = [
+                tool for tool in tools if tool.name in mcp_server.allowed_tools
+            ]
+        if mcp_server.disallowed_tools:
+            tools_to_return = [
+                tool for tool in tools if tool.name not in mcp_server.disallowed_tools
+            ]
+        return tools_to_return
+
     async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
@@ -431,7 +449,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                 )
-                all_tools.extend(tools)
+                all_tools.extend(filter_tools_by_allowed_tools(tools, server))
                 verbose_logger.debug(
                     f"Successfully fetched {len(tools)} tools from server {server.name}"
                 )
