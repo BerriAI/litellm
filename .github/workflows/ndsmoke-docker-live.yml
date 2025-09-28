@@ -1,0 +1,52 @@
+name: Fork E2E (Docker Live)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fork/**
+
+jobs:
+  ndsmoke-docker-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry + deps
+        run: |
+          pip install --upgrade pip
+          pip install poetry
+          poetry install --with dev
+          poetry run pip install pytest pytest-timeout httpx
+
+      - name: Start mini-agent (Docker, with optional Ollama)
+        env:
+          OLLAMA: "0"   # set to 1 to include Ollama service
+        run: |
+          docker network create llmnet || true
+          make docker-up
+          sleep 2
+          curl -sf http://127.0.0.1:8788/ready
+
+      - name: Run Docker Live ndsmokes (codex loopback by default)
+        env:
+          DOCKER_MINI_AGENT: "1"
+          MINI_AGENT_API_HOST: "127.0.0.1"
+          MINI_AGENT_API_PORT: "8788"
+          LITELLM_ENABLE_CODEX_AGENT: "1"
+          CODEX_AGENT_API_BASE: "http://127.0.0.1:8788"
+          LITELLM_DEFAULT_CODE_MODEL: "codex-agent/mini"
+        run: |
+          PYTHONPATH=$(pwd) poetry run pytest -q tests/ndsmoke/test_mini_agent_docker_live_optional.py -q || true
+
+      - name: Upload logs (always)
+        if: always()
+        run: |
+          docker compose -f local/docker/compose.exec.yml logs --no-color agent-api | tail -n 500 || true
+

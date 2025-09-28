@@ -21,7 +21,7 @@ from litellm.router_utils.parallel_acompletion import (
 )
 
 # mark this nd smoke as part of the mini_agent suite too
-pytestmark = (pytest.mark.mini_agent,)
+pytestmark = pytest.mark.mini_agent
 
 load_dotenv(find_dotenv(), override=False)
 

@@ -1,0 +1,10 @@
+model_list:
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: http://127.0.0.1:54023
+      api_key: dummy
+router_settings:
+  groups:
+    - id: codex-agent-1
+      models: ["gpt-5"]

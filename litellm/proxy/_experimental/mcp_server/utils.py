@@ -9,7 +9,13 @@ import importlib
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
+LITELLM_MCP_SERVER_DESCRIPTION = (
+    "LiteLLM MCP: multi-model chat/tools via one server.\n"
+    "Use ollama_* for fast/local short tasks.\n"
+    "Use chutes/* (DeepSeek ~72B) as a middle ground when you need strong reasoning at lower cost/latency than SOTA.\n"
+    "Use codex-agent/* for SOTA/enterprise routes or complex tool use.\n"
+    "Use gemini/gemini-2.5-flash for very long (~1M) context or multimodal."
+)
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 

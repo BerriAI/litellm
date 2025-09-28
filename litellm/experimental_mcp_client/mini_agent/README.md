@@ -26,7 +26,7 @@ POST /agent/run
   "messages": [{"role":"user","content":"hi"}],
   "model":"openai/gpt-4o-mini",
   "tool_backend":"http",
-  "tool_http_base_url":"http://127.0.0.1:8789",
+  "tool_http_base_url":"http://127.0.0.1:8788",
   "tool_http_headers":{"Authorization":"Bearer <token>"}
 }
 

@@ -64,3 +64,4 @@ pondpond==1.4.1 # for object pooling
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
 litellm-enterprise==0.1.20
+pytest-asyncio>=0.23

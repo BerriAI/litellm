@@ -33,109 +33,116 @@ You are an operator agent asked to produce a fresh “State of Our LiteLLM Fork�
 
 ---
 
-# State of Our LiteLLM Fork — September 19, 2025 (Refreshed @ 2025‑09‑19)
+# State of Our LiteLLM Fork — September 24, 2025 (Refreshed @ 2025‑09‑24)
 
 Executive Summary
-- This fork keeps upstream’s public APIs unchanged while adding a paved, opt‑in path for maintainability (router_core seam), a tiny in‑code mini‑agent, and extras to cut boilerplate. Import‑time robustness and deterministic smokes make the fork safer to build on.
-- Performance is neutral vs upstream (p50/p95 parity in local harness). The value is stability, ergonomics, and seams for future work—not raw speed.
-- CI enforces tests/smoke on `fork/stable`. A canary flag enables the extracted streaming path; legacy remains default.
+- We added an experimental Mini‑Agent (with a FastAPI façade), an env‑gated `codex-agent` provider, a pragmatic HTTP tools adapter, and reorganized smokes into deterministic vs live E2E groups. Upstream OpenAI‑compatible APIs remain intact.
+- Focus is operator ergonomics and test determinism: `/agent/run` returns a stable envelope, `/ready` supports health checks, and an OpenAI shim (`/v1/chat/completions`) enables quick wiring to Router and provider facades.
+- Optional live E2E flows (exec‑rpc, HTTP tools, codex‑agent) are skip‑friendly by default and gated via envs.
 
 Capabilities (fork‑only paved road)
-- Router Core (opt‑in refactor seam)
-  - `Router(..., router_core="legacy"|"extracted")` or `LITELLM_ROUTER_CORE=extracted`.
-  - Extracted streaming iterator now exercised fully when flag is set; legacy remains default.
-- Mini‑Agent (in‑code helper, not a framework)
-  - Local tools: `exec_shell` (allowlist, timeouts), `exec_python` (rc/stdout/stderr, observation injection on failure), pair‑preserving pruning, “research on unsure” nudge.
-  - HTTP tools adapter + tiny FastAPI proxy for internal calls.
-- Extras (optional, import‑guarded)
-  - `extras/cache.configure_cache_redis(router, ...)` — one‑liner Redis wiring.
-  - `extras/images.compress_image(...)`, `extras.images.fetch_remote_image(...)` — quick data URLs.
-  - `extras/response_utils` — `extract_content`, `assemble_stream_text`, `augment_json_with_cost`.
-  - `extras/batch.acompletion_as_completed(...)` — simple concurrent batch helper.
-- Robustness
-  - fastuuid→uuid fallback; MCP imports guarded to fail lazily on use.
-  - Py3.12 loop safety (fixture + small default loop bootstrap in Router).
-- Dev hygiene
-  - Smokes are deterministic; Node gateway smoke readiness‑polls and skips if Node absent.
-  - Internal doc: `docs/dev/router_core_flag.md`. Perf harness: `local/scripts/router_core_perf.py`.
+- Mini‑Agent + HTTP Façade
+  - Endpoints: `/agent/run`, `/v1/chat/completions` (OpenAI shim), `/ready`.
+  - Backends: `local` (in‑process tools), `http` (external tool host), `echo` (hermetic), with final fallback to Router for one‑shot.
+  - Envelope: `{ok, final_answer, stopped_reason, messages, metrics}` with `metrics.escalated` and `metrics.used_model`.
+  - Tracing: optional JSONL record via `MINI_AGENT_STORE_TRACES=1` and `MINI_AGENT_STORE_PATH`.
+  - Files: `litellm/experimental_mcp_client/mini_agent/agent_proxy.py`, `litellm/experimental_mcp_client/mini_agent/__init__.py`.
+- HTTP Tools Invoker
+  - Lists tools from `/tools`, invokes via `/invoke`, merges env/request headers (Authorization pass‑through), bounded 429 retry.
+  - File: `litellm/experimental_mcp_client/mini_agent/http_tools_invoker.py`.
+- Local Tools (agent)
+  - `exec_python` and `exec_shell` with timeouts; kill()+wait() on timeout; returns `rc/stdout/stderr`.
+  - Parallel tool execution keeps original call order in stitched outputs.
+- Env‑Gated Provider: `codex-agent`
+  - Enable with `LITELLM_ENABLE_CODEX_AGENT=1`.
+  - Config via `CODEX_AGENT_API_BASE` (or `api_base`), optional `CODEX_AGENT_API_KEY` → `Authorization: Bearer ...`.
+  - Aliases registered: `codex-agent`, `codex_cli_agent`; sync/async HTTP via `httpx`.
+  - File: `litellm/llms/codex_agent.py` (docs at `docs/my-website/docs/providers/codex_agent.md`).
+- Response Utilities
+  - `extract_content`, `assemble_stream_text`, `augment_json_with_cost` for quick, tested helpers.
+- Smokes Reorg
+  - Deterministic under `tests/local_testing/`; live and optional E2E under `tests/smoke/` and `tests/ndsmoke_e2e/`.
+  - Make targets for E2E flows: `e2e-up`, `e2e-run`, `e2e-down`.
 
 Validation Status
-- Local smokes: `PYTHONPATH=$(pwd) pytest -q tests/smoke` → green.
-- CI: `.github/workflows/fork-smokes.yml` runs smokes on push/PR into `fork/stable` (Python 3.12). Green on last run.
-- Optional live check with model key(s): `PYTHONPATH=$(pwd) python local/scripts/live_checks.py` → returns non‑empty results.
+- Deterministic suite: `PYTHONPATH=$(pwd) pytest -q tests/local_testing` → green locally.
+- Smokes (skip‑friendly): `PYTHONPATH=$(pwd) pytest -q tests/smoke -q` → greens or skips when envs missing.
+- E2E (optional): `make e2e-up && make e2e-run && make e2e-down` (requires Docker/compose and services).
+- Note: Broader upstream test matrix still requires provider/env setup and will skip/fail fast if absent (expected).
 
 Comparison vs Upstream (Blunt Assessment)
 - Prompt (as requested): “With blunt criticalal expert-level honest assessment, How does our fork compare with with the original litellm”
 - Answer:
-  - Better for developer stability and operator ergonomics: import‑time robustness, deterministic smokes/CI, extras that erase boilerplate, and a tiny mini‑agent for simple tool loops.
-  - Maintainability improved a notch: the router seam introduces real “places to put code” without changing defaults. Still conservative; we didn’t explode the monolith.
-  - Not faster: runtime performance is essentially neutral. The fork prioritizes safety and seams over micro‑optimizations.
-  - Upstreamability: three safe PRs prepared (fastuuid fallbacks, MCP import guards, httpx error tails). The seam/mini‑agent/extras should remain fork‑only until invited.
+  - The fork is more operator‑friendly for small agentic workflows: a minimal agent façade, an OpenAI shim, and env‑gated provider make prototyping and demos fast without impacting upstream defaults.
+  - Stability is stronger on e2e flows we care about: deterministic tests lock response shapes; live paths are clearly gated and skip‑friendly; subprocess handling is safer (timeouts + kill+wait).
+  - We trade breadth for paved‑road depth: we didn’t touch upstream gateway auth/rate‑limit breadth; instead we focused on a reliable agent loop, HTTP tools, and a conservative provider adapter.
+  - Performance is neutral; the value comes from seams, determinism, and safer envelopes—not raw throughput.
 
 Advantages (vs upstream)
-- Safer imports (no optional dep crashes), test‑friendly event loop behavior, paved extras, and a minimal agent loop for simple iterative flows.
-- Clear, opt‑in refactor seam enables future modularization without touching default users.
+- Clear, small surfaces for agent demos: `/agent/run`, OpenAI shim, `/ready`.
+- Safer subprocess tooling; Authorization header handling in tools/provider paths; bounded 429 retry for tools.
+- Deterministic envelopes and tests make upgrades less risky.
 
 Gaps (vs upstream)
-- No measured speedup; parity is the target. The seam’s main benefits are maintainability and DX.
-- The seam is off by default; projects must flip the flag to exercise it.
-- Coverage is targeted to our paved‑road features; the full provider zoo/proxy paths remain at upstream breadth.
+- `codex-agent` is HTTP‑only here; no CLI/binary integration in this fork.
+- Live E2E depends on local services (mini‑agent, exec‑rpc) and Docker; CI should keep these optional.
+- We did not expand proxy gateway features (auth/rate‑limits/admin) beyond upstream.
 
 HAPPYPATH Alignment (local/docs/01_guides/HAPPYPATH_GUIDE.md)
-- Minimal surface: one flag (existing seam); no option sprawl.
-- Defaults work; overrides are rare; smokes are deterministic; commands copy‑paste cleanly.
-- No new backends or global toggles; extras are import‑guarded and optional.
+- Minimal surfaces, copy‑paste commands, and skip‑friendly tests.
+- New functionality is env‑gated (`LITELLM_ENABLE_CODEX_AGENT`, `MINI_AGENT_*`) and off by default.
+- Deterministic shapes validated locally; live paths documented and optional.
 
 Iterative Next Steps (Now/Next/Later)
 - Now
-  - Add tiny debug‑only metrics (ttft_ms/total_ms) attached to streaming responses (extracted path) and assert parity ±3% vs legacy in smokes. (Collector tests already present.)
-  - Open the three upstream PRs formally (fastuuid fallback, MCP guards, httpx error tails). Keep diffs surgical.
+  - Add `mini-agent` package extras and simple entrypoint (`litellm-mini-agent serve`).
+  - Land small doc updates for `codex-agent` and HTTP tools usage; ensure examples run.
 - Next
-  - Expand extracted streaming parity tests with mid‑stream fallback and chunk‑ordering assertions. Keep default=legacy.
-  - Add 3 short README examples for extras (cache/images/response) + a docs smoke that runs the code blocks.
+  - Add `/metrics` (optional) to the mini‑agent app for Prometheus; keep import‑guarded.
+  - Expand deterministic tests for budget stop (no escalation) and history pruning invariants.
 - Later
-  - Consider enabling extracted by default inside our fork only after real‑world parity metrics hold; upstream remains untouched.
+  - Optional CLI/exec wiring for `codex-agent` when upstream agrees on scope.
+  - Harden E2E harness with per‑service readiness checks and time‑bounded retries.
 
 Metrics & SLIs
-- Smokes pass rate (target 100%).
-- Streaming: time‑to‑first‑token and total latency parity legacy vs extracted (±3%).
-- Import‑time failures: 0 on CI and local.
-- Node gateway readiness failures: 0 (readiness poll).
+- Deterministic smokes pass rate (target 100%).
+- Mini‑agent `/ready` availability in E2E runs (target 100%).
+- Tool call success rate with bounded retries (target > 99% on healthy deps).
+- Subprocess timeouts resolved without zombies (observed 0 leaked processes).
 
 Risks & Mitigations
-- Router drift vs upstream — keep seam opt‑in; keep diffs small; upstream PRs only for safe patches.
-- Extras dependency creep — extras remain optional and import‑guarded; no new global knobs.
-- Test fragility — continue using local‑only smokes; avoid network; keep readiness polls and autouse loop fixture.
+- Live deps flakiness — keep tests skip‑friendly and document envs; add readiness checks.
+- Header handling regressions — tests validate Authorization propagation in HTTP tools and provider calls.
+- Subprocess safety — enforce timeouts and kill+wait; keep allowlists tight.
 
 References
-- docs/dev/router_core_flag.md — flag usage & safety.
-- tests/smoke — deterministic smokes.
-- .github/workflows/fork-smokes.yml — CI for our fork.
-- local/scripts/router_core_perf.py — perf parity sanity.
-- local/scripts/live_checks.py — quick live test harness.
+- Mini‑Agent proxy: `litellm/experimental_mcp_client/mini_agent/agent_proxy.py`
+- Mini‑Agent init: `litellm/experimental_mcp_client/mini_agent/__init__.py`
+- HTTP tools: `litellm/experimental_mcp_client/mini_agent/http_tools_invoker.py`
+- Codex provider: `litellm/llms/codex_agent.py`
+- Docs: `docs/my-website/docs/providers/codex_agent.md`
+- Smokes: `tests/local_testing/`, `tests/smoke/`, `tests/ndsmoke_e2e/`
 
 
 Stop/Start/Continue
-- Stop: adding new extras or mini‑agent features until parity and upstream PRs land; keep scope tight.
-- Start: capture parity metrics (ttft_ms/total_ms) from a single canary service with LITELLM_ROUTER_CORE=extracted and compare to legacy.
-- Continue: running smokes + CI on every push to fork/stable and keeping upstream PRs surgical with “no behavior change for defaults.”
+- Stop: broadening live E2E without readiness checks.
+- Start: package the mini‑agent server as an optional extra with a CLI.
+- Continue: keep tests deterministic by default and live paths gated/skip‑friendly.
 
 Technical Debt (own it)
-- Parallel helpers in router tests: useful for smokes but not a public abstraction. Keep test‑only; do not export.
-- Event‑loop bootstrapping in tests: safeguards smokes but should not be relied on by embedders. Keep wrapped in try/except and document as test‑only.
-- Metrics attachment via hidden params: handy for debugging; treat as unofficial and avoid downstream coupling. If needed later, expose a formal callback.
+- Event‑loop guards in `mini_agent/__init__.py` are test‑oriented; keep minimal and avoid depending on them in library code.
+- HTTP tools 429 retry is basic; consider jitter/backoff tuning and max attempt metrics.
+- Exec tools allowlist must remain strict; audit periodically.
 
 
 Canary Parity Plan
-- See local/docs/02_operational/CANARY_PARITY_PLAN.md.
-- Gate wiring on: same_text true and worst_ttft/total ≤ 3% over one week.
+- Not applicable for router core in this iteration. Focus canary on mini‑agent e2e availability and tool success rates.
 
 
 Wiring Draft
-- Branch: feat/extracted-transport-wiring-draft (PR #6 on fork).
-- Behavior: wires inner async call to router_core/transport_manager only when LITELLM_ROUTER_CORE=extracted. Default remains legacy.
-- Status: Do not merge until canary parity (same_text true; worst ttft/total ≤ 3%) passes for 7 days.
+- `codex-agent` provider is disabled by default and wires in only when `LITELLM_ENABLE_CODEX_AGENT=1`.
+- Mini‑agent server remains optional; docs provide quickstart. No default changes to upstream behavior.
 
 Quick Links
-- QUICK_START.md for copy‑paste setup.
-- local/docs/02_operational/CANARY_PARITY_PLAN.md for canary runbook.
+- `README_FORK.md` for fork feature summary and quickstart.
+- `docs/my-website/docs/providers/codex_agent.md` for provider usage.

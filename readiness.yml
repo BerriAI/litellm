@@ -1,0 +1,144 @@
+checks:
+  - name: deterministic_local
+    description: Deterministic Local (agent core, response utils)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q \
+        tests/local_testing/test_agent_local_finalize.py \
+        tests/local_testing/test_http_tools_invoker.py \
+        tests/local_testing/test_response_utils.py -q
+
+  - name: mini_agent_e2e_low
+    description: Mini-Agent E2E (local shim)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke_e2e/test_mini_agent_e2e_low.py -q
+    env:
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+
+  - name: codex_agent_router_shim
+    description: codex-agent via Router (shim)
+    run: |
+      python - <<'PY'
+      import os, socket, threading, json, time
+      from http.server import BaseHTTPRequestHandler, HTTPServer
+      # inline stub server to avoid port collisions
+      s=socket.socket(); s.bind(('127.0.0.1',0)); port=s.getsockname()[1]; s.close()
+      class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+          if not (self.path.endswith('/chat/completions')):
+            self.send_response(404); self.end_headers(); return
+          _ = self.rfile.read(int(self.headers.get('content-length','0') or '0'))
+          self.send_response(200)
+          self.send_header('Content-Type','application/json')
+          self.end_headers()
+          body={'choices':[{'message':{'content':'hello from codex-agent stub'}}]}
+          self.wfile.write(json.dumps(body).encode('utf-8'))
+      server=HTTPServer(('127.0.0.1',port), H)
+      t=threading.Thread(target=server.serve_forever, daemon=True); t.start()
+      # gate env before importing litellm
+      os.environ.setdefault('LITELLM_ENABLE_CODEX_AGENT','1')
+      os.environ['CODEX_AGENT_API_BASE']=f'http://127.0.0.1:{port}'
+      from litellm import Router
+      r = Router(model_list=[{
+        'model_name':'codex-agent-1','litellm_params':{
+          'model':'gpt-5',
+          'custom_llm_provider':'custom_openai',
+          'api_base':os.getenv('CODEX_AGENT_API_BASE'),
+          'api_key':os.getenv('CODEX_AGENT_API_KEY','sk-stub')
+        }
+      }])
+      out = r.completion(model='codex-agent-1', messages=[{'role':'user','content':'Say hello and finish.'}])
+      content = getattr(getattr(out.choices[0],'message',{}),'content','')
+      assert isinstance(content,str) and content.strip()
+      PY
+
+  - name: docker_smokes
+    description: Docker Readiness (readiness + loopback gated)
+    run: |
+      make ndsmoke-docker
+    optional: true
+
+  # Expanded ND smokes (must pass under strict readiness)
+  - name: mini_agent_api_live_minimal
+    description: Mini-Agent API reachability + invariants (live-ish, shim guarded)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke/test_mini_agent_api_live_minimal_ndsmoke.py -q
+    env:
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+
+  - name: mini_agent_lang_tools
+    description: Mini-Agent language toolchain checks (skip missing toolchains; require LLM + python path)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke/test_mini_agent_lang_ndsmoke.py -q
+    env:
+      DOCKER_MINI_AGENT: "1"
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+      LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
+
+  - name: mini_agent_escalation_high
+    description: Mini-Agent escalation path sets metrics and used_model correctly
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke_e2e/test_mini_agent_e2e_high_escalation.py -q
+    env:
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+      NDSMOKE_SHORTCIRCUIT_CHUTES: "1"
+
+  - name: code_loop_python
+    description: Explicit code loop (generate → run → repair) must converge
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke/test_loop_exec_python_ndsmoke.py -q
+    env:
+      DOCKER_MINI_AGENT: "1"
+      LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
+      NDSMOKE_MAX_ITERS: "5"
+      NDSMOKE_TOOL_TIMEOUT: "45"
+      NDSMOKE_TIMEOUT: "240"
+
+  - name: code_loop_python
+    description: Explicit code loop (generate → run → repair) must converge
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke/test_loop_exec_python_ndsmoke.py -q
+    env:
+      DOCKER_MINI_AGENT: "1"
+      LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
+      NDSMOKE_MAX_ITERS: "5"
+      NDSMOKE_TOOL_TIMEOUT: "45"
+      NDSMOKE_TIMEOUT: "240"
+
+  - name: all_smokes
+    description: Run every smoke suite (full surface). Legacy monolith; optional for strict gates.
+    optional: true
+    run: |
+      PYTHONPATH=$(pwd) python scripts/run_all_smokes.py
+
+
+  - name: all_smokes_core
+    description: Core smoke suites (deterministic)
+    run: |
+      PYTHONPATH=$(pwd) pytest tests/smoke tests/smoke_optional
+    env:
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+      MINI_AGENT_OPENAI_SHIM_MODE: echo
+      LITELLM_ENABLE_CODEX_AGENT: "1"
+      CODEX_AGENT_API_BASE: http://127.0.0.1:8788
+      LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
+      LITELLM_DEFAULT_TEXT_MODEL: ollama_chat/glm4:latest
+      OLLAMA_MODEL: glm4:latest
+
+  - name: all_smokes_nd
+    description: Non-deterministic + E2E (slower)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/ndsmoke tests/ndsmoke_e2e
+    env:
+      MINI_AGENT_API_HOST: 127.0.0.1
+      MINI_AGENT_API_PORT: "8788"
+      MINI_AGENT_OPENAI_SHIM_MODE: echo
+      LITELLM_ENABLE_CODEX_AGENT: "1"
+      CODEX_AGENT_API_BASE: http://127.0.0.1:8788
+      LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
+      LITELLM_DEFAULT_TEXT_MODEL: ollama_chat/glm4:latest
+      OLLAMA_MODEL: glm4:latest

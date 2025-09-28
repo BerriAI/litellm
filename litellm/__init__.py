@@ -1296,7 +1296,6 @@ from .exceptions import (
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
-from .router import Router
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
@@ -1336,3 +1335,20 @@ global_disable_no_log_param: bool = False
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+
+# --- Experimental provider: codex-agent (env-gated) ---------------------------
+# Register this BEFORE importing Router so provider validation sees it.
+try:
+    import os as _os
+    if _os.getenv("LITELLM_ENABLE_CODEX_AGENT", "") == "1":
+        from .llms.codex_agent import CodexAgentLLM as _CodexAgentLLM
+        custom_provider_map.append({"provider": "codex-agent", "custom_handler": _CodexAgentLLM()})
+        # Add to provider list once at import time
+        from .utils import custom_llm_setup as _custom_llm_setup
+
+        _custom_llm_setup()
+except Exception:
+    # Best-effort: never break base imports if experimental provider misbehaves
+    pass
+
+from .router import Router

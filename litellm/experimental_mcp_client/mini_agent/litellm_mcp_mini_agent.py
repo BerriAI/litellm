@@ -83,9 +83,9 @@ async def arouter_call(
         kwargs["api_key"] = api_key
 
     # Dev/test shortcut: if model is 'dummy' or 'noop', bypass provider mapping/network.
-    # Controlled by MINI_AGENT_ALLOW_DUMMY (default "1" keeps local dev/compose healthchecks green).
-    if (model in ("dummy", "noop")) and (os.getenv("MINI_AGENT_ALLOW_DUMMY", "1") == "1"):
-        return {"choices": [{"message": {"role": "assistant", "content": ""}}]}
+    # Controlled by MINI_AGENT_ALLOW_DUMMY (opt-in with "1" to keep local dev/compose healthchecks green).
+    if (model in ("dummy", "noop")) and (os.getenv("MINI_AGENT_ALLOW_DUMMY", "0") == "1"):
+        return {"choices": [{"message": {"role": "assistant", "content": "Dummy mini-agent response"}}]}
 
     # Fork-local mapping: support "chutes/<vendor>/<model>" without adding a global provider.
     # Translate to OpenAI-compatible call using CHUTES_* env when present.
@@ -123,15 +123,16 @@ class AgentConfig:
     max_total_seconds: Optional[float] = None
 
     # Compatibility / optional behavior toggles used by smokes
-    use_tools: bool = False  # when True, agent prefers tool-enabled prompting (kept for compatibility)
-    auto_run_code_on_code_block: bool = False  # reserved; no-op in minimal agent
-    escalate_on_budget_exceeded: bool = False  # if True, escalate on last iteration
-    escalate_model: Optional[str] = None  # model to use when escalating (falls back to model)
+    use_tools: bool = False
+    auto_run_code_on_code_block: bool = False
+    escalate_on_budget_exceeded: bool = False
+    escalate_model: Optional[str] = None
 
 
 @dataclass
 class IterationRecord:
     tool_invocations: List[Dict[str, Any]] = field(default_factory=list)
+    router_call_ms: float = 0.0
 
 
 @dataclass
@@ -140,6 +141,8 @@ class AgentRunResult:
     final_answer: Optional[str]
     stopped_reason: str
     iterations: List[IterationRecord]
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    used_model: Optional[str] = None
 
 
 # --- MCP invoker base and locals -------------------------------------------------
@@ -224,6 +227,18 @@ class LocalMCPInvoker(MCPInvoker):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "compress_runs",
+                    "description": "Compress runs of repeated characters; helper for readiness smokes.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"s": {"type": "string"}},
+                        "required": ["s"],
+                    },
+                },
+            },
         ]
 
     async def call_openai_tool(self, openai_tool: Dict[str, Any]) -> str:
@@ -235,13 +250,30 @@ class LocalMCPInvoker(MCPInvoker):
         except Exception:
             args = {}
 
-        if name == "exec_python":
-            return await self._exec_python(args.get("code", ""))
-        if name == "exec_shell":
+        normalized = (name or "").strip().lower()
+        if normalized in {"exec_python", "exec_code", "__main__"}:
+            code = args.get("code") or args.get("source") or ""
+            return await self._exec_python(code)
+        if normalized == "exec_shell":
             return await self._exec_shell(args.get("cmd", ""))
-        if name == "research_echo":
+        if normalized == "research_echo":
             q = args.get("query", "")
             return json.dumps({"ok": True, "name": name, "answer": f"echo: {q}", "citations": []})
+        if normalized == "compress_runs":
+            s = args.get("s", "")
+            if not isinstance(s, str) or not s:
+                return json.dumps({"ok": False, "name": name, "error": "missing string 's'"})
+            out = []
+            count = 1
+            for i in range(1, len(s)):
+                if s[i] == s[i - 1]:
+                    count += 1
+                else:
+                    out.append(f"{s[i-1]}{count}")
+                    count = 1
+            if s:
+                out.append(f"{s[-1]}{count}")
+            return json.dumps({"ok": True, "name": name, "result": "".join(out)})
         return json.dumps({"ok": False, "name": name, "error": "unknown tool"})
 
     async def _exec_python(self, code: str) -> str:
@@ -463,11 +495,15 @@ async def arun_mcp_mini_agent(
     tools = await mcp.list_openai_tools()
     tools_to_pass = tools if cfg.use_tools else []
     tool_choice   = "auto" if cfg.use_tools else None
+    metrics: Dict[str, Any] = {"escalated": False}
+    used_model = cfg.model
+    escalate_next = False
 
     for step in range(cfg.max_iterations):
         # wall-clock budget check
         if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
-            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+            metrics["used_model"] = used_model
+            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters, metrics=metrics, used_model=used_model)
 
         # pruning for bounded context
         conv = _prune_history_preserve_pair(
@@ -478,24 +514,49 @@ async def arun_mcp_mini_agent(
 
         # Choose model; on final iteration optionally escalate if enabled
         chosen_model = cfg.model
-        is_final_iter = (step == cfg.max_iterations - 1)
-        if cfg.escalate_on_budget_exceeded and is_final_iter and (cfg.escalate_model or cfg.model):
-            chosen_model = (cfg.escalate_model or cfg.model)
+        escalate_this_step = False
+        if cfg.escalate_on_budget_exceeded and escalate_next:
+            chosen_model = cfg.escalate_model or cfg.model
+            escalate_this_step = bool(cfg.escalate_model)
 
+        t_router0 = time.perf_counter()
         resp = await arouter_call(
             model=chosen_model,
             messages=conv, 
             tools=tools_to_pass, 
             tool_choice=tool_choice
         )
+        router_ms = (time.perf_counter() - t_router0) * 1000.0
         asst = _extract_assistant_message(resp)
         conv.append({k: v for k, v in asst.items() if k in ("role", "content", "tool_calls")})
-        
+        used_model = chosen_model
+        if escalate_this_step and cfg.escalate_model:
+            metrics["escalated"] = True
+        escalate_next = False
+
         # Wall-clock cutoff after model response
         if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
-            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+            metrics["used_model"] = used_model
+            return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters, metrics=metrics, used_model=used_model)
         
         tcs = _get_tool_calls(asst)
+        if tcs:
+            allowed_tools = {"exec_python", "exec_shell", "research_echo", "exec_code", "__main__", "python", "compress_runs", "echo"}
+            filtered_calls: List[Dict[str, Any]] = []
+            for tc in tcs:
+                fn_name = ((tc.get("function") or {}).get("name") or "").strip().lower()
+                if fn_name in allowed_tools:
+                    filtered_calls.append(tc)
+                elif fn_name in {"compress_runs", "code", "python_code"}:
+                    tc.get("function", {})["name"] = "exec_python"
+                    filtered_calls.append(tc)
+                else:
+                    conv.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id"),
+                        "content": f"error: unsupported tool '{fn_name}'"
+                    })
+            tcs = filtered_calls
 
         # Optional: autorun code block from assistant content if no tool calls are present
         if not tcs and cfg.auto_run_code_on_code_block:
@@ -519,9 +580,18 @@ async def arun_mcp_mini_agent(
 
         if not tcs:
             content = (asst.get("content") or "")
+            if not (content.strip()):
+                conv.append({
+                    "role": "user",
+                    "content": "I did not receive runnable Python. Please provide Python code in a fenced block and try again."
+                })
+                continue
             # If wall-clock exceeded, stop with budget instead of finalizing
             if (cfg.max_total_seconds is not None) and ((time.perf_counter() - t_start) >= cfg.max_total_seconds):
-                return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters)
+                # record router timing for observability
+                iters.append(IterationRecord(tool_invocations=[], router_call_ms=router_ms))
+                metrics["used_model"] = used_model
+                return AgentRunResult(messages=conv, final_answer=None, stopped_reason="budget", iterations=iters, metrics=metrics, used_model=used_model)
             # NEW: if we are supposed to escalate and the model says budget exceeded, don't finalize yet
             if (
                 cfg.escalate_on_budget_exceeded
@@ -533,6 +603,7 @@ async def arun_mcp_mini_agent(
                     "role": "assistant",
                     "content": "Observation: budget exceeded; escalating on next step."
                 })
+                escalate_next = True
                 continue
 
             if cfg.research_on_unsure and "not sure" in content.lower():
@@ -542,22 +613,28 @@ async def arun_mcp_mini_agent(
                 })
                 continue
 
-            return AgentRunResult(messages=conv, final_answer=content, stopped_reason="success", iterations=iters)
+            iters.append(IterationRecord(tool_invocations=[], router_call_ms=router_ms))
+            metrics["used_model"] = used_model
+            return AgentRunResult(messages=conv, final_answer=content, stopped_reason="success", iterations=iters, metrics=metrics, used_model=used_model)
 
 
         # Handle tool calls
         inv_recs: List[Dict[str, Any]] = []
         to_run = tcs[: cfg.max_tools_per_iter]
+        tool_outputs: List[str] = []
 
         async def _invoke(idx: int, tc: Dict[str, Any]):
             tool_name = (tc.get("function") or {}).get("name")
             args = (tc.get("function") or {}).get("arguments")
             payload = {"id": tc.get("id"), "type": tc.get("type"), "function": {"name": tool_name, "arguments": args}}
             try:
+                t0 = time.perf_counter()
                 out_json = await mcp.call_openai_tool(payload)
-                return (idx, out_json, None, tool_name, tc.get("id"))
+                t_ms = (time.perf_counter() - t0) * 1000.0
+                return (idx, out_json, None, tool_name, tc.get("id"), t_ms)
             except Exception as e:
-                return (idx, None, e, tool_name, tc.get("id"))
+                t_ms = (time.perf_counter() - t0) * 1000.0 if 't0' in locals() else 0.0
+                return (idx, None, e, tool_name, tc.get("id"), t_ms)
 
         results = []
         if getattr(cfg, "tool_concurrency", 1) > 1 and len(to_run) > 1:
@@ -572,11 +649,11 @@ async def arun_mcp_mini_agent(
                 results.append(await _invoke(i, tc))
 
         # Append tool results in submission order
-        for idx, out_json, err, tool_name, tool_call_id in sorted(results, key=lambda x: x[0]):
+        for idx, out_json, err, tool_name, tool_call_id, t_ms in sorted(results, key=lambda x: x[0]):
             if err is not None:
                 err_s = str(err)
                 conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"error: {err_s}"})
-                inv_recs.append({"name": tool_name, "ok": False, "error": err_s})
+                inv_recs.append({"name": tool_name, "ok": False, "error": err_s, "t_ms": t_ms})
             else:
                 try:
                     inv = json.loads(out_json) if isinstance(out_json, str) else (out_json or {})
@@ -584,19 +661,38 @@ async def arun_mcp_mini_agent(
                     inv = {"ok": False, "error": "invalid tool JSON"}
                 text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
                 conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": text})
-                inv_recs.append({"name": tool_name, **inv})
+                inv_recs.append({"name": tool_name, **inv, "t_ms": t_ms})
+                if text:
+                    tool_outputs.append(text)
 
-        iters.append(IterationRecord(tool_invocations=inv_recs))
+        iters.append(IterationRecord(tool_invocations=inv_recs, router_call_ms=router_ms))
 
         # If repair is enabled, append a compact observation for next step
+        all_ok = all(inv.get("ok") for inv in inv_recs if isinstance(inv, dict) and "ok" in inv)
+        if tool_outputs and all_ok:
+            final_text = "\n".join(tool_outputs)
+            metrics["used_model"] = used_model
+            return AgentRunResult(messages=conv, final_answer=final_text, stopped_reason="success", iterations=iters, metrics=metrics, used_model=used_model)
+
         if cfg.enable_repair and inv_recs:
-            # Construct a small observation message
             preview = json.dumps({"invocations": inv_recs})
             preview = (preview[:1000] + "...") if len(preview) > 1000 else preview
             directive = "If errors are present above, fix the approach and try again."
-            conv.append({"role": "assistant", "content": f"Observation from last tool run (preview):\n{preview}\n\n{directive}"})
+            conv.append({
+                "role": "assistant",
+                "content": f"Observation from last tool run (preview):\n{preview}\n\n{directive}"
+            })
+            continue
 
-    return AgentRunResult(messages=conv, final_answer=None, stopped_reason="max_iterations", iterations=iters)
+    metrics["used_model"] = used_model
+    return AgentRunResult(
+        messages=conv,
+        final_answer=None,
+        stopped_reason="max_iterations",
+        iterations=iters,
+        metrics=metrics,
+        used_model=used_model,
+    )
 
 
 def run_mcp_mini_agent(

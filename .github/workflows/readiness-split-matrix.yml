@@ -1,0 +1,57 @@
+name: Readiness (split & sharded)
+
+on:
+  push:
+    branches: [ fork/** ]
+  pull_request:
+    branches: [ fork/** ]
+  workflow_dispatch: {}
+
+concurrency:
+  group: readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+          pip install pytest-xdist
+      - name: Core smokes (split gate)
+        env:
+          ALL_SMOKES_CORE_TIMEOUT: '900'
+          PYTEST_XDIST_AUTO_NUM_WORKERS: '4'
+        run: make project-ready-core-only
+
+  nd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        shard: [ "not shard_b", "shard_b" ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+          pip install pytest-xdist
+      - name: ND/E2E smokes (matrix shard)
+        env:
+          ALL_SMOKES_ND_TIMEOUT: '1200'
+          PYTEST_XDIST_AUTO_NUM_WORKERS: '6'
+          PYTEST_ADDOPTS: -k '${{ matrix.shard }}'
+        run: make project-ready-nd-only

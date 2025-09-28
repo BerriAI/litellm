@@ -1,3 +1,13 @@
+"""Mini-agent public surface and event-loop guards.
+
+This module exports the key mini-agent types and functions used in smokes and
+lightweight integrations, while also ensuring an event loop exists in
+environments that still call `asyncio.get_event_loop()` directly (e.g., some
+test runners).
+"""
+
+from __future__ import annotations
+
 # Minimal namespace for mini-agent helpers used in smokes.
 # Ensure an event loop exists for tests that call asyncio.get_event_loop().run_until_complete(...)
 import asyncio  # noqa: E402
@@ -27,3 +37,32 @@ except RuntimeError:
         asyncio.set_event_loop(_loop_pkg2)
     except Exception:
         pass
+
+# Public exports from the mini-agent implementation
+from .litellm_mcp_mini_agent import (
+    AgentConfig,
+    AgentRunResult,
+    IterationRecord,
+    MCPInvoker,
+    EchoMCP,
+    LocalMCPInvoker,
+    arun_mcp_mini_agent,
+    run_mcp_mini_agent,
+)
+
+try:  # optional dependency (httpx)
+    from .http_tools_invoker import HttpToolsInvoker  # type: ignore
+except Exception:  # pragma: no cover - optional export
+    HttpToolsInvoker = None  # type: ignore
+
+__all__ = [
+    "AgentConfig",
+    "AgentRunResult",
+    "IterationRecord",
+    "MCPInvoker",
+    "EchoMCP",
+    "LocalMCPInvoker",
+    "HttpToolsInvoker",
+    "arun_mcp_mini_agent",
+    "run_mcp_mini_agent",
+]

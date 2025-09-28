@@ -26,7 +26,7 @@ def test_node_gateway_optional(monkeypatch):
     if not os.path.isdir(gw_dir):
         pytest.skip("node gateway directory not found")
     env = os.environ.copy()
-    env.setdefault("PORT", "8789")
+    env.setdefault("PORT", "8788")
     proc = subprocess.Popen([node, "server.mjs"], cwd=gw_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         # Readiness poll (up to ~3s)
@@ -35,7 +35,7 @@ def test_node_gateway_optional(monkeypatch):
         ready = False
         for _ in range(20):
             try:
-                with _req.urlopen("http://127.0.0.1:8789/tools", timeout=0.15) as r:  # type: ignore
+                with _req.urlopen("http://127.0.0.1:8788/tools", timeout=0.15) as r:  # type: ignore
                     if r.status == 200:
                         _ = _json.loads(r.read().decode("utf-8"))
                         ready = True
@@ -57,7 +57,7 @@ def test_node_gateway_optional(monkeypatch):
         from litellm.experimental_mcp_client.mini_agent.http_tools_invoker import HttpToolsInvoker
         from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import AgentConfig, run_mcp_mini_agent
 
-        mcp = HttpToolsInvoker("http://127.0.0.1:8789")
+        mcp = HttpToolsInvoker("http://127.0.0.1:8788")
         cfg = AgentConfig(model="dummy")
         messages = [{"role": "user", "content": "Use echo('hi') and finish."}]
 

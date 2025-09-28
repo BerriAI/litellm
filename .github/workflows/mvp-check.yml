@@ -1,0 +1,51 @@
+name: Project Readiness
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - fork/**
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Dev Readiness
+        run: make project-ready
+
+      - name: Deploy Readiness (Ollama default)
+        env:
+          READINESS_LIVE: '1'
+          STRICT_READY: '1'
+          READINESS_EXPECT: 'ollama'
+          # Optionally wire a remote/local Ollama
+          OLLAMA_API_BASE: 'http://127.0.0.1:11434'
+        run: |
+          make project-ready-live || true
+          # Fail the job if the summary says NOT READY
+          if grep -q "**Summary**: NOT READY" PROJECT_READY.md; then
+            echo "Deploy readiness failed" >&2
+            exit 1
+          fi
+
+      - name: Upload readiness artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readiness
+          path: |
+            PROJECT_READY.md
+            local/artifacts/mvp/mvp_report.json
+

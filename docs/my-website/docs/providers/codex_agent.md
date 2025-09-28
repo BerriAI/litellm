@@ -41,25 +41,35 @@ resp = await router.acompletion(
 print(resp.choices[0].message.content)
 ```
 
-### Verify local codex binary (optional)
+### Configure HTTP endpoint (required) and auth (optional)
 
-You can configure the CLI path via either `LITELLM_CODEX_BINARY_PATH` (absolute) or `CODEX_HOME/bin/codex`. If neither is set, the provider falls back to `which("codex")`.
+This provider is **HTTP-only**. Point it at an OpenAI-compatible Chat Completions base:
 
 ```bash
 export LITELLM_ENABLE_CODEX_AGENT=1
-export CODEX_HOME="$HOME/.codex"
-# or: export LITELLM_CODEX_BINARY_PATH="/absolute/path/to/codex"
-codex --version  # quick sanity check
+export CODEX_AGENT_API_BASE=http://127.0.0.1:8788    # e.g., mini-agent shim /v1/chat/completions
+export CODEX_AGENT_API_KEY=sk-your-key               # optional; becomes Authorization: Bearer ...
 ```
 
-Then test a short run via Router (no special client code needed):
+Then wire the Router (note the `api_base`/`api_key` in `litellm_params`):
 
 ```python
 from litellm import Router
 import os
+
 os.environ["LITELLM_ENABLE_CODEX_AGENT"] = "1"
-router = Router(model_list=[{"model_name":"codex-agent-1","litellm_params":{"model":"codex-agent/mini"}}])
-resp = await router.acompletion(model="codex-agent-1", messages=[{"role":"user","content":"echo hello then stop"}])
+router = Router(model_list=[
+  {"model_name":"codex-agent-1","litellm_params":{
+      "model":"codex-agent/mini",
+      "api_base": os.getenv("CODEX_AGENT_API_BASE"),
+      "api_key":  os.getenv("CODEX_AGENT_API_KEY","")
+  }},
+])
+
+resp = await router.acompletion(
+  model="codex-agent-1",
+  messages=[{"role":"user","content":"Plan steps and finish."}],
+)
 print(resp.choices[0].message.content)
 ```
 

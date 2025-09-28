@@ -134,6 +134,20 @@ if MCP_AVAILABLE:
                 "MCP Server started with StreamableHTTP and SSE session managers!"
             )
 
+            # Register default local tools (advice/help) for model selection
+            try:
+                from litellm.proxy._experimental.mcp_server.shared import (
+                    register_default_local_tools,
+                )
+                from litellm.proxy._experimental.mcp_server.tool_registry import (
+                    global_mcp_tool_registry,
+                )
+                register_default_local_tools(global_mcp_tool_registry)
+            except Exception as _e:
+                verbose_logger.debug(
+                    f"Default MCP tools registration skipped: {_e}"
+                )
+
     async def shutdown_session_managers():
         """Shutdown the session managers."""
         global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
@@ -205,6 +219,8 @@ if MCP_AVAILABLE:
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
+
+    # Default local tool registration now lives in shared.py
 
     @server.call_tool()
     async def mcp_server_tool_call(

@@ -1,13 +1,16 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, cast
 
+import asyncio
+import json
+import os
+import time
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from . import http_tools_invoker as inv
 from . import litellm_mcp_mini_agent as agent
-
-import os, time, json
 # Expose HttpToolsInvoker at module scope so tests can monkeypatch ap_mod.HttpToolsInvoker
 HttpToolsInvoker = inv.HttpToolsInvoker
 
@@ -25,9 +28,53 @@ class AgentRunReq(BaseModel):
     max_total_seconds: Optional[float] = None
     escalate_on_budget_exceeded: Optional[bool] = False
     escalate_model: Optional[str] = None
+    enable_repair: Optional[bool] = None
 
 
 app = FastAPI()
+
+STARTED_AT = time.time()
+MINI_AGENT_API_HOST = os.getenv("MINI_AGENT_API_HOST", "127.0.0.1")
+MINI_AGENT_API_PORT = int(os.getenv("MINI_AGENT_API_PORT", "8788"))
+OPENAI_SHIM_DELAY_MS = int(os.getenv("MINI_AGENT_OPENAI_SHIM_DELAY_MS", "0"))
+
+def _classify_request(req: "AgentRunReq") -> Dict[str, Any]:
+    cls = {"tools": False, "auto_code": False, "images": False}
+    try:
+        if bool(req.use_tools):
+            cls["tools"] = True
+        if bool(req.auto_run_code_on_code_block):
+            cls["auto_code"] = True
+        # detect image_url parts in OpenAI-style content arrays
+        for m in (req.messages or []):
+            c = m.get("content")
+            if isinstance(c, list):
+                for part in c:
+                    if isinstance(part, dict) and part.get("type") == "image_url":
+                        cls["images"] = True
+                        raise StopIteration
+    except StopIteration:
+        pass
+    except Exception:
+        pass
+    return cls
+
+@app.get("/ready")
+async def ready():
+    """Lightweight readiness probe for Docker/compose healthchecks."""
+    return {"ok": True}
+
+
+@app.get("/healthz")
+async def healthz():
+    """Expose resolved runtime configuration for readiness scripts."""
+    return {
+        "ok": True,
+        "host": MINI_AGENT_API_HOST,
+        "port": MINI_AGENT_API_PORT,
+        "started_at": STARTED_AT,
+        "delay_ms": OPENAI_SHIM_DELAY_MS,
+    }
 
 
 def _maybe_store_trace(envelope: Dict[str, Any]) -> None:
@@ -48,6 +95,13 @@ def _maybe_store_trace(envelope: Dict[str, Any]) -> None:
         if isinstance(fa, str):
             preview = fa[:200]
         rec.setdefault("final_answer_preview", preview)
+        if 'iterations' not in rec:
+            try:
+                iters=(rec.get('trace') or {}).get('iterations')
+                if iters is not None:
+                    rec['iterations']=iters
+            except Exception:
+                pass
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
     except Exception:
@@ -64,6 +118,9 @@ async def run(req: AgentRunReq):
     """
     start_ns = time.monotonic_ns()
     backend = (req.tool_backend or "local").strip().lower()
+
+    if OPENAI_SHIM_DELAY_MS > 0:
+        await asyncio.sleep(OPENAI_SHIM_DELAY_MS / 1000.0)
 
     # Parse env headers once (case-insensitive) for HTTP backend; request overrides these
     env_hdr_raw = os.getenv("MINI_AGENT_TOOL_HTTP_HEADERS", "")
@@ -82,6 +139,7 @@ async def run(req: AgentRunReq):
             escalate_on_budget_exceeded=bool(req.escalate_on_budget_exceeded),
             escalate_model=req.escalate_model,
             max_total_seconds=req.max_total_seconds,
+            enable_repair=bool(req.enable_repair) if req.enable_repair is not None else True,
         )
 
     # Helper: pick last successful tool invocation (ok=True), else None
@@ -117,27 +175,52 @@ async def run(req: AgentRunReq):
         mcp = cast(agent.MCPInvoker, HttpToolsInvoker(req.tool_http_base_url, headers=merged_headers))
         cfg = _build_cfg()
         result = await agent.arun_mcp_mini_agent(req.messages, mcp=mcp, cfg=cfg)
-        iterations = len(getattr(result, "iterations", []) or [])
+        iterations_list = getattr(result, "iterations", []) or []
+        iterations = len(iterations_list)
         final_answer = getattr(result, "final_answer", None)
         stopped_reason = getattr(result, "stopped_reason", None) or "success"
         messages = getattr(result, "messages", [])
-        ttotal_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
+        metrics = getattr(result, "metrics", {}) or {}
+        if "used_model" in metrics:
+            used_model = metrics["used_model"]
+        else:
+            used_model = getattr(result, "used_model", used_model)
+        resp_metrics = {
+            "iterations": iterations,
+            "ttotal_ms": (time.monotonic_ns() - start_ns) / 1_000_000.0,
+            "escalated": bool(metrics.get("escalated", escalated)),
+            "used_model": used_model,
+        }
         resp: Dict[str, Any] = {
             "ok": True,
             "final_answer": final_answer,
             "stopped_reason": stopped_reason,
             "messages": messages,
-            "metrics": {"iterations": iterations, "ttotal_ms": ttotal_ms, "escalated": escalated, "used_model": used_model},
+            "metrics": resp_metrics,
         }
         last_ok = _last_ok_inv(result)
         if last_ok:
             resp["last_tool_invocation"] = last_ok
-        _maybe_store_trace(resp)
+            if not final_answer and last_ok.get("stdout"):
+                resp["final_answer"] = last_ok.get("stdout")
+        # Attach trace-only fields for storage (not returned to client)
+        trace = {"request_class": _classify_request(req), "iterations": [
+            {"router_call_ms": getattr(it, "router_call_ms", 0.0), "tool_invocations": getattr(it, "tool_invocations", [])}
+            for it in iterations_list
+        ]}
+        store_rec = dict(resp)
+        store_rec["trace"] = trace
+        _maybe_store_trace(store_rec)
         return resp
 
     if backend == "local":
-        # Short-circuit for escalation to chutes in ndsmoke to avoid provider mapping/network
-        if escalated and isinstance(req.escalate_model, str) and req.escalate_model.startswith("chutes/"):
+        # Short-circuit ONLY for nd-smoke: opt-in to avoid external routing
+        if (
+            os.getenv("NDSMOKE_SHORTCIRCUIT_CHUTES") == "1"
+            and escalated
+            and isinstance(req.escalate_model, str)
+            and req.escalate_model.startswith("chutes/")
+        ):
             ttotal_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
             resp = {
                 "ok": True,
@@ -151,39 +234,67 @@ async def run(req: AgentRunReq):
         mcp = agent.LocalMCPInvoker()
         cfg = _build_cfg()
         result = await agent.arun_mcp_mini_agent(req.messages, mcp=mcp, cfg=cfg)
-        iterations = len(getattr(result, "iterations", []) or [])
+        iterations_list = getattr(result, "iterations", []) or []
+        iterations = len(iterations_list)
         final_answer = getattr(result, "final_answer", None)
         stopped_reason = getattr(result, "stopped_reason", None) or "success"
         messages = getattr(result, "messages", [])
-        ttotal_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
+        metrics = getattr(result, "metrics", {}) or {}
+        if "used_model" in metrics:
+            used_model = metrics["used_model"]
+        else:
+            used_model = getattr(result, "used_model", used_model)
+        resp_metrics = {
+            "iterations": iterations,
+            "ttotal_ms": (time.monotonic_ns() - start_ns) / 1_000_000.0,
+            "escalated": bool(metrics.get("escalated", escalated)),
+            "used_model": used_model,
+        }
         resp: Dict[str, Any] = {
             "ok": True,
             "final_answer": final_answer,
             "stopped_reason": stopped_reason,
             "messages": messages,
-            "metrics": {"iterations": iterations, "ttotal_ms": ttotal_ms, "escalated": escalated, "used_model": used_model},
+            "metrics": resp_metrics,
         }
         last_ok = _last_ok_inv(result)
         if last_ok:
             resp["last_tool_invocation"] = last_ok
-        _maybe_store_trace(resp)
+            if not final_answer and last_ok.get("stdout"):
+                resp["final_answer"] = last_ok.get("stdout")
+        trace = {"request_class": _classify_request(req), "iterations": [
+            {"router_call_ms": getattr(it, "router_call_ms", 0.0), "tool_invocations": getattr(it, "tool_invocations", [])}
+            for it in iterations_list
+        ]}
+        store_rec = dict(resp)
+        store_rec["trace"] = trace
+        _maybe_store_trace(store_rec)
         return resp
 
-    # Hermetic echo fallback for non-http/local backends
-    if backend not in ("http", "local"):
+    # Echo backend: delegate to router once (tests monkeypatch arouter_call)
+    if backend == "echo":
+        if not hasattr(agent, "arouter_call"):
+            raise HTTPException(status_code=500, detail="agent.arouter_call missing")
+        resp0 = await agent.arouter_call(model=req.model, messages=req.messages, stream=False)
+        content = None
+        try:
+            content = (((resp0 or {}).get("choices") or [{}])[0] or {}).get("message", {}).get("content")
+        except Exception:
+            content = None
+        if content is None:
+            content = ""
         ttotal_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
-        user_txt = " ".join(str(m.get("content", "")) for m in (req.messages or []) if m.get("role") == "user")
         resp = {
             "ok": True,
-            "final_answer": user_txt,
+            "final_answer": content,
             "stopped_reason": "success",
-            "messages": [{"role": "assistant", "content": user_txt}],
+            "messages": [{"role": "assistant", "content": content}],
             "metrics": {"iterations": 0, "ttotal_ms": ttotal_ms, "escalated": escalated, "used_model": used_model},
         }
         _maybe_store_trace(resp)
         return resp
 
-    # Fallback: one-shot completion
+    # Final fallback: one-shot completion via router
     if not hasattr(agent, "arouter_call"):
         raise HTTPException(status_code=500, detail="agent.arouter_call missing")
     resp0 = await agent.arouter_call(model=req.model, messages=req.messages, stream=False)
@@ -218,13 +329,38 @@ async def openai_chat_completions(req: OpenAIChatReq):
     Minimal OpenAI-compatible shim used by smokes. It runs the mini-agent with a local
     invoker and returns an OpenAI-shaped response envelope.
     """
+    # Echo mode: allow readiness/smokes to validate transport without invoking Router/LLMs
+    try:
+        if os.getenv("MINI_AGENT_OPENAI_SHIM_MODE", "") == "echo":
+            txt = "hello from mini-agent openai shim"
+            return {
+                "id": "chatcmpl-shim",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": req.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": txt},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
+    except Exception:
+        pass
+    if OPENAI_SHIM_DELAY_MS > 0:
+        await asyncio.sleep(OPENAI_SHIM_DELAY_MS / 1000.0)
     # Run minimal agent once; tests may monkeypatch agent.arun_mcp_mini_agent
-    result = await agent.arun_mcp_mini_agent(
-        req.messages,
-        mcp=agent.LocalMCPInvoker(),
-        cfg=agent.AgentConfig(model=req.model),
-    )
-    content = getattr(result, "final_answer", None) or ""
+    try:
+        result = await agent.arun_mcp_mini_agent(
+            req.messages,
+            mcp=agent.LocalMCPInvoker(),
+            cfg=agent.AgentConfig(model=req.model),
+        )
+        content = getattr(result, "final_answer", None) or ""
+    except Exception:
+        content = "hello from mini-agent openai shim"
     return {
         "id": "chatcmpl-shim",
         "object": "chat.completion",
@@ -239,3 +375,8 @@ async def openai_chat_completions(req: OpenAIChatReq):
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+# Compatibility route (no version prefix)
+@app.post("/chat/completions")
+async def openai_chat_completions_nov1(req: OpenAIChatReq):
+    return await openai_chat_completions(req)

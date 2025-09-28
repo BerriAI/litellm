@@ -2400,6 +2400,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     CHUTES = "chutes"
     OVHCLOUD = "ovhcloud"
+    CODEX_AGENT = "codex-agent"
 
 
 # Create a set of all provider values for quick lookup

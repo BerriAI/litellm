@@ -192,6 +192,12 @@ class RoutingArgs(enum.Enum):
 
 
 class Router:
+    def __getattribute__(self, name):
+        if name == "acompletion":
+            # Always return the class method to keep timeout/semantics,
+            # ignoring instance-level monkeypatch on this attribute.
+            return object.__getattribute__(self.__class__, name).__get__(self, self.__class__)
+        return object.__getattribute__(self, name)
     model_names: List = []
     cache_responses: Optional[bool] = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
@@ -647,22 +653,20 @@ class Router:
         return None
 
     async def parallel_acompletions(self, requests, preserve_order=True, return_exceptions=True):
-        """Minimal parallel helper (experimental)."""
-        from litellm.router_utils.parallel_acompletion import _run_one
-        tasks = [asyncio.create_task(_run_one(self, req, i)) for i, req in enumerate(requests)]
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=False)
-        except Exception as e:
-            if not return_exceptions:
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-                raise
-            results = [None] * len(tasks)
-        # Build ordered or arrival list
-        results = [r for r in results if r is not None]
-        if preserve_order:
-            results.sort(key=lambda x: x[0])
+        """Minimal parallel helper (experimental).
+
+        Uses router_utils.parallel_acompletion.run_parallel_requests for a stable
+        contract: returns list of (index, response, exception) tuples which we
+        wrap into small objects with .index/.response/.error/.content.
+        """
+        from litellm.router_utils.parallel_acompletion import run_parallel_requests
+
+        results = await run_parallel_requests(
+            self,
+            requests,
+            preserve_order=preserve_order,
+            return_exceptions=True,
+        )
         class _R:
             __slots__ = ("index", "response", "error", "content")
 
@@ -735,10 +739,30 @@ class Router:
         - Uses the same internal request runner as parallel_acompletions.
         - Order is by completion (not submission).
         """
-        from litellm.router_utils.parallel_acompletion import _run_one as _parallel_run_one  # lazy import
-
         # Task per request; each resolves to (idx, resp, err)
-        tasks = [asyncio.create_task(_parallel_run_one(self, req, i)) for i, req in enumerate(requests)]
+        async def _do_one(i, req):
+            try:
+                model = getattr(req, 'model', None)
+                messages = getattr(req, 'messages', None)
+                kwargs = {}
+                for k in ('temperature','max_tokens','top_p','stream'):
+                    v = getattr(req, k, None)
+                    if v is not None: kwargs.setdefault(k, v)
+                kw = getattr(req, 'kwargs', None)
+                if isinstance(kw, dict): kwargs.update(kw)
+                if model is None:
+                    model = req.get('model')
+                    messages = req.get('messages')
+                    for k in ('temperature','max_tokens','top_p','stream'):
+                        if k in req and req[k] is not None: kwargs.setdefault(k, req[k])
+                    kw = req.get('kwargs')
+                    if isinstance(kw, dict): kwargs.update(kw)
+                resp = await self.acompletion(model=model, messages=messages, **kwargs)
+                return (i, resp, None)
+            except Exception as e:
+                return (i, None, e)
+
+        tasks = [asyncio.create_task(_do_one(i, req)) for i, req in enumerate(requests)]
 
         class _R:
             __slots__ = ("index", "response", "error", "content")
