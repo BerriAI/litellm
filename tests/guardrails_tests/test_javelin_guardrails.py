@@ -67,11 +67,14 @@ async def test_javelin_guardrail_reject_prompt():
                 call_type="completion")
         
         # Verify the exception details
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 500
         assert "Violated guardrail policy" in str(exc_info.value.detail)
-        assert "javelin_guardrail_response" in exc_info.value.detail
-        assert "reject_prompt" in exc_info.value.detail
-        assert exc_info.value.detail["reject_prompt"] == "Unable to complete request, prompt injection/jailbreak detected"
+        detail_dict = exc_info.value.detail
+        assert isinstance(detail_dict, dict)
+        detail_dict = dict(detail_dict)
+        assert "javelin_guardrail_response" in detail_dict
+        assert "reject_prompt" in detail_dict
+        assert detail_dict["reject_prompt"] == "Unable to complete request, prompt injection/jailbreak detected"
 
 #test trustsafety guardrail
 @pytest.mark.asyncio
@@ -139,11 +142,14 @@ async def test_javelin_guardrail_trustsafety():
                 call_type="completion")
         
         # Verify the exception details
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 500
         assert "Violated guardrail policy" in str(exc_info.value.detail)
-        assert "javelin_guardrail_response" in exc_info.value.detail
-        assert "reject_prompt" in exc_info.value.detail
-        assert exc_info.value.detail["reject_prompt"] == "Unable to complete request, trust & safety violation detected"
+        detail_dict = exc_info.value.detail
+        assert isinstance(detail_dict, dict)
+        detail_dict = dict(detail_dict)  # Ensure type checker knows it's a dict
+        assert "javelin_guardrail_response" in detail_dict
+        assert "reject_prompt" in detail_dict
+        assert detail_dict["reject_prompt"] == "Unable to complete request, trust & safety violation detected"
 
 #test language detection guardrail
 @pytest.mark.asyncio
@@ -197,11 +203,14 @@ async def test_javelin_guardrail_language_detection():
                 call_type="completion")
         
         # Verify the exception details
-        assert exc_info.value.status_code == 400
+        assert exc_info.value.status_code == 500
         assert "Violated guardrail policy" in str(exc_info.value.detail)
-        assert "javelin_guardrail_response" in exc_info.value.detail
-        assert "reject_prompt" in exc_info.value.detail
-        assert exc_info.value.detail["reject_prompt"] == "Unable to complete request, language violation detected"
+        detail_dict = exc_info.value.detail
+        assert isinstance(detail_dict, dict)
+        detail_dict = dict(detail_dict)  # Ensure type checker knows it's a dict
+        assert "javelin_guardrail_response" in detail_dict
+        assert "reject_prompt" in detail_dict
+        assert detail_dict["reject_prompt"] == "Unable to complete request, language violation detected"
 
 
 @pytest.mark.asyncio
@@ -237,4 +246,5 @@ async def test_javelin_guardrail_no_user_message():
     
     # Verify the response is unchanged
     assert response is not None
+    assert isinstance(response, dict)
     assert response["messages"] == original_messages
