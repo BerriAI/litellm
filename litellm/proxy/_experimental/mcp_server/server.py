@@ -414,6 +414,13 @@ if MCP_AVAILABLE:
             if server.auth_type == MCPAuth.oauth2:
                 extra_headers = oauth2_headers
 
+            if server.forwardable_headers and raw_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                for header in server.forwardable_headers:
+                    if header in raw_headers:
+                        extra_headers[header] = raw_headers[header]
+
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
                 server_auth_header = mcp_auth_header
