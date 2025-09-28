@@ -212,6 +212,7 @@ class MCPServerManager:
                     "authentication_token", server_config.get("auth_value", None)
                 ),
                 mcp_info=mcp_info,
+                forwardable_headers=server_config.get("forwardable_headers", None),
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -264,6 +265,13 @@ class MCPServerManager:
                 transport=cast(MCPTransportType, mcp_server.transport),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=mcp_info,
+                forwardable_headers=getattr(mcp_server, "forwardable_headers", None),
+                # oauth specific fields
+                client_id=getattr(mcp_server, "client_id", None),
+                client_secret=getattr(mcp_server, "client_secret", None),
+                scopes=getattr(mcp_server, "scopes", None),
+                authorization_url=getattr(mcp_server, "authorization_url", None),
+                token_url=getattr(mcp_server, "token_url", None),
                 # Stdio-specific fields
                 command=getattr(mcp_server, "command", None),
                 args=getattr(mcp_server, "args", None) or [],
@@ -641,6 +649,7 @@ class MCPServerManager:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -708,6 +717,13 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None
         if mcp_server.auth_type == MCPAuth.oauth2:
             extra_headers = oauth2_headers
+
+        if mcp_server.forwardable_headers and raw_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            for header in mcp_server.forwardable_headers:
+                if header in raw_headers:
+                    extra_headers[header] = raw_headers[header]
 
         client = self._create_mcp_client(
             server=mcp_server,

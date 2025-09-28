@@ -41,6 +41,7 @@ class MCPRequestHandler:
         Optional[List[str]],
         Optional[Dict[str, Dict[str, str]]],
         Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
     ]:
         """
         Process and validate MCP request headers from the ASGI scope.
@@ -49,6 +50,7 @@ class MCPRequestHandler:
         2. Processing MCP server configuration
         3. Handling MCP-specific headers
         4. Handling oauth2 headers
+        5. Raw headers - allows forwarding specific headers to the MCP server, specified by the admin.
 
         Args:
             scope: ASGI scope containing request information
@@ -58,7 +60,8 @@ class MCPRequestHandler:
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional[List[str]] List of MCP servers and access groups to use
             mcp_server_auth_headers: Optional[Dict[str, str]] Server-specific auth headers in format {server_alias: auth_value}
-
+            oauth2_headers: Optional[Dict[str, str]] OAuth2 headers
+            raw_headers: Optional[Dict[str, str]] Raw headers to be forwarded to the MCP server
         Raises:
             HTTPException: If headers are invalid or missing required headers
         """
@@ -116,6 +119,7 @@ class MCPRequestHandler:
             mcp_servers,
             mcp_server_auth_headers,
             oauth2_headers,
+            dict(headers),
         )
 
     @staticmethod
