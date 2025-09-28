@@ -5,7 +5,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 from datetime import timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -44,7 +44,7 @@ class MCPClient:
         server_url: str = "",
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
-        auth_value: Optional[str] = None,
+        auth_value: Optional[Union[str, Dict[str, str]]] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
@@ -53,7 +53,7 @@ class MCPClient:
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout
-        self._mcp_auth_value: Optional[str] = None
+        self._mcp_auth_value: Optional[Union[str, Dict[str, str]]] = None
         self._session: Optional[ClientSession] = None
         self._context = None
         self._transport_ctx = None
@@ -180,28 +180,34 @@ class MCPClient:
                 pass
             self._context = None
 
-    def update_auth_value(self, mcp_auth_value: str):
+    def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
         Set the authentication header for the MCP client.
         """
-        if self.auth_type == MCPAuth.basic:
-            # Assuming mcp_auth_value is in format "username:password", convert it when updating
-            mcp_auth_value = to_basic_auth(mcp_auth_value)
-        self._mcp_auth_value = mcp_auth_value
+        if isinstance(mcp_auth_value, dict):
+            self._mcp_auth_value = mcp_auth_value
+        else:
+            if self.auth_type == MCPAuth.basic:
+                # Assuming mcp_auth_value is in format "username:password", convert it when updating
+                mcp_auth_value = to_basic_auth(mcp_auth_value)
+            self._mcp_auth_value = mcp_auth_value
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
         headers = {"MCP-Protocol-Version": "2025-06-18"}
 
         if self._mcp_auth_value:
-            if self.auth_type == MCPAuth.bearer_token:
-                headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.basic:
-                headers["Authorization"] = f"Basic {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.api_key:
-                headers["X-API-Key"] = self._mcp_auth_value
-            elif self.auth_type == MCPAuth.authorization:
-                headers["Authorization"] = self._mcp_auth_value
+            if isinstance(self._mcp_auth_value, str):
+                if self.auth_type == MCPAuth.bearer_token:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.basic:
+                    headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.api_key:
+                    headers["X-API-Key"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.authorization:
+                    headers["Authorization"] = self._mcp_auth_value
+            elif isinstance(self._mcp_auth_value, dict):
+                headers.update(self._mcp_auth_value)
 
         # update the headers with the extra headers
         if self.extra_headers:

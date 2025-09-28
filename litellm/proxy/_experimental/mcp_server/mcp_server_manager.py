@@ -10,7 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 from fastapi import HTTPException
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -212,6 +212,9 @@ class MCPServerManager:
                     "authentication_token", server_config.get("auth_value", None)
                 ),
                 mcp_info=mcp_info,
+                extra_headers=server_config.get("extra_headers", None),
+                allowed_tools=server_config.get("allowed_tools", None),
+                disallowed_tools=server_config.get("disallowed_tools", None),
                 access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -264,11 +267,20 @@ class MCPServerManager:
                 transport=cast(MCPTransportType, mcp_server.transport),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=mcp_info,
+                extra_headers=getattr(mcp_server, "extra_headers", None),
+                # oauth specific fields
+                client_id=getattr(mcp_server, "client_id", None),
+                client_secret=getattr(mcp_server, "client_secret", None),
+                scopes=getattr(mcp_server, "scopes", None),
+                authorization_url=getattr(mcp_server, "authorization_url", None),
+                token_url=getattr(mcp_server, "token_url", None),
                 # Stdio-specific fields
                 command=getattr(mcp_server, "command", None),
                 args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
                 access_groups=getattr(mcp_server, "mcp_access_groups", None),
+                allowed_tools=getattr(mcp_server, "allowed_tools", None),
+                disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
@@ -319,7 +331,7 @@ class MCPServerManager:
         self,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Union[str, Dict[str, str]]]] = None,
     ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
@@ -381,7 +393,7 @@ class MCPServerManager:
     def _create_mcp_client(
         self,
         server: MCPServer,
-        mcp_auth_header: Optional[str] = None,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> MCPClient:
         """
@@ -429,7 +441,7 @@ class MCPServerManager:
     async def _get_tools_from_server(
         self,
         server: MCPServer,
-        mcp_auth_header: Optional[str] = None,
+        mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
@@ -561,6 +573,16 @@ class MCPServerManager:
         )
         return prefixed_tools
 
+    def check_allowed_or_banned_tools(self, tool_name: str, server: MCPServer) -> bool:
+        """
+        Check if the tool is allowed or banned for the given server
+        """
+        if server.allowed_tools:
+            return tool_name in server.allowed_tools
+        if server.disallowed_tools:
+            return tool_name not in server.disallowed_tools
+        return True
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -568,7 +590,18 @@ class MCPServerManager:
         server_name_from_prefix: str,
         user_api_key_auth: Optional[UserAPIKeyAuth],
         proxy_logging_obj: ProxyLogging,
+        server: MCPServer,
     ):
+
+        ## check if the tool is allowed or banned for the given server
+        if not self.check_allowed_or_banned_tools(name, server):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool {name} is not allowed for server {server.name}. Contact proxy admin to allow this tool."
+                },
+            )
+
         pre_hook_kwargs = {
             "name": name,
             "arguments": arguments,
@@ -638,9 +671,10 @@ class MCPServerManager:
         arguments: Dict[str, Any],
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -691,6 +725,7 @@ class MCPServerManager:
                 server_name_from_prefix=server_name_from_prefix,
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
+                server=mcp_server,
             )
 
         # Get server-specific auth header if available
@@ -708,6 +743,13 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None
         if mcp_server.auth_type == MCPAuth.oauth2:
             extra_headers = oauth2_headers
+
+        if mcp_server.extra_headers and raw_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            for header in mcp_server.extra_headers:
+                if header in raw_headers:
+                    extra_headers[header] = raw_headers[header]
 
         client = self._create_mcp_client(
             server=mcp_server,

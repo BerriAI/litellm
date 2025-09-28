@@ -137,6 +137,7 @@ mcp_servers:
   | `basic` | `Authorization: Basic <auth_value>` |
   | `authorization` | `Authorization: <auth_value>` |
 
+- **Extra Headers**: Optional list of additional header names that should be forwarded from client to the MCP server
 - **Spec Version**: Optional MCP specification version (defaults to `2025-06-18`)
 
 Examples for each auth type:
@@ -162,6 +163,13 @@ mcp_servers:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "authorization"
     auth_value: "Token example123"  # headers={"Authorization": "Token example123"}
+
+  # Example with extra headers forwarding
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "ghp_example_token"
+    extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
 ```
 
 
@@ -191,6 +199,65 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+## MCP Tool Filtering
+
+Control which tools are available from your MCP servers. You can either allow only specific tools or block dangerous ones.
+
+<Tabs>
+<TabItem value="allowed" label="Only Allow Specific Tools">
+
+Use `allowed_tools` to specify exactly which tools users can access. All other tools will be blocked.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    allowed_tools: ["list_tools"]
+    # only list_tools will be available
+```
+
+**Use this when:**
+- You want strict control over which tools are available
+- You're in a high-security environment
+- You're testing a new MCP server with limited tools
+
+</TabItem>
+<TabItem value="blocked" label="Block Specific Tools">
+
+Use `disallowed_tools` to block specific tools. All other tools will be available.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+    disallowed_tools: ["repo_delete"]
+    # only repo_delete will be blocked
+```
+
+**Use this when:**
+- Most tools are safe, but you want to block a few dangerous ones
+- You want to prevent expensive API calls
+- You're gradually adding restrictions to an existing server
+
+</TabItem>
+</Tabs>
+
+### Important Notes
+
+- If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
+- Tool names are case-sensitive
 
 ## Using your MCP
 
@@ -771,6 +838,203 @@ When creating API keys, you can assign them to specific access groups for permis
 />
 
 
+## Forwarding Custom Headers to MCP Servers
+
+LiteLLM supports forwarding additional custom headers from MCP clients to backend MCP servers using the `extra_headers` configuration parameter. This allows you to pass custom authentication tokens, API keys, or other headers that your MCP server requires.
+
+### Configuration
+
+
+<Tabs>
+<TabItem value="config" label="config.yaml">
+Configure `extra_headers` in your MCP server configuration to specify which header names should be forwarded:
+
+```yaml title="config.yaml with extra_headers" showLineNumbers
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "ghp_default_token"
+    extra_headers: ["custom_key", "x-custom-header", "Authorization"]
+    description: "GitHub MCP server with custom header forwarding"
+```
+</TabItem>
+<TabItem value="clientside" label="Dynamically on Client Side">
+
+Use this when giving users access to a [group of MCP servers](#grouping-mcps-access-groups).
+
+**Format:** `x-mcp-{server_alias}-{header_name}: value`
+
+This allows you to use different authentication for different MCP servers.
+
+
+**Examples:**
+- `x-mcp-github-authorization: Bearer ghp_xxxxxxxxx` - GitHub MCP server with Bearer token
+- `x-mcp-zapier-x-api-key: sk-xxxxxxxxx` - Zapier MCP server with API key
+- `x-mcp-deepwiki-authorization: Basic base64_encoded_creds` - DeepWiki MCP server with Basic auth
+
+```python title="Python Client with Server-Specific Auth" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# Standard MCP configuration with multiple servers
+config = {
+    "mcpServers": {
+        "mcp_group": {
+            "url": "http://localhost:4000/mcp",
+            "headers": {
+                "x-mcp-servers": "dev_group", # assume this gives access to github, zapier and deepwiki
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-mcp-github-authorization": "Bearer gho_token", 
+                "x-mcp-zapier-x-api-key": "sk-xxxxxxxxx",
+                "x-mcp-deepwiki-authorization": "Basic base64_encoded_creds",
+                "custom_key": "value"
+            }
+        }
+    }
+}
+
+# Create a client that connects to all servers
+client = Client(config)
+
+
+async def main():
+    async with client:
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+
+        # call mcp 
+        await client.call_tool(
+            name="github_mcp-search_issues",
+            arguments={'query': 'created:>2024-01-01', 'sort': 'created', 'order': 'desc', 'perPage': 30}
+        )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+```
+
+
+
+**Benefits:**
+- **Server-specific authentication**: Each MCP server can use different auth methods
+- **Better security**: No need to share the same auth token across all servers
+- **Flexible header names**: Support for different auth header types (authorization, x-api-key, etc.)
+- **Clean separation**: Each server's auth is clearly identified
+
+
+
+</TabItem>
+</Tabs>
+
+
+### Client Usage
+
+When connecting from MCP clients, include the custom headers that match the `extra_headers` configuration:
+
+<Tabs>
+<TabItem value="fastmcp" label="Python FastMCP">
+
+```python title="FastMCP Client with Custom Headers" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# MCP client configuration with custom headers
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/github_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "Authorization": "Bearer gho_token", 
+                "custom_key": "custom_value",
+                "x-custom-header": "additional_data"
+            }
+        }
+    }
+}
+
+# Create a client that connects to the server
+client = Client(config)
+
+async def main():
+    async with client:
+        # List available tools
+        tools = await client.list_tools()
+        print(f"Available tools: {tools}")
+        
+        # Call a tool if available
+        if tools:
+            result = await client.call_tool(tools[0].name, {})
+            print(f"Tool result: {result}")
+
+# Run the client
+asyncio.run(main())
+```
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with Custom Headers" showLineNumbers
+{
+  "mcpServers": {
+    "GitHub": {
+      "url": "http://localhost:4000/github_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "Authorization": "Bearer $GITHUB_TOKEN",
+        "custom_key": "custom_value",
+        "x-custom-header": "additional_data"
+      }
+    }
+  }
+}
+```
+
+</TabItem>
+
+<TabItem value="http" label="HTTP Client">
+
+```bash title="cURL with Custom Headers" showLineNumbers
+curl --location 'http://localhost:4000/github_mcp/mcp' \
+--header 'Content-Type: application/json' \
+--header 'x-litellm-api-key: Bearer sk-1234' \
+--header 'Authorization: Bearer gho_token' \
+--header 'custom_key: custom_value' \
+--header 'x-custom-header: additional_data' \
+--data '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+}'
+```
+
+</TabItem>
+</Tabs>
+
+### How It Works
+
+1. **Configuration**: Define `extra_headers` in your MCP server config with the header names you want to forward
+2. **Client Headers**: Include the corresponding headers in your MCP client requests
+3. **Header Forwarding**: LiteLLM automatically forwards matching headers to the backend MCP server
+4. **Authentication**: The backend MCP server receives both the configured auth headers and the custom headers
+
+### Use Cases
+
+- **Custom Authentication**: Forward custom API keys or tokens required by specific MCP servers
+- **Request Context**: Pass user identification, session data, or request tracking headers
+- **Third-party Integration**: Include headers required by external services that your MCP server integrates with
+- **Multi-tenant Systems**: Forward tenant-specific headers for proper request routing
+
+### Security Considerations
+
+- Only headers listed in `extra_headers` are forwarded to maintain security
+- Sensitive headers should be passed through environment variables when possible
+- Consider using server-specific auth headers for better security isolation
+
+---
+
 ## Using your MCP with client side credentials
 
 Use this if you want to pass a client side authentication token to LiteLLM to then pass to your MCP to auth to your MCP.
@@ -779,13 +1043,6 @@ Use this if you want to pass a client side authentication token to LiteLLM to th
 ### New Server-Specific Auth Headers (Recommended)
 
 You can specify MCP auth tokens using server-specific headers in the format `x-mcp-{server_alias}-{header_name}`. This allows you to use different authentication for different MCP servers.
-
-**Format:** `x-mcp-{server_alias}-{header_name}: value`
-
-**Examples:**
-- `x-mcp-github-authorization: Bearer ghp_xxxxxxxxx` - GitHub MCP server with Bearer token
-- `x-mcp-zapier-x-api-key: sk-xxxxxxxxx` - Zapier MCP server with API key
-- `x-mcp-deepwiki-authorization: Basic base64_encoded_creds` - DeepWiki MCP server with Basic auth
 
 **Benefits:**
 - **Server-specific authentication**: Each MCP server can use different auth methods
