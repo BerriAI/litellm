@@ -1,6 +1,9 @@
 from typing import Dict, List, Optional
 
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from .base import GuardrailConfigModel
 
 
 class JavelinGuardInput(TypedDict):
@@ -81,3 +84,27 @@ class JavelinGuardResponse(TypedDict):
             | JavelinLanguageDetectionAssessment,
         ]
     ]
+
+
+class JavelinGuardrailConfigModel(GuardrailConfigModel):
+    """Configuration parameters for the Javelin guardrail"""
+
+    guard_name: Optional[str] = Field(
+        default=None, description="Name of the Javelin guard to use"
+    )
+    api_version: Optional[str] = Field(
+        default="v1", description="API version for Javelin service"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+    application: Optional[str] = Field(
+        default=None, description="Application name for Javelin service"
+    )
+    config: Optional[Dict] = Field(
+        default=None, description="Configuration parameters for Javelin service"
+    )
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Javelin Guardrails"
