@@ -5867,21 +5867,15 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        # Check if custom_llm_provider is already specified in model_params
-        # If so, respect user's explicit configuration and avoid model name parsing
-        existing_custom_provider = model_params.get("custom_llm_provider", None)
-        existing_api_base = model_params.get("api_base", None)
-
-        if existing_custom_provider and existing_api_base:
-            # User has explicitly configured custom provider and api_base
-            # Don't parse the model name to preserve user's intent
-            custom_llm_provider = existing_custom_provider
-            # Keep the original model name as specified by user
-        else:
-            # Standard behavior: parse model name to determine provider
-            model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
+        # Lazily resolve provider only when required (wildcard/realtime)
+        def _resolve_provider_for_health_check() -> str:
+            existing_custom_provider = model_params.get("custom_llm_provider")
+            existing_api_base = model_params.get("api_base")
+            if existing_custom_provider and existing_api_base:
+                return existing_custom_provider
+            # Fallback to standard detection (do not mutate model_params/model)
+            _, detected_provider, _, _ = get_llm_provider(model=model)
+            return detected_provider  # type: ignore[return-value]
 
         model_params["cache"] = {
             "no-cache": True
@@ -5890,7 +5884,7 @@ async def ahealth_check(
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=_resolve_provider_for_health_check(),
                 model_params=model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
@@ -5933,7 +5927,7 @@ async def ahealth_check(
             ),
             "realtime": lambda: _realtime_health_check(
                 model=model,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=_resolve_provider_for_health_check(),
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
