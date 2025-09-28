@@ -92,7 +92,7 @@ response = litellm.completion(
 </TabItem>
 <TabItem value="gitlab" label="GITLAB">
 
-**1. Create a .prompt file in BitBucket**
+**1. Create a .prompt file in a gitlab repo**
 
 Create `prompts/hello.prompt` in your gitlab repository:
 
@@ -111,7 +111,7 @@ User: {{user_message}}
 ```python
 import litellm
 
-# Configure BitBucket access
+# Configure gitlab access
 gitlab_config = {
     "workspace": "your-workspace",
     "repository": "your-repo",
@@ -119,8 +119,8 @@ gitlab_config = {
     "branch": "main"
 }
 
-# Set global BitBucket configuration
-litellm.set_global_gitlab_config(bitbucket_config)
+# Set global gitlab configuration
+litellm.set_global_gitlab_config(gitlab_config)
 ```
 
 **3. Use with LiteLLM**
