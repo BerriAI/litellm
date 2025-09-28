@@ -66,18 +66,34 @@ run_grype_scans() {
     echo "Scanning locally built LiteLLM image for high-severity vulnerabilities..."
     echo "Using locally built image: litellm:latest"
     
-    # Run grype scan and check for vulnerabilities with CVSS >= 4.0
+    # Allowlist of CVEs to be ignored in failure threshold/reporting
+    # - CVE-2025-8869: Not applicable on Python >=3.13 (PEP 706 implemented); pip fallback unused; no OS-level fix
+    ALLOWED_CVES=(
+        "CVE-2025-8869"
+    )
+
+    # Build JSON array of allowlisted CVE IDs for jq
+    ALLOWED_IDS_JSON=$(printf '%s\n' "${ALLOWED_CVES[@]}" | jq -R . | jq -s .)
+
     echo "Checking for vulnerabilities with CVSS score >= 4.0..."
-    HIGH_SEVERITY_COUNT=$(grype litellm:latest -o json | jq -r '.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) | .vulnerability.id' | wc -l)
+    echo "Allowlisted CVEs (ignored in threshold): ${ALLOWED_CVES[*]}"
+
+    HIGH_SEVERITY_COUNT=$(grype litellm:latest -o json | jq --argjson allow "$ALLOWED_IDS_JSON" -r '
+        .matches[]
+        | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+        | select((.vulnerability.id as $id | $allow | index($id) | not))
+        | .vulnerability.id' | wc -l)
     
     if [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
         echo "ERROR: Found $HIGH_SEVERITY_COUNT vulnerabilities with CVSS score >= 4.0 in litellm:latest"
         echo "Detailed vulnerability report:"
-        grype litellm:latest -o json | jq -r '
+        grype litellm:latest -o json | jq --argjson allow "$ALLOWED_IDS_JSON" -r '
         ["Package", "Version", "Vulnerability ID", "CVSS Score", "Severity", "Fix Version", "Description"],
-        (.matches[] | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0) |
-        [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, .vulnerability.severity, (.vulnerability.fix.versions[0] // "No fix available"), .vulnerability.description]) |
-        @tsv' | column -t -s $'\t'
+        (.matches[]
+          | select(.vulnerability.cvss[]?.metrics.baseScore >= 4.0)
+          | select((.vulnerability.id as $id | $allow | index($id) | not))
+          | [.artifact.name, .artifact.version, .vulnerability.id, .vulnerability.cvss[0].metrics.baseScore, .vulnerability.severity, (.vulnerability.fix.versions[0] // "No fix available"), .vulnerability.description])
+        | @tsv' | column -t -s $'\t'
         exit 1
     else
         echo "No high-severity vulnerabilities (CVSS >= 4.0) found in litellm:latest"
