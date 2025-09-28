@@ -296,6 +296,5 @@ class JavelinGuardrail(CustomGuardrail):
         from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
             JavelinGuardrailConfigModel,
         )
+
         return JavelinGuardrailConfigModel
-
-
