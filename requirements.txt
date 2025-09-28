@@ -8,7 +8,7 @@ backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
 uvicorn==0.29.0 # server dep
 gunicorn==23.0.0 # server dep
-fastuuid==0.12.0 # for uuid4
+fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.36.0 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
@@ -41,9 +41,9 @@ opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
-cryptography==43.0.1
+cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.2.19 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.2.22 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage

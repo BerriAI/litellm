@@ -11,6 +11,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `trace_id` | `str` | Trace multiple LLM calls belonging to same overall request |
 | `call_type` | `str` | Type of call |
 | `response_cost` | `float` | Cost of the response in USD ($) |
+| `cost_breakdown` | `Optional[CostBreakdown]` | Detailed cost breakdown object |
 | `response_cost_failure_debug_info` | `StandardLoggingModelCostFailureDebugInformation` | Debug information if cost tracking fails |
 | `status` | `StandardLoggingPayloadStatus` | Status of the payload |
 | `total_tokens` | `int` | Total number of tokens |
@@ -38,6 +39,29 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `error_information` | `Optional[StandardLoggingPayloadErrorInformation]` | Optional error information |
 | `model_parameters` | `dict` | Model parameters |
 | `hidden_params` | `StandardLoggingHiddenParams` | Hidden parameters |
+
+## Cost Breakdown
+
+The `cost_breakdown` field provides detailed cost breakdown for completion requests as a `CostBreakdown` object containing:
+
+- **`input_cost`**: Cost of input/prompt tokens including cache creation tokens
+- **`output_cost`**: Cost of output/completion tokens (including reasoning tokens if applicable)
+- **`tool_usage_cost`**: Cost of built-in tools usage (e.g., web search, code interpreter)
+- **`total_cost`**: Total cost of input + output + tool usage
+
+**Note**: This field is populated for all call types. For non-completion calls, `input_cost` and `output_cost` may be 0.
+
+The total cost relationship is: `response_cost = cost_breakdown.total_cost`
+
+### CostBreakdown Type
+
+```python
+class CostBreakdown(TypedDict, total=False):
+    input_cost: float        # Cost of input/prompt tokens in USD
+    output_cost: float       # Cost of output/completion tokens in USD (includes reasoning)
+    tool_usage_cost: float   # Cost of built-in tools usage in USD
+    total_cost: float        # Total cost in USD
+```
 
 ## StandardLoggingUserAPIKeyMetadata
 

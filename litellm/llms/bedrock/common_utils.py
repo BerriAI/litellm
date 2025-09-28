@@ -826,7 +826,7 @@ class CommonBatchFilesUtils:
             Tuple of (bucket_name, object_key)
         """
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         # Get bucket name
         bucket_name = (

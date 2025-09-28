@@ -1,5 +1,5 @@
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
