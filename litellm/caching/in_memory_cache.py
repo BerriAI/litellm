@@ -47,7 +47,7 @@ class InMemoryCache(BaseCache):
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
-        self.expiration_heap = []
+        self.expiration_heap: list[tuple[float, str]] = []
 
     def check_value_size(self, value: Any):
         """
