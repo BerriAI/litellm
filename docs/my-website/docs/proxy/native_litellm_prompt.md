@@ -94,7 +94,7 @@ response = litellm.completion(
 
 **1. Create a .prompt file in BitBucket**
 
-Create `prompts/hello.prompt` in your BitBucket repository:
+Create `prompts/hello.prompt` in your gitlab repository:
 
 ```yaml
 ---
@@ -106,7 +106,7 @@ System: You are a helpful assistant.
 User: {{user_message}}
 ```
 
-**2. Configure BitBucket access**
+**2. Configure Gitlab access**
 
 ```python
 import litellm
@@ -266,10 +266,10 @@ bitbucket_config: Optional[dict]  # optional - BitBucket configuration (if not s
 
 **Gitlab:**
 ```
-model: gitlab/<base_model>     # required (e.g., bitbucket/gpt-4)
+model: gitlab/<base_model>        # required (e.g., gitlab/gpt-4)
 prompt_id: str                    # required - the .prompt filename without extension
 prompt_variables: Optional[dict]  # optional - variables for template rendering
-bitbucket_config: Optional[dict]  # optional - BitBucket configuration (if not set globally)
+gitlab_config: Optional[dict]     # optional - Gitlab configuration (if not set globally)
 ```
 
 **Example API calls:**
@@ -300,10 +300,12 @@ response = litellm.completion(
     model="gitlab/gpt-4",
     prompt_id="hello",
     prompt_variables={"user_message": "Hello world"},
-    bitbucket_config={
-        "workspace": "your-workspace",
-        "repository": "your-repo",
-        "access_token": "your-token"
+    gitlab_config={
+        "project": "a/b/<repo_name>",
+        "access_token": "your-access-token",
+        "base_url": "gitlab url",
+        "prompts_path": "src/prompts", # folder to point to, defaults to root
+        "branch":"main"  # optional, defaults to main
     }
 )
 ```
