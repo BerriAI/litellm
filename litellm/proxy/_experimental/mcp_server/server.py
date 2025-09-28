@@ -414,10 +414,10 @@ if MCP_AVAILABLE:
             if server.auth_type == MCPAuth.oauth2:
                 extra_headers = oauth2_headers
 
-            if server.forwardable_headers and raw_headers:
+            if server.extra_headers and raw_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                for header in server.forwardable_headers:
+                for header in server.extra_headers:
                     if header in raw_headers:
                         extra_headers[header] = raw_headers[header]
 
