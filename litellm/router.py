@@ -2005,7 +2005,7 @@ class Router:
 
         # Filter out prompt management specific parameters from data before merging
         prompt_management_params = {
-            "bitbucket_config", "dotprompt_config", "prompt_id", 
+            "bitbucket_config", "dotprompt_config", "prompt_id", "gitlab_config",
             "prompt_variables", "prompt_label", "prompt_version"
         }
         filtered_data = {k: v for k, v in data.items() if k not in prompt_management_params}
