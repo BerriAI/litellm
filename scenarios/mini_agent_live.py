@@ -181,24 +181,46 @@ def _agent_config(level: str) -> AgentConfig:
 
 async def run_one(level: str) -> None:
     cfg = _agent_config(level)
-    print(
-        f"-- running mini-agent level={level} model={cfg.model} iterations<= {cfg.max_iterations}"
-    )
-    t0 = time.perf_counter()
-    try:
-        result = await arun_mcp_mini_agent(
+
+    async def _run(cfg: AgentConfig, tag: str):
+        print(
+            f"-- running mini-agent level={level} tag={tag} model={cfg.model} iterations<= {cfg.max_iterations}"
+        )
+        t0_local = time.perf_counter()
+        result_local = await arun_mcp_mini_agent(
             messages=PROMPTS[level],
             mcp=LocalMCPInvoker(shell_allow_prefixes=("python", "echo"), tool_timeout_sec=20.0),
             cfg=cfg,
         )
-        payload = _format_result(result, level)
-        elapsed = time.perf_counter() - t0
-        print(f"=== mini-agent {level} (elapsed {elapsed:.2f}s) ===")
-        print(json.dumps(_normalize_payload(payload), indent=2))
+        elapsed_local = time.perf_counter() - t0_local
+        payload_local = _format_result(result_local, level)
+        print(f"=== mini-agent {level} [{tag}] (elapsed {elapsed_local:.2f}s) ===")
+        print(json.dumps(_normalize_payload(payload_local), indent=2))
+        return result_local
+
+    try:
+        primary = await _run(cfg, "primary")
+        needs_escalation = (
+            level == "complex"
+            and CHUTES_MODEL
+            and (not primary.final_answer or not str(primary.final_answer).strip())
+        )
+        if needs_escalation:
+            print(
+                f"-- no final answer from base model; escalating complex scenario to {CHUTES_MODEL}"
+            )
+            cfg_escalated = AgentConfig(
+                model=CHUTES_MODEL,
+                max_iterations=cfg.max_iterations,
+                max_total_seconds=cfg.max_total_seconds,
+                use_tools=True,
+                auto_run_code_on_code_block=True,
+                enable_repair=True,
+                research_on_unsure=True,
+            )
+            await _run(cfg_escalated, "escalated")
     except Exception as exc:  # noqa: BLE001
-        elapsed = time.perf_counter() - t0
         print(f"=== mini-agent {level} ERROR ===")
-        print(f"Runtime {elapsed:.2f}s")
         print(str(exc))
 
 
