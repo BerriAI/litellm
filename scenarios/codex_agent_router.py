@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
+
+if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
+    codex_path = os.getenv("CODEX_BINARY_PATH") or shutil.which("codex")
+    if codex_path:
+        os.environ["LITELLM_ENABLE_CODEX_AGENT"] = "1"
+    else:
+        print("Skipping codex-agent scenario (codex CLI not found)")
+        raise SystemExit(0)
 
 from litellm import Router
 
@@ -46,13 +55,7 @@ def main() -> None:
         params.setdefault("api_base", os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434"))
 
     if model_alias.startswith("codex-agent/"):
-        if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
-            print("Skipping codex-agent scenario (LITELLM_ENABLE_CODEX_AGENT != 1)")
-            return
         params.setdefault("api_base", os.getenv("CODEX_AGENT_API_BASE"))
-        if not params.get("api_base"):
-            print("Skipping codex-agent scenario (CODEX_AGENT_API_BASE not set)")
-            return
         if os.getenv("CODEX_AGENT_API_KEY"):
             params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
 
