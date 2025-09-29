@@ -37,13 +37,29 @@ def _gather_allowed_languages(optional_params: dict) -> Tuple[str, ...]:
             langs = [part.strip() for part in env_val.split(",") if part.strip()]
     if not langs:
         langs = list(DEFAULT_LANGS)
-    return tuple(langs)
+    # Normalize: lowercase, strip, unique preserving order
+    normalized = []
+    seen = set()
+    for item in langs:
+        token = str(item).strip()
+        if not token:
+            continue
+        token = token.lower()
+        if token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return tuple(normalized)
 
 
 def _pick_base_model(optional_params: dict) -> str:
     target = optional_params.get("target_model") or optional_params.get("mini_agent_model")
     if not target:
-        target = os.getenv("LITELLM_DEFAULT_CHUTES_MODEL") or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
+        target = (
+            os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
+            or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
+            or os.getenv("LITELLM_DEFAULT_MODEL")
+        )
     if not target:
         raise CustomLLMError(status_code=400, message="mini-agent requires 'target_model' or defaults; none found")
     return str(target)
@@ -81,9 +97,27 @@ class MiniAgentLLM(CustomLLM):
             )
         model_response.model = result.used_model or model_response.model
         try:
-            model_response.choices[0].message = {"role": "assistant", "content": content}
-        except Exception:  # pragma: no cover - defensive
-            model_response.choices.append(type(model_response.choices[0])(message={"role": "assistant", "content": content}))
+            message = model_response.choices[0].message
+            if hasattr(message, "role"):
+                try:
+                    setattr(message, "role", "assistant")
+                except Exception:
+                    pass
+            if hasattr(message, "content"):
+                setattr(message, "content", content)
+            else:
+                raise AttributeError
+        except Exception:
+            try:
+                model_response.choices[0].message = {"role": "assistant", "content": content}
+            except Exception:  # pragma: no cover - defensive
+                model_response.choices.append(
+                    type(model_response.choices[0])(message={"role": "assistant", "content": content})
+                )
+        try:
+            setattr(model_response.choices[0], "finish_reason", result.stopped_reason or "stop")
+        except Exception:
+            pass
         additional = {
             "mini_agent": {
                 "iterations": len(result.iterations),
