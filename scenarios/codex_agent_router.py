@@ -2,8 +2,10 @@
 """Route requests through the default code model at multiple prompt complexities."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import time
 from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
@@ -59,16 +61,22 @@ def main() -> None:
         if os.getenv("CODEX_AGENT_API_KEY"):
             params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
 
+    print("-- starting codex-agent scenario with config:")
+    print(json.dumps({"model": model_alias, "params": params}, indent=2))
+
+    t_router = time.perf_counter()
     router = Router(model_list=[{"model_name": "scenario-code", "litellm_params": params}])
 
     for level in ("simple", "medium", "complex"):
         try:
+            start = time.perf_counter()
             response = router.completion(
                 model="scenario-code",
                 messages=[{"role": "user", "content": PROMPTS[level]}],
             )
             content = getattr(response.choices[0].message, "content", "").strip()
-            print(f"=== code-model ({model_alias}) {level} ===\n{content}\n")
+            duration = time.perf_counter() - start
+            print(f"=== code-model ({model_alias}) {level} (elapsed {duration:.2f}s) ===\n{content}\n")
         except Exception as exc:
             print(f"=== code-model ({model_alias}) {level} ERROR ===\n{exc}\n")
 

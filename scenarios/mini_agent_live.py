@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List
 
 from dotenv import find_dotenv, load_dotenv
@@ -180,6 +181,10 @@ def _agent_config(level: str) -> AgentConfig:
 
 async def run_one(level: str) -> None:
     cfg = _agent_config(level)
+    print(
+        f"-- running mini-agent level={level} model={cfg.model} iterations<= {cfg.max_iterations}"
+    )
+    t0 = time.perf_counter()
     try:
         result = await arun_mcp_mini_agent(
             messages=PROMPTS[level],
@@ -187,10 +192,13 @@ async def run_one(level: str) -> None:
             cfg=cfg,
         )
         payload = _format_result(result, level)
-        print(f"=== mini-agent {level} ===")
+        elapsed = time.perf_counter() - t0
+        print(f"=== mini-agent {level} (elapsed {elapsed:.2f}s) ===")
         print(json.dumps(_normalize_payload(payload), indent=2))
     except Exception as exc:  # noqa: BLE001
+        elapsed = time.perf_counter() - t0
         print(f"=== mini-agent {level} ERROR ===")
+        print(f"Runtime {elapsed:.2f}s")
         print(str(exc))
 
 
