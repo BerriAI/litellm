@@ -5146,18 +5146,7 @@ async def aadapter_generate_content(
         GenerateContentToCompletionHandler,
     )
 
-    custom_llm_provider_params = adapter.translate_generate_content_to_completion(
-        model=model, contents=contents, config=config, **kwargs
-    )
-
-    custom_llm_provider_params["stream"] = stream
-
-
-    if stream:
-        return adapter.translate_completion_output_params_streaming(
-            completion_stream=response
-        )
-    return await handler.async_generate_content_handler(**kwargs, _is_async=True)
+    return await GenerateContentToCompletionHandler.async_generate_content_handler(**kwargs, _is_async=True)
 
 
 def adapter_completion(
