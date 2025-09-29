@@ -10,14 +10,7 @@ load_dotenv(find_dotenv())
 
 from litellm import Router
 
-MODEL_ALIAS = (
-    os.getenv("SCENARIO_PARALLEL_MODEL")
-    or os.getenv("LITELLM_DEFAULT_MODEL")
-    or "ollama/qwen2.5-coder:14b"
-)
-PROVIDER = None
-if "/" in MODEL_ALIAS:
-    PROVIDER = MODEL_ALIAS.split("/", 1)[0]
+MODEL_ALIAS = os.getenv("LITELLM_DEFAULT_MODEL") or "ollama/qwen2.5-coder:14b"
 
 model_list = [
     {
