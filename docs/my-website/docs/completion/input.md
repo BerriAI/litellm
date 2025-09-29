@@ -162,7 +162,7 @@ def completion(
 
 - `max_completion_tokens`: *integer (optional)* -  An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.
 
-- `max_tokens`: *integer (optional)* - The maximum number of tokens to generate in the chat completion.
+- `max_tokens` (alias: `max_output_tokens`): *integer (optional)* - The maximum number of tokens to generate in the chat completion. Both names are accepted; `max_tokens` is preferred.
 
 - `presence_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their existence in the text so far.
 

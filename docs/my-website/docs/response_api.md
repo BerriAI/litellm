@@ -6,6 +6,12 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
 
+> **Note on token limits**
+>
+> Throughout this guide you may see the parameters `max_tokens` and `max_output_tokens`.  
+> They are **identical in behavior**—both set the maximum number of tokens the model can generate.  
+> `max_output_tokens` exists for historical reasons; new projects should use **`max_tokens`**.
+
 Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
 | Feature | Supported | Notes |
