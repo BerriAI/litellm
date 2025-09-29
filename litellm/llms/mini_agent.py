@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Iterable, Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any
 
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.utils import ModelResponse
@@ -14,11 +14,13 @@ try:
     from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import (
         AgentConfig,
         LocalMCPInvoker,
+        DockerMCPInvoker,
         arun_mcp_mini_agent,
     )
 except Exception as exc:  # pragma: no cover - import guard
     AgentConfig = None  # type: ignore
     LocalMCPInvoker = None  # type: ignore
+    DockerMCPInvoker = None  # type: ignore
     arun_mcp_mini_agent = None  # type: ignore
 
 
@@ -85,6 +87,37 @@ class MiniAgentLLM(CustomLLM):
             auto_run_code_on_code_block=True,
         )
         return cfg, allowed_langs
+
+    def _make_invoker(self, allowed: Tuple[str, ...], cfg: "AgentConfig", optional_params: dict):
+        backend = (
+            optional_params.get("tool_backend")
+            or optional_params.get("mini_agent_backend")
+            or os.getenv("LITELLM_MINI_AGENT_TOOL_BACKEND", "local")
+        )
+        backend = str(backend or "local").strip().lower()
+        timeout = float(cfg.max_total_seconds or DEFAULT_MAX_SECONDS)
+        if backend == "docker":
+            if DockerMCPInvoker is None:
+                raise CustomLLMError(status_code=500, message="mini-agent docker backend unavailable")
+            container = (
+                optional_params.get("docker_container")
+                or optional_params.get("mini_agent_docker_container")
+                or os.getenv("LITELLM_MINI_AGENT_DOCKER_CONTAINER")
+            )
+            if not container:
+                raise CustomLLMError(
+                    status_code=400,
+                    message="mini-agent docker backend requires 'docker_container' or LITELLM_MINI_AGENT_DOCKER_CONTAINER",
+                )
+            return DockerMCPInvoker(
+                container=str(container),
+                shell_allow_prefixes=allowed,
+                tool_timeout_sec=timeout,
+                docker_exec_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_EXEC_BIN", "docker"),
+                python_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_PYTHON", "python"),
+                shell_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_SHELL", "/bin/sh"),
+            )
+        return LocalMCPInvoker(shell_allow_prefixes=allowed, tool_timeout_sec=timeout)
 
     def _to_model_response(self, model_response: ModelResponse, result) -> ModelResponse:
         content = result.final_answer or ""
@@ -156,8 +189,9 @@ class MiniAgentLLM(CustomLLM):
         if arun_mcp_mini_agent is None:
             raise CustomLLMError(status_code=500, message="mini-agent components unavailable")
 
-        cfg, allowed = self._build_config(model, optional_params or {})
-        invoker = LocalMCPInvoker(shell_allow_prefixes=allowed, tool_timeout_sec=cfg.max_total_seconds or DEFAULT_MAX_SECONDS)
+        optional_params = optional_params or {}
+        cfg, allowed = self._build_config(model, optional_params)
+        invoker = self._make_invoker(allowed, cfg, optional_params)
 
         async def _run():
             return await arun_mcp_mini_agent(messages=messages, mcp=invoker, cfg=cfg)
@@ -229,8 +263,9 @@ class MiniAgentLLM(CustomLLM):
         if arun_mcp_mini_agent is None:
             raise CustomLLMError(status_code=500, message="mini-agent components unavailable")
 
-        cfg, allowed = self._build_config(model, optional_params or {})
-        invoker = LocalMCPInvoker(shell_allow_prefixes=allowed, tool_timeout_sec=cfg.max_total_seconds or DEFAULT_MAX_SECONDS)
+        optional_params = optional_params or {}
+        cfg, allowed = self._build_config(model, optional_params)
+        invoker = self._make_invoker(allowed, cfg, optional_params)
 
         try:
             result = await arun_mcp_mini_agent(messages=messages, mcp=invoker, cfg=cfg)

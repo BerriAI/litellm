@@ -15,7 +15,6 @@ from typing import (
 
 from pydantic import BaseModel
 
-from litellm.caching.caching import DualCache
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
@@ -31,6 +30,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+    DualCache = Any  # type: ignore
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
     MCPPostCallResponseObject = Any
@@ -268,7 +269,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
+        cache: 'DualCache',
         data: dict,
         call_type: Literal[
             "completion",

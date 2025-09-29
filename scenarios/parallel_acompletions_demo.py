@@ -9,7 +9,21 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv())
 
 from litellm import Router
-from litellm.router_utils.parallel_acompletion import RouterParallelRequest
+try:
+    from litellm.router_utils.parallel_acompletion import RouterParallelRequest
+except Exception:
+    from dataclasses import dataclass
+    from typing import Any, List, Dict, Optional
+
+    @dataclass
+    class RouterParallelRequest:  # type: ignore
+        model: str
+        messages: List[Dict[str, Any]]
+        temperature: Optional[float] = None
+        max_tokens: Optional[int] = None
+        top_p: Optional[float] = None
+        stream: Optional[bool] = None
+        kwargs: Optional[Dict[str, Any]] = None
 
 PROMPTS = {
     "simple": "List three programming languages",

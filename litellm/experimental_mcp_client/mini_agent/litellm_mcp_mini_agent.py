@@ -373,6 +373,233 @@ class LocalMCPInvoker(MCPInvoker):
             return json.dumps({"ok": False, "name": "exec_shell", "error": str(e)})
 
 
+class DockerMCPInvoker(MCPInvoker):
+    """Execute tools inside a Docker container via docker exec, mirroring LocalMCPInvoker safety."""
+
+    def __init__(
+        self,
+        *,
+        container: str,
+        shell_allow_prefixes: Sequence[str] = ("echo",),
+        tool_timeout_sec: float = 10.0,
+        docker_exec_bin: str = "docker",
+        python_bin: str = "python",
+        shell_bin: str = "/bin/sh",
+    ) -> None:
+        if not container or not isinstance(container, str):
+            raise ValueError("DockerMCPInvoker requires a non-empty 'container' name/id")
+        self.container = container
+        self.shell_allow_prefixes = tuple(shell_allow_prefixes)
+        self.tool_timeout_sec = tool_timeout_sec
+        self.docker_exec_bin = docker_exec_bin
+        self.python_bin = python_bin
+        self.shell_bin = shell_bin
+
+    async def list_openai_tools(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec_python",
+                    "description": "Execute short Python code (inside container).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}},
+                        "required": ["code"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec_shell",
+                    "description": "Run a shell command (inside container, allowlist prefixes only).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "research_echo",
+                    "description": "Toy research tool returning a canned answer.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "compress_runs",
+                    "description": "Compress runs of repeated characters.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"s": {"type": "string"}},
+                        "required": ["s"],
+                    },
+                },
+            },
+        ]
+
+    async def call_openai_tool(self, openai_tool: Dict[str, Any]) -> str:
+        f = openai_tool.get("function", {})
+        name = f.get("name")
+        args_raw = f.get("arguments")
+        try:
+            args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+        except Exception:
+            args = {}
+        normalized = (name or "").strip().lower()
+        if normalized in {"exec_python", "exec_code", "__main__"}:
+            code = args.get("code") or args.get("source") or ""
+            return await self._exec_python_docker(code)
+        if normalized == "exec_shell":
+            return await self._exec_shell_docker(args.get("cmd", ""))
+        if normalized == "research_echo":
+            q = args.get("query", "")
+            return json.dumps({"ok": True, "name": name, "answer": f"echo: {q}", "citations": []})
+        if normalized == "compress_runs":
+            s = args.get("s", "")
+            if not isinstance(s, str) or not s:
+                return json.dumps({"ok": False, "name": name, "error": "missing string 's'"})
+            out, count = [], 1
+            for i in range(1, len(s)):
+                if s[i] == s[i - 1]:
+                    count += 1
+                else:
+                    out.append(f"{s[i-1]}{count}")
+                    count = 1
+            if s:
+                out.append(f"{s[-1]}{count}")
+            return json.dumps({"ok": True, "name": name, "result": "".join(out)})
+        return json.dumps({"ok": False, "name": name, "error": "unknown tool"})
+
+    async def _exec_python_docker(self, code: str) -> str:
+        import asyncio, time, contextlib
+
+        t0 = time.perf_counter()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.docker_exec_bin,
+                "exec",
+                "-i",
+                self.container,
+                self.python_bin,
+                "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                out, err = await asyncio.wait_for(
+                    proc.communicate(input=(code or "").encode("utf-8")),
+                    timeout=self.tool_timeout_sec,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                t_ms = (time.perf_counter() - t0) * 1000.0
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "name": "exec_python",
+                        "error": f"timeout after {self.tool_timeout_sec}s",
+                        "t_ms": t_ms,
+                        "docker": True,
+                        "container": self.container,
+                    }
+                )
+            rc = proc.returncode or 0
+            stdout_s = (out or b"").decode("utf-8", errors="replace")
+            stderr_s = (err or b"").decode("utf-8", errors="replace")
+            t_ms = (time.perf_counter() - t0) * 1000.0
+            payload = {
+                "ok": rc == 0,
+                "name": "exec_python",
+                "rc": rc,
+                "stdout": stdout_s,
+                "stderr": stderr_s,
+                "t_ms": t_ms,
+                "docker": True,
+                "container": self.container,
+            }
+            if rc != 0:
+                payload["error"] = f"rc={rc}: {(stderr_s or stdout_s)[:200]}"
+            return json.dumps(payload)
+        except Exception as e:
+            return json.dumps({"ok": False, "name": "exec_python", "error": str(e), "docker": True, "container": self.container})
+
+    async def _exec_shell_docker(self, cmd: str) -> str:
+        import asyncio, time, contextlib
+
+        if not any((cmd or "").strip().startswith(p) for p in self.shell_allow_prefixes):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "name": "exec_shell",
+                    "error": "cmd prefix not allowed (docker)",
+                    "docker": True,
+                    "container": self.container,
+                }
+            )
+
+        t0 = time.perf_counter()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.docker_exec_bin,
+                "exec",
+                self.container,
+                self.shell_bin,
+                "-lc",
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=self.tool_timeout_sec)
+            except asyncio.TimeoutError:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                t_ms = (time.perf_counter() - t0) * 1000.0
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "name": "exec_shell",
+                        "error": f"timeout after {self.tool_timeout_sec}s",
+                        "t_ms": t_ms,
+                        "docker": True,
+                        "container": self.container,
+                    }
+                )
+            rc = proc.returncode or 0
+            stdout_s = (out or b"").decode("utf-8", errors="replace")
+            stderr_s = (err or b"").decode("utf-8", errors="replace")
+            t_ms = (time.perf_counter() - t0) * 1000.0
+            payload = {
+                "ok": rc == 0,
+                "name": "exec_shell",
+                "rc": rc,
+                "stdout": stdout_s,
+                "stderr": stderr_s,
+                "t_ms": t_ms,
+                "docker": True,
+                "container": self.container,
+            }
+            if rc != 0:
+                payload["error"] = f"rc={rc}: {(stderr_s or stdout_s)[:200]}"
+            return json.dumps(payload)
+        except Exception as e:
+            return json.dumps({"ok": False, "name": "exec_shell", "error": str(e), "docker": True, "container": self.container})
+
+
 # --- Utility helpers -------------------------------------------------------------
 
 def _get_tool_calls(msg: Any) -> List[Dict[str, Any]]:

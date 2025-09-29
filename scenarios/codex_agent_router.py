@@ -34,7 +34,10 @@ model_list = [
 ]
 
 codex_alias = os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5"
-codex_params = {"model": codex_alias}
+codex_params = {
+    "model": codex_alias,
+    "custom_llm_provider": os.getenv("SCENARIO_CODE_PROVIDER") or "openai",
+}
 if os.getenv("CODEX_AGENT_API_KEY"):
     codex_params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
 if os.getenv("CODEX_AGENT_API_BASE"):
@@ -85,23 +88,37 @@ PROMPTS = [
 async def main() -> None:
     for prompt in PROMPTS:
         start = time.perf_counter()
-        response = await router.acompletion(
-            model="codex-agent",
-            messages=prompt["messages"],
-        )
-        response_payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
-        duration = time.perf_counter() - start
-        print(
-            json.dumps(
-                {
-                    "level": prompt["level"],
-                    "request": prompt["messages"],
-                    "response": response_payload,
-                    "elapsed_s": round(duration, 2),
-                },
-                indent=2,
+        try:
+            response = await router.acompletion(
+                model="codex-agent",
+                messages=prompt["messages"],
             )
-        )
+            response_payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
+            duration = time.perf_counter() - start
+            print(
+                json.dumps(
+                    {
+                        "level": prompt["level"],
+                        "request": prompt["messages"],
+                        "response": response_payload,
+                        "elapsed_s": round(duration, 2),
+                    },
+                    indent=2,
+                )
+            )
+        except Exception as exc:
+            duration = time.perf_counter() - start
+            print(
+                json.dumps(
+                    {
+                        "level": prompt["level"],
+                        "request": prompt["messages"],
+                        "error": str(exc),
+                        "elapsed_s": round(duration, 2),
+                    },
+                    indent=2,
+                )
+            )
 
 
 if __name__ == "__main__":
