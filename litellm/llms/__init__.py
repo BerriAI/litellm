@@ -1,6 +1,12 @@
 from typing import TYPE_CHECKING, Optional
 
-from . import *
+import importlib
+import os
+
+from . import *  # noqa: F401,F403
+
+if os.getenv("LITELLM_ENABLE_MINI_AGENT", "").strip() == "1":
+    importlib.import_module("litellm.llms.mini_agent")
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage

@@ -1,27 +1,43 @@
 #!/usr/bin/env python3
-"""Single-call live mini-agent scenario using familiar LiteLLM patterns."""
+"""Live mini-agent scenario via Router using the mini-agent provider."""
 
 import asyncio
 import json
 import os
 import sys
-from typing import List, Dict
 
 from dotenv import find_dotenv, load_dotenv
+from litellm import Router
 
 load_dotenv(find_dotenv())
 
-try:
-    from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import (
-        AgentConfig,
-        LocalMCPInvoker,
-        arun_mcp_mini_agent,
-    )
-except Exception as exc:  # pragma: no cover
-    print(f"Mini-agent components unavailable: {exc}")
+if os.getenv("LITELLM_ENABLE_MINI_AGENT") != "1":
+    print("Mini-agent requires LITELLM_ENABLE_MINI_AGENT=1; aborting.")
     sys.exit(1)
 
-PROMPT: List[Dict[str, str]] = [
+BASE_MODEL = (
+    os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
+    or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
+    or "deepseek-ai/DeepSeek-R1"
+)
+
+model_list = [
+    {
+        "model_name": "mini-agent",
+        "litellm_params": {
+            "model": "mini-agent",
+            "custom_llm_provider": "mini-agent",
+            "target_model": BASE_MODEL,
+            "allowed_languages": ["python", "rust"],
+            "max_iterations": 6,
+            "max_seconds": 180,
+        },
+    }
+]
+
+router = Router(model_list=model_list)
+
+PROMPT = [
     {
         "role": "system",
         "content": (
@@ -38,37 +54,12 @@ PROMPT: List[Dict[str, str]] = [
     },
 ]
 
-MODEL = (
-    os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
-    or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
-    or "ollama/qwen2.5-coder:14b"
-)
-
-CONFIG = AgentConfig(
-    model=MODEL,
-    max_iterations=6,
-    max_total_seconds=180,
-    use_tools=True,
-    auto_run_code_on_code_block=True,
-)
 
 async def main() -> None:
-    print("-- mini-agent live scenario --")
-    print(json.dumps({"model": CONFIG.model, "prompt": PROMPT}, indent=2))
-
-    result = await arun_mcp_mini_agent(
-        messages=PROMPT,
-        mcp=LocalMCPInvoker(shell_allow_prefixes=("python", "echo"), tool_timeout_sec=30.0),
-        cfg=CONFIG,
-    )
-
-    response_payload = {
-        "final_answer": result.final_answer,
-        "iterations": len(result.iterations),
-        "stopped_reason": result.stopped_reason,
-        "conversation": result.messages,
-    }
-    print(json.dumps({"request": PROMPT, "response": response_payload}, indent=2))
+    print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
+    response = await router.acompletion(model="mini-agent", messages=PROMPT)
+    payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
+    print(json.dumps({"request": PROMPT, "response": payload}, indent=2))
 
 
 if __name__ == "__main__":

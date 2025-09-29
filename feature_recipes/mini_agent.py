@@ -1,31 +1,46 @@
-"""Mini-agent feature recipe.
+"""Mini-agent feature recipe using the Router interface.
 
-This script showcases the paved-road usage of the LiteLLM mini-agent helper:
-
-    1. Configure the target model (defaults to ``LITELLM_DEFAULT_CHUTES_MODEL``).
-    2. Whitelist tool languages via ``tools=("python", "rust")``.
-    3. Provide OpenAI-style ``messages`` with system/user roles.
-    4. Await the final answer and inspect iteration counts.
-
-Run this module directly (``python feature_recipes/mini_agent.py``) after
-populating the relevant environment variables.
+Requires ``LITELLM_ENABLE_MINI_AGENT=1`` and the experimental mini-agent
+components (codex CLI + MCP tooling) to be available locally.
 """
 
 import asyncio
+import json
 import os
-from typing import Iterable, List, Dict
+import sys
 
 from dotenv import find_dotenv, load_dotenv
+from litellm import Router
 
 load_dotenv(find_dotenv())
 
-from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import (
-    AgentConfig,
-    LocalMCPInvoker,
-    arun_mcp_mini_agent,
+if os.getenv("LITELLM_ENABLE_MINI_AGENT") != "1":
+    print("Set LITELLM_ENABLE_MINI_AGENT=1 before running this recipe.")
+    sys.exit(1)
+
+BASE_MODEL = (
+    os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
+    or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
+    or "deepseek-ai/DeepSeek-R1"
 )
 
-PROMPT: List[Dict[str, str]] = [
+model_list = [
+    {
+        "model_name": "mini-agent",
+        "litellm_params": {
+            "model": "mini-agent",
+            "custom_llm_provider": "mini-agent",
+            "target_model": BASE_MODEL,
+            "allowed_languages": ["python", "rust"],
+            "max_iterations": 6,
+            "max_seconds": 180,
+        },
+    }
+]
+
+router = Router(model_list=model_list)
+
+PROMPT = [
     {
         "role": "system",
         "content": (
@@ -43,52 +58,12 @@ PROMPT: List[Dict[str, str]] = [
 ]
 
 
-def run_mini_agent(
-    messages: List[Dict[str, str]],
-    *,
-    model: str,
-    max_iterations: int = 6,
-    max_seconds: float = 180.0,
-    tools: Iterable[str] = ("python",),
-) -> Dict[str, object]:
-    """Run the mini-agent once and return paired request/response metadata."""
-
-    async def _call() -> Dict[str, object]:
-        cfg = AgentConfig(
-            model=model,
-            max_iterations=max_iterations,
-            max_total_seconds=max_seconds,
-            use_tools=True,
-            auto_run_code_on_code_block=True,
-        )
-        invoker = LocalMCPInvoker(
-            shell_allow_prefixes=tuple(tools),
-            tool_timeout_sec=max_seconds,
-        )
-        result = await arun_mcp_mini_agent(messages=messages, mcp=invoker, cfg=cfg)
-        return {
-            "request": messages,
-            "response": {
-                "final_answer": result.final_answer,
-                "iterations": len(result.iterations),
-                "stopped_reason": result.stopped_reason,
-            },
-            "conversation": result.messages,
-        }
-
-    return asyncio.run(_call())
-
-
-def main() -> None:
-    model = (
-        os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
-        or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
-        or "ollama/qwen2.5-coder:14b"
-    )
-    print({"model": model, "prompt": PROMPT})
-    result = run_mini_agent(PROMPT, model=model, tools=("python", "rust"))
-    print(result)
+async def main() -> None:
+    print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
+    response = await router.acompletion(model="mini-agent", messages=PROMPT)
+    payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
+    print(json.dumps({"request": PROMPT, "response": payload}, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
