@@ -2,6 +2,7 @@
 """Demonstrate Router.parallel_acompletions with increasing prompt complexity."""
 
 import asyncio
+import json
 import os
 from dotenv import find_dotenv, load_dotenv
 
@@ -53,12 +54,41 @@ def main() -> None:
 
     router = Router(model_list=[{"model_name": "scenario-parallel", "litellm_params": params}])
 
+    messages_list = [
+        [{"role": "user", "content": "Describe this image: https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg"}],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe both of these images."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+                        },
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://upload.wikimedia.org/wikipedia/commons/b/bd/Test.svg",
+                        },
+                    },
+                ],
+            }
+        ],
+        [{"role": "user", "content": f"Summarize this local diagram: {os.path.abspath('local/images/sample_chart.png')}"}],
+        [{"role": "user", "content": "Summarize the benefits of unit testing in a paragraph."}],
+    ]
+
     requests = [
-        RouterParallelRequest(
-            model="scenario-parallel",
-            messages=[{"role": "user", "content": PROMPTS[level]}],
-        )
-        for level in ("simple", "medium", "complex")
+        RouterParallelRequest("scenario-parallel", messages_list[0], temperature=0.3),
+        RouterParallelRequest("scenario-parallel", messages_list[1], stream=True),
+        {
+            "model": "scenario-parallel",
+            "messages": messages_list[2],
+            "kwargs": {"max_tokens": 128},
+        },
+        RouterParallelRequest("scenario-parallel", messages_list[3], top_p=0.95),
     ]
 
     async def run_parallel():
@@ -66,15 +96,26 @@ def main() -> None:
             requests,
             preserve_order=True,
             return_exceptions=True,
+            concurrency=2,
         )
         for item in results:
-            if item.error:
-                print(f"=== parallel completion #{item.index} ERROR ===\n{item.error}\n")
+            response_payload = getattr(item.response, "model_dump", None)
+            if callable(response_payload):
+                response_payload = response_payload()
             else:
-                content = item.content
-                if content is None:
-                    content = ""
-                print(f"=== parallel completion #{item.index} ({model_alias}) ===\n{str(content).strip()}\n")
+                response_payload = item.response
+            print(
+                json.dumps(
+                    {
+                        "index": item.index,
+                        "request": item.request.messages,
+                        "response": response_payload,
+                        "content": item.content,
+                        "error": str(item.error) if item.error else None,
+                    },
+                    indent=2,
+                )
+            )
 
     asyncio.run(run_parallel())
 

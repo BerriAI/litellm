@@ -25,16 +25,14 @@ if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
 
 from litellm import Router
 
-gemini_api_key = os.getenv("GEMINI_API_KEY")
+
 model_list = [
     {
         "model_name": "gemini-2.5-flash",
         "litellm_params": {
             "model": "gemini/gemini-2.5-flash",
-            "api_key": gemini_api_key,
+            "api_key": os.getenv("GEMINI_API_KEY"),
         }
-        if gemini_api_key
-        else {"model": "gemini/gemini-2.5-flash"},
     },
     {
         "model_name": "deepseek-r1",

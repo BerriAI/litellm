@@ -62,12 +62,13 @@ async def main() -> None:
         cfg=CONFIG,
     )
 
-    output = {
+    response_payload = {
         "final_answer": result.final_answer,
         "iterations": len(result.iterations),
         "stopped_reason": result.stopped_reason,
+        "conversation": result.messages,
     }
-    print(json.dumps(output, indent=2))
+    print(json.dumps({"request": PROMPT, "response": response_payload}, indent=2))
 
 
 if __name__ == "__main__":
