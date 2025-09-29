@@ -149,6 +149,16 @@ mcp_servers:
     auth_type: "api_key"
     auth_value: "abc123"        # headers={"X-API-Key": "abc123"}
 
+  # NEW – OAuth 2.0 Client Credentials (v1.77.5)
+  oauth2_example:
+    url: "https://my-mcp-server.com/mcp"
+    auth_type: "oauth2"         # 👈 KEY CHANGE
+    authorization_url: "https://my-mcp-server.com/oauth/authorize" # optional for client-credentials
+    token_url: "https://my-mcp-server.com/oauth/token"             # required
+    client_id: os.environ/OAUTH_CLIENT_ID
+    client_secret: os.environ/OAUTH_CLIENT_SECRET
+    scopes: ["tool.read", "tool.write"] # optional
+
   bearer_example:
     url: "https://my-mcp-server.com/mcp"
     auth_type: "bearer_token"
