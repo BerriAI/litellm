@@ -36,12 +36,16 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    update_response_metadata,
+)
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 from litellm.types.caching import CachedEmbedding
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
+    CachingDetails,
     CallTypes,
     Embedding,
     EmbeddingResponse,
@@ -50,7 +54,6 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
-from litellm.utils import update_response_metadata
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -137,6 +140,13 @@ class LLMCachingHandler:
 
         kwargs = kwargs.copy()
         args = args or ()
+        #########################################################
+        # Init cache timing metrics
+        #########################################################
+        cache_check_start_time = datetime.datetime.now()
+        cache_check_end_time = None
+        #########################################################
+
 
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
         kwargs["parent_otel_span"] = parent_otel_span
@@ -158,6 +168,7 @@ class LLMCachingHandler:
                     kwargs=kwargs,
                     args=args,
                 )
+                cache_check_end_time = datetime.datetime.now()
 
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
@@ -179,6 +190,12 @@ class LLMCachingHandler:
                     )
 
                     call_type = original_function.__name__
+
+                    cache_duration_ms = (cache_check_end_time - cache_check_start_time).total_seconds() * 1000
+                    logging_obj.caching_details = CachingDetails(
+                        cache_hit=True,
+                        cache_duration_ms=cache_duration_ms,
+                    )
 
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
