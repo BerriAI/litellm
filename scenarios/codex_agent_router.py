@@ -56,7 +56,7 @@ def infer_provider(alias: str) -> str | None:
     if alias.startswith("openai/"):
         return "openai"
     if alias.startswith("azure/"):
-        return "azure_openai"
+        return "azure"
     if alias.startswith("ollama/"):
         return "ollama"
     if alias.startswith("codex-agent/"):

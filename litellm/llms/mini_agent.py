@@ -79,52 +79,12 @@ class MiniAgentLLM(CustomLLM):
         max_seconds = float(optional_params.get("max_seconds") or optional_params.get("mini_agent_max_seconds") or DEFAULT_MAX_SECONDS)
         allowed_langs = _gather_allowed_languages(optional_params)
 
-        completion_kwargs: Dict[str, Any] = {}
-        provider_hint = str(optional_params.get("custom_llm_provider") or "")
-        if not provider_hint and "/" in base_model:
-            provider_hint = base_model.split("/", 1)[0]
-        provider_hint = provider_hint.lower()
-
-        def _maybe_float(value):
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return value
-
-        def _maybe_int(value):
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return value
-
-        def _set_if_allowed(key: str, cast_fn):
-            if optional_params.get(key) is not None:
-                completion_kwargs[key] = cast_fn(optional_params.get(key))
-
-        # Providers that reliably support OpenAI-style extras
-        openai_like = {"openai", "azure", "azure_openai"}
-
-        if provider_hint in openai_like:
-            _set_if_allowed("temperature", _maybe_float)
-            _set_if_allowed("seed", _maybe_int)
-            if optional_params.get("response_format") is not None:
-                completion_kwargs["response_format"] = optional_params.get("response_format")
-            if optional_params.get("tool_choice") is not None:
-                completion_kwargs["tool_choice"] = optional_params.get("tool_choice")
-        elif provider_hint == "ollama":
-            _set_if_allowed("temperature", _maybe_float)
-            _set_if_allowed("seed", _maybe_int)
-        else:
-            # Conservative default: allow temperature only for other providers
-            _set_if_allowed("temperature", _maybe_float)
-
         cfg = AgentConfig(
             model=base_model,
             max_iterations=max_iterations,
             max_total_seconds=max_seconds,
             use_tools=True,
             auto_run_code_on_code_block=True,
-            completion_kwargs=completion_kwargs,
         )
         return cfg, allowed_langs
 

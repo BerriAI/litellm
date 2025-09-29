@@ -55,10 +55,6 @@ model_list = [
             "allowed_languages": ["python"],
             "max_iterations": 4,
             "max_seconds": 180,
-            "tool_choice": "required",
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "seed": 7,
         },
     }
 ]
@@ -121,15 +117,13 @@ async def main() -> None:
                         peak_change = parsed.get("peak_change")
                         peak_week = parsed.get("peak_week")
                         if peak_change is not None and peak_week is not None:
-                            summary = {
-                                "peak_change_pct": round(float(peak_change), 1),
-                                "peak_week": int(peak_week),
-                                "recommendation": "Investigate the drivers to sustain momentum.",
-                            }
+                            summary = (
+                                f"The largest spike was a {float(peak_change):.1f}% increase in week {int(peak_week)}; "
+                                "investigate the drivers to sustain momentum."
+                            )
                             break
-        if summary is None:
-            summary = {}
-        print(json.dumps({"synthetic_summary": summary}, indent=2))
+        if summary:
+            print(json.dumps({"synthetic_summary": summary}, indent=2))
 
         finish_reason = None
         if getattr(response, "choices", None):
