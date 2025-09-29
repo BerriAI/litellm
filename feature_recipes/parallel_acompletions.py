@@ -37,6 +37,26 @@ messages_list: List[List[dict]] = [
     [
         {
             "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe both of these images."},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+                    },
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/b/bd/Test.svg",
+                    },
+                },
+            ],
+        }
+    ],
+    [
+        {
+            "role": "user",
             "content": "Summarize the benefits of unit testing in a paragraph.",
         }
     ],
