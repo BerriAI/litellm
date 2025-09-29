@@ -50,6 +50,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
 )
+from litellm.utils import update_response_metadata
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -716,6 +717,18 @@ class LLMCachingHandler:
             and isinstance(cached_result._hidden_params, dict)
         ):
             cached_result._hidden_params["cache_hit"] = True
+        
+        #########################################################
+        # Add final timing metrics to the cached result
+        #########################################################
+        update_response_metadata(
+            result=cached_result,
+            logging_obj=logging_obj,
+            model=model,
+            kwargs=kwargs,
+            start_time=self.start_time,
+            end_time=datetime.datetime.now(),
+        )
         return cached_result
 
     def _convert_cached_stream_response(
