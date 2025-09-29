@@ -242,7 +242,7 @@ async def _acompletion_with_stream_aware_aggregation(router, req: RouterParallel
         call_target = router.acompletion
 
     if call_kwargs.get("stream") is True:
-        return await _aggregate_stream(router, req, call_kwargs)
+        return await _aggregate_stream(call_target, req, call_kwargs)
     return await call_target(model=req.model, messages=req.messages, **call_kwargs)
 
 

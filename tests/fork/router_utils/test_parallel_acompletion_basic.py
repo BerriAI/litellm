@@ -48,3 +48,28 @@ async def test_run_parallel_requests_surfaces_exceptions():
     assert out[0][0] == 0
     assert out[0][1] is None
     assert isinstance(out[0][2], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_gather_parallel_acompletions_streams_are_aggregated():
+    class _StreamRouter:
+        async def acompletion(self, *, model, messages, stream=False, **kwargs):
+            assert stream is True
+
+            async def _gen():
+                yield {"choices": [{"delta": {"content": "hello "}}]}
+                yield {"choices": [{"delta": {"content": "world"}}]}
+
+            return _gen()
+
+    router = _StreamRouter()
+    req = RouterParallelRequest(
+        model="stream-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+
+    results = await gather_parallel_acompletions(router, [req], preserve_order=True)
+
+    assert results[0].exception is None
+    assert results[0].response == {"choices": [{"message": {"content": "hello world"}}]}

@@ -37,10 +37,6 @@ def main() -> None:
 
     provider = os.getenv("SCENARIO_CODE_PROVIDER") or infer_provider(model_alias)
 
-    if model_alias.startswith("codex-agent/") and os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
-        print("Skipping codex-agent scenario (LITELLM_ENABLE_CODEX_AGENT != 1)")
-        return
-
     params = {"model": model_alias}
     if provider:
         params["custom_llm_provider"] = provider
@@ -48,6 +44,15 @@ def main() -> None:
         params["api_key"] = os.environ["OPENAI_API_KEY"]
     if provider == "ollama":
         params.setdefault("api_base", os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434"))
+
+    if model_alias.startswith("codex-agent/"):
+        if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
+            print("Skipping codex-agent scenario (LITELLM_ENABLE_CODEX_AGENT != 1)")
+            return
+        params.setdefault("api_base", os.getenv("CODEX_AGENT_API_BASE"))
+        if not params.get("api_base"):
+            print("Skipping codex-agent scenario (CODEX_AGENT_API_BASE not set)")
+            return
 
     router = Router(model_list=[{"model_name": "scenario-code", "litellm_params": params}])
 

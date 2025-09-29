@@ -65,16 +65,29 @@ class CodexAgentLLM(CustomLLM):
     ) -> ModelResponse:
         base = self._resolve_base(api_base)
         payload: dict[str, Any] = {"model": model, "messages": messages}
+        extras = dict(optional_params or {})
+        for key, value in extras.items():
+            if key not in ("model", "messages"):
+                payload[key] = value
         # Compose headers; honor provided headers but add Authorization if api_key is present
         _hdr = dict(headers or {})
         if api_key and not any(k.lower() == "authorization" for k in _hdr.keys()):
             _hdr["Authorization"] = f"Bearer {api_key}"
+        request_timeout: Optional[Union[float, httpx.Timeout]] = timeout or 30.0
         try:
-            with httpx.Client(timeout=timeout or 30.0, headers=_hdr) as c:
-                r = c.post(f"{base}/v1/chat/completions", json=payload)
-                if r.status_code < 200 or r.status_code >= 300:
-                    raise CustomLLMError(status_code=r.status_code, message=r.text[:400])
-                data = r.json()
+            if isinstance(client, HTTPHandler):
+                r = client.post(
+                    f"{base}/v1/chat/completions",
+                    json=payload,
+                    headers=_hdr or None,
+                    timeout=request_timeout,
+                )
+            else:
+                with httpx.Client(timeout=request_timeout, headers=_hdr) as c:
+                    r = c.post(f"{base}/v1/chat/completions", json=payload)
+                    if r.status_code < 200 or r.status_code >= 300:
+                        raise CustomLLMError(status_code=r.status_code, message=r.text[:400])
+            data = r.json()
         except CustomLLMError:
             raise
         except Exception as e:
@@ -118,15 +131,28 @@ class CodexAgentLLM(CustomLLM):
     ) -> ModelResponse:
         base = self._resolve_base(api_base)
         payload: dict[str, Any] = {"model": model, "messages": messages}
+        extras = dict(optional_params or {})
+        for key, value in extras.items():
+            if key not in ("model", "messages"):
+                payload[key] = value
         _hdr = dict(headers or {})
         if api_key and not any(k.lower() == "authorization" for k in _hdr.keys()):
             _hdr["Authorization"] = f"Bearer {api_key}"
+        request_timeout: Optional[Union[float, httpx.Timeout]] = timeout or 30.0
         try:
-            async with httpx.AsyncClient(timeout=timeout or 30.0, headers=_hdr) as c:
-                r = await c.post(f"{base}/v1/chat/completions", json=payload)
-                if r.status_code < 200 or r.status_code >= 300:
-                    raise CustomLLMError(status_code=r.status_code, message=r.text[:400])
-                data = r.json()
+            if isinstance(client, AsyncHTTPHandler):
+                r = await client.post(
+                    f"{base}/v1/chat/completions",
+                    json=payload,
+                    headers=_hdr or None,
+                    timeout=request_timeout,
+                )
+            else:
+                async with httpx.AsyncClient(timeout=request_timeout, headers=_hdr) as c:
+                    r = await c.post(f"{base}/v1/chat/completions", json=payload)
+                    if r.status_code < 200 or r.status_code >= 300:
+                        raise CustomLLMError(status_code=r.status_code, message=r.text[:400])
+            data = r.json()
         except CustomLLMError:
             raise
         except Exception as e:
