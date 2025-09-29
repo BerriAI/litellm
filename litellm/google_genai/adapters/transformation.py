@@ -43,7 +43,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
     def __next__(self):
         try:
-            if not hasattr(self.completion_stream, '__iter__'):
+            if not hasattr(self.completion_stream, "__iter__"):
                 if self._returned_response:
                     raise StopIteration
                 self._returned_response = True
@@ -69,7 +69,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
     async def __anext__(self):
         try:
-            if not hasattr(self.completion_stream, '__aiter__'):
+            if not hasattr(self.completion_stream, "__aiter__"):
                 if self._returned_response:
                     raise StopAsyncIteration
                 self._returned_response = True
@@ -98,7 +98,9 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                         try:
                             # For tool calls with no arguments, accumulated_args will be "", which is not valid JSON.
                             # We default to an empty JSON object in this case.
-                            parsed_args = json.loads(tool_call_data["arguments"] or "{}")
+                            parsed_args = json.loads(
+                                tool_call_data["arguments"] or "{}"
+                            )
                             function_call_part = {
                                 "functionCall": {
                                     "name": tool_call_data["name"]
@@ -171,7 +173,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
             else:
                 # For other chunk types, yield them directly
-                if hasattr(chunk, 'encode'):
+                if hasattr(chunk, "encode"):
                     yield chunk.encode()
                 else:
                     yield str(chunk).encode()
@@ -191,7 +193,6 @@ class GoogleGenAIAdapter:
         litellm_params: Optional[GenericLiteLLMParams] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-
         """
         Transform generate_content request to litellm completion format
 
@@ -212,7 +213,6 @@ class GoogleGenAIAdapter:
         tools = kwargs.get("tools")
         tool_config = kwargs.get("toolConfig") or kwargs.get("tool_config")
 
-
         # Normalize contents to list format
         if isinstance(contents, dict):
             contents_list = [contents]
@@ -223,7 +223,6 @@ class GoogleGenAIAdapter:
         messages = self._transform_contents_to_messages(
             contents_list, system_instruction=system_instruction
         )
-
 
         # Create base request as dict (which is compatible with ChatCompletionRequest)
         completion_request: ChatCompletionRequest = {
@@ -338,9 +337,7 @@ class GoogleGenAIAdapter:
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
-                        function_chunk["parameters"] = func_decl[
-                            "parametersJsonSchema"
-                        ]
+                        function_chunk["parameters"] = func_decl["parametersJsonSchema"]
 
                     openai_tool = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
@@ -377,7 +374,7 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]:
                 messages.append(
                     ChatCompletionUserMessage(
-                        role="system", content=system_parts[0]["text"] 
+                        role="system", content=system_parts[0]["text"]
                     )
                 )
 
@@ -470,7 +467,9 @@ class GoogleGenAIAdapter:
             Dict in Google GenAI generate_content response format
         """
         if isinstance(response, AdapterCompletionStreamWrapper):
-            return self.translate_streaming_completion_to_generate_content(response, wrapper=response)
+            return self.translate_streaming_completion_to_generate_content(
+                response, wrapper=response
+            )
 
         # Extract the main response content
         choice = response.choices[0] if response.choices else None
@@ -529,7 +528,6 @@ class GoogleGenAIAdapter:
         response: Union[ModelResponse, ModelResponseStream],
         wrapper: GoogleGenAIStreamWrapper,
     ) -> Optional[Dict[str, Any]]:
-
         """
         Transform streaming litellm completion chunk to Google GenAI generate_content format
 
@@ -639,7 +637,6 @@ class GoogleGenAIAdapter:
 
         return parts if parts else [{"text": ""}]
 
-
     def _transform_openai_delta_to_google_genai_parts_with_accumulation(
         self, delta: Any, wrapper: GoogleGenAIStreamWrapper
     ) -> List[Dict[str, Any]]:
@@ -688,7 +685,9 @@ class GoogleGenAIAdapter:
                 wrapper.accumulated_tool_calls[tool_call_index]["name"] = function_name
 
             if args_chunk:
-                wrapper.accumulated_tool_calls[tool_call_index]["arguments"] += args_chunk
+                wrapper.accumulated_tool_calls[tool_call_index][
+                    "arguments"
+                ] += args_chunk
 
             # Attempt to parse and emit a complete tool call
             accumulated_data = wrapper.accumulated_tool_calls[tool_call_index]

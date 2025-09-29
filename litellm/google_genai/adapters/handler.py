@@ -74,7 +74,7 @@ class GenerateContentToCompletionHandler:
             if stream:
                 # Check if completion_response is actually a stream or a ModelResponse
                 # This can happen in error cases or when stream is not properly supported
-                if not hasattr(completion_response, '__aiter__'):
+                if not hasattr(completion_response, "__aiter__"):
                     # If it's not a stream, treat it as a regular response
                     generate_content_response = (
                         GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
@@ -84,10 +84,8 @@ class GenerateContentToCompletionHandler:
                     return generate_content_response
                 else:
                     # Transform streaming completion response to generate_content format
-                    transformed_stream = (
-                        GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                            completion_response
-                        )
+                    transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+                        completion_response
                     )
                     if transformed_stream is not None:
                         return transformed_stream
@@ -149,7 +147,7 @@ class GenerateContentToCompletionHandler:
             if stream:
                 # Check if completion_response is actually a stream or a ModelResponse
                 # This can happen in error cases or when stream is not properly supported
-                if not hasattr(completion_response, '__iter__'):
+                if not hasattr(completion_response, "__iter__"):
                     # If it's not a stream, treat it as a regular response
                     generate_content_response = (
                         GOOGLE_GENAI_ADAPTER.translate_completion_to_generate_content(
@@ -159,10 +157,8 @@ class GenerateContentToCompletionHandler:
                     return generate_content_response
                 else:
                     # Transform streaming completion response to generate_content format
-                    transformed_stream = (
-                        GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
-                            completion_response
-                        )
+                    transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+                        completion_response
                     )
                     if transformed_stream is not None:
                         return transformed_stream
