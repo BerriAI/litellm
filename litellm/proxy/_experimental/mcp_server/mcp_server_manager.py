@@ -729,7 +729,7 @@ class MCPServerManager:
             )
 
         # Get server-specific auth header if available
-        server_auth_header = None
+        server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers and mcp_server.alias:
             server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
         elif mcp_server_auth_headers and mcp_server.server_name:

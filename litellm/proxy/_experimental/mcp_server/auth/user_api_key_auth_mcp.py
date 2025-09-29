@@ -164,7 +164,7 @@ class MCPRequestHandler:
         Returns:
             Dict[str, Dict[str, str]]: Mapping of server alias to header dict
         """
-        server_auth_headers = {}
+        server_auth_headers: Dict[str, Dict[str, str]] = {}
         prefix = "x-mcp-"
 
         for header_name, header_value in headers.items():

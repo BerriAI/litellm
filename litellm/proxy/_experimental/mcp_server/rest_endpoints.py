@@ -1,5 +1,5 @@
 import importlib
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -34,9 +34,9 @@ if MCP_AVAILABLE:
     ############ MCP Server REST API Routes #################
     def _get_server_auth_header(
         server,
-        mcp_server_auth_headers: Optional[Dict[str, str]],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
         mcp_auth_header: Optional[str],
-    ) -> Optional[str]:
+    ) -> Optional[Union[Dict[str, str], str]]:
         """Helper function to get server-specific auth header with case-insensitive matching."""
         if mcp_server_auth_headers and server.alias:
             normalized_server_alias = server.alias.lower()
