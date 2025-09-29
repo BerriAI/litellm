@@ -26,6 +26,10 @@ from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     STREAM_SSE_DATA_PREFIX,
 )
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    StandardLoggingGuardrailInformation,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -178,6 +182,31 @@ async def create_streaming_response(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self.start_time: datetime = datetime.now()
+    
+    @staticmethod
+    def _get_overhead_duration_ms(
+        hidden_params: Optional[dict] = None,
+    ) -> Optional[float]:
+        if hidden_params is not None:
+            return hidden_params.get("litellm_overhead_time_ms", None)
+        return None
+    
+    @staticmethod
+    def _get_total_response_time_ms(
+        hidden_params: Optional[dict] = None,
+    ) -> Optional[float]:
+        if hidden_params is not None:
+            return hidden_params.get("_response_ms", None)
+        return None
+    
+    @staticmethod
+    def _get_guardrail_duration_ms(
+        hidden_params: Optional[dict] = None,
+    ) -> Optional[float]:
+        if hidden_params is not None:
+            return hidden_params.get("guardrail_duration_ms", None)
+        return None
 
     @staticmethod
     def get_custom_headers(
@@ -213,10 +242,10 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(user_api_key_dict.spend),
             "x-litellm-response-duration-ms": str(
-                hidden_params.get("_response_ms", None)
+                ProxyBaseLLMRequestProcessing._get_total_response_time_ms(hidden_params)
             ),
             "x-litellm-overhead-duration-ms": str(
-                hidden_params.get("litellm_overhead_time_ms", None)
+                ProxyBaseLLMRequestProcessing._get_overhead_duration_ms(hidden_params)
             ),
             "x-litellm-fastest_response_batch_completion": (
                 str(fastest_response_batch_completion)
@@ -284,7 +313,6 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         model: Optional[str] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
-        start_time = datetime.now()  # start before calling guardrail hooks
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -330,7 +358,7 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
-            start_time=start_time,
+            start_time=self.start_time,
             **self.data,
         )
 
@@ -626,6 +654,29 @@ class ProxyBaseLLMRequestProcessing:
         if "stream" in data and data["stream"] is True:
             return True
         return False
+    
+    def _construct_hidden_params_for_failed_request(self) -> dict:
+        """
+        Includes timing metrics for the request
+        """
+        total_duration = (datetime.now() - self.start_time).total_seconds() * 1000
+        hidden_params = {
+            "_response_ms": total_duration,
+        }
+
+        #############################################################
+        # Add guardrail duration to hidden params
+        #############################################################
+        standard_logging_guardrail_information: Optional[StandardLoggingGuardrailInformation] = CustomGuardrail.get_standard_logging_guardrail_information_from_request_data(self.data)
+        if standard_logging_guardrail_information is not None:
+            guardrail_duration_seconds = standard_logging_guardrail_information.get("duration")
+            if guardrail_duration_seconds is not None:
+                guardrail_duration_ms = guardrail_duration_seconds * 1000
+                # if the guardrail fails, litellm overhead is the total duration minus the guardrail duration
+                hidden_params["litellm_overhead_time_ms"] = total_duration - guardrail_duration_ms
+                hidden_params["guardrail_duration_ms"] = guardrail_duration_ms
+        
+        return hidden_params
 
     async def _handle_llm_api_exception(
         self,
@@ -656,6 +707,7 @@ class ProxyBaseLLMRequestProcessing:
         _litellm_logging_obj: Optional[LiteLLMLoggingObj] = self.data.get(
             "litellm_logging_obj", None
         )
+        hidden_params = self._construct_hidden_params_for_failed_request()
         custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=(
@@ -666,6 +718,7 @@ class ProxyBaseLLMRequestProcessing:
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,
+            hidden_params=hidden_params,
         )
         headers = getattr(e, "headers", {}) or {}
         headers.update(custom_headers)
