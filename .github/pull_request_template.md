@@ -1,33 +1,16 @@
-## Title
+## Readiness Lanes
 
-<!-- e.g. "Implement user authentication feature" -->
+- [ ] Core lane hermetic (no semantic asserts)
+- [ ] ND lane preserved (no accidental dummy/echo in tests/ndsmoke)
+- [ ] Live lane opt-in only (no unintended cloud calls)
 
-## Relevant issues
+## ND Guardrails
 
-<!-- e.g. "Fixes #000" -->
+- [ ] I did not add MINI_AGENT_ALLOW_DUMMY or echo shortcuts to tests/ndsmoke
+- [ ] If I touched scripts/mvp_check.py, I preserved the ND_REAL gate logic
+- [ ] If I added ND-real tests, they assert robust invariants (non-empty content, model prefix), not exact wording
 
-## Pre-Submission checklist
+## Changes Summary
 
-**Please complete all items before asking a LiteLLM maintainer to review your PR**
-
-- [ ] I have Added testing in the [`tests/litellm/`](https://github.com/BerriAI/litellm/tree/main/tests/litellm) directory, **Adding at least 1 test is a hard requirement** - [see details](https://docs.litellm.ai/docs/extras/contributing_code)
-- [ ] I have added a screenshot of my new test passing locally 
-- [ ] My PR passes all unit tests on [`make test-unit`](https://docs.litellm.ai/docs/extras/contributing_code)
-- [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
-
-
-## Type
-
-<!-- Select the type of Pull Request -->
-<!-- Keep only the necessary ones -->
-
-🆕 New Feature
-🐛 Bug Fix
-🧹 Refactoring
-📖 Documentation
-🚄 Infrastructure
-✅ Test
-
-## Changes
-
+<briefly summarize>
 

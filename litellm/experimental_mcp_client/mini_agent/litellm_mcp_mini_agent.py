@@ -95,6 +95,9 @@ async def arouter_call(
         except Exception:
             remainder = model
         ch_api_base = os.getenv("CHUTES_API_BASE") or os.getenv("CHUTES_BASE")
+        if not ch_api_base:
+            # Sensible default for Chutes OpenAI-compatible endpoint
+            ch_api_base = "https://llm.chutes.ai/v1"
         ch_api_key = os.getenv("CHUTES_API_KEY") or os.getenv("CHUTES_API_TOKEN")
         if ch_api_base and not kwargs.get("api_base"):
             kwargs["api_base"] = ch_api_base
@@ -384,6 +387,19 @@ def _get_tool_calls(msg: Any) -> List[Dict[str, Any]]:
     return tc or []
 
 
+def _safe_tool_stub(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a minimal assistant message preserving tool_calls."""
+    tc = _get_tool_calls(msg)
+    stub = {"role": "assistant", "content": ""}
+    if tc:
+        stub["tool_calls"] = tc
+    # Preserve optional identifiers if present
+    for key in ("id", "name"):
+        if key in msg:
+            stub[key] = msg[key]
+    return stub
+
+
 def _extract_assistant_message(resp: Any) -> Dict[str, Any]:
     """Normalize dict/object responses to a dict with role/content/tool_calls."""
     if isinstance(resp, dict):
@@ -447,12 +463,15 @@ def _prune_history_preserve_pair(messages: List[Dict[str, Any]], max_non_system:
             break
 
     # Build a set of indices to keep, preserving chronological order
-    keep_idx = set()
+    keep_idx: set[int] = set()
+    essential_idx: set[int] = set()
     if last_tool_idx is not None:
         keep_idx.add(last_tool_idx)
+        essential_idx.add(last_tool_idx)
         for j in range(last_tool_idx + 1, len(non_system)):
             if non_system[j].get("role") == "tool" and non_system[j].get("tool_call_id") == last_tool_call_id:
                 keep_idx.add(j)
+                essential_idx.add(j)
                 break
 
     # Add up to max_non_system most recent non-system indices
@@ -462,6 +481,7 @@ def _prune_history_preserve_pair(messages: List[Dict[str, Any]], max_non_system:
 
     # Emit in original order: system first, then chosen non-system in order
     trimmed_non_system = [non_system[i] for i in range(len(non_system)) if i in keep_idx]
+    essential_messages = {id(non_system[i]) for i in essential_idx}
     out = system_msgs + trimmed_non_system
     # Enforce rough character budget by removing oldest non-system if needed
     def total_chars(ms: List[Dict[str, Any]]) -> int:
@@ -474,10 +494,35 @@ def _prune_history_preserve_pair(messages: List[Dict[str, Any]], max_non_system:
 
     while total_chars(out) > hard_char_budget and any(m.get("role") != "system" for m in out):
         # drop the oldest non-system message
+        removed = False
         for i, m in enumerate(out):
-            if m.get("role") != "system":
-                out.pop(i)
-                break
+            if m.get("role") == "system":
+                continue
+            if id(m) in essential_messages:
+                continue
+            out.pop(i)
+            removed = True
+            break
+        if not removed:
+            # Nothing removable without breaking essential tool-call pair; stop trimming
+            break
+
+    # If essential assistant/tool messages were dropped earlier (e.g., due to copying), ensure at least one assistant tool-call remains
+    has_assistant_tool = any((m.get("role") == "assistant") and _get_tool_calls(m) for m in out)
+    if not has_assistant_tool and last_tool_idx is not None:
+        assistant_msg = _safe_tool_stub(non_system[last_tool_idx])
+        out.append(assistant_msg)
+
+    # Ensure matching tool reply exists if we have assistant tool-call reference
+    if any((m.get("role") == "assistant") and _get_tool_calls(m) for m in out):
+        if last_tool_call_id is not None and not any(
+            (m.get("role") == "tool" and m.get("tool_call_id") == last_tool_call_id) for m in out
+        ):
+            for j in range(last_tool_idx + 1, len(non_system)) if last_tool_idx is not None else []:
+                tool_msg = non_system[j]
+                if tool_msg.get("role") == "tool" and tool_msg.get("tool_call_id") == last_tool_call_id:
+                    out.append(tool_msg)
+                    break
     return out
 
 
@@ -579,8 +624,15 @@ async def arun_mcp_mini_agent(
                 ]
 
         if not tcs:
-            content = (asst.get("content") or "")
-            if not (content.strip()):
+            content = asst.get("content")
+            # JSON-mode: allow dict content to pass through without coercion
+            if isinstance(content, dict):
+                iters.append(IterationRecord(tool_invocations=[], router_call_ms=router_ms))
+                metrics["used_model"] = used_model
+                return AgentRunResult(messages=conv, final_answer=None, stopped_reason="success", iterations=iters, metrics=metrics, used_model=used_model)
+            # String-mode
+            content_str = (content or "") if isinstance(content, str) else ""
+            if not (content_str.strip()):
                 conv.append({
                     "role": "user",
                     "content": "I did not receive runnable Python. Please provide Python code in a fenced block and try again."
@@ -615,7 +667,7 @@ async def arun_mcp_mini_agent(
 
             iters.append(IterationRecord(tool_invocations=[], router_call_ms=router_ms))
             metrics["used_model"] = used_model
-            return AgentRunResult(messages=conv, final_answer=content, stopped_reason="success", iterations=iters, metrics=metrics, used_model=used_model)
+            return AgentRunResult(messages=conv, final_answer=content_str, stopped_reason="success", iterations=iters, metrics=metrics, used_model=used_model)
 
 
         # Handle tool calls

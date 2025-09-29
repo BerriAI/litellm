@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 from typing import List, Tuple
+import json as _json_mod
 import json
 try:
     # Ensure .env is loaded so checks see keys like GEMINI_API_KEY
@@ -77,8 +78,20 @@ def _can(host: str, port: int, t: float = 0.5) -> bool:
         return False
 
 
+def _c(s: str, name: str) -> str:
+    codes = {
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "cyan": "\033[36m",
+        "bold": "\033[1m",
+        "reset": "\033[0m",
+    }
+    return f"{codes.get(name,'')}{s}{codes['reset']}"
+
+
 def section(title: str):
-    print(f"\n=== {title} ===")
+    print("\n" + _c(f"=== {title} ===", "bold"))
 
 
 def _emoji(ok: bool | None, skipped: bool | None = None) -> str:
@@ -104,9 +117,41 @@ def _print_preflight_banner(strict_ready: bool, expected_live: list[str]):
         ma_port = 8788
     policy = "STRICT" if strict_ready else ("LIVE" if rl else "DEV")
     exp = ",".join(expected_live) if expected_live else "(none)"
-    print("\n=== Readiness Preflight ===")
-    print(f"Policy: {policy}; READINESS_EXPECT={exp}; DOCKER_MINI_AGENT={'1' if dm else '0'}")
-    print(f"Resolved endpoints: mini-agent={ma_host}:{ma_port}; codex-agent base={ca_base or '(auto)'}; ollama={oa_base}")
+    print("\n" + _c("=== Readiness Preflight ===", "cyan"))
+    print(_c(f"Policy: {policy}; READINESS_EXPECT={exp}; DOCKER_MINI_AGENT={'1' if dm else '0'}", "bold"))
+    print(_c(f"Resolved endpoints: mini-agent={ma_host}:{ma_port}; codex-agent base={ca_base or '(auto)'}; ollama={oa_base}", "cyan"))
+
+
+def _http_get(url: str, timeout: float = 2.0) -> bytes:
+    try:
+        import urllib.request as _u
+        req = _u.Request(url, headers={"accept": "application/json"})
+        with _u.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except Exception:
+        raise
+
+
+def _probe_ollama(base: str) -> bool:
+    try:
+        _http_get(base.rstrip("/") + "/api/version", 1.5)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_ollama_model(base: str) -> str:
+    try:
+        raw = _http_get(base.rstrip("/") + "/api/tags", 2.0)
+        data = _json_mod.loads(raw.decode("utf-8", "ignore")) or {}
+        models = data.get("models") or []
+        if models:
+            name = (models[0].get("name") or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return "tinyllama"
 
 
 def _ensure_dir(p: str) -> None:
@@ -188,17 +233,20 @@ def _maybe_autoconfig_router(check_name: str, env: dict) -> None:
 
 
 def _rewrite_cmd_with_venv(run: str, env: dict | None = None) -> str:
-    """Make 'pytest …' and 'python …' invocations venv-safe using sys.executable."""
-    cmd = (run or '').lstrip()
+    """Make 'pytest …' and 'python …' invocations venv-safe using sys.executable.
+
+    Handles commands prefixed with env assignments (e.g., "PYTHONPATH=… pytest …")
+    and heredocs like "python - <<'PY'" by rewriting the first token occurrence.
+    """
+    import re as _re
+    cmd = (run or '')
     py = (env or {}).get('PYTHON_BIN', sys.executable)
     pytest_cmd = (env or {}).get('PYTEST', f"{py} -m pytest")
-    if cmd.startswith('pytest '):
-        return cmd.replace('pytest', pytest_cmd, 1)
-    if cmd.startswith('python3 '):
-        return cmd.replace('python3', py, 1)
-    if cmd.startswith('python '):
-        return cmd.replace('python', py, 1)
-    return run
+    # Replace standalone 'pytest' tokens anywhere (including after assignments)
+    cmd = _re.sub(r'(?<!\w)pytest(?!\w)', pytest_cmd, cmd, count=1)
+    # Replace the first leading 'python' or 'python3' token (even if followed by '-')
+    cmd = _re.sub(r'^(\s*)(python3|python)(\b|-)', lambda m: f"{m.group(1)}{py}{m.group(3)}", cmd, count=1)
+    return cmd
 
 def _augment_pytest_env(check_name: str, env: dict) -> tuple[dict, str]:
     """Add readable defaults + JUnit XML per-check."""
@@ -383,11 +431,11 @@ def main() -> int:
             rc2, out2 = _run(_cmd2, env=env)
             print(out2.strip())
             if rc2 != 0:
-                print("[FAIL] mini-agent low E2E finalize")
+                print(_c("[FAIL] mini-agent low E2E finalize", "red"))
                 failures += 1
                 report["checks"].append({"name": "mini_agent_e2e_low", "ok": False, "details": out2[-1000:]})
             else:
-                print("[OK] mini-agent low E2E finalize")
+                print(_c("[OK] mini-agent low E2E finalize", "green"))
                 report["checks"].append({"name": "mini_agent_e2e_low", "ok": True})
 
             # 2b) codex-agent via Router using shim (codex-agent/gpt-5)
@@ -433,6 +481,7 @@ def main() -> int:
                 "print(getattr(getattr(out.choices[0],'message',{}),'content','').strip() or '(empty)')\n"
                 "PY\n"
             )
+            code = _rewrite_cmd_with_venv(code, os.environ.copy())
             rc3b, out3b = _run(code)
             print(out3b.strip())
             if rc3b != 0 or '(empty)' in out3b:
@@ -498,9 +547,30 @@ def main() -> int:
                     env['CODEX_AGENT_API_BASE'] = f"http://{env['MINI_AGENT_API_HOST']}:{env['MINI_AGENT_API_PORT']}"
                 except Exception:
                     pass
-            # For mini-agent-targeting checks, allow the dummy path to eliminate model dependency flake
-            if 'mini_agent' in (name or ''):
-                env.setdefault('MINI_AGENT_ALLOW_DUMMY', '1')
+            # Lane selection: ND real toggle
+            is_nd_lane = (name == 'all_smokes_nd') or ('all_smokes_nd' in (name or ''))
+            nd_real = os.getenv('ND_REAL', '0') == '1'
+
+            if is_nd_lane and nd_real:
+                # True ND: never stub; block echo shim; require Ollama reachable; select model
+                env['MINI_AGENT_OPENAI_SHIM_MODE'] = 'block'
+                env['MINI_AGENT_ALLOW_DUMMY'] = '0'
+                ollama_base = env.get('OLLAMA_API_BASE', os.getenv('OLLAMA_API_BASE', 'http://127.0.0.1:11434'))
+                if not _probe_ollama(ollama_base):
+                    print(_c(f"[readiness] ND_REAL=1 but OLLAMA_API_BASE not reachable: {ollama_base}", 'red'))
+                else:
+                    tag = env.get('OLLAMA_MODEL') or _resolve_ollama_model(ollama_base)
+                    env.setdefault('LITELLM_DEFAULT_CODE_MODEL', f'ollama_chat/{tag}')
+                    env.setdefault('LITELLM_DEFAULT_TEXT_MODEL', f'ollama_chat/{tag}')
+            else:
+                # Hermetic defaults and ND-low tolerance
+                env.setdefault('MINI_AGENT_OPENAI_SHIM_MODE', 'echo')
+                if 'mini_agent' in (name or ''):
+                    # Only allow dummy for the explicit low e2e
+                    if name.lower() == 'mini_agent_e2e_low' or 'e2e_low' in name.lower():
+                        env.setdefault('MINI_AGENT_ALLOW_DUMMY', '1')
+                    else:
+                        env.setdefault('MINI_AGENT_ALLOW_DUMMY', '0')
             def _get_timeout_for_check(check_name: str, check_cfg: dict | None) -> int:
                 """Resolve timeout precedence for a check.
                 1) readiness.yml 'timeout' value if provided
@@ -540,7 +610,7 @@ def main() -> int:
             if rcx != 0:
                 cause = _parse_junit_first_failure(junit_path) or _extract_pytest_cause(outx)
                 if cause:
-                    print(f"[readiness] CHECK '{name}' FAILED — CAUSE: {cause}")
+                    print(_c(f"[readiness] CHECK '{name}' FAILED — CAUSE: {cause}", "red"))
             ok = (rcx == 0)
             if os.getenv('READINESS_FAIL_ON_SKIP') == '1':
                 import re as _re
@@ -567,11 +637,11 @@ def main() -> int:
             print(out4.strip())
             # make target is skip-friendly; treat non-zero as warning
             if rc4 != 0:
-                print("[WARN] docker ndsmokes returned non-zero (check output)")
+                print(_c("[WARN] docker ndsmokes returned non-zero (check output)", "yellow"))
                 report["checks"].append({"name": "docker_smokes", "ok": False, "details": out4[-2000:]})
                 results["docker"] = False
             else:
-                print("[OK] docker ndsmokes (readiness + loopback gated)")
+                print(_c("[OK] docker ndsmokes (readiness + loopback gated)", "green"))
                 report["checks"].append({"name": "docker_smokes", "ok": True})
                 results["docker"] = True
 
@@ -580,8 +650,8 @@ def main() -> int:
     live_attempts = 0
     live_success = 0
 
-    # Gemini live check
-    if os.getenv("GEMINI_API_KEY"):
+    # Gemini live check (opt-in: requires LIVE_PROVIDERS=1 and GEMINI_API_KEY)
+    if os.getenv("LIVE_PROVIDERS", "0") == "1" and os.getenv("GEMINI_API_KEY"):
         live_attempts += 1
         code = (
             "python - <<'PY'\n"
@@ -602,7 +672,7 @@ def main() -> int:
         else:
             failures += 1 if strict_ready else 0
     else:
-        print("[SKIP] GEMINI_API_KEY not set")
+        print("[SKIP] LIVE_PROVIDERS!=1 or GEMINI_API_KEY not set")
 
     # Ollama live check
     ollama_base = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434")
@@ -641,7 +711,7 @@ def main() -> int:
         else:
             failures += 1 if strict_ready else 0
     else:
-        print(f"[SKIP] Ollama not reachable on {host}:{port}")
+        print(_c(f"[SKIP] Ollama not reachable on {host}:{port}", "yellow"))
 
     # codex-agent live check (env-gated to a reachable base; default uses MINI_AGENT_API_HOST/PORT)
     ca_host = os.getenv("CODEX_AGENT_HOST") or os.getenv("MINI_AGENT_API_HOST", "127.0.0.1")
@@ -725,7 +795,7 @@ def main() -> int:
         else:
             failures += 1 if strict_ready else 0
     else:
-        print(f"[SKIP] codex-agent base not reachable on {ca_host}:{ca_port}")
+        print(_c(f"[SKIP] codex-agent base not reachable on {ca_host}:{ca_port}", "yellow"))
     # cleanup if we started local server
     if ca_proc is not None:
         try:
@@ -746,7 +816,7 @@ def main() -> int:
         expected_live = [p for p in expected_live if p in known_providers]
         missing = [p for p in expected_live if results.get(p) is not True]
         if missing:
-            print(f"[FAIL] live providers missing/failed in STRICT mode: {', '.join(missing)}")
+            print(_c(f"[FAIL] live providers missing/failed in STRICT mode: {', '.join(missing)}", "red"))
             failures += 1
             report["checks"].append({
                 "name": "live_summary",
@@ -760,7 +830,7 @@ def main() -> int:
                 "details": f"All expected live providers OK: {', '.join(expected_live)}"
             })
 
-    print("\n=== Summary ===")
+    print("\n" + _c("=== Summary ===", "bold"))
     # Write JSON report
     os.makedirs("local/artifacts/mvp", exist_ok=True)
     with open("local/artifacts/mvp/mvp_report.json", "w", encoding="utf-8") as f:
@@ -798,19 +868,26 @@ def main() -> int:
 
     # Compact terminal table for quick scan
     try:
-        print("\n--- Results (quick) ---")
+        print(_c("\n--- Results (quick) ---", "bold"))
         for c in report.get("checks", []):
             name = c.get("name")
             ok = c.get("ok")
             skipped = c.get("skipped")
-            print(f"{name:<26} {_emoji(ok, skipped)}")
+            mark = _emoji(ok, skipped)
+            if skipped:
+                mark = _c(mark, "yellow")
+            elif ok:
+                mark = _c(mark, "green")
+            else:
+                mark = _c(mark, "red")
+            print(f"{name:<26} {mark}")
     except Exception:
         pass
 
     if failures:
-        print(f"MVP readiness checks: {failures} failure(s)")
+        print(_c(f"MVP readiness checks: {failures} failure(s)", "red"))
     else:
-        print("MVP readiness checks: OK")
+        print(_c("MVP readiness checks: OK", "green"))
     return 1 if failures else 0
 
 

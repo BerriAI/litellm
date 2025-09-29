@@ -1,3 +1,4 @@
+# Source: litellm/experimental_mcp_client/mini_agent/http_tools_invoker.py (lines 1-140)
 from __future__ import annotations
 import json
 import asyncio
@@ -29,7 +30,7 @@ except Exception:
 class HttpToolsInvoker:
     def __init__(self, base_url: str, headers: Optional[Dict[str, str]] = None) -> None:
         self.base_url = base_url.rstrip("/")
-        self.headers = dict(headers or {})
+        self.headers = headers or {}
 
     def _mk_client(self):
         """

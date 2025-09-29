@@ -28,6 +28,8 @@ Notes
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -72,38 +74,87 @@ class ParallelResult:
 
 # ----------------------------- Internal helpers -------------------------------
 
-def _normalize_request(req: Union[RouterParallelRequest, Dict[str, Any]], idx: int) -> RouterParallelRequest:
+def _normalize_request(
+    req: Union[RouterParallelRequest, Dict[str, Any], Any], idx: int
+) -> RouterParallelRequest:
     """
-    Accept either a RouterParallelRequest or a dict with keys:
-      - model, messages, (optional) temperature, max_tokens, top_p, stream, kwargs
-    Returns a RouterParallelRequest.
+    Accept RouterParallelRequest, dict, dataclass, or any object with
+    `model` and `messages` attributes. Falls back to structural copy to avoid
+    brittle isinstance checks across modules.
     """
     if isinstance(req, RouterParallelRequest):
         return req
 
-    if not isinstance(req, dict):
-        raise TypeError(f"request at index {idx} must be RouterParallelRequest or dict, got: {type(req)}")
+    data: Dict[str, Any]
 
-    model = req.get("model")
-    messages = req.get("messages") or []
-    if not model or not isinstance(messages, list):
-        raise ValueError(f"request at index {idx} missing 'model' or invalid 'messages'")
+    if isinstance(req, dict):
+        data = dict(req)
+    elif dataclasses.is_dataclass(req):
+        try:
+            data = dataclasses.asdict(req)
+        except Exception:
+            data = {
+                "model": getattr(req, "model", None),
+                "messages": getattr(req, "messages", None),
+                "temperature": getattr(req, "temperature", None),
+                "max_tokens": getattr(req, "max_tokens", None),
+                "top_p": getattr(req, "top_p", None),
+                "stream": getattr(req, "stream", None),
+                "kwargs": getattr(req, "kwargs", None),
+            }
+    elif hasattr(req, "model") and hasattr(req, "messages"):
+        data = {
+            "model": getattr(req, "model"),
+            "messages": getattr(req, "messages"),
+        }
+        for key in (
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "stream",
+            "kwargs",
+            "metadata",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "seed",
+            "timeout",
+        ):
+            if hasattr(req, key):
+                data.setdefault(key, getattr(req, key))
+    else:
+        if inspect.isclass(req):
+            raise TypeError(
+                f"request at index {idx} is a class, not an instance: {req!r}; construct it first"
+            )
+        raise TypeError(
+            f"request at index {idx} must be RouterParallelRequest-like or dict, got instance of {type(req)}"
+        )
 
-    r = RouterParallelRequest(
+    model = data.get("model")
+    messages = data.get("messages")
+    if model is None or not isinstance(messages, list):
+        raise TypeError(
+            f"request at index {idx} missing required fields model/messages after normalization: keys={list(data.keys())}"
+        )
+
+    kwargs = data.get("kwargs") or {}
+    if kwargs is None:
+        kwargs = {}
+
+    return RouterParallelRequest(
         model=str(model),
         messages=list(messages),
-        temperature=req.get("temperature"),
-        max_tokens=req.get("max_tokens"),
-        top_p=req.get("top_p"),
-        stream=req.get("stream"),
-        kwargs=dict(req.get("kwargs") or {}),
+        temperature=data.get("temperature"),
+        max_tokens=data.get("max_tokens"),
+        top_p=data.get("top_p"),
+        stream=data.get("stream"),
+        kwargs=dict(kwargs),
     )
-    # Allow top-level common knobs in dict; `kwargs` may also contain them, but we prefer typed fields.
-    return r
 
 
 def _normalize_requests(
-    requests: Sequence[Union[RouterParallelRequest, Dict[str, Any]]]
+    requests: Sequence[Union[RouterParallelRequest, Dict[str, Any], Any]]
 ) -> List[RouterParallelRequest]:
     return [_normalize_request(r, i) for i, r in enumerate(requests)]
 
@@ -125,7 +176,11 @@ def _merge_kwargs(req: RouterParallelRequest) -> Dict[str, Any]:
     return out
 
 
-async def _aggregate_stream(router, req: RouterParallelRequest, call_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+async def _aggregate_stream(
+    call_target,
+    req: RouterParallelRequest,
+    call_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
     """
     Consume a streaming response and aggregate into a minimal Chat-Completions-like dict:
       {"choices": [{"message": {"content": "<assembled text>"}}]}
@@ -133,7 +188,7 @@ async def _aggregate_stream(router, req: RouterParallelRequest, call_kwargs: Dic
     Supports both object and dict chunk shapes.
     """
     # Start streaming call
-    stream = await router.acompletion(model=req.model, messages=req.messages, **call_kwargs)
+    stream = await call_target(model=req.model, messages=req.messages, **call_kwargs)
 
     chunks: List[str] = []
 
@@ -181,9 +236,14 @@ async def _acompletion_with_stream_aware_aggregation(router, req: RouterParallel
       - Stream: normalized dict with choices[0].message.content aggregated
     """
     call_kwargs = _merge_kwargs(req)
+
+    call_target = router.__dict__.get("acompletion")
+    if call_target is None:
+        call_target = router.acompletion
+
     if call_kwargs.get("stream") is True:
         return await _aggregate_stream(router, req, call_kwargs)
-    return await router.acompletion(model=req.model, messages=req.messages, **call_kwargs)
+    return await call_target(model=req.model, messages=req.messages, **call_kwargs)
 
 
 # ------------------------------ Public helpers --------------------------------
@@ -243,6 +303,7 @@ async def run_parallel_requests(
     requests: Sequence[Union[RouterParallelRequest, Dict[str, Any]]],
     preserve_order: bool = True,
     return_exceptions: bool = True,
+    concurrency: Optional[int] = None,
 ) -> List[Tuple[int, Any, Optional[Exception]]]:
     """
     DEPRECATED adapter for legacy callers.
@@ -254,7 +315,7 @@ async def run_parallel_requests(
     prs = await gather_parallel_acompletions(
         router,
         requests,
-        concurrency=None,
+        concurrency=concurrency,
         preserve_order=preserve_order,
     )
 

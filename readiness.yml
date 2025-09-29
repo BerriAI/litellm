@@ -123,6 +123,7 @@ checks:
       MINI_AGENT_API_HOST: 127.0.0.1
       MINI_AGENT_API_PORT: "8788"
       MINI_AGENT_OPENAI_SHIM_MODE: echo
+      MINI_AGENT_ALLOW_DUMMY: "1"
       LITELLM_ENABLE_CODEX_AGENT: "1"
       CODEX_AGENT_API_BASE: http://127.0.0.1:8788
       LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
@@ -142,3 +143,9 @@ checks:
       LITELLM_DEFAULT_CODE_MODEL: ollama_chat/qwen2.5-coder:3b
       LITELLM_DEFAULT_TEXT_MODEL: ollama_chat/glm4:latest
       OLLAMA_MODEL: glm4:latest
+
+  - name: release_smokes
+    description: Quickstart release smokes (docs parity)
+    run: |
+      PYTHONPATH=$(pwd) pytest -q tests/release_smokes
+    optional: true

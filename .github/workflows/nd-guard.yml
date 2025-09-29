@@ -1,0 +1,19 @@
+name: nd-guard
+on:
+  pull_request:
+    paths:
+      - 'scripts/mvp_check.py'
+      - 'tests/ndsmoke/**'
+      - 'scripts/ci/check_nd_guardrails.py'
+
+jobs:
+  nd-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run ND guardrails
+        run: |
+          python scripts/ci/check_nd_guardrails.py

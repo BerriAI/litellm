@@ -1,79 +1,60 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="1" skipped="2" tests="3" time="21.532" timestamp="2025-09-28T09:16:09.883509" hostname="graham-MS-7C60"><testcase classname="tests.smoke.test_agent_api_shape" name="test_agent_proxy_response_shapes_minimal" time="0.000"><skipped type="pytest.skip" message="Agent API not reachable on 127.0.0.1:54023">/home/graham/workspace/experiments/litellm/tests/smoke/test_agent_api_shape.py:25: Agent API not reachable on 127.0.0.1:54023</skipped></testcase><testcase classname="tests.smoke.test_codex_agent_binary_resolution" name="test_codex_agent_binary_resolution" time="0.000"><skipped type="pytest.skip" message="codex_cli_agent provider not present in this build">/home/graham/workspace/experiments/litellm/tests/smoke/test_codex_agent_binary_resolution.py:43: codex_cli_agent provider not present in this build</skipped></testcase><testcase classname="tests.smoke.test_codex_agent_router_smoke" name="test_codex_agent_router_against_inprocess_shim" time="18.499"><failure message="litellm.exceptions.APIConnectionError: litellm.APIConnectionError: [Errno -2] Name or service not known&#10;Traceback (most recent call last):&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py&quot;, line 101, in map_httpcore_exceptions&#10;    yield&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py&quot;, line 394, in handle_async_request&#10;    resp = await self._pool.handle_async_request(req)&#10;           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py&quot;, line 256, in handle_async_request&#10;    raise exc from None&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py&quot;, line 236, in handle_async_request&#10;    response = await connection.handle_async_request(&#10;               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py&quot;, line 101, in handle_async_request&#10;    raise exc&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py&quot;, line 78, in handle_async_request&#10;    stream = await self._connect(request)&#10;             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py&quot;, line 124, in _connect&#10;    stream = await self._network_backend.connect_tcp(**kwargs)&#10;             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_backends/auto.py&quot;, line 31, in connect_tcp&#10;    return await self._backend.connect_tcp(&#10;           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py&quot;, line 113, in connect_tcp&#10;    with map_exceptions(exc_map):&#10;  File &quot;/usr/lib/python3.12/contextlib.py&quot;, line 158, in __exit__&#10;    self.gen.throw(value)&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_exceptions.py&quot;, line 14, in map_exceptions&#10;    raise to_exc(exc) from exc&#10;httpcore.ConnectError: [Errno -2] Name or service not known&#10;&#10;The above exception was the direct cause of the following exception:&#10;&#10;Traceback (most recent call last):&#10;  File &quot;/home/graham/workspace/experiments/litellm/litellm/llms/codex_agent.py&quot;, line 126, in acompletion&#10;    r = await c.post(f&quot;{base}/v1/chat/completions&quot;, json=payload)&#10;        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1859, in post&#10;    return await self.request(&#10;           ^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1540, in request&#10;    return await self.send(request, auth=auth, follow_redirects=follow_redirects)&#10;           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1629, in send&#10;    response = await self._send_handling_auth(&#10;               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1657, in _send_handling_auth&#10;    response = await self._send_handling_redirects(&#10;               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1694, in _send_handling_redirects&#10;    response = await self._send_single_request(request)&#10;               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py&quot;, line 1730, in _send_single_request&#10;    response = await transport.handle_async_request(request)&#10;               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py&quot;, line 393, in handle_async_request&#10;    with map_httpcore_exceptions():&#10;  File &quot;/usr/lib/python3.12/contextlib.py&quot;, line 158, in __exit__&#10;    self.gen.throw(value)&#10;  File &quot;/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py&quot;, line 118, in map_httpcore_exceptions&#10;    raise mapped_exc(message) from exc&#10;httpx.ConnectError: [Errno -2] Name or service not known&#10;&#10;During handling of the above exception, another exception occurred:&#10;&#10;Traceback (most recent call last):&#10;  File &quot;/home/graham/workspace/experiments/litellm/litellm/main.py&quot;, line 557, in acompletion&#10;    response = await init_response&#10;               ^^^^^^^^^^^^^^^^^^^&#10;  File &quot;/home/graham/workspace/experiments/litellm/litellm/llms/codex_agent.py&quot;, line 133, in acompletion&#10;    raise CustomLLMError(status_code=500, message=str(e)[:400])&#10;litellm.llms.custom_llm.CustomLLMError: [Errno -2] Name or service not known&#10;. Received Model Group=codex-agent-1&#10;Available Model Group Fallbacks=None LiteLLM Retried: 1 times, LiteLLM Max Retries: 2">.venv/lib/python3.12/site-packages/httpx/_transports/default.py:101: in map_httpcore_exceptions
-    yield
-.venv/lib/python3.12/site-packages/httpx/_transports/default.py:394: in handle_async_request
-    resp = await self._pool.handle_async_request(req)
-.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py:256: in handle_async_request
-    raise exc from None
-.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py:236: in handle_async_request
-    response = await connection.handle_async_request(
-.venv/lib/python3.12/site-packages/httpcore/_async/connection.py:101: in handle_async_request
-    raise exc
-.venv/lib/python3.12/site-packages/httpcore/_async/connection.py:78: in handle_async_request
-    stream = await self._connect(request)
-.venv/lib/python3.12/site-packages/httpcore/_async/connection.py:124: in _connect
-    stream = await self._network_backend.connect_tcp(**kwargs)
-.venv/lib/python3.12/site-packages/httpcore/_backends/auto.py:31: in connect_tcp
-    return await self._backend.connect_tcp(
-.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py:113: in connect_tcp
-    with map_exceptions(exc_map):
-/usr/lib/python3.12/contextlib.py:158: in __exit__
-    self.gen.throw(value)
-.venv/lib/python3.12/site-packages/httpcore/_exceptions.py:14: in map_exceptions
-    raise to_exc(exc) from exc
-E   httpcore.ConnectError: [Errno -2] Name or service not known
-
-The above exception was the direct cause of the following exception:
-litellm/llms/codex_agent.py:126: in acompletion
-    r = await c.post(f"{base}/v1/chat/completions", json=payload)
-.venv/lib/python3.12/site-packages/httpx/_client.py:1859: in post
-    return await self.request(
-.venv/lib/python3.12/site-packages/httpx/_client.py:1540: in request
-    return await self.send(request, auth=auth, follow_redirects=follow_redirects)
-.venv/lib/python3.12/site-packages/httpx/_client.py:1629: in send
-    response = await self._send_handling_auth(
-.venv/lib/python3.12/site-packages/httpx/_client.py:1657: in _send_handling_auth
-    response = await self._send_handling_redirects(
-.venv/lib/python3.12/site-packages/httpx/_client.py:1694: in _send_handling_redirects
-    response = await self._send_single_request(request)
-.venv/lib/python3.12/site-packages/httpx/_client.py:1730: in _send_single_request
-    response = await transport.handle_async_request(request)
-.venv/lib/python3.12/site-packages/httpx/_transports/default.py:393: in handle_async_request
-    with map_httpcore_exceptions():
-/usr/lib/python3.12/contextlib.py:158: in __exit__
-    self.gen.throw(value)
-.venv/lib/python3.12/site-packages/httpx/_transports/default.py:118: in map_httpcore_exceptions
-    raise mapped_exc(message) from exc
-E   httpx.ConnectError: [Errno -2] Name or service not known
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="57" time="9.567" timestamp="2025-09-28T16:09:14.765372" hostname="graham-MS-7C60"><testcase classname="tests.smoke.test_agent_api_shape" name="test_agent_proxy_response_shapes_minimal" time="2.639" /><testcase classname="tests.smoke.test_codex_agent_binary_resolution" name="test_codex_agent_binary_resolution" time="0.001" /><testcase classname="tests.smoke.test_codex_agent_router_smoke" name="test_codex_agent_router_against_inprocess_shim" time="0.442" /><testcase classname="tests.smoke.test_concurrent_agents_isolated_state" name="test_concurrent_agents_isolated_state" time="0.001" /><testcase classname="tests.smoke.test_escalation_matrix_smoke" name="test_escalation_matrix_smoke" time="0.000" /><testcase classname="tests.smoke.test_mini_agent_france_smoke" name="test_agent_api_contract_minimal" time="0.023" /><testcase classname="tests.smoke.test_mini_agent_import" name="test_mini_agent_module_import_and_config" time="0.000" /><testcase classname="tests.smoke_optional.test_agent_escalate_smoke" name="test_agent_escalate_on_last_step" time="0.001" /><testcase classname="tests.smoke_optional.test_agent_json_mode_response_passthrough" name="test_agent_json_mode_response_passthrough" time="0.000" /><testcase classname="tests.smoke_optional.test_agent_proxy" name="test_agent_proxy_run_minimal" time="0.005" /><testcase classname="tests.smoke_optional.test_agent_proxy_headers_and_errors" name="test_agent_proxy_errors_and_headers" time="0.003" /><testcase classname="tests.smoke_optional.test_agent_proxy_metrics_smoke" name="test_agent_proxy_returns_metrics" time="0.002" /><testcase classname="tests.smoke_optional.test_agent_proxy_validation_errors" name="test_agent_proxy_headers_precedence" time="0.008" /><testcase classname="tests.smoke_optional.test_batch_as_completed_ordering" name="test_batch_as_completed_ordering" time="0.051" /><testcase classname="tests.smoke_optional.test_batch_as_completed_return_exceptions" name="test_as_completed_return_exceptions" time="0.001" /><testcase classname="tests.smoke_optional.test_http_error_tail" name="test_http_tools_invoker_error_tail" time="0.001" /><testcase classname="tests.smoke_optional.test_http_tools_invoker" name="test_http_tools_invoker_monkeypatch" time="0.001" /><testcase classname="tests.smoke_optional.test_http_tools_invoker_429_retry_after_once" name="test_http_tools_invoker_429_retry_after_once" time="0.001" /><testcase classname="tests.smoke_optional.test_http_tools_invoker_headers" name="test_http_tools_invoker_headers_passthrough" time="0.001" /><testcase classname="tests.smoke_optional.test_http_tools_invoker_non_json_body" name="test_http_tools_invoker_non_json_body" time="0.001" /><testcase classname="tests.smoke_optional.test_images_local_remote" name="test_compress_image_local" time="0.014" /><testcase classname="tests.smoke_optional.test_images_local_remote" name="test_fetch_remote_image_cache" time="0.001" /><testcase classname="tests.smoke_optional.test_import_fastuuid_fallback" name="test_import_without_fastuuid" time="1.800" /><testcase classname="tests.smoke_optional.test_local_docs_litellm_call_image_prep" name="test_litellm_call_image_prep_uses_utils" time="0.007" /><testcase classname="tests.smoke_optional.test_local_docs_litellm_image_utils" name="test_local_docs_litellm_image_utils_reexport" time="0.000" /><testcase classname="tests.smoke_optional.test_mini_agent" name="test_mini_agent_echo_tool_roundtrip" time="0.003" /><testcase classname="tests.smoke_optional.test_mini_agent_codeblock_autorun_smoke" name="test_mini_agent_autorun_python_codeblock_smoke" time="0.001" /><testcase classname="tests.smoke_optional.test_mini_agent_codeblock_multilang_smoke" name="test_mini_agent_autorun_c_codeblock_smoke" time="0.001" /><testcase classname="tests.smoke_optional.test_mini_agent_repair_loop" name="test_mini_agent_repair_loop_exec_python" time="0.023" /><testcase classname="tests.smoke_optional.test_mini_agent_research_on_unsure" name="test_mini_agent_research_on_unsure" time="0.001" /><testcase classname="tests.smoke_optional.test_mini_agent_response_shapes" name="test_mini_agent_accepts_dict_and_object" time="0.000" /><testcase classname="tests.smoke_optional.test_mini_agent_tool_args_non_json" name="test_mini_agent_tool_args_non_json" time="0.001" /><testcase classname="tests.smoke_optional.test_openai_shim_smoke" name="test_openai_shim_basic" time="0.007" /><testcase classname="tests.smoke_optional.test_parallel_acompletions" name="test_parallel_acompletions_preserve_order_true" time="0.010" /><testcase classname="tests.smoke_optional.test_parallel_acompletions" name="test_parallel_acompletions_preserve_order_false" time="0.001" /><testcase classname="tests.smoke_optional.test_parallel_acompletions_exceptions_and_limits" name="test_parallel_acompletions_exceptions_and_limits" time="0.001" /><testcase classname="tests.smoke_optional.test_parallel_acompletions_exceptions_and_limits" name="test_parallel_acompletions_empty_list" time="0.001" /><testcase classname="tests.smoke_optional.test_parallel_order_and_failfast" name="test_parallel_preserve_order" time="0.053" /><testcase classname="tests.smoke_optional.test_parallel_order_and_failfast" name="test_parallel_fail_fast_cancel" time="0.102" /><testcase classname="tests.smoke_optional.test_prune_history_budget_smaller_than_pair" name="test_prune_history_budget_smaller_than_pair" time="0.001" /><testcase classname="tests.smoke_optional.test_prune_history_preserve_pair" name="test_prune_history_preserve_pair" time="0.000" /><testcase classname="tests.smoke_optional.test_prune_history_small_window" name="test_prune_history_small_window_preserves_last_pair" time="0.001" /><testcase classname="tests.smoke_optional.test_research_python_tools" name="test_research_python_tools_basic" time="0.001" /><testcase classname="tests.smoke_optional.test_router_builder_smoke" name="test_router_builder_param_propagation" time="0.003" /><testcase classname="tests.smoke_optional.test_router_cancel_inflight_no_leak" name="test_router_cancel_inflight_no_leak" time="0.001" /><testcase classname="tests.smoke_optional.test_router_fallback_non_streaming_parity" name="test_router_fallback_non_streaming_parity" time="0.369"><failure message="assert (0 &gt;= 1)">tests/smoke_optional/test_router_fallback_non_streaming_parity.py:30: in test_router_fallback_non_streaming_parity
+    assert calls["primary"]&gt;=1 and calls["fb"]==1
+E   assert (0 &gt;= 1)</failure></testcase><testcase classname="tests.smoke_optional.test_router_parallel_api_smoke" name="test_parallel_as_completed_and_acompletions" time="0.041" /><testcase classname="tests.smoke_optional.test_router_streaming_fallback_parity" name="test_router_streaming_midstream_fallback_parity" time="0.263" /><testcase classname="tests.smoke_optional.test_router_streaming_metrics_extracted" name="test_router_streaming_metrics_extracted" time="0.018" /><testcase classname="tests.smoke_optional.test_router_streaming_parity" name="test_router_streaming_parity" time="0.192"><failure message="litellm.exceptions.AuthenticationError: litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: sk-test. You can find your API key at https://platform.openai.com/account/api-keys.. Received Model Group=a&#10;Available Model Group Fallbacks=None">litellm/llms/openai/openai.py:980: in async_streaming
+    headers, response = await self.make_openai_chat_completion_request(
+litellm/litellm_core_utils/logging_utils.py:190: in async_wrapper
+    result = await func(*args, **kwargs)
+litellm/llms/openai/openai.py:447: in make_openai_chat_completion_request
+    raise e
+litellm/llms/openai/openai.py:429: in make_openai_chat_completion_request
+    await openai_aclient.chat.completions.with_raw_response.create(
+.venv/lib/python3.12/site-packages/openai/_legacy_response.py:381: in wrapped
+    return cast(LegacyAPIResponse[R], await func(*args, **kwargs))
+.venv/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py:2585: in create
+    return await self._post(
+.venv/lib/python3.12/site-packages/openai/_base_client.py:1794: in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+.venv/lib/python3.12/site-packages/openai/_base_client.py:1594: in request
+    raise self._make_status_error_from_response(err.response) from None
+E   openai.AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
 
 During handling of the above exception, another exception occurred:
 litellm/main.py:557: in acompletion
     response = await init_response
-litellm/llms/codex_agent.py:133: in acompletion
-    raise CustomLLMError(status_code=500, message=str(e)[:400])
-E   litellm.llms.custom_llm.CustomLLMError: [Errno -2] Name or service not known
+litellm/llms/openai/openai.py:1030: in async_streaming
+    raise OpenAIError(
+E   litellm.llms.openai.common_utils.OpenAIError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}
 
 During handling of the above exception, another exception occurred:
-tests/smoke/test_codex_agent_router_smoke.py:53: in test_codex_agent_router_against_inprocess_shim
-    out = await router.acompletion(
-litellm/router.py:1278: in acompletion
+tests/smoke_optional/test_router_streaming_parity.py:69: in test_router_streaming_parity
+    legacy = run("legacy")
+tests/smoke_optional/test_router_streaming_parity.py:48: in run
+    stream = asyncio.get_event_loop().run_until_complete(
+/usr/lib/python3.12/asyncio/base_events.py:687: in run_until_complete
+    return future.result()
+litellm/router.py:212: in _wrapped
+    return await target(*args, **kwargs)
+litellm/router.py:1336: in acompletion
     raise e
-litellm/router.py:1254: in acompletion
+litellm/router.py:1312: in acompletion
     response = await self.async_function_with_fallbacks(**kwargs)
-litellm/router.py:4116: in async_function_with_fallbacks
+litellm/router.py:4174: in async_function_with_fallbacks
     return await self.async_function_with_fallbacks_common_utils(
-litellm/router.py:4074: in async_function_with_fallbacks_common_utils
+litellm/router.py:4132: in async_function_with_fallbacks_common_utils
     raise original_exception
-litellm/router.py:4108: in async_function_with_fallbacks
+litellm/router.py:4166: in async_function_with_fallbacks
     response = await self.async_function_with_retries(*args, **kwargs)
-litellm/router.py:4313: in async_function_with_retries
-    raise original_exception
-litellm/router.py:4204: in async_function_with_retries
+litellm/router.py:4288: in async_function_with_retries
+    self.should_retry_this_error(
+litellm/router.py:4480: in should_retry_this_error
+    raise error  # then raise error
+litellm/router.py:4262: in async_function_with_retries
     response = await self.make_call(original_function, *args, **kwargs)
-litellm/router.py:4322: in make_call
+litellm/router.py:4380: in make_call
     response = await response
-litellm/router.py:1577: in _acompletion
+litellm/router.py:1635: in _acompletion
     raise e
-litellm/router.py:1520: in _acompletion
+litellm/router.py:1578: in _acompletion
     response = await _response
 litellm/utils.py:1604: in wrapper_async
     raise e
@@ -83,79 +64,10 @@ litellm/main.py:576: in acompletion
     raise exception_type(
 litellm/litellm_core_utils/exception_mapping_utils.py:2309: in exception_type
     raise e
-litellm/litellm_core_utils/exception_mapping_utils.py:2285: in exception_type
-    raise APIConnectionError(
-E   litellm.exceptions.APIConnectionError: litellm.APIConnectionError: [Errno -2] Name or service not known
-E   Traceback (most recent call last):
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
-E       yield
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 394, in handle_async_request
-E       resp = await self._pool.handle_async_request(req)
-E              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 256, in handle_async_request
-E       raise exc from None
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection_pool.py", line 236, in handle_async_request
-E       response = await connection.handle_async_request(
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 101, in handle_async_request
-E       raise exc
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 78, in handle_async_request
-E       stream = await self._connect(request)
-E                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_async/connection.py", line 124, in _connect
-E       stream = await self._network_backend.connect_tcp(**kwargs)
-E                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_backends/auto.py", line 31, in connect_tcp
-E       return await self._backend.connect_tcp(
-E              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_backends/anyio.py", line 113, in connect_tcp
-E       with map_exceptions(exc_map):
-E     File "/usr/lib/python3.12/contextlib.py", line 158, in __exit__
-E       self.gen.throw(value)
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
-E       raise to_exc(exc) from exc
-E   httpcore.ConnectError: [Errno -2] Name or service not known
-E   
-E   The above exception was the direct cause of the following exception:
-E   
-E   Traceback (most recent call last):
-E     File "/home/graham/workspace/experiments/litellm/litellm/llms/codex_agent.py", line 126, in acompletion
-E       r = await c.post(f"{base}/v1/chat/completions", json=payload)
-E           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1859, in post
-E       return await self.request(
-E              ^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1540, in request
-E       return await self.send(request, auth=auth, follow_redirects=follow_redirects)
-E              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1629, in send
-E       response = await self._send_handling_auth(
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1657, in _send_handling_auth
-E       response = await self._send_handling_redirects(
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1694, in _send_handling_redirects
-E       response = await self._send_single_request(request)
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_client.py", line 1730, in _send_single_request
-E       response = await transport.handle_async_request(request)
-E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 393, in handle_async_request
-E       with map_httpcore_exceptions():
-E     File "/usr/lib/python3.12/contextlib.py", line 158, in __exit__
-E       self.gen.throw(value)
-E     File "/home/graham/workspace/experiments/litellm/.venv/lib/python3.12/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
-E       raise mapped_exc(message) from exc
-E   httpx.ConnectError: [Errno -2] Name or service not known
-E   
-E   During handling of the above exception, another exception occurred:
-E   
-E   Traceback (most recent call last):
-E     File "/home/graham/workspace/experiments/litellm/litellm/main.py", line 557, in acompletion
-E       response = await init_response
-E                  ^^^^^^^^^^^^^^^^^^^
-E     File "/home/graham/workspace/experiments/litellm/litellm/llms/codex_agent.py", line 133, in acompletion
-E       raise CustomLLMError(status_code=500, message=str(e)[:400])
-E   litellm.llms.custom_llm.CustomLLMError: [Errno -2] Name or service not known
-E   . Received Model Group=codex-agent-1
-E   Available Model Group Fallbacks=None LiteLLM Retried: 1 times, LiteLLM Max Retries: 2</failure></testcase></testsuite></testsuites>
+litellm/litellm_core_utils/exception_mapping_utils.py:456: in exception_type
+    raise AuthenticationError(
+E   litellm.exceptions.AuthenticationError: litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: sk-test. You can find your API key at https://platform.openai.com/account/api-keys.. Received Model Group=a
+E   Available Model Group Fallbacks=None</failure></testcase><testcase classname="tests.smoke_optional.test_router_streaming_smoke" name="test_router_streaming_smoke[legacy]" time="0.004" /><testcase classname="tests.smoke_optional.test_router_streaming_smoke" name="test_router_streaming_smoke[extracted]" time="0.209"><failure message="assert False&#10; +  where False = isinstance(&lt;litellm.litellm_core_utils.streaming_handler.CustomStreamWrapper object at 0x79ad1b6db4d0&gt;, CustomStreamWrapper)">tests/smoke_optional/test_router_streaming_smoke.py:75: in test_router_streaming_smoke
+    assert isinstance(stream, CustomStreamWrapper)
+E   assert False
+E    +  where False = isinstance(&lt;litellm.litellm_core_utils.streaming_handler.CustomStreamWrapper object at 0x79ad1b6db4d0&gt;, CustomStreamWrapper)</failure></testcase><testcase classname="tests.smoke_optional.test_router_teardown" name="test_router_teardown_no_errors" time="0.001" /><testcase classname="tests.smoke_optional.test_router_teardown_smoke" name="test_router_teardown_smoke" time="0.002" /><testcase classname="tests.smoke_optional.test_router_timeout_param_enforced" name="test_router_timeout_param_enforced" time="0.051" /><testcase classname="tests.smoke_optional.test_storage_hook_schema_minimal" name="test_storage_hook_schema_minimal" time="0.006" /><testcase classname="tests.smoke_optional.test_storage_hook_smoke" name="test_storage_hook_jsonl" time="0.003" /></testsuite></testsuites>
