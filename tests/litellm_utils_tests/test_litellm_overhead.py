@@ -165,3 +165,5 @@ async def test_litellm_overhead_cache_hit():
 
 
     assert "_response_ms" in response2._hidden_params
+    total_time_ms = response2._hidden_params["_response_ms"]
+    assert response2._hidden_params["litellm_overhead_time_ms"] > 0 and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
