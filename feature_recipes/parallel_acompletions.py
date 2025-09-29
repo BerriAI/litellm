@@ -72,10 +72,10 @@ async def main() -> None:
         preserve_order=True,
         return_exceptions=True,
     )
-    for req, item in zip(requests, results):
+    for item in results:
         print({
             "index": item.index,
-            "request": req["messages"],
+            "request": item.request.messages,
             "response": getattr(item.response, "choices", item.response),
             "error": str(item.error) if item.error else None,
         })

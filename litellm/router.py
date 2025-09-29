@@ -779,7 +779,13 @@ class Router:
             return None
 
         return [
-            SimpleNamespace(index=r.index, response=r.response, error=r.exception, content=_extract_content(r.response))
+            SimpleNamespace(
+                index=r.index,
+                request=r.request,
+                response=r.response,
+                error=r.exception,
+                content=_extract_content(r.response),
+            )
             for r in prs
         ]
 
