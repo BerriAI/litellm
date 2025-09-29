@@ -60,8 +60,22 @@ PROMPTS = [
         "level": "complex",
         "messages": [
             {
+                "role": "system",
+                "content": (
+                    "You are a planning agent with access to MCP tools (perplexity-ask, brave-search, context7). "
+                    "Use the tools to gather evidence and respond in JSON with keys 'summary', 'insights', and 'sources'."
+                ),
+            },
+            {
                 "role": "user",
-                "content": "Draft a short proposal outlining how LiteLLM can integrate with an existing FastAPI application, including pros and cons.",
+                "content": (
+                    "Task list:\n"
+                    "1. Research the latest LiteLLM features released in the past 3 months (prefer perplexity-ask).\n"
+                    "2. Find public feedback or discussions about LiteLLM (use brave-search).\n"
+                    "3. Locate the most relevant LiteLLM documentation for onboarding new developers (use context7 for 'liteLLM').\n"
+                    "4. Recommend next steps for adopting LiteLLM in a production workflow.\n"
+                    "Return JSON as instructed by the system message."
+                ),
             }
         ],
     },

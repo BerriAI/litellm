@@ -56,9 +56,24 @@ router = Router(model_list=model_list)
 
 PROMPT = [
     {
+        "role": "system",
+        "content": (
+            "You are a planning agent with access to MCP tools (perplexity-ask, brave-search, context7). "
+            "For each task decide which tool to call and cite results. Respond in JSON with keys "
+            "'summary', 'insights', and 'sources'."
+        ),
+    },
+    {
         "role": "user",
-        "content": "List three key features of LiteLLM.",
-    }
+        "content": (
+            "Task list:\n"
+            "1. Research the latest features shipped in LiteLLM within the past 3 months (try perplexity-ask).\n"
+            "2. Find community feedback or discussions about LiteLLM (use brave-search).\n"
+            "3. Look up the most relevant LiteLLM documentation pages for onboarding (use context7 for 'liteLLM').\n"
+            "4. Provide recommended next steps for adopting LiteLLM in production.\n"
+            "Return JSON matching the system instructions."
+        ),
+    },
 ]
 
 
