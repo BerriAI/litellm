@@ -552,6 +552,7 @@ class TestMCPRequestHandler:
                 mcp_servers_result,
                 mcp_server_auth_headers,
                 oauth2_headers,
+                raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
@@ -726,6 +727,7 @@ class TestMCPCustomHeaderName:
                     mcp_servers,
                     mcp_server_auth_headers,
                     oauth2_headers,
+                    raw_headers,
                 ) = await MCPRequestHandler.process_mcp_request(scope)
 
                 # Assert the results
@@ -981,6 +983,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
             mcp_servers,
             mcp_server_auth_headers,
             oauth2_headers,
+            raw_headers,
         ) = get_auth_context()
 
         # Capture the MCP servers for testing
