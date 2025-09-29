@@ -1,12 +1,16 @@
-"""Feature recipe: batching prompts with Router.parallel_acompletions.
+"""Parallel-acompletions feature recipe.
 
-Demonstrates:
-- Standard text prompts
-- OpenAI multimodal payloads (text + image_url list)
-- Local image references inside text
-- Request-level knobs (temperature, stream, kwargs)
-- Mixed request representations (dict or RouterParallelRequest)
-- Concurrency + per-result request/response pairing
+Illustrates batching heterogeneous prompts through ``Router.parallel_acompletions``:
+
+- Plain text prompt with inline image URL reference.
+- OpenAI multimodal payload using ``[{"type": "text"}, {"type": "image_url"}, ...]``.
+- Local file reference embedded in text content.
+- Mixed request shapes (``RouterParallelRequest`` and plain dict).
+- Request-level knobs such as ``temperature``, ``stream``, ``max_tokens``, ``top_p``.
+- Per-result output that includes the original request, response, content, and error.
+
+Execute with ``python feature_recipes/parallel_acompletions.py`` after setting
+``LITELLM_DEFAULT_MODEL`` (or relying on its default).
 """
 
 import asyncio

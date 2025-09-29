@@ -1,7 +1,14 @@
-"""Feature recipe: running the LiteLLM mini-agent with tools.
+"""Mini-agent feature recipe.
 
-This script mirrors the expected developer experience: provide a Router-style
-model alias, list allowed tool languages, and await the final answer.
+This script showcases the paved-road usage of the LiteLLM mini-agent helper:
+
+    1. Configure the target model (defaults to ``LITELLM_DEFAULT_CHUTES_MODEL``).
+    2. Whitelist tool languages via ``tools=("python", "rust")``.
+    3. Provide OpenAI-style ``messages`` with system/user roles.
+    4. Await the final answer and inspect iteration counts.
+
+Run this module directly (``python feature_recipes/mini_agent.py``) after
+populating the relevant environment variables.
 """
 
 import asyncio

@@ -1,4 +1,14 @@
-"""Feature recipe: calling codex-agent through the LiteLLM Router."""
+"""Codex-agent feature recipe.
+
+Demonstrates invoking the codex-agent provider via the standard LiteLLM Router:
+
+- Uses ``model_list`` with a codex-agent entry.
+- Reads API base/key from ``CODEX_AGENT_API_BASE`` / ``CODEX_AGENT_API_KEY``.
+- Issues a single completion request with OpenAI-style messages.
+
+Run ``python feature_recipes/codex_agent.py`` with ``LITELLM_ENABLE_CODEX_AGENT=1``
+and the codex CLI/sidecar configured.
+"""
 
 import json
 import os
