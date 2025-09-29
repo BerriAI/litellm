@@ -28,7 +28,7 @@ Replace `your-secret-key` with a strong, randomly generated secret.
 Once you have set the `MASTER_KEY`, you can build and run the containers using the following command:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 This command will:
@@ -42,13 +42,13 @@ This command will:
 You can check the status of the running containers with the following command:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 To view the logs of the `litellm` container, run:
 
 ```bash
-docker-compose logs -f litellm
+docker compose logs -f litellm
 ```
 
 ### 4. Stopping the Application
@@ -56,7 +56,7 @@ docker-compose logs -f litellm
 To stop the running containers, use the following command:
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## Troubleshooting
