@@ -699,7 +699,7 @@ class Router:
             or routing_strategy == RoutingStrategy.LEAST_BUSY
         ):
             self.leastbusy_logger = LeastBusyLoggingHandler(
-                router_cache=self.cache, model_list=self.model_list
+                router_cache=self.cache
             )
             ## add callback
             if isinstance(litellm.input_callback, list):
@@ -714,7 +714,6 @@ class Router:
         ):
             self.lowesttpm_logger = LowestTPMLoggingHandler(
                 router_cache=self.cache,
-                model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
@@ -725,7 +724,6 @@ class Router:
         ):
             self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
                 router_cache=self.cache,
-                model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
@@ -736,7 +734,6 @@ class Router:
         ):
             self.lowestlatency_logger = LowestLatencyLoggingHandler(
                 router_cache=self.cache,
-                model_list=self.model_list,
                 routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
@@ -747,7 +744,6 @@ class Router:
         ):
             self.lowestcost_logger = LowestCostLoggingHandler(
                 router_cache=self.cache,
-                model_list=self.model_list,
                 routing_args={},
             )
             if isinstance(litellm.callbacks, list):

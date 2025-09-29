@@ -28,7 +28,7 @@ from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
 def test_model_added():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -45,7 +45,7 @@ def test_model_added():
 
 def test_get_available_deployments():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment = "azure/gpt-4.1-nano"
     kwargs = {
