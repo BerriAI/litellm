@@ -337,8 +337,6 @@ class Router:
         ```
         """
 
-        from litellm._service_logger import ServiceLogging
-
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.debug_level = debug_level
@@ -360,9 +358,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -404,14 +402,14 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
-            {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[
+            str, PatternMatchRouter
+        ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         # Initialize model ID to deployment index mapping for O(1) lookups
         self.model_id_to_deployment_index_map: Dict[str, int] = {}
-        
+
         if model_list is not None:
             # Build model index immediately to enable O(1) lookups from the start
             self._build_model_id_to_deployment_index_map(model_list)
@@ -584,9 +582,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -1216,10 +1214,7 @@ class Router:
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[
-        ModelResponse,
-        CustomStreamWrapper,
-    ]:
+    ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -3176,9 +3171,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = (
-                model_file_id_mapping
-            )
+            returned_response._hidden_params[
+                "model_file_id_mapping"
+            ] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -3741,11 +3736,11 @@ class Router:
 
             if isinstance(e, litellm.ContextWindowExceededError):
                 if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
-                        )
+                    context_window_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=context_window_fallbacks,
+                        model_group=model_group,
                     )
                     if context_window_fallback_model_group is None:
                         raise original_exception
@@ -3777,11 +3772,11 @@ class Router:
                     e.message += "\n{}".format(error_message)
             elif isinstance(e, litellm.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
-                    content_policy_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
-                        )
+                    content_policy_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
                     )
                     if content_policy_fallback_model_group is None:
                         raise original_exception
@@ -4988,7 +4983,9 @@ class Router:
 
             model = deployment.to_json(exclude_none=True)
 
-            self._add_model_to_list_and_index_map(model=model, model_id=deployment.model_info.id)
+            self._add_model_to_list_and_index_map(
+                model=model, model_id=deployment.model_info.id
+            )
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -5017,26 +5014,26 @@ class Router:
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-        auto_router_config_path: Optional[str] = (
-            deployment.litellm_params.auto_router_config_path
-        )
+        auto_router_config_path: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_config_path
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
                 "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        default_model: Optional[str] = (
-            deployment.litellm_params.auto_router_default_model
-        )
+        default_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_default_model
         if default_model is None:
             raise ValueError(
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[str] = (
-            deployment.litellm_params.auto_router_embedding_model
-        )
+        embedding_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_embedding_model
         if embedding_model is None:
             raise ValueError(
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
@@ -5339,14 +5336,18 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         # add to model names
-        self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
+        self._add_model_to_list_and_index_map(
+            model=_deployment, model_id=deployment.model_info.id
+        )
         self.model_names.append(deployment.model_name)
         return deployment
 
-    def _update_deployment_indices_after_removal(self, model_id: str, removal_idx: int) -> None:
+    def _update_deployment_indices_after_removal(
+        self, model_id: str, removal_idx: int
+    ) -> None:
         """
         Helper method to update deployment indices after a deployment has been removed from model_list.
-        
+
         Parameters:
         - model_id: str - the id of the deployment that was removed
         - removal_idx: int - the index where the deployment was removed from model_list
@@ -5359,11 +5360,12 @@ class Router:
         if model_id in self.model_id_to_deployment_index_map:
             del self.model_id_to_deployment_index_map[model_id]
 
-
-    def _add_model_to_list_and_index_map(self, model: dict, model_id: Optional[str] = None) -> None:
+    def _add_model_to_list_and_index_map(
+        self, model: dict, model_id: Optional[str] = None
+    ) -> None:
         """
         Helper method to add a model to the model_list and update the model_id_to_deployment_index_map.
-        
+
         Parameters:
         - model: dict - the model to add to the list
         - model_id: Optional[str] - the model ID to use for indexing. If None, will try to get from model["model_info"]["id"]
@@ -5373,7 +5375,9 @@ class Router:
         if model_id is not None:
             self.model_id_to_deployment_index_map[model_id] = len(self.model_list) - 1
         elif model.get("model_info", {}).get("id") is not None:
-            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = len(self.model_list) - 1
+            self.model_id_to_deployment_index_map[model["model_info"]["id"]] = (
+                len(self.model_list) - 1
+            )
 
     def upsert_deployment(self, deployment: Deployment) -> Optional[Deployment]:
         """
@@ -5402,13 +5406,15 @@ class Router:
                 removal_idx: Optional[int] = None
                 deployment_id = deployment.model_info.id
                 deployment_fast_mapping = self.model_id_to_deployment_index_map
-                
+
                 if deployment_id in deployment_fast_mapping:
                     removal_idx = deployment_fast_mapping[deployment_id]
 
                     if removal_idx is not None:
                         self.model_list.pop(removal_idx)
-                        self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self._update_deployment_indices_after_removal(
+                            model_id=deployment_id, removal_idx=removal_idx
+                        )
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -5439,7 +5445,9 @@ class Router:
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
-                self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
+                self._update_deployment_indices_after_removal(
+                    model_id=id, removal_idx=deployment_idx
+                )
                 return item
             else:
                 return None
@@ -5462,7 +5470,7 @@ class Router:
                 return model
             else:
                 raise Exception("Model invalid format - {}".format(type(model)))
-        
+
         return None
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
@@ -6092,7 +6100,7 @@ class Router:
             # Extract model_info from the model dict
             model_info = model.get("model_info", {})
             model_id = model_info.get("id")
-            
+
             # If no ID exists, generate one using the same logic as set_model_list
             if model_id is None:
                 model_name = model.get("model_name", "")
@@ -6102,7 +6110,7 @@ class Router:
                 if "model_info" not in model:
                     model["model_info"] = {}
                 model["model_info"]["id"] = model_id
-            
+
             self._add_model_to_list_and_index_map(model=model, model_id=model_id)
 
     def get_model_ids(
