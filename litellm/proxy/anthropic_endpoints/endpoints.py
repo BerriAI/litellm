@@ -17,6 +17,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import TokenCountResponse
+from litellm.proxy.anthropic_endpoints.service import AnthropicMessagesService
 
 router = APIRouter()
 
@@ -85,74 +86,30 @@ async def anthropic_response(  # noqa: PLR0915
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
 
-        ### CALL HOOKS ### - modify incoming data before calling the model
-        data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=data, call_type="text_completion"
-        )
-
-        tasks = []
-        tasks.append(
-            proxy_logging_obj.during_call_hook(
+        # Use service to build OpenAI-shaped request and execute call
+        service = AnthropicMessagesService()
+        original_anthropic_model: str = str(data.get("model", ""))
+        try:
+            openai_data: dict = await service.build_openai_request(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
-                    route_type="anthropic_messages"  # type: ignore
-                ),
+                proxy_logging_obj=proxy_logging_obj,
             )
-        )
-
-        ### ROUTE THE REQUESTs ###
-        router_model_names = llm_router.model_names if llm_router is not None else []
-
-        # skip router if user passed their key
-        if (
-            llm_router is not None and data["model"] in router_model_names
-        ):  # model in router model list
-            llm_coro = llm_router.aanthropic_messages(**data)
-        elif (
-            llm_router is not None
-            and llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):  # model set in model_group_alias
-            llm_coro = llm_router.aanthropic_messages(**data)
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            llm_coro = llm_router.aanthropic_messages(**data, specific_deployment=True)
-        elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
-        ):  # model in router model list
-            llm_coro = llm_router.aanthropic_messages(**data)
-        elif (
-            llm_router is not None
-            and data["model"] not in router_model_names
-            and (
-                llm_router.default_deployment is not None
-                or len(llm_router.pattern_router.patterns) > 0
-            )
-        ):  # model in router deployments, calling a specific deployment on the router
-            llm_coro = llm_router.aanthropic_messages(**data)
-        elif user_model is not None:  # `litellm --model <your-model-name>`
-            llm_coro = litellm.anthropic_messages(**data)
-        else:
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error": "completion: Invalid model name passed in model="
-                    + data.get("model", "")
+                    "error": "Failed translating Anthropic request to OpenAI format"
                 },
             )
 
-        tasks.append(llm_coro)
-
-        # wait for call to end
-        llm_responses = asyncio.gather(
-            *tasks
-        )  # run the moderation check in parallel to the actual llm api call
-
-        responses = await llm_responses
-
-        response = responses[1]
+        response = await service.route_and_call(
+            openai_data=openai_data,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            user_model=user_model,
+        )
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
@@ -182,31 +139,38 @@ async def anthropic_response(  # noqa: PLR0915
             )
         )
 
-        if (
-            "stream" in data and data["stream"] is True
-        ):  # use generate_responses to stream responses
-            selected_data_generator = (
-                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                    response=response,
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=data,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
+        # STREAMING PATH: delegate wrapping to the service
+        if openai_data.get("stream", False) is True:
+            generator = AnthropicMessagesService().wrap_openai_stream_as_anthropic(
+                openai_stream=response,
+                model=original_anthropic_model
+                or (openai_data.get("model", "") or "unknown-model"),
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=openai_data,
             )
 
             return await create_streaming_response(
-                generator=selected_data_generator,
+                generator=generator,
                 media_type="text/event-stream",
                 headers=dict(fastapi_response.headers),
             )
 
-        ### CALL HOOKS ### - modify outgoing data
+        # NON-STREAMING PATH
+        # Run post-call hook on OpenAI response
         response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
+            data=openai_data, user_api_key_dict=user_api_key_dict, response=response  # type: ignore
         )
-
-        verbose_proxy_logger.debug("\nResponse from Litellm:\n{}".format(response))
-        return response
+        # Translate OpenAI response back to Anthropic format via service
+        anthropic_response_payload = AnthropicMessagesService().to_anthropic_response(
+            openai_response=response  # type: ignore
+        )
+        verbose_proxy_logger.debug(
+            "\nResponse from LiteLLM (Anthropic):\n{}".format(
+                anthropic_response_payload
+            )
+        )
+        return anthropic_response_payload
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
@@ -255,35 +219,30 @@ async def count_tokens(
     Returns: {"input_tokens": <number>}
     """
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
-    
+
     try:
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
-        
+
         # Extract required fields
         model_name = data.get("model")
         messages = data.get("messages", [])
-        
+
         if not model_name:
             raise HTTPException(
-                status_code=400,
-                detail={"error": "model parameter is required"}
+                status_code=400, detail={"error": "model parameter is required"}
             )
-        
+
         if not messages:
             raise HTTPException(
-                status_code=400,
-                detail={"error": "messages parameter is required"}
+                status_code=400, detail={"error": "messages parameter is required"}
             )
-        
+
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
-        
-        token_request = TokenCountRequest(
-            model=model_name,
-            messages=messages
-        )
-        
+
+        token_request = TokenCountRequest(model=model_name, messages=messages)
+
         # Call the internal token counter function with direct request flag set to False
         token_response = await internal_token_counter(
             request=token_request,
@@ -294,17 +253,18 @@ async def count_tokens(
             _token_response_dict = token_response.model_dump()
         elif isinstance(token_response, dict):
             _token_response_dict = token_response
-    
+
         # Convert the internal response to Anthropic API format
         return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
+                str(e)
+            )
         )
         raise HTTPException(
-            status_code=500,
-            detail={"error": f"Internal server error: {str(e)}"}
+            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
         )
