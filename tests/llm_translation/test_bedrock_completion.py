@@ -27,6 +27,7 @@ import litellm
 from litellm import (
     ModelResponse,
     RateLimitError,
+    ServiceUnavailableError,
     Timeout,
     completion,
     completion_cost,
@@ -2020,10 +2021,16 @@ def test_bedrock_context_window_error():
 
 def test_bedrock_converse_route():
     litellm.set_verbose = True
-    litellm.completion(
-        model="bedrock/converse/us.amazon.nova-pro-v1:0",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-    )
+    try:
+        litellm.completion(
+            model="bedrock/converse/us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+    except ServiceUnavailableError as e:
+        if "Too many requests" in str(e):
+            pytest.skip("Skipping test due to AWS Bedrock rate limiting")
+        else:
+            raise
 
 
 def test_bedrock_mapped_converse_models():

@@ -15,6 +15,7 @@ from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -90,6 +91,7 @@ class CustomLoggerRegistry:
         "dynamic_rate_limiter_v3": _PROXY_DynamicRateLimitHandlerV3,
         "vector_store_pre_call_hook": VectorStorePreCallHook,
         "dotprompt": DotpromptManager,
+        "bitbucket": BitBucketPromptManager,
         "cloudzero": CloudZeroLogger,
         "posthog": PostHogLogger,
     }
@@ -157,7 +159,6 @@ class CustomLoggerRegistry:
             if callback_class == class_type:
                 callback_strs.append(callback_str)
         return callback_strs
-    
 
     @classmethod
     def get_class_type_for_custom_logger_name(

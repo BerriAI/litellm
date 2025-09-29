@@ -1,6 +1,6 @@
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from functools import partial
 from typing import Optional
 

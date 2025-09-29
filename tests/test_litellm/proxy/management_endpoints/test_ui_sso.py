@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
