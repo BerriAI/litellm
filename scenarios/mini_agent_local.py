@@ -3,11 +3,17 @@
 
 import asyncio
 import json
+import sys
+from typing import Any
 from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
 
-from litellm.experimental_mcp_client.mini_agent.agent_proxy import AgentRunReq, run
+try:
+    from litellm.experimental_mcp_client.mini_agent.agent_proxy import AgentRunReq, run
+except Exception as exc:
+    print(f"Skipping mini-agent scenario (mini-agent components unavailable): {exc}")
+    sys.exit(0)
 
 PROMPTS = {
     "simple": [{"role": "user", "content": "Say hi"}],
@@ -31,9 +37,22 @@ async def run_one(level: str) -> None:
         model=f"mini-agent-{level}",
         **cfg,
     )
-    resp = await run(req)
-    print(f"=== mini-agent {level} ===")
-    print(json.dumps(resp, indent=2))
+    try:
+        resp = await run(req)
+        payload: Any = resp
+        try:
+            payload = resp.model_dump()  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                payload = resp.dict()  # type: ignore[attr-defined]
+            except Exception:
+                if not isinstance(resp, (dict, list, str, int, float, bool, type(None))):
+                    payload = str(resp)
+        print(f"=== mini-agent {level} ===")
+        print(json.dumps(payload, indent=2))
+    except Exception as exc:
+        print(f"=== mini-agent {level} ERROR ===")
+        print(str(exc))
 
 async def main() -> None:
     for level in ("simple", "medium", "complex"):

@@ -27,6 +27,8 @@ from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import ModelResponse
 
+from .codex_sidecar_manager import SidecarError, ensure_sidecar
+
 
 class CodexAgentLLM(CustomLLM):
     def __init__(self) -> None:
@@ -34,15 +36,28 @@ class CodexAgentLLM(CustomLLM):
 
     def _resolve_base(self, api_base: Optional[str]) -> str:
         base = api_base or os.getenv("CODEX_AGENT_API_BASE")
-        if not base:
+        if base:
+            return base.rstrip("/")
+
+        try:
+            sidecar_base = ensure_sidecar()
+        except SidecarError as exc:
             raise CustomLLMError(
-                status_code=400,
+                status_code=500,
                 message=(
-                    "codex-agent not configured: set CODEX_AGENT_API_BASE or pass api_base; "
-                    "enable with LITELLM_ENABLE_CODEX_AGENT=1"
-                ),
-            )
-        return base.rstrip("/")
+                    "codex-agent sidecar failed to start: "
+                    + str(exc)
+                )[:400],
+            ) from exc
+        except Exception as exc:  # pragma: no cover - safety net
+            raise CustomLLMError(
+                status_code=500,
+                message=(
+                    "codex-agent sidecar unexpected failure: "
+                    + str(exc)
+                )[:400],
+            ) from exc
+        return sidecar_base.rstrip("/")
 
     def completion(
         self,

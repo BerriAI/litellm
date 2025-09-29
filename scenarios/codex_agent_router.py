@@ -53,16 +53,21 @@ def main() -> None:
         if not params.get("api_base"):
             print("Skipping codex-agent scenario (CODEX_AGENT_API_BASE not set)")
             return
+        if os.getenv("CODEX_AGENT_API_KEY"):
+            params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
 
     router = Router(model_list=[{"model_name": "scenario-code", "litellm_params": params}])
 
     for level in ("simple", "medium", "complex"):
-        response = router.completion(
-            model="scenario-code",
-            messages=[{"role": "user", "content": PROMPTS[level]}],
-        )
-        content = getattr(response.choices[0].message, "content", "").strip()
-        print(f"=== code-model ({model_alias}) {level} ===\n{content}\n")
+        try:
+            response = router.completion(
+                model="scenario-code",
+                messages=[{"role": "user", "content": PROMPTS[level]}],
+            )
+            content = getattr(response.choices[0].message, "content", "").strip()
+            print(f"=== code-model ({model_alias}) {level} ===\n{content}\n")
+        except Exception as exc:
+            print(f"=== code-model ({model_alias}) {level} ERROR ===\n{exc}\n")
 
 
 if __name__ == "__main__":

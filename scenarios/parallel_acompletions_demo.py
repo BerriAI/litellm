@@ -34,7 +34,7 @@ def main() -> None:
         os.getenv("SCENARIO_PARALLEL_MODEL")
         or os.getenv("LITELLM_DEFAULT_MODEL")
         or os.getenv("LITELLM_DEFAULT_LARGE_MODEL")
-        or "glm4:latest"
+        or "ollama/qwen2.5:7b"
     )
 
     provider = os.getenv("SCENARIO_PARALLEL_PROVIDER") or infer_provider(model_alias)
@@ -71,7 +71,10 @@ def main() -> None:
             if item.error:
                 print(f"=== parallel completion #{item.index} ERROR ===\n{item.error}\n")
             else:
-                print(f"=== parallel completion #{item.index} ({model_alias}) ===\n{item.content}\n")
+                content = item.content
+                if content is None:
+                    content = ""
+                print(f"=== parallel completion #{item.index} ({model_alias}) ===\n{str(content).strip()}\n")
 
     asyncio.run(run_parallel())
 
