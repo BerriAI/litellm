@@ -42,6 +42,7 @@ MODEL_ALIAS = (
     or "ollama/qwen2.5-coder:14b"
 )
 PROVIDER = os.getenv("SCENARIO_MINI_PROVIDER") or _infer_provider(MODEL_ALIAS)
+CHUTES_MODEL = os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
 
 if PROVIDER == "openai" and not os.getenv("OPENAI_API_KEY"):
     print("Skipping mini-agent scenario (OPENAI_API_KEY not set)")
@@ -101,7 +102,7 @@ PROMPTS: Dict[str, List[Dict[str, str]]] = {
 CONFIGS = {
     "simple": {"max_iterations": 3, "max_total_seconds": 60},
     "medium": {"max_iterations": 4, "max_total_seconds": 120},
-    "complex": {"max_iterations": 5, "max_total_seconds": 150},
+    "complex": {"max_iterations": 5, "max_total_seconds": 150, "escalate_on_budget_exceeded": True},
 }
 
 
@@ -143,6 +144,9 @@ def _agent_config(level: str) -> AgentConfig:
     model_name = MODEL_ALIAS
     if "/" not in model_name and PROVIDER:
         model_name = f"{PROVIDER}/{model_name}"
+    escalate_model = None
+    if level == "complex" and CHUTES_MODEL:
+        escalate_model = CHUTES_MODEL
     return AgentConfig(
         model=model_name,
         max_iterations=cfg["max_iterations"],
@@ -151,6 +155,8 @@ def _agent_config(level: str) -> AgentConfig:
         auto_run_code_on_code_block=True,
         enable_repair=True,
         research_on_unsure=True,
+        escalate_on_budget_exceeded=cfg.get("escalate_on_budget_exceeded", False),
+        escalate_model=escalate_model,
     )
 
 
