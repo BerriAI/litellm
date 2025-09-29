@@ -73,7 +73,7 @@ lint-black: format-check
 
 run-scenarios:
 	@echo "Running mini-agent scenarios"
-	@. .venv/bin/activate && python scenarios/mini_agent_local.py
+	@. .venv/bin/activate && python scenarios/mini_agent_live.py
 	@if [ -n "$$OPENAI_API_KEY" ]; then \
 	  echo "Running parallel-acompletions scenario"; \
 	  . .venv/bin/activate && python scenarios/parallel_acompletions_demo.py; \
