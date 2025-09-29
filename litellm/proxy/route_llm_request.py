@@ -130,7 +130,7 @@ async def route_request(
 
         elif (
             data["model"] in router_model_names
-            or data["model"] in llm_router.get_model_ids()
+            or llm_router.has_model_id(data["model"])
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 
