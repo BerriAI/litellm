@@ -21,7 +21,7 @@ import litellm
         "openai/gpt-4o",
         "openai/self_hosted",
         "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-        "vertex_ai/gemini-1.0-pro-vision-001",
+        "vertex_ai/gemini-1.5-flash",
     ],
 )
 async def test_litellm_overhead_non_streaming(model):
@@ -38,10 +38,12 @@ async def test_litellm_overhead_non_streaming(model):
     #########################################################
     # Specific cases for models
     #########################################################
-    if model == "vertex_ai/gemini-1.0-pro-vision-001" or model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
+    if model == "vertex_ai/gemini-1.5-flash":
+        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro-vision-001"
         # warmup call for auth validation on vertex_ai models
         await litellm.acompletion(**kwargs)
+    if model == "openai/self_hosted":
+        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
 
 
     response = await litellm.acompletion(
