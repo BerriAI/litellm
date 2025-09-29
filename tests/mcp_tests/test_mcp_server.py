@@ -707,9 +707,7 @@ async def test_list_tools_rest_api_success():
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            # The server should use the server_name as prefix since no alias is provided
-            expected_prefix = "test_server"
-            assert response["tools"][0].name == f"{expected_prefix}-test_tool"
+            assert response["tools"][0].name == "test_tool"
     finally:
         # Restore original state
         global_mcp_server_manager.registry = {}
@@ -800,7 +798,7 @@ async def test_get_tools_from_mcp_servers():
             )
             mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
             mock_manager_2._get_tools_from_server = AsyncMock(
-                side_effect=lambda server, mcp_auth_header=None, extra_headers=None: (
+                side_effect=lambda server, mcp_auth_header=None, extra_headers=None, add_prefix=False: (
                     [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2]
                 )
             )
@@ -1713,6 +1711,7 @@ async def test_get_tools_for_single_server():
         mock_manager._get_tools_from_server.assert_called_once_with(
             server=mock_server,
             mcp_auth_header="Bearer test_token",
+            add_prefix=False,
         )
 
         # Verify the result
