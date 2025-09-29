@@ -43,16 +43,15 @@ model_list = [
             "api_base": os.getenv("CHUTES_API_BASE"),
         },
     },
+    {
+        "model_name": "codex-demo",
+        "litellm_params": {
+            "model": os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5",
+            "api_key": os.getenv("CODEX_AGENT_API_KEY"),
+            "api_base": os.getenv("CODEX_AGENT_API_BASE"),
+        },
+    },
 ]
-
-codex_alias = os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5"
-codex_params = {"model": codex_alias}
-if os.getenv("CODEX_AGENT_API_KEY"):
-    codex_params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
-if os.getenv("CODEX_AGENT_API_BASE"):
-    codex_params["api_base"] = os.environ["CODEX_AGENT_API_BASE"]
-
-model_list.append({"model_name": "codex-demo", "litellm_params": codex_params})
 
 router = Router(model_list=model_list)
 
