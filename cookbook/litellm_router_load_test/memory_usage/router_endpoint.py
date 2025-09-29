@@ -5,7 +5,7 @@ import os
 import litellm
 from litellm import Router
 from dotenv import load_dotenv
-import uuid
+from litellm._uuid import uuid
 
 load_dotenv()
 

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import logging
-import uuid
+from litellm._uuid import uuid
 
 import pytest
 

@@ -17,12 +17,12 @@ import random
 import sys
 import time
 import traceback
-import uuid
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Coroutine,
@@ -36,8 +36,9 @@ from typing import (
     Union,
     cast,
     get_args,
-    TYPE_CHECKING,
 )
+
+from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -721,12 +722,15 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
         await asyncio.sleep(timeout.connect)
 
 
+MOCK_RESPONSE_TYPE = Union[str, Exception, dict]
+
+
 def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
     n: Optional[int] = None,
-    mock_response: Union[str, Exception, dict] = "This is a mock request",
+    mock_response: Optional[MOCK_RESPONSE_TYPE] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     mock_timeout: Optional[bool] = False,
     logging=None,
@@ -1007,7 +1011,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
-    mock_response = kwargs.get("mock_response", None)
+    mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
     mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
     force_timeout = kwargs.get("force_timeout", 600)  ## deprecated
@@ -1114,7 +1118,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = base_url
         if num_retries is not None:
             max_retries = num_retries
-        logging = litellm_logging_obj
+        logging: Logging = cast(Logging, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(**args)
@@ -1427,7 +1431,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret("AZURE_API_VERSION")
+                or get_secret_str("AZURE_API_VERSION")
                 or litellm.AZURE_DEFAULT_API_VERSION
             )
 
@@ -1435,13 +1439,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
             )
 
             azure_ad_token = optional_params.get("extra_body", {}).pop(
                 "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
+            ) or get_secret_str("AZURE_AD_TOKEN")
 
             azure_ad_token_provider = litellm_params.get(
                 "azure_ad_token_provider", None
@@ -1529,25 +1533,32 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
         elif custom_llm_provider == "azure_text":
             # azure configs
-            api_type = get_secret("AZURE_API_TYPE") or "azure"
+            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
 
-            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
+            api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
+            if api_base is None:
+                raise ValueError(
+                    "api_base is required for Azure OpenAI LLM provider. Either set it dynamically or set the AZURE_API_BASE environment variable."
+                )
 
             api_version = (
-                api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
+                api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
             )
 
             api_key = (
                 api_key
                 or litellm.api_key
                 or litellm.azure_key
-                or get_secret("AZURE_OPENAI_API_KEY")
-                or get_secret("AZURE_API_KEY")
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
             )
 
             azure_ad_token = optional_params.get("extra_body", {}).pop(
                 "azure_ad_token", None
-            ) or get_secret("AZURE_AD_TOKEN")
+            ) or get_secret_str("AZURE_AD_TOKEN")
 
             azure_ad_token_provider = litellm_params.get(
                 "azure_ad_token_provider", None
@@ -1573,7 +1584,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=headers,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=api_version,
+                api_version=cast(str, api_version),
                 api_type=api_type,
                 azure_ad_token=azure_ad_token,
                 azure_ad_token_provider=azure_ad_token_provider,
@@ -2545,15 +2556,10 @@ def completion(  # type: ignore # noqa: PLR0915
             )
         elif custom_llm_provider == "compactifai":
             api_key = (
-                api_key
-                or get_secret_str("COMPACTIFAI_API_KEY")
-                or litellm.api_key
+                api_key or get_secret_str("COMPACTIFAI_API_KEY") or litellm.api_key
             )
 
-            api_base = (
-                api_base
-                or "https://api.compactif.ai/v1"
-            )
+            api_base = api_base or "https://api.compactif.ai/v1"
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(
@@ -2860,7 +2866,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=custom_llm_provider,  # type: ignore
                 client=client,
                 api_base=api_base,
                 extra_headers=extra_headers,
@@ -2929,7 +2935,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=custom_llm_provider,  # type: ignore
                     client=client,
                     api_base=api_base,
                     extra_headers=extra_headers,
@@ -3935,7 +3941,7 @@ def embedding(  # noqa: PLR0915
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-    aembedding = kwargs.get("aembedding", None)
+    aembedding: Optional[bool] = kwargs.get("aembedding", None)
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None)
     ### CUSTOM MODEL COST ###
@@ -5356,8 +5362,7 @@ def transcription(
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
-    atranscription = kwargs.get("atranscription", False)
-    atranscription = kwargs.get("atranscription", False)
+    atranscription = kwargs.pop("atranscription", False)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
@@ -5615,7 +5620,7 @@ def speech(  # noqa: PLR0915
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
     litellm_params_dict = get_litellm_params(**kwargs)
-    logging_obj = kwargs.get("litellm_logging_obj", None)
+    logging_obj: Logging = cast(Logging, kwargs.get("litellm_logging_obj"))
     logging_obj.update_environment_variables(
         model=model,
         user=user,
