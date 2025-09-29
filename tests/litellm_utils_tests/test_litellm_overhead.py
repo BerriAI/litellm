@@ -20,23 +20,35 @@ import litellm
         "openai/gpt-4o",
         "openai/self_hosted",
         "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        "vertex_ai/gemini-1.0-pro-vision-001",
     ],
 )
-async def test_litellm_overhead(model):
+async def test_litellm_overhead_non_streaming(model):
+    """
+    - Test we can see the litellm overhead and that it is less than 40% of the total request time
+    """
 
     litellm._turn_on_debug()
     start_time = datetime.now()
-    if model == "openai/self_hosted":
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello, world!"}],
-        )
+    kwargs ={
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "model": model
+    }
+    #########################################################
+    # Specific cases for models
+    #########################################################
+    if model == "vertex_ai/gemini-1.0-pro-vision-001" or model == "openai/self_hosted":
+        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
+        # warmup call for auth validation on vertex_ai models
+        await litellm.acompletion(**kwargs)
+
+
+    response = await litellm.acompletion(
+        **kwargs
+    )
+    #########################################################
+    # End of specific cases for models
+    #########################################################
     end_time = datetime.now()
     total_time_ms = (end_time - start_time).total_seconds() * 1000
     print(response)
@@ -75,19 +87,22 @@ async def test_litellm_overhead_stream(model):
 
     litellm._turn_on_debug()
     start_time = datetime.now()
+    kwargs ={
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "model": model,
+        "stream": True,
+    }
+    #########################################################
+    # Specific cases for models
+    #########################################################
     if model == "openai/self_hosted":
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
-            stream=True,
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            stream=True,
-        )
+        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
+        # warmup call for auth validation on vertex_ai models
+        await litellm.acompletion(**kwargs)
+    
+    response = await litellm.acompletion(
+        **kwargs
+    )
 
     async for chunk in response:
         print()
