@@ -23,7 +23,7 @@ from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
     CohereEmbeddingRequest,
 )
-from litellm.types.utils import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse, LlmProviders
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
@@ -622,7 +622,7 @@ class BedrockEmbedding(BaseAWSLLM):
             )
 
         # Make the GET request
-        client = get_async_httpx_client(llm_provider="bedrock")
+        client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         response = await client.get(
             url=prepped.url,
             headers=prepped.headers,
