@@ -115,7 +115,7 @@ CONFIGS = {
         "max_iterations": 5,
         "max_total_seconds": 150,
         "escalate_on_budget_exceeded": True,
-        "model_override": "ollama/qwen2.5-coder:14b",
+        "model_override": CHUTES_MODEL or "ollama/qwen2.5-coder:14b",
     },
 }
 
@@ -136,22 +136,32 @@ def _normalize_payload(data: Any) -> Any:
             return str(data)
 
 
+def _to_plain(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return _to_plain(obj.model_dump())
+    if isinstance(obj, dict):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_plain(v) for v in obj]
+    return obj
+
+
 def _format_result(result, level: str) -> Dict[str, Any]:
     last_tool = None
     if result.iterations:
         last_iter = result.iterations[-1]
         if last_iter.tool_invocations:
-            last_tool = last_iter.tool_invocations[-1]
+            last_tool = _to_plain(last_iter.tool_invocations[-1])
     return {
         "level": level,
         "model": result.used_model,
         "iterations": len(result.iterations),
         "stopped_reason": result.stopped_reason,
         "final_answer": result.final_answer,
-        "metrics": result.metrics,
+        "metrics": _to_plain(result.metrics),
         "last_tool_invocation": last_tool,
         "prompt": PROMPTS[level],
-        "conversation": result.messages,
+        "conversation": _to_plain(result.messages),
     }
 
 
