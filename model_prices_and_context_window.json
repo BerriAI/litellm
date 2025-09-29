@@ -4763,7 +4763,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 346
     },
     "claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -19693,7 +19693,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "tool_use_system_prompt_tokens": 159
+        "tool_use_system_prompt_tokens": 346
     },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
