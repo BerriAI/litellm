@@ -10,37 +10,66 @@ from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
 
-CODex_FLAG = os.getenv("LITELLM_ENABLE_CODEX_AGENT")
-if CODex_FLAG != "1":
+if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
     print("Codex-agent requires LITELLM_ENABLE_CODEX_AGENT=1; aborting.")
     sys.exit(1)
 
 from litellm import Router
 
-PROMPTS = {
-    "simple": "Say hello then stop.",
-    "medium": "List three key features of LiteLLM.",
-    "complex": "Draft a short proposal outlining how LiteLLM can integrate with an existing FastAPI application, including pros and cons.",
-}
+MODEL_ALIAS = os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5"
+litellm_params = {"model": MODEL_ALIAS}
+api_key = os.getenv("CODEX_AGENT_API_KEY")
+api_base = os.getenv("CODEX_AGENT_API_BASE")
+if api_key:
+    litellm_params["api_key"] = api_key
+if api_base:
+    litellm_params["api_base"] = api_base
 
-MODEL_ALIAS = os.getenv("SCENARIO_CODE_MODEL") or "codex-agent/gpt-5"
-
-params = {"model": MODEL_ALIAS}
-if os.getenv("CODEX_AGENT_API_KEY"):
-    params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
-if os.getenv("CODEX_AGENT_API_BASE"):
-    params["api_base"] = os.environ["CODEX_AGENT_API_BASE"]
+model_list = [
+    {
+        "model_name": "codex-demo",
+        "litellm_params": litellm_params,
+    }
+]
 
 print("-- codex-agent scenario --")
-print(json.dumps({"model_list": [{"model_name": "codex-demo", "litellm_params": params}]}, indent=2))
+print(json.dumps({"model_list": model_list}, indent=2))
 
-router = Router(model_list=[{"model_name": "codex-demo", "litellm_params": params}])
+router = Router(model_list=model_list)
 
-for level in ("simple", "medium", "complex"):
-    messages = [{"role": "user", "content": PROMPTS[level]}]
-    print(json.dumps({"level": level, "messages": messages}, indent=2))
+PROMPTS = [
+    {
+        "level": "simple",
+        "messages": [{"role": "user", "content": "Say hello then stop."}],
+    },
+    {
+        "level": "medium",
+        "messages": [{"role": "user", "content": "List three key features of LiteLLM."}],
+    },
+    {
+        "level": "complex",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Draft a short proposal outlining how LiteLLM can integrate with an existing FastAPI application, including pros and cons.",
+            }
+        ],
+    },
+]
+
+for prompt in PROMPTS:
     start = time.perf_counter()
-    response = router.completion(model="codex-demo", messages=messages)
+    response = router.completion(model="codex-demo", messages=prompt["messages"])
     duration = time.perf_counter() - start
     content = getattr(response.choices[0].message, "content", "").strip()
-    print(f"=== codex-agent {level} (elapsed {duration:.2f}s) ===\n{content}\n")
+    print(
+        json.dumps(
+            {
+                "level": prompt["level"],
+                "request": prompt["messages"],
+                "response": content,
+                "elapsed_s": round(duration, 2),
+            },
+            indent=2,
+        )
+    )
