@@ -15,6 +15,7 @@ USER root
 # Install build dependencies in one layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
     python3-dev \
     libssl-dev \
     pkg-config \
@@ -64,6 +65,7 @@ WORKDIR /app
 # Copy only necessary runtime files
 COPY docker/entrypoint.sh docker/prod_entrypoint.sh ./docker/
 COPY litellm/ ./litellm/
+COPY deploy/ ./deploy/
 COPY pyproject.toml README.md schema.prisma poetry.lock ./
 
 # Copy pre-built wheels and install everything at once
