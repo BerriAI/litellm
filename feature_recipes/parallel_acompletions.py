@@ -29,9 +29,41 @@ model_list = [
 router = Router(model_list=model_list)
 
 messages_list: List[List[dict]] = [
-    [{"role": "user", "content": "List three programming languages."}],
-    [{"role": "user", "content": "Give me a fun fact about pandas."}],
-    [{"role": "user", "content": "Summarize the benefits of unit testing."}],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe what you see in this image."},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+                    },
+                },
+            ],
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyse this local file and summarize its contents."},
+                {
+                    "type": "input_image",
+                    "input_image": {
+                        "path": os.path.abspath("local/images/sample_chart.png"),
+                        "media_type": "image/png",
+                    },
+                },
+            ],
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": "Summarize the benefits of unit testing in a paragraph.",
+        }
+    ],
 ]
 
 async def main() -> None:
@@ -50,7 +82,7 @@ async def main() -> None:
     for item in results:
         print({
             "index": item.index,
-            "content": item.content,
+            "response": getattr(item.response, "choices", item.response),
             "error": str(item.error) if item.error else None,
         })
 
