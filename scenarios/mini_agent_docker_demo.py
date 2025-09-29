@@ -61,6 +61,10 @@ def main() -> None:
                     "allowed_languages": os.getenv("LITELLM_MINI_AGENT_LANGUAGES", "python"),
                     "max_iterations": int(os.getenv("SCENARIO_MINI_MAX_ITER", "4")),
                     "max_seconds": float(os.getenv("SCENARIO_MINI_MAX_SECONDS", "60")),
+                    "tool_choice": "required",
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                    "seed": 7,
                 },
             }
         ]
