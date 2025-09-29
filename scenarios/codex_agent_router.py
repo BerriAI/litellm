@@ -15,33 +15,69 @@ if os.getenv("LITELLM_ENABLE_CODEX_AGENT") != "1":
     print("Codex-agent requires LITELLM_ENABLE_CODEX_AGENT=1; aborting.")
     sys.exit(1)
 
-model_list = [
-    {
-        "model_name": "gemini-2.5-flash",
-        "litellm_params": {
-            "model": "gemini/gemini-2.5-flash",
-            "api_key": os.getenv("GEMINI_API_KEY"),
+model_list = []
+
+gemini_key = os.getenv("GEMINI_API_KEY")
+if gemini_key:
+    model_list.append(
+        {
+            "model_name": "gemini-2.5-flash",
+            "litellm_params": {
+                "model": "gemini/gemini-2.5-flash",
+                "api_key": gemini_key,
+            },
         }
-    },
-    {
-        "model_name": "deepseek-r1",
-        "litellm_params": {
-            "model": os.getenv("LITELLM_DEFAULT_CHUTES_MODEL") or "deepseek-ai/DeepSeek-R1",
-            "api_key": os.getenv("CHUTES_API_KEY"),
-            "api_base": os.getenv("CHUTES_API_BASE"),
-        },
-    },
-]
+    )
+else:
+    print("Skipping gemini scenario entry (GEMINI_API_KEY not set).")
+
+chutes_key = os.getenv("CHUTES_API_KEY")
+chutes_base = os.getenv("CHUTES_API_BASE")
+chutes_model = os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
+if chutes_key and chutes_base and chutes_model:
+    chutes_params = {
+        "model": chutes_model,
+        "api_key": chutes_key,
+        "api_base": chutes_base,
+    }
+    chutes_provider = os.getenv("SCENARIO_CHUTES_PROVIDER")
+    if chutes_provider:
+        chutes_params["custom_llm_provider"] = chutes_provider
+    else:
+        chutes_params["custom_llm_provider"] = "openai"
+    model_list.append({"model_name": "deepseek-r1", "litellm_params": chutes_params})
+else:
+    print("Skipping chutes entry (set CHUTES_API_KEY, CHUTES_API_BASE, LITELLM_DEFAULT_CHUTES_MODEL to include it).")
 
 codex_alias = os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5"
-codex_params = {
-    "model": codex_alias,
-    "custom_llm_provider": os.getenv("SCENARIO_CODE_PROVIDER") or "openai",
-}
+
+
+def infer_provider(alias: str) -> str | None:
+    if alias.startswith("openai/"):
+        return "openai"
+    if alias.startswith("azure/"):
+        return "azure"
+    if alias.startswith("ollama/"):
+        return "ollama"
+    if alias.startswith("codex-agent/"):
+        return "codex-agent"
+    if ":" in alias:
+        return "ollama"
+    return None
+
+
+codex_provider = os.getenv("SCENARIO_CODE_PROVIDER") or infer_provider(codex_alias)
+codex_params = {"model": codex_alias}
+if codex_provider:
+    codex_params["custom_llm_provider"] = codex_provider
 if os.getenv("CODEX_AGENT_API_KEY"):
     codex_params["api_key"] = os.environ["CODEX_AGENT_API_KEY"]
 if os.getenv("CODEX_AGENT_API_BASE"):
     codex_params["api_base"] = os.environ["CODEX_AGENT_API_BASE"]
+
+if codex_alias.startswith("codex-agent/") and "api_base" not in codex_params:
+    print("Skipping codex-agent scenario (CODEX_AGENT_API_BASE not configured for codex-agent/* model).")
+    sys.exit(0)
 
 model_list.append({"model_name": "codex-agent", "litellm_params": codex_params})
 

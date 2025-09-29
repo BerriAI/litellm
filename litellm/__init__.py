@@ -1351,4 +1351,16 @@ except Exception:
     # Best-effort: never break base imports if experimental provider misbehaves
     pass
 
+# --- Experimental provider: mini-agent (env-gated) ---------------------------
+try:
+    import os as _os_mini
+    if _os_mini.getenv("LITELLM_ENABLE_MINI_AGENT", "") == "1":
+        from .llms.mini_agent import MiniAgentLLM as _MiniAgentLLM
+        from .llms.custom_llm import register_custom_provider as _register_custom_provider
+
+        _register_custom_provider("mini-agent", _MiniAgentLLM)
+except Exception:
+    # Never block base imports if experimental provider setup fails
+    pass
+
 from .router import Router

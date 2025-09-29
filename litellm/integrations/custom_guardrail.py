@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Type, Union, get_args
 
 from litellm._logging import verbose_logger
-from litellm.caching import DualCache
+# Lazy import to avoid circular dependency during early import of litellm
+try:
+    from litellm.caching import DualCache  # type: ignore
+except Exception:  # pragma: no cover
+    DualCache = None  # type: ignore
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
@@ -18,7 +24,18 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-dc = DualCache()
+_dual_cache: DualCache | None = None  # type: ignore
+
+
+def _get_dual_cache() -> DualCache | None:  # type: ignore
+    global _dual_cache
+    if _dual_cache is None:
+        try:
+            from litellm.caching import DualCache as _DualCache  # local import
+        except Exception:  # pragma: no cover
+            return None
+        _dual_cache = _DualCache()
+    return _dual_cache
 
 
 class CustomGuardrail(CustomLogger):
@@ -168,7 +185,7 @@ class CustomGuardrail(CustomLogger):
                     api_key=kwargs.get("user_api_key_hash"),
                     request_route=kwargs.get("user_api_key_request_route"),
                 ),
-                cache=dc,
+                cache=_get_dual_cache(),
                 data=kwargs,
                 call_type=call_type.value or "acompletion",  # type: ignore
             )

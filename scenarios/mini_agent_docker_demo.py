@@ -35,7 +35,10 @@ def main() -> None:
 
     container = os.getenv("LITELLM_MINI_AGENT_DOCKER_CONTAINER")
     if not container:
-        print("Set LITELLM_MINI_AGENT_DOCKER_CONTAINER to a running container name or ID.")
+        print(
+            "Set LITELLM_MINI_AGENT_DOCKER_CONTAINER to a running container name or ID. "
+            "Start the bundled stack with `docker compose -f local/docker/compose.exec.yml up --build -d`."
+        )
         return
 
     target_model = (

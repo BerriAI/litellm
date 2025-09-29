@@ -47,9 +47,10 @@ def infer_provider(alias: str) -> str | None:
 def main() -> None:
     model_alias = (
         os.getenv("SCENARIO_PARALLEL_MODEL")
+        or os.getenv("LITELLM_DEFAULT_VISION_MODEL")
         or os.getenv("LITELLM_DEFAULT_MODEL")
         or os.getenv("LITELLM_DEFAULT_LARGE_MODEL")
-        or "ollama/qwen2.5:7b"
+        or "ollama/gemma3:12b"
     )
 
     provider = os.getenv("SCENARIO_PARALLEL_PROVIDER") or infer_provider(model_alias)

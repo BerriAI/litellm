@@ -8,7 +8,7 @@ from typing import Callable, List, Literal, Optional, Tuple, Union, cast
 import tiktoken
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,

@@ -11,8 +11,8 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 from pydantic import BaseModel
 
-import litellm
-from litellm import verbose_logger
+import litellm  # type: ignore
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -57,6 +57,8 @@ def is_async_iterable(obj: Any) -> bool:
 
 def print_verbose(print_statement):
     try:
+        import litellm
+
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except Exception:

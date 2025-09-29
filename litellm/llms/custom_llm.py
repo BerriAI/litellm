@@ -16,6 +16,7 @@ from typing import (
     Coroutine,
     Iterator,
     Optional,
+    Type,
     Union,
 )
 
@@ -197,6 +198,60 @@ class CustomLLM(BaseLLM):
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
+
+
+def register_custom_provider(
+    provider: str,
+    handler: Union["CustomLLM", Type["CustomLLM"]],
+) -> "CustomLLM":
+    """Register a custom provider so Router can resolve it.
+
+    Accepts either an instantiated handler or the handler class. Ensures the
+    provider appears in ``litellm.custom_provider_map`` and updates
+    ``provider_list`` / ``_custom_providers`` so validation succeeds.
+    """
+
+    # Deferred imports keep this helper usable during package initialization.
+    import litellm  # type: ignore
+
+    if isinstance(handler, type):
+        instance: CustomLLM = handler()
+    else:
+        instance = handler
+
+    # Ensure globals exist even during early import cycles.
+    current_map = getattr(litellm, "custom_provider_map", None)
+    if not isinstance(current_map, list):
+        current_map = []
+
+    # Replace existing entry for this provider if present.
+    filtered = [item for item in current_map if item.get("provider") != provider]
+    filtered.append({"provider": provider, "custom_handler": instance})
+    litellm.custom_provider_map = filtered  # type: ignore[attr-defined]
+
+    if not hasattr(litellm, "_custom_providers") or not isinstance(
+        getattr(litellm, "_custom_providers"), list
+    ):
+        litellm._custom_providers = []  # type: ignore[attr-defined]
+    if provider not in litellm._custom_providers:  # type: ignore[attr-defined]
+        litellm._custom_providers.append(provider)  # type: ignore[attr-defined]
+
+    provider_list = getattr(litellm, "provider_list", None)
+    if isinstance(provider_list, list):
+        if provider not in provider_list:
+            provider_list.append(provider)
+    else:
+        litellm.provider_list = [provider]  # type: ignore[attr-defined]
+
+    # Best-effort: update any additional bookkeeping helpers.
+    try:
+        from litellm.utils import custom_llm_setup
+
+        custom_llm_setup()
+    except Exception:
+        pass
+
+    return instance
 
 def custom_chat_llm_router(
     async_fn: bool, stream: Optional[bool], custom_llm: CustomLLM

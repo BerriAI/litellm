@@ -142,6 +142,12 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        if custom_llm_provider and "/" not in model:
+            # Allow callers to pass bare provider names (e.g., "mini-agent")
+            # and still route through the custom provider logic without
+            # triggering index errors below.
+            model = f"{custom_llm_provider}/{model}"
+
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
         # check if llm provider part of model name

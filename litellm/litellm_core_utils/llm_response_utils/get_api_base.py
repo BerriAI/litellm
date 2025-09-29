@@ -1,7 +1,6 @@
 from typing import Optional, Union
 
-import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 from ...litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from ...types.router import LiteLLM_Params
@@ -43,6 +42,8 @@ def get_api_base(
 
     if _optional_params.api_base is not None:
         return _optional_params.api_base
+
+    import litellm
 
     if litellm.model_alias_map and model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]

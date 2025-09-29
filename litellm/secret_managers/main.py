@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import ast
 import base64
 import binascii
@@ -9,14 +11,28 @@ import httpx
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.caching import DualCache
+try:
+    from litellm.caching.caching import DualCache  # type: ignore
+except Exception:  # pragma: no cover
+    DualCache = None  # type: ignore
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.types.secret_managers.main import KeyManagementSystem
 
-oidc_cache = DualCache()
+_oidc_cache: DualCache | None = None  # type: ignore
+
+
+def _get_oidc_cache() -> DualCache | None:  # type: ignore
+    global _oidc_cache
+    if _oidc_cache is None:
+        try:
+            from litellm.caching.caching import DualCache as _DualCache
+        except Exception:  # pragma: no cover
+            return None
+        _oidc_cache = _DualCache()
+    return _oidc_cache
 
 
 ######### Secret Manager ############################
@@ -108,7 +124,8 @@ def get_secret(  # noqa: PLR0915
         oidc_aud = "/".join(secret_name_split.split("/")[1:])
         # TODO: Add caching for HTTP requests
         if oidc_provider == "google":
-            oidc_token = oidc_cache.get_cache(key=secret_name)
+            cache = _get_oidc_cache()
+            oidc_token = cache.get_cache(key=secret_name) if cache else None
             if oidc_token is not None:
                 return oidc_token
 
@@ -121,7 +138,8 @@ def get_secret(  # noqa: PLR0915
             )
             if response.status_code == 200:
                 oidc_token = response.text
-                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
+                if cache:
+                    cache.set_cache(key=secret_name, value=oidc_token, ttl=3600 - 60)
                 return oidc_token
             else:
                 raise ValueError("Google OIDC provider failed")
@@ -146,7 +164,8 @@ def get_secret(  # noqa: PLR0915
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
 
-            oidc_token = oidc_cache.get_cache(key=secret_name)
+            cache = _get_oidc_cache()
+            oidc_token = cache.get_cache(key=secret_name) if cache else None
             if oidc_token is not None:
                 return oidc_token
 
@@ -161,7 +180,8 @@ def get_secret(  # noqa: PLR0915
             )
             if response.status_code == 200:
                 oidc_token = response.json().get("value", None)
-                oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
+                if cache:
+                    cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
                 return oidc_token
             else:
                 raise ValueError("Github OIDC provider failed")

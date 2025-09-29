@@ -819,15 +819,36 @@ async def arun_mcp_mini_agent(
                 fn_name = ((tc.get("function") or {}).get("name") or "").strip().lower()
                 if fn_name in allowed_tools:
                     filtered_calls.append(tc)
-                elif fn_name in {"compress_runs", "code", "python_code"}:
-                    tc.get("function", {})["name"] = "exec_python"
-                    filtered_calls.append(tc)
                 else:
-                    conv.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id"),
-                        "content": f"error: unsupported tool '{fn_name}'"
-                    })
+                    fn_payload = tc.get("function") or {}
+                    args_raw = fn_payload.get("arguments")
+                    args_obj = None
+                    if isinstance(args_raw, str):
+                        try:
+                            args_obj = json.loads(args_raw)
+                        except Exception:
+                            args_obj = None
+                    elif isinstance(args_raw, dict):
+                        args_obj = args_raw
+
+                    if fn_name in {"compress_runs", "code", "python_code"}:
+                        fn_payload["name"] = "exec_python"
+                        filtered_calls.append(tc)
+                    elif isinstance(args_obj, dict) and "code" in args_obj:
+                        fn_payload["name"] = "exec_python"
+                        try:
+                            fn_payload["arguments"] = json.dumps({"code": args_obj["code"]})
+                        except Exception:
+                            fn_payload["arguments"] = args_raw
+                        filtered_calls.append(tc)
+                    else:
+                        conv.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id"),
+                                "content": f"error: unsupported tool '{fn_name}'",
+                            }
+                        )
             tcs = filtered_calls
 
         # Optional: autorun code block from assistant content if no tool calls are present

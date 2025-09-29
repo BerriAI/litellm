@@ -59,6 +59,12 @@ pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 pondpond==1.4.1 # for object pooling
+scipy==1.14.1 # scientific computing baseline for mini-agent tasks
+numpy==2.1.2 # numerical routines for analytics scenarios
+pandas==2.2.3 # dataframe operations for analytics
+matplotlib==3.9.2 # plotting support for local analysis
+seaborn==0.13.2 # statistical visualization helpers
+scikit-learn==1.5.2 # classical ML utilities for scenarios
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES

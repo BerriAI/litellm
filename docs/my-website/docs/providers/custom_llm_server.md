@@ -38,8 +38,22 @@ class MyCustomLLM(CustomLLM):
 my_custom_llm = MyCustomLLM()
 
 litellm.custom_provider_map = [ # 👈 KEY STEP - REGISTER HANDLER
-        {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
-    ]
+  {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
+]
+
+# New helper in this fork
+# -----------------------
+
+```python showLineNumbers
+from litellm.llms.custom_llm import register_custom_provider
+
+register_custom_provider("my-custom-llm", my_custom_llm)
+```
+
+`register_custom_provider` accepts either the handler instance or class and
+updates `custom_provider_map`, `provider_list`, and `_custom_providers` in one
+shot. This is the recommended approach when you are registering providers from
+library code.
 
 resp = completion(
         model="my-custom-llm/my-fake-model",
