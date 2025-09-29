@@ -180,6 +180,7 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
+                    cache_duration_ms = (cache_check_end_time - cache_check_start_time).total_seconds() * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -187,16 +188,12 @@ class LLMCachingHandler:
                         cached_result=cached_result,
                         is_async=True,
                         custom_llm_provider=custom_llm_provider,
+                        cache_duration_ms=cache_duration_ms,
                     )
 
                     call_type = original_function.__name__
 
-                    cache_duration_ms = (cache_check_end_time - cache_check_start_time).total_seconds() * 1000
-                    logging_obj.caching_details = CachingDetails(
-                        cache_hit=True,
-                        cache_duration_ms=cache_duration_ms,
-                    )
-
+      
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -974,6 +971,7 @@ class LLMCachingHandler:
         is_async: bool,
         is_embedding: bool = False,
         custom_llm_provider: Optional[str] = None,
+        cache_duration_ms: Optional[float] = None,
     ):
         """
         Helper function to update the LiteLLMLoggingObj environment variables.
@@ -1023,6 +1021,11 @@ class LLMCachingHandler:
             additional_args=None,
             stream=kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
+        )
+
+        logging_obj.caching_details = CachingDetails(
+            cache_hit=True,
+            cache_duration_ms=cache_duration_ms,
         )
 
 

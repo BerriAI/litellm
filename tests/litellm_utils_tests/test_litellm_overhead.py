@@ -148,12 +148,20 @@ async def test_litellm_overhead_cache_hit():
     print("test2 for caching")
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "Hello, world! Cache test"}]
-    response1 = litellm.completion(model="gpt-4.1-nano", messages=messages, caching=True)
-    response2 = litellm.completion(model="gpt-4.1-nano", messages=messages, caching=True)
+    response1 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
+    await asyncio.sleep(2)
+    # Wait for any pending background tasks to complete
+    pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
+    print("all pending tasks", pending_tasks)
+    if pending_tasks:
+        await asyncio.wait(pending_tasks, timeout=1.0)
+    
+    response2 = await litellm.acompletion(model="gpt-4.1-nano", messages=messages, caching=True)
     print("RESPONSE 1", response1)
     print("RESPONSE 2", response2)
     assert response1.id == response2.id
 
     print("response 2 hidden params", response2._hidden_params)
+
 
     assert "_response_ms" in response2._hidden_params
