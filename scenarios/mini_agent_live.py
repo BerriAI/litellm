@@ -139,8 +139,11 @@ def _format_result(result, level: str) -> Dict[str, Any]:
 
 def _agent_config(level: str) -> AgentConfig:
     cfg = CONFIGS[level]
+    model_name = MODEL_ALIAS
+    if "/" not in model_name and PROVIDER:
+        model_name = f"{PROVIDER}/{model_name}"
     return AgentConfig(
-        model=MODEL_ALIAS,
+        model=model_name,
         max_iterations=cfg["max_iterations"],
         max_total_seconds=cfg["max_total_seconds"],
         use_tools=True,
