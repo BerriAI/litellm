@@ -58,6 +58,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
+from litellm.integrations.neatlogs import NeatlogsLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -3541,6 +3542,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _mlflow_logger = MlflowLogger()
             _in_memory_loggers.append(_mlflow_logger)
             return _mlflow_logger  # type: ignore
+        elif logging_integration == "neatlogs":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NeatlogsLogger):
+                    return callback  # type: ignore
+
+            _neatlogs_logger = NeatlogsLogger()
+            _in_memory_loggers.append(_neatlogs_logger)
+            return _neatlogs_logger  # type: ignore
         elif logging_integration == "langfuse":
             for callback in _in_memory_loggers:
                 if isinstance(callback, LangfusePromptManagement):
@@ -3814,6 +3823,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "mlflow":
             for callback in _in_memory_loggers:
                 if isinstance(callback, MlflowLogger):
+                    return callback
+        elif logging_integration == "neatlogs":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, NeatlogsLogger):
                     return callback
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
