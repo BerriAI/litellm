@@ -51,7 +51,7 @@ def run_mini_agent(
     max_seconds: float = 180.0,
     tools: Iterable[str] = ("python",),
 ) -> Dict[str, object]:
-    """Helper that keeps the paved-road mini-agent call ergonomic."""
+    """Run the mini-agent once and return paired request/response metadata."""
 
     async def _call() -> Dict[str, object]:
         cfg = AgentConfig(
@@ -67,9 +67,13 @@ def run_mini_agent(
         )
         result = await arun_mcp_mini_agent(messages=messages, mcp=invoker, cfg=cfg)
         return {
-            "final_answer": result.final_answer,
-            "iterations": len(result.iterations),
-            "stopped_reason": result.stopped_reason,
+            "request": messages,
+            "response": {
+                "final_answer": result.final_answer,
+                "iterations": len(result.iterations),
+                "stopped_reason": result.stopped_reason,
+            },
+            "conversation": result.messages,
         }
 
     return asyncio.run(_call())
