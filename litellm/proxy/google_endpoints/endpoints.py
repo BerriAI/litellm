@@ -3,10 +3,7 @@ from fastapi.responses import StreamingResponse
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import (
-    ProxyBaseLLMRequestProcessing,
-    create_streaming_response,
-)
+
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
@@ -15,8 +12,13 @@ router = APIRouter(
 )
 
 
-@router.post("/v1beta/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1beta/models/{model_name}:generateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/models/{model_name}:generateContent", dependencies=[Depends(user_api_key_auth)]
+)
 async def google_generate_content(
     request: Request,
     model_name: str,
@@ -35,8 +37,14 @@ async def google_generate_content(
     return response
 
 
-@router.post("/v1beta/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:streamGenerateContent", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1beta/models/{model_name}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/models/{model_name}:streamGenerateContent",
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def google_stream_generate_content(
     request: Request,
     model_name: str,
