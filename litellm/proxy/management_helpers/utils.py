@@ -1,6 +1,5 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
-import uuid
 from datetime import datetime
 from functools import wraps
 from typing import Optional, Tuple
@@ -9,6 +8,7 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     DeleteCustomerRequest,
     DeleteTeamRequest,
@@ -36,7 +36,7 @@ def get_new_internal_user_defaults(
     user_info = litellm.default_internal_user_params or {}
 
     returned_dict: SSOUserDefinedValues = {
-        "models": user_info.get("models", None),
+        "models": user_info.get("models") or [],
         "max_budget": user_info.get("max_budget", litellm.max_internal_user_budget),
         "budget_duration": user_info.get(
             "budget_duration", litellm.internal_user_budget_duration

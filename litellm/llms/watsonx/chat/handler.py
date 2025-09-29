@@ -21,7 +21,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         *,
         model: str,
         messages: list,
-        api_base: str,
+        api_base: Optional[str],
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
@@ -70,7 +70,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         )
 
         return super().completion(
-            model=watsonx_auth_payload.get("model_id", None),
+            model=watsonx_auth_payload.get("model_id") or "",
             messages=messages,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,

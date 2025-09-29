@@ -55,9 +55,9 @@ class AnthropicTextConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens_to_sample: Optional[
-        int
-    ] = litellm.max_tokens  # anthropic requires a default
+    max_tokens_to_sample: Optional[int] = (
+        litellm.max_tokens
+    )  # anthropic requires a default
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -291,7 +291,7 @@ class AnthropicTextCompletionResponseIterator(BaseModelResponseIterator):
             _chunk_text = chunk.get("completion", None)
             if _chunk_text is not None and isinstance(_chunk_text, str):
                 text = _chunk_text
-            finish_reason = chunk.get("stop_reason", None)
+            finish_reason = chunk.get("stop_reason") or ""
             if finish_reason is not None:
                 is_finished = True
             returned_chunk = GenericStreamingChunk(

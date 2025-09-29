@@ -5,7 +5,7 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-import uuid
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../..")

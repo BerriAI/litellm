@@ -1,7 +1,7 @@
 model_list:
   - model_name: azure-cloudflare
     litellm_params:
-      model: azure/chatgpt-v-3
+      model: azure/gpt-4.1-nano
       api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
       api_key: os.environ/AZURE_API_KEY
       api_version: 2023-07-01-preview

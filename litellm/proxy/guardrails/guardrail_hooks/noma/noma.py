@@ -8,7 +8,7 @@
 import asyncio
 import copy
 import os
-from typing import Any, Dict, Final, Literal, Optional, Union
+from typing import Any, Dict, Final, Literal, Optional, Union, Type, TYPE_CHECKING
 from urllib.parse import urljoin
 
 from fastapi import HTTPException
@@ -34,7 +34,10 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 MessageRole = Literal["user", "assistant"]
 LLMResponse = Union[Any, ModelResponse, EmbeddingResponse, ImageResponse]
 
+if TYPE_CHECKING:
+  from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+  
 class NomaBlockedMessage(HTTPException):
     """Exception raised when Noma guardrail blocks a message"""
 
@@ -730,3 +733,12 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.info(msg)
             else:
                 verbose_proxy_logger.debug(msg)
+    
+    @staticmethod
+    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
+            NomaGuardrailConfigModel,
+        )
+
+        return NomaGuardrailConfigModel
+

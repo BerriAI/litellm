@@ -137,7 +137,7 @@ def test_azure_extra_headers(input, call_type, header_value):
                 func = image_generation
 
             data = {
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-nano",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                 "api_version": "2023-07-01-preview",
                 "api_key": "my-azure-api-key",
@@ -204,7 +204,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
 class TestAzureEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
         return {
-            "model": "azure/azure-embedding-model",
+            "model": "azure/text-embedding-ada-002",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
         }
@@ -339,7 +339,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
         response = litellm.completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-nano",
             messages=[
                 {
                     "role": "system",
@@ -474,7 +474,7 @@ def test_azure_max_retries_0(
 
     try:
         completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -502,7 +502,7 @@ async def test_async_azure_max_retries_0(
 
     try:
         await acompletion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -565,7 +565,7 @@ async def test_azure_embedding_max_retries_0(
     from litellm import aembedding, embedding
 
     args = {
-        "model": "azure/azure-embedding-model",
+        "model": "azure/text-embedding-ada-002",
         "input": "Hello world",
         "max_retries": max_retries,
     }
@@ -598,7 +598,7 @@ def test_azure_safety_result():
     litellm._turn_on_debug()
 
     response = completion(
-        model="azure/gpt-4o-new-test",
+        model="azure/gpt-4.1-nano",
         messages=[{"role": "user", "content": "Hello world"}],
     )
     print(f"response: {response}")

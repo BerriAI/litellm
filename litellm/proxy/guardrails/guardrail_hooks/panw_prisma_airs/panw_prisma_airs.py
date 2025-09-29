@@ -5,7 +5,7 @@ PANW Prisma AIRS Built-in Guardrail for LiteLLM
 """
 
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
 
 from fastapi import HTTPException

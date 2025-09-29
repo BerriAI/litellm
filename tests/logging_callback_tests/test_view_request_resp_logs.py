@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import tempfile
-import uuid
+from litellm._uuid import uuid
 
 import json
 from datetime import datetime, timedelta, timezone

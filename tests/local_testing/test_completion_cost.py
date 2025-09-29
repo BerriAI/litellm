@@ -283,7 +283,7 @@ def test_cost_azure_embedding():
 
         async def _test():
             response = await litellm.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm", "gm"],
             )
 

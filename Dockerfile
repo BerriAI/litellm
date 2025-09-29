@@ -15,7 +15,7 @@ USER root
 RUN apk add --no-cache gcc python3-dev openssl openssl-dev
 
 
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip>=24.3.1 && \
     pip install build
 
 # Copy the current directory contents into the container at /app
@@ -49,6 +49,9 @@ USER root
 
 # Install runtime dependencies
 RUN apk add --no-cache openssl tzdata
+
+# Upgrade pip to fix CVE-2025-8869
+RUN pip install --upgrade pip>=24.3.1
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
