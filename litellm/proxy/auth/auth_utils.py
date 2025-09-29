@@ -447,7 +447,9 @@ def get_key_model_tpm_limit(
     elif user_api_key_dict.model_max_budget:
         if "tpm_limit" in user_api_key_dict.model_max_budget:
             return user_api_key_dict.model_max_budget["tpm_limit"]
-
+    elif user_api_key_dict.team_metadata:
+        if "model_tpm_limit" in user_api_key_dict.team_metadata:
+            return user_api_key_dict.team_metadata["model_tpm_limit"]
     return None
 
 
