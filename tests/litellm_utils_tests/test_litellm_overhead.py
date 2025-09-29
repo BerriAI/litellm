@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
+import asyncio
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -73,6 +74,7 @@ async def test_litellm_overhead_non_streaming(model):
     pass
 
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",
@@ -129,3 +131,27 @@ async def test_litellm_overhead_stream(model):
     assert overhead_percent < 40
 
     pass
+
+
+@pytest.mark.asyncio
+async def test_litellm_overhead_cache_hit():
+    """
+    Test that litellm overhead is tracked on cache hits.
+    Makes two identical requests and checks that the second one (cache hit) has overhead in hidden params.
+    """
+    from litellm.caching.caching import Cache
+    
+    litellm._turn_on_debug()
+    litellm.cache = Cache()
+    print("test2 for caching")
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "Hello, world! Cache test"}]
+    response1 = litellm.completion(model="gpt-4.1-nano", messages=messages, caching=True)
+    response2 = litellm.completion(model="gpt-4.1-nano", messages=messages, caching=True)
+    print("RESPONSE 1", response1)
+    print("RESPONSE 2", response2)
+    assert response1.id == response2.id
+
+    print("response 2 hidden params", response2._hidden_params)
+
+    assert "_response_ms" in response2._hidden_params
