@@ -89,6 +89,7 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
@@ -281,7 +282,7 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         messages: list,
-        api_base: str,
+        api_base: Optional[str],
         custom_llm_provider: str,
         model_response: ModelResponse,
         encoding,
@@ -750,7 +751,7 @@ class BaseLLMHTTPHandler:
         model_response: EmbeddingResponse,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        aembedding: bool = False,
+        aembedding: Optional[bool] = False,
         headers: Optional[Dict[str, Any]] = None,
     ) -> EmbeddingResponse:
         provider_config = ProviderConfigManager.get_provider_embedding_config(
@@ -3141,7 +3142,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -3331,7 +3335,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
