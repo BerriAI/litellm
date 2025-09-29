@@ -1,4 +1,13 @@
-"""Feature recipe: batching prompts with Router.parallel_acompletions."""
+"""Feature recipe: batching prompts with Router.parallel_acompletions.
+
+Demonstrates:
+- Standard text prompts
+- OpenAI multimodal payloads (text + image_url list)
+- Local image references inside text
+- Request-level knobs (temperature, stream, kwargs)
+- Mixed request representations (dict or RouterParallelRequest)
+- Concurrency + per-result request/response pairing
+"""
 
 import asyncio
 import os
@@ -9,6 +18,7 @@ from dotenv import find_dotenv, load_dotenv
 load_dotenv(find_dotenv())
 
 from litellm import Router
+from litellm.router_utils.parallel_acompletion import RouterParallelRequest
 
 MODEL_ALIAS = os.getenv("LITELLM_DEFAULT_MODEL") or "ollama/qwen2.5-coder:14b"
 
@@ -26,12 +36,6 @@ messages_list: List[List[dict]] = [
         {
             "role": "user",
             "content": "Describe this image: https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
-        }
-    ],
-    [
-        {
-            "role": "user",
-            "content": f"Summarize this local diagram: {os.path.abspath('local/images/sample_chart.png')}",
         }
     ],
     [
@@ -57,6 +61,12 @@ messages_list: List[List[dict]] = [
     [
         {
             "role": "user",
+            "content": f"Summarize this local diagram: {os.path.abspath('local/images/sample_chart.png')}",
+        }
+    ],
+    [
+        {
+            "role": "user",
             "content": "Summarize the benefits of unit testing in a paragraph.",
         }
     ],
@@ -64,22 +74,30 @@ messages_list: List[List[dict]] = [
 
 async def main() -> None:
     requests = [
+        RouterParallelRequest("parallel-demo", messages_list[0], temperature=0.3),
+        RouterParallelRequest("parallel-demo", messages_list[1], stream=True),
         {
             "model": "parallel-demo",
-            "messages": messages,
-        }
-        for messages in messages_list
+            "messages": messages_list[2],
+            "kwargs": {"max_tokens": 128},
+        },
+        RouterParallelRequest("parallel-demo", messages_list[3], top_p=0.95),
     ]
+
     results = await router.parallel_acompletions(
         requests,
         preserve_order=True,
         return_exceptions=True,
+        concurrency=2,
     )
+
     for item in results:
+        request_messages = getattr(item.request, "messages", None)
         print({
             "index": item.index,
-            "request": item.request.messages,
+            "request": request_messages,
             "response": getattr(item.response, "choices", item.response),
+            "content": item.content,
             "error": str(item.error) if item.error else None,
         })
 
