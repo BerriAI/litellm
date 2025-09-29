@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Live codex-agent scenario using familiar Router setup."""
 
+import asyncio
 import json
 import os
 import sys
@@ -66,19 +67,25 @@ PROMPTS = [
     },
 ]
 
-for prompt in PROMPTS:
-    start = time.perf_counter()
-    response = router.completion(model="codex-demo", messages=prompt["messages"])
-    duration = time.perf_counter() - start
-    content = getattr(response.choices[0].message, "content", "").strip()
-    print(
-        json.dumps(
-            {
-                "level": prompt["level"],
-                "request": prompt["messages"],
-                "response": content,
-                "elapsed_s": round(duration, 2),
-            },
-            indent=2,
+
+async def main() -> None:
+    for prompt in PROMPTS:
+        start = time.perf_counter()
+        response = await router.acompletion(model="codex-demo", messages=prompt["messages"])
+        duration = time.perf_counter() - start
+        content = getattr(response.choices[0].message, "content", "").strip()
+        print(
+            json.dumps(
+                {
+                    "level": prompt["level"],
+                    "request": prompt["messages"],
+                    "response": content,
+                    "elapsed_s": round(duration, 2),
+                },
+                indent=2,
+            )
         )
-    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -10,6 +10,7 @@ Run ``python feature_recipes/codex_agent.py`` with ``LITELLM_ENABLE_CODEX_AGENT=
 and the codex CLI/sidecar configured.
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -62,14 +63,20 @@ PROMPT = [
     }
 ]
 
-print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
-response = router.completion(model="codex-demo", messages=PROMPT)
-print(
-    json.dumps(
-        {
-            "request": PROMPT,
-            "response": response.choices[0].message.content,
-        },
-        indent=2,
+
+async def main() -> None:
+    print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
+    response = await router.acompletion(model="codex-demo", messages=PROMPT)
+    print(
+        json.dumps(
+            {
+                "request": PROMPT,
+                "response": response.choices[0].message.content,
+            },
+            indent=2,
+        )
     )
-)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
