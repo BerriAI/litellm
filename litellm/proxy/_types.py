@@ -2966,6 +2966,27 @@ class SpecialHeaders(enum.Enum):
     mcp_access_groups = "x-mcp-access-groups"
 
 
+class LiteLLMResponseHeaders(str, enum.Enum):
+    """Response headers returned by LiteLLM proxy"""
+
+    x_litellm_call_id = "x-litellm-call-id"
+    x_litellm_model_id = "x-litellm-model-id"
+    x_litellm_cache_key = "x-litellm-cache-key"
+    x_litellm_model_api_base = "x-litellm-model-api-base"
+    x_litellm_version = "x-litellm-version"
+    x_litellm_model_region = "x-litellm-model-region"
+    x_litellm_response_cost = "x-litellm-response-cost"
+    x_litellm_key_tpm_limit = "x-litellm-key-tpm-limit"
+    x_litellm_key_rpm_limit = "x-litellm-key-rpm-limit"
+    x_litellm_key_max_budget = "x-litellm-key-max-budget"
+    x_litellm_key_spend = "x-litellm-key-spend"
+    x_litellm_response_duration_ms = "x-litellm-response-duration-ms"
+    x_litellm_overhead_duration_ms = "x-litellm-overhead-duration-ms"
+    x_litellm_fastest_response_batch_completion = "x-litellm-fastest_response_batch_completion"
+    x_litellm_timeout = "x-litellm-timeout"
+    x_litellm_guardrail_duration_ms = "x-litellm-guardrail-duration-ms"
+
+
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
     headers: dict
     organization: str

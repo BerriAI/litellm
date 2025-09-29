@@ -33,7 +33,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMResponseHeaders, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -207,6 +207,23 @@ class ProxyBaseLLMRequestProcessing:
         if hidden_params is not None:
             return hidden_params.get("guardrail_duration_ms", None)
         return None
+    
+    @staticmethod
+    def add_guardrail_duration_to_headers(
+        request_data: Optional[dict] = {},
+    ) -> dict:
+        """
+        Adds the guardrail duration to the response headers
+        """
+        standard_logging_guardrail_information: Optional[StandardLoggingGuardrailInformation] = CustomGuardrail.get_standard_logging_guardrail_information_from_request_data(request_data or {})
+        if standard_logging_guardrail_information is not None:
+            _guardrail_duration_seconds = standard_logging_guardrail_information.get("duration")
+            if _guardrail_duration_seconds is not None:
+                guardrail_duration_ms = _guardrail_duration_seconds * 1000
+                return {
+                    LiteLLMResponseHeaders.x_litellm_guardrail_duration_ms.value: str(guardrail_duration_ms),
+                }
+        return {}
 
     @staticmethod
     def get_custom_headers(
@@ -228,33 +245,34 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
         headers = {
-            "x-litellm-call-id": call_id,
-            "x-litellm-model-id": model_id,
-            "x-litellm-cache-key": cache_key,
-            "x-litellm-model-api-base": (
+            LiteLLMResponseHeaders.x_litellm_call_id.value: call_id,
+            LiteLLMResponseHeaders.x_litellm_model_id.value: model_id,
+            LiteLLMResponseHeaders.x_litellm_cache_key.value: cache_key,
+            LiteLLMResponseHeaders.x_litellm_model_api_base.value: (
                 api_base.split("?")[0] if api_base else None
             ),  # don't include query params, risk of leaking sensitive info
-            "x-litellm-version": version,
-            "x-litellm-model-region": model_region,
-            "x-litellm-response-cost": str(response_cost),
-            "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
-            "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
-            "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
-            "x-litellm-key-spend": str(user_api_key_dict.spend),
-            "x-litellm-response-duration-ms": str(
+            LiteLLMResponseHeaders.x_litellm_version.value: version,
+            LiteLLMResponseHeaders.x_litellm_model_region.value: model_region,
+            LiteLLMResponseHeaders.x_litellm_response_cost.value: str(response_cost),
+            LiteLLMResponseHeaders.x_litellm_key_tpm_limit.value: str(user_api_key_dict.tpm_limit),
+            LiteLLMResponseHeaders.x_litellm_key_rpm_limit.value: str(user_api_key_dict.rpm_limit),
+            LiteLLMResponseHeaders.x_litellm_key_max_budget.value: str(user_api_key_dict.max_budget),
+            LiteLLMResponseHeaders.x_litellm_key_spend.value: str(user_api_key_dict.spend),
+            LiteLLMResponseHeaders.x_litellm_response_duration_ms.value: str(
                 ProxyBaseLLMRequestProcessing._get_total_response_time_ms(hidden_params)
             ),
-            "x-litellm-overhead-duration-ms": str(
+            LiteLLMResponseHeaders.x_litellm_overhead_duration_ms.value: str(
                 ProxyBaseLLMRequestProcessing._get_overhead_duration_ms(hidden_params)
             ),
-            "x-litellm-fastest_response_batch_completion": (
+            LiteLLMResponseHeaders.x_litellm_fastest_response_batch_completion.value: (
                 str(fastest_response_batch_completion)
                 if fastest_response_batch_completion is not None
                 else None
             ),
-            "x-litellm-timeout": str(timeout) if timeout is not None else None,
+            LiteLLMResponseHeaders.x_litellm_timeout.value: str(timeout) if timeout is not None else None,
             **{k: str(v) for k, v in kwargs.items()},
         }
+        headers.update(ProxyBaseLLMRequestProcessing.add_guardrail_duration_to_headers(request_data=request_data))
         if request_data:
             remaining_tokens_header = (
                 get_remaining_tokens_and_requests_from_request_data(request_data)
@@ -349,7 +367,7 @@ class ProxyBaseLLMRequestProcessing:
             self.data["model"] = litellm.model_alias_map[self.data["model"]]
 
         self.data["litellm_call_id"] = request.headers.get(
-            "x-litellm-call-id", str(uuid.uuid4())
+            LiteLLMResponseHeaders.x_litellm_call_id.value, str(uuid.uuid4())
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
