@@ -67,11 +67,12 @@ PROMPT = [
 async def main() -> None:
     print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
     response = await router.acompletion(model="codex-agent", messages=PROMPT)
+    response_payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
     print(
         json.dumps(
             {
                 "request": PROMPT,
-                "response": response.choices[0].message.content,
+                "response": response_payload,
             },
             indent=2,
         )

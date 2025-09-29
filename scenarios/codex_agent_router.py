@@ -72,17 +72,17 @@ async def main() -> None:
     for prompt in PROMPTS:
         start = time.perf_counter()
         response = await router.acompletion(
-            model="codex-agent", 
-            messages=prompt["messages"]
+            model="codex-agent",
+            messages=prompt["messages"],
         )
+        response_payload = response.model_dump() if hasattr(response, "model_dump") else str(response)
         duration = time.perf_counter() - start
-        content = getattr(response.choices[0].message, "content", "").strip()
         print(
             json.dumps(
                 {
                     "level": prompt["level"],
                     "request": prompt["messages"],
-                    "response": content,
+                    "response": response_payload,
                     "elapsed_s": round(duration, 2),
                 },
                 indent=2,
