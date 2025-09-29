@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Minimal live mini-agent scenario: ask one complex question via arun_mcp_mini_agent."""
+"""Single-call live mini-agent scenario using familiar LiteLLM patterns."""
 
 import asyncio
 import json
 import os
 import sys
+from typing import List, Dict
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -16,27 +17,32 @@ try:
         LocalMCPInvoker,
         arun_mcp_mini_agent,
     )
-except Exception as exc:
+except Exception as exc:  # pragma: no cover
     print(f"Mini-agent components unavailable: {exc}")
     sys.exit(1)
 
-PROMPT = [
+PROMPT: List[Dict[str, str]] = [
     {
         "role": "system",
-        "content": "You are a meticulous analyst. Use exec_python to verify any numbers before answering.",
+        "content": (
+            "You are a meticulous analyst. Use exec_python to verify numbers before you answer."
+        ),
     },
     {
         "role": "user",
         "content": (
             "A startup tracks weekly active users: [1320, 1588, 1710, 1895, 2044, 2102, 1998, 2234]. "
-            "Using Python, compute the week-over-week percentage change, highlight the largest spike, and provide a recommendation."
+            "Using Python, compute the week-over-week percentage change, highlight the largest spike, "
+            "and provide a recommendation."
         ),
     },
 ]
 
-MODEL = os.getenv("LITELLM_DEFAULT_CHUTES_MODEL") or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
-if not MODEL:
-    MODEL = "ollama/qwen2.5-coder:14b"
+MODEL = (
+    os.getenv("LITELLM_DEFAULT_CHUTES_MODEL")
+    or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
+    or "ollama/qwen2.5-coder:14b"
+)
 
 CONFIG = AgentConfig(
     model=MODEL,
@@ -49,18 +55,19 @@ CONFIG = AgentConfig(
 async def main() -> None:
     print("-- mini-agent live scenario --")
     print(json.dumps({"model": CONFIG.model, "prompt": PROMPT}, indent=2))
+
     result = await arun_mcp_mini_agent(
         messages=PROMPT,
         mcp=LocalMCPInvoker(shell_allow_prefixes=("python", "echo"), tool_timeout_sec=30.0),
         cfg=CONFIG,
     )
-    payload = {
+
+    output = {
         "final_answer": result.final_answer,
         "iterations": len(result.iterations),
         "stopped_reason": result.stopped_reason,
-        "last_iteration": result.iterations[-1].__dict__ if result.iterations else None,
     }
-    print(json.dumps(payload, indent=2))
+    print(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
