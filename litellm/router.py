@@ -415,7 +415,6 @@ class Router:
         if model_list is not None:
             # Build model index immediately to enable O(1) lookups from the start
             self._build_model_id_to_deployment_index_map(model_list)
-            model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list  # type: ignore
             for m in model_list:
