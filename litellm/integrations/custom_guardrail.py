@@ -393,6 +393,17 @@ class CustomGuardrail(CustomLogger):
             verbose_logger.warning(
                 "unable to log guardrail information. No metadata found in request_data"
             )
+        
+    @staticmethod
+    def get_standard_logging_guardrail_information_from_request_data(request_data: dict) -> Optional[StandardLoggingGuardrailInformation]:
+        """
+        Returns the standard logging guardrail information from the request data
+        """
+        if "metadata" in request_data and "standard_logging_guardrail_information" in request_data["metadata"]:
+            return request_data["metadata"].get("standard_logging_guardrail_information")
+        elif "litellm_metadata" in request_data and "standard_logging_guardrail_information" in request_data["litellm_metadata"]:
+            return request_data["litellm_metadata"].get("standard_logging_guardrail_information")
+        return None
 
     async def apply_guardrail(
         self,
