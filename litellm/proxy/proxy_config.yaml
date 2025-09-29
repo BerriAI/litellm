@@ -23,6 +23,9 @@ model_list:
     litellm_params:
       model: gemini/*
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: vertex_ai/*
+    litellm_params:
+      model: vertex_ai/*
 
 
 guardrails:

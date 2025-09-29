@@ -3,7 +3,6 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import time
-from litellm._uuid import uuid
 from copy import deepcopy
 from functools import partial
 from typing import (
@@ -25,6 +24,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -32,8 +32,8 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH,
-    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -1596,7 +1596,7 @@ async def make_call(
         )
 
     try:
-        response = await client.post(api_base, headers=headers, data=data, stream=True)
+        response = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string = str(await e.response.aread())
@@ -1643,7 +1643,7 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response = client.post(api_base, headers=headers, data=data, stream=True)
+    response = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -1842,7 +1842,7 @@ class VertexLLM(VertexBase):
 
         try:
             response = await client.post(
-                api_base, headers=headers, json=cast(dict, request_body)
+                api_base, headers=headers, json=cast(dict, request_body), logging_obj=logging_obj
             )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -2045,7 +2045,7 @@ class VertexLLM(VertexBase):
             client = client
 
         try:
-            response = client.post(url=url, headers=headers, json=data)  # type: ignore
+            response = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
