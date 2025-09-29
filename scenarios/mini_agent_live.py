@@ -149,6 +149,8 @@ def _format_result(result, level: str) -> Dict[str, Any]:
         "final_answer": result.final_answer,
         "metrics": result.metrics,
         "last_tool_invocation": last_tool,
+        "prompt": PROMPTS[level],
+        "conversation": result.messages,
     }
 
 
