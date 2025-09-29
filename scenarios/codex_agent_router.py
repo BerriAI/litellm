@@ -40,7 +40,7 @@ if os.getenv("CODEX_AGENT_API_KEY"):
 if os.getenv("CODEX_AGENT_API_BASE"):
     codex_params["api_base"] = os.environ["CODEX_AGENT_API_BASE"]
 
-model_list.append({"model_name": "codex-demo", "litellm_params": codex_params})
+model_list.append({"model_name": "codex-agent", "litellm_params": codex_params})
 
 print("-- codex-agent scenario --")
 print(json.dumps({"model_list": model_list}, indent=2))
@@ -71,7 +71,10 @@ PROMPTS = [
 async def main() -> None:
     for prompt in PROMPTS:
         start = time.perf_counter()
-        response = await router.acompletion(model="codex-demo", messages=prompt["messages"])
+        response = await router.acompletion(
+            model="codex-agent", 
+            messages=prompt["messages"]
+        )
         duration = time.perf_counter() - start
         content = getattr(response.choices[0].message, "content", "").strip()
         print(

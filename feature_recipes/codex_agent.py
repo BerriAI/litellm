@@ -45,7 +45,7 @@ model_list = [
         },
     },
     {
-        "model_name": "codex-demo",
+        "model_name": "codex-agent",
         "litellm_params": {
             "model": os.getenv("LITELLM_DEFAULT_CODE_MODEL") or "codex-agent/gpt-5",
             "api_key": os.getenv("CODEX_AGENT_API_KEY"),
@@ -66,7 +66,7 @@ PROMPT = [
 
 async def main() -> None:
     print(json.dumps({"model_list": model_list, "prompt": PROMPT}, indent=2))
-    response = await router.acompletion(model="codex-demo", messages=PROMPT)
+    response = await router.acompletion(model="codex-agent", messages=PROMPT)
     print(
         json.dumps(
             {
