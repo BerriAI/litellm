@@ -294,6 +294,9 @@ class MCPRequestHandler:
     ) -> List[str]:
         """
         Get list of allowed MCP servers for the given user/key based on permissions
+
+        Returns:
+            List[str]: List of allowed MCP servers by server id
         """
         from typing import List
 
@@ -331,7 +334,7 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
-    async def is_tool_allowed(
+    def is_tool_allowed(
         allowed_mcp_servers: List[str],
         server_name: str,
     ) -> bool:
