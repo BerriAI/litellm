@@ -414,6 +414,9 @@ if MCP_AVAILABLE:
                 allowed_mcp_servers=allowed_mcp_servers,
             )
 
+        # Decide whether to add prefix based on number of allowed servers
+        add_prefix = not (len(allowed_mcp_servers) == 1)
+
         # Get tools from each allowed server
         all_tools = []
         for server_id in allowed_mcp_servers:
@@ -448,6 +451,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
+                    add_prefix=add_prefix,
                 )
                 all_tools.extend(filter_tools_by_allowed_tools(tools, server))
                 verbose_logger.debug(
@@ -567,16 +571,16 @@ if MCP_AVAILABLE:
             "litellm_logging_obj", None
         )
         if litellm_logging_obj:
-            litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
-                standard_logging_mcp_tool_call
-            )
+            litellm_logging_obj.model_call_details[
+                "mcp_tool_call_metadata"
+            ] = standard_logging_mcp_tool_call
             litellm_logging_obj.model = f"MCP: {name}"
         # Try managed server tool first (pass the full prefixed name)
         # Primary and recommended way to use MCP servers
         #########################################################
-        mcp_server: Optional[MCPServer] = (
-            global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-        )
+        mcp_server: Optional[
+            MCPServer
+        ] = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
                 mcp_server.mcp_info or {}
