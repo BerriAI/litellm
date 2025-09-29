@@ -100,9 +100,22 @@ PROMPTS: Dict[str, List[Dict[str, str]]] = {
 }
 
 CONFIGS = {
-    "simple": {"max_iterations": 3, "max_total_seconds": 60},
-    "medium": {"max_iterations": 4, "max_total_seconds": 120},
-    "complex": {"max_iterations": 5, "max_total_seconds": 150, "escalate_on_budget_exceeded": True},
+    "simple": {
+        "max_iterations": 3,
+        "max_total_seconds": 60,
+        "model_override": "ollama/qwen2.5-coder:14b",
+    },
+    "medium": {
+        "max_iterations": 4,
+        "max_total_seconds": 120,
+        "model_override": "ollama/qwen2.5-coder:14b",
+    },
+    "complex": {
+        "max_iterations": 5,
+        "max_total_seconds": 150,
+        "escalate_on_budget_exceeded": True,
+        "model_override": "ollama/qwen2.5-coder:14b",
+    },
 }
 
 
@@ -141,9 +154,12 @@ def _format_result(result, level: str) -> Dict[str, Any]:
 
 def _agent_config(level: str) -> AgentConfig:
     cfg = CONFIGS[level]
-    model_name = MODEL_ALIAS
-    if "/" not in model_name and PROVIDER:
-        model_name = f"{PROVIDER}/{model_name}"
+    model_name = cfg.get("model_override") or MODEL_ALIAS
+    provider = PROVIDER
+    if "/" in model_name:
+        provider = _infer_provider(model_name)
+    if "/" not in model_name and provider:
+        model_name = f"{provider}/{model_name}"
     escalate_model = None
     if level == "complex" and CHUTES_MODEL:
         escalate_model = CHUTES_MODEL
