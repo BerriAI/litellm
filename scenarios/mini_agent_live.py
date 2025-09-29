@@ -36,9 +36,10 @@ def _infer_provider(alias: str) -> str | None:
 
 MODEL_ALIAS = (
     os.getenv("SCENARIO_MINI_MODEL")
-    or os.getenv("LITELLM_DEFAULT_MODEL")
     or os.getenv("LITELLM_DEFAULT_CODE_MODEL")
-    or "ollama/qwen2.5:7b"
+    or os.getenv("LITELLM_DEFAULT_MODEL")
+    or os.getenv("LITELLM_DEFAULT_LARGE_MODEL")
+    or "ollama/qwen2.5-coder:14b"
 )
 PROVIDER = os.getenv("SCENARIO_MINI_PROVIDER") or _infer_provider(MODEL_ALIAS)
 
