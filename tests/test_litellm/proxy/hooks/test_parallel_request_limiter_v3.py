@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.exceptions import ParallelRequestLimitError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
@@ -92,7 +93,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch):
     )
 
     # Fourth request should fail (counter would be 4, limit is 3, so 4 > 3)
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ParallelRequestLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -374,7 +375,7 @@ async def test_normal_router_call_tpm_v3(monkeypatch, rate_limit_object):
     await local_cache.async_increment_cache(key=counter_key, value=15, ttl=2)  # Use up most of our 10 token limit
     
     # Make another request to test rate limiting - this should fail as we've consumed tokens
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ParallelRequestLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -777,7 +778,7 @@ async def test_tpm_api_key_rate_limits_v3():
     async def mock_should_rate_limit(descriptors, **kwargs):
         nonlocal captured_descriptors
         captured_descriptors = descriptors
-        # Return Error response to ensure HTTPException
+        # Return Error response to ensure ParallelRequestLimitError
         return {
             "overall_code": "OVER_LIMIT",
             "statuses": [{'code': 'OK', 'current_limit': 2, 'limit_remaining': 1, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
@@ -795,7 +796,7 @@ async def test_tpm_api_key_rate_limits_v3():
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
+    except ParallelRequestLimitError as e:
         error=e
         assert e.status_code == 429
         assert "rate_limit_type" in e.headers
@@ -853,7 +854,7 @@ async def test_rpm_api_key_rate_limits_v3():
     async def mock_should_rate_limit(descriptors, **kwargs):
         nonlocal captured_descriptors
         captured_descriptors = descriptors
-        # Return Error response to ensure HTTPException
+        # Return Error response to ensure ParallelRequestLimitError
         return {
             "overall_code": "OVER_LIMIT",
             "statuses": [{'code': 'OVER_LIMIT', 'current_limit': 2, 'limit_remaining': -2, 'rate_limit_type': 'requests', 'descriptor_key': 'model_per_key'},
@@ -871,7 +872,7 @@ async def test_rpm_api_key_rate_limits_v3():
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
+    except ParallelRequestLimitError as e:
         error=e
         assert e.status_code == 429
         assert "rate_limit_type" in e.headers
@@ -922,7 +923,7 @@ async def test_team_member_rate_limits_v3():
     async def mock_should_rate_limit(descriptors, **kwargs):
         nonlocal captured_descriptors
         captured_descriptors = descriptors
-        # Return OK response to avoid HTTPException
+        # Return OK response to avoid ParallelRequestLimitError
         return {
             "overall_code": "OK",
             "statuses": []
