@@ -4739,7 +4739,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159
     },
-    "anthropic/claude-sonnet-4-5": {
+    "claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
