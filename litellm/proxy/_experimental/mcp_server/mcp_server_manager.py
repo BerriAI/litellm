@@ -919,6 +919,14 @@ class MCPServerManager:
                 return server
         return None
 
+    def get_mcp_server_names_from_ids(self, server_ids: List[str]) -> List[str]:
+        server_names = []
+        registry = self.get_registry()
+        for server in registry.values():
+            if server.server_id in server_ids:
+                server_names.append(server.name)
+        return server_names
+
     def get_mcp_server_by_name(self, server_name: str) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server name
