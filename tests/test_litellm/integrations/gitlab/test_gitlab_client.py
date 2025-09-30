@@ -103,7 +103,7 @@ def test_ref_prefers_tag_over_branch():
 
 def test_default_branch_is_main_when_absent():
     c = make_client(branch=None)  # explicit None
-    assert c.ref == "main"
+    assert c.ref == 'main'
 
 
 def test_auth_header_token_default():

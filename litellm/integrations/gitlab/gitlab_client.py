@@ -43,7 +43,9 @@ class GitLabClient:
         self.project: str | int = project
         self.access_token: str = str(access_token)
         self.auth_method = config.get("auth_method", "token")  # 'token' or 'oauth'
-        self.branch = config.get("branch", "main")
+        self.branch = config.get("branch", None)
+        if not self.branch:
+            self.branch = 'main'
         self.tag = config.get("tag")
         self.base_url = config.get("base_url", "https://gitlab.com/api/v4")
 

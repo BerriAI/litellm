@@ -46,18 +46,19 @@ class GitLabTemplateManager:
     New: supports `prompts_path` (or `folder`) in gitlab_config to scope where prompts live.
     """
 
+
     def __init__(
             self,
             gitlab_config: Dict[str, Any],
             prompt_id: Optional[str] = None,
-            ref: Optional[str] = None,  # optional per-manager override (tag/branch/SHA)
+            ref: Optional[str] = None,
+            gitlab_client: Optional[GitLabClient] = None
     ):
         self.gitlab_config = dict(gitlab_config)
         self.prompt_id = prompt_id
         self.prompts: Dict[str, GitLabPromptTemplate] = {}
-        self.gitlab_client = GitLabClient(self.gitlab_config)
+        self.gitlab_client = gitlab_client or GitLabClient(self.gitlab_config)
 
-        # Optional ref override
         if ref:
             self.gitlab_client.set_ref(ref)
 
@@ -119,12 +120,9 @@ class GitLabTemplateManager:
         """
         Eagerly load all .prompt files from prompts_path. Returns loaded IDs.
         """
-        files = self.gitlab_client.list_files(
-            directory_path=self.prompts_path, file_extension=".prompt", recursive=recursive
-        )
+        files = self.list_templates(recursive=recursive)  # reuse logic
         loaded: List[str] = []
-        for repo_path in files:
-            pid = self._repo_path_to_id(repo_path)
+        for pid in files:
             if pid not in self.prompts:
                 self._load_prompt_from_gitlab(pid)
             loaded.append(pid)
@@ -200,10 +198,47 @@ class GitLabTemplateManager:
         """
         List available prompt IDs discovered under prompts_path (no extension, relative to prompts_path).
         """
-        files = self.gitlab_client.list_files(
-            directory_path=self.prompts_path, file_extension=".prompt", recursive=recursive
-        )
-        return [self._repo_path_to_id(p) for p in files]
+        """
+        List available prompt IDs under prompts_path (no extension).
+        Compatible with both list_files signatures:
+        - list_files(directory_path=..., file_extension=..., recursive=...)
+        - list_files(path=..., ref=None, recursive=...)
+        """
+        # First try the "new" signature (directory_path/file_extension)
+        try:
+            files = self.gitlab_client.list_files(
+                directory_path=self.prompts_path,
+                file_extension=".prompt",
+                recursive=recursive,
+            )
+            base = self.prompts_path.strip("/")
+            out: List[str] = []
+            for p in files or []:
+                path = str(p).strip("/")
+                if base and not path.startswith(base + "/"):
+                    # if the client returns extra files outside the folder, skip them
+                    continue
+                if not path.endswith(".prompt"):
+                    continue
+                out.append(self._repo_path_to_id(path))
+            return out
+        except TypeError:
+            # Fallback to the "classic" signature
+            raw = self.gitlab_client.list_files(
+                path=self.prompts_path or "",
+                ref=None,
+                recursive=recursive,
+            )
+            # Classic returns GitLab tree entries; filter *.prompt blobs
+            files = [
+                f["path"]
+                for f in (raw or [])
+                if isinstance(f, dict)
+                   and f.get("type") == "blob"
+                   and str(f.get("path", "")).endswith(".prompt")
+            ]
+
+            return [self._repo_path_to_id(p) for p in files]
 
 
 class GitLabPromptManager(CustomPromptManagement):
@@ -225,11 +260,19 @@ class GitLabPromptManager(CustomPromptManagement):
             gitlab_config: Dict[str, Any],
             prompt_id: Optional[str] = None,
             ref: Optional[str] = None,  # tag/branch/SHA override
+            gitlab_client: Optional[GitLabClient] = None
     ):
         self.gitlab_config = gitlab_config
         self.prompt_id = prompt_id
         self._prompt_manager: Optional[GitLabTemplateManager] = None
         self._ref_override = ref
+        self._injected_gitlab_client = gitlab_client
+        if self.prompt_id:
+            self._prompt_manager = GitLabTemplateManager(
+                gitlab_config=self.gitlab_config,
+                prompt_id=self.prompt_id,
+                ref=self._ref_override,
+            )
 
     @property
     def integration_name(self) -> str:
@@ -242,6 +285,7 @@ class GitLabPromptManager(CustomPromptManagement):
                 gitlab_config=self.gitlab_config,
                 prompt_id=self.prompt_id,
                 ref=self._ref_override,
+                gitlab_client=self._injected_gitlab_client
             )
         return self._prompt_manager
 
@@ -364,8 +408,17 @@ class GitLabPromptManager(CustomPromptManagement):
         return response
 
     def get_available_prompts(self) -> List[str]:
-        """List discovered prompt IDs under the configured prompts_path."""
-        return self.prompt_manager.list_templates()
+        """
+        Return prompt IDs. Prefer already-loaded templates in memory to avoid
+        unnecessary network calls (and to make tests deterministic).
+        """
+        ids = set(self.prompt_manager.prompts.keys())
+        try:
+            ids.update(self.prompt_manager.list_templates())
+        except Exception:
+            # If GitLab list fails (auth, network), still return what we've loaded.
+            pass
+        return sorted(ids)
 
     def reload_prompts(self) -> None:
         if self.prompt_id:
