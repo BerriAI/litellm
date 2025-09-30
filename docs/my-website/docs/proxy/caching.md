@@ -19,7 +19,7 @@ calling the LLM API again.
 - Redis Cache
 - Qdrant Semantic Cache
 - Redis Semantic Cache
-- s3 Bucket Cache
+- S3 Bucket Cache
 - GCS Bucket Cache
 
 ## Quick Start
