@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 # PATCH: Additional imports for Redis session storage
 from datetime import datetime
-import uuid
 import json
 
 from openai.types.responses.tool_param import FunctionToolParam
@@ -922,7 +921,7 @@ class LiteLLMCompletionResponsesConfig:
             )
             
             
-        except Exception as e:
+        except Exception:
             # PATCH: Silent fail - don't break existing functionality
             pass
 
@@ -950,6 +949,6 @@ class LiteLLMCompletionResponsesConfig:
                 
             return None
             
-        except Exception as e:
+        except Exception:
             # PATCH: Silent fail - fallback to existing logic
             return None

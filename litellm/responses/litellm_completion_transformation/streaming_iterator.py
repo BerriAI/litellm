@@ -1,6 +1,5 @@
 from typing import List, Optional, Union
 import uuid
-import asyncio
 
 import litellm
 from litellm.main import stream_chunk_builder
@@ -244,7 +243,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     session_id=session_id,
                     messages=messages
                 )
-        except Exception as e:
+        except Exception:
             # Silently fail - Redis storage is a patch for timing issues
             # and shouldn't break the streaming response
             pass
