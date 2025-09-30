@@ -1,4 +1,4 @@
-"""Mock research tools used by the mini-agent during local smoke tests."""
+"""Mock research tools used by mini-agent demos and unit tests."""
 
 from __future__ import annotations
 

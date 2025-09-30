@@ -1,4 +1,4 @@
-"""Helper utilities for mimicking OpenAI responses during mini-agent smokes."""
+"""Helpers that mimic OpenAI responses for mini-agent local debugging."""
 
 from __future__ import annotations
 

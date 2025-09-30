@@ -1,4 +1,4 @@
-"""HTTP-based MCP invoker that proxies tool calls to remote endpoints."""
+"""HTTP-based MCP invoker for proxying mini-agent tool calls to services."""
 
 from __future__ import annotations
 import json

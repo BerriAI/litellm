@@ -1,4 +1,4 @@
-"""Lightweight RPC server that runs mini-agent tools inside the host/Docker."""
+"""Lightweight RPC server that runs mini-agent tools inside host or Docker."""
 
 from __future__ import annotations
 

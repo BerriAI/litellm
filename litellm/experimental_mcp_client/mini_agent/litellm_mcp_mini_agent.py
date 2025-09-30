@@ -1,4 +1,4 @@
-"""Core mini-agent loop and Router integration helpers for LiteLLM."""
+"""Core mini-agent loop plus Router helpers used by debug tooling."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""FastAPI shim exposing the mini-agent loop for local tests and tools."""
+"""FastAPI shim that exposes the mini-agent loop for local tools and demos."""
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, cast
