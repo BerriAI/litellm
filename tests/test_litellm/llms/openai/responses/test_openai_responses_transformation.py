@@ -147,7 +147,7 @@ class TestOpenAIResponsesAPIConfig:
 
             assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
             assert result.response.id == "resp_123"
-    
+
     @pytest.mark.serial
     def test_validate_environment(self):
         """Test that validate_environment correctly sets the Authorization header"""
@@ -292,27 +292,36 @@ class TestAzureResponsesAPIConfig:
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
         base_url = "https://litellm8397336933.openai.azure.com"
-        
+
         # Test with preview version - should use openai/v1/responses
         result_preview = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "preview"},
         )
-        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
-        
-        # Test with latest version - should use openai/v1/responses  
+        assert (
+            result_preview
+            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
+        )
+
+        # Test with latest version - should use openai/v1/responses
         result_latest = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "latest"},
         )
-        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
-        
+        assert (
+            result_latest
+            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
+        )
+
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "2025-01-01"},
         )
-        assert result_date == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+        assert (
+            result_date
+            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+        )
 
 
 class TestTransformListInputItemsRequest:
@@ -650,3 +659,12 @@ class TestTransformListInputItemsRequest:
         for key, value in params.items():
             assert isinstance(key, str)
             assert value is not None
+
+
+def test_get_supported_openai_params():
+    config = OpenAIResponsesAPIConfig()
+    params = config.get_supported_openai_params("gpt-4o")
+    assert "temperature" in params
+    assert "stream" in params
+    assert "background" in params
+    assert "stream" in params

@@ -1,8 +1,9 @@
 import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model, testConnectionRequest } from "../networking";
+import { modelCreateCall, Model } from "../networking";
 import React, { useState } from 'react';
 import ConnectionErrorDisplay from './model_connection_test';
+import NotificationManager from "../molecules/notifications_manager";
 
 export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
@@ -100,9 +101,8 @@ export const prepareModelAddRequest = async (
               try {
                 litellmExtraParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -117,9 +117,8 @@ export const prepareModelAddRequest = async (
               try {
                 modelInfoParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -151,7 +150,7 @@ export const prepareModelAddRequest = async (
 
       return deployments;
     } catch (error) {
-      message.error("Failed to create model: " + error, 10);
+      NotificationManager.fromBackend("Failed to create model: " + error);
     }
   };
 
@@ -185,7 +184,7 @@ export const handleAddModelSubmit = async (
       callback && callback();
       form.resetFields();
     } catch (error) {
-      message.error("Failed to add model: " + error, 10);
+      NotificationManager.fromBackend("Failed to add model: " + error);
     }
   };
 

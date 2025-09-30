@@ -7,21 +7,14 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
-from litellm._logging import verbose_logger
-
-try:
-    from litellm_enterprise.enterprise_callbacks.session_handler import (
-        _ENTERPRISE_ResponsesSessionHandler,
-    )
-except Exception as e:
-    verbose_logger.debug(
-        f"[Non-Blocking] Unable to import _ENTERPRISE_ResponsesSessionHandler - LiteLLM Enterprise Feature - {str(e)}"
-    )
-    _ENTERPRISE_ResponsesSessionHandler = None
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -40,7 +33,6 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseTextConfig,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -75,13 +67,6 @@ class ChatCompletionSession(TypedDict, total=False):
     litellm_session_id: Optional[str]
 
 
-class ChatCompletionImageItem(TypedDict):
-    """TypedDict for image items in chat completion content"""
-
-    type: Literal["image"]
-    image_url: ChatCompletionImageUrlObject
-
-
 ########### End of Initialize Classes used for Responses API  ###########
 
 
@@ -114,6 +99,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         stream: Optional[bool] = None,
+        extra_headers: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> dict:
         """
@@ -141,6 +127,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
         }
 
         # Responses API `Completed` events require usage, we pass `stream_options` to litellm.completion to include usage
@@ -210,20 +197,19 @@ class LiteLLMCompletionResponsesConfig:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
-        if _ENTERPRISE_ResponsesSessionHandler is not None:
-            chat_completion_session = ChatCompletionSession(
-                messages=[], litellm_session_id=None
+        chat_completion_session = ChatCompletionSession(
+            messages=[], litellm_session_id=None
+        )
+        if previous_response_id:
+            chat_completion_session = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                previous_response_id=previous_response_id
             )
-            if previous_response_id:
-                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                    previous_response_id=previous_response_id
-                )
-            _messages = litellm_completion_request.get("messages") or []
-            session_messages = chat_completion_session.get("messages") or []
-            litellm_completion_request["messages"] = session_messages + _messages
-            litellm_completion_request[
-                "litellm_trace_id"
-            ] = chat_completion_session.get("litellm_session_id")
+        _messages = litellm_completion_request.get("messages") or []
+        session_messages = chat_completion_session.get("messages") or []
+        litellm_completion_request["messages"] = session_messages + _messages
+        litellm_completion_request[
+            "litellm_trace_id"
+        ] = chat_completion_session.get("litellm_session_id")
         return litellm_completion_request
 
     @staticmethod
@@ -485,7 +471,7 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
-    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageItem:
+    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageObject:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
@@ -494,8 +480,8 @@ class LiteLLMCompletionResponsesConfig:
             detail=item.get("detail") or "auto"
         )
 
-        return ChatCompletionImageItem(
-            type="image",
+        return ChatCompletionImageObject(
+            type="image_url",
             image_url=image_url_obj
         )
 
@@ -506,7 +492,6 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API content into a Chat Completion content
         """
-
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
@@ -675,7 +660,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             reasoning=Reasoning(),
             status=getattr(chat_completion_response, "status", "completed"),
-            text=ResponseTextConfig(),
+            text={},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
@@ -866,8 +851,15 @@ class LiteLLMCompletionResponsesConfig:
                 output_tokens=0,
                 total_tokens=0,
             )
-        return ResponseAPIUsage(
+        
+        response_usage = ResponseAPIUsage(
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+        
+        # Preserve cost field if it exists (for streaming usage with cost calculation)
+        if hasattr(usage, "cost") and usage.cost is not None:
+            setattr(response_usage, "cost", usage.cost)
+        
+        return response_usage

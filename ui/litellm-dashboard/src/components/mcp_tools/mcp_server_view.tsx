@@ -169,6 +169,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               auth_type={mcpServer.auth_type}
               userRole={userRole}
               userID={userID}
+              serverAlias={mcpServer.alias}
             />
           </TabPanel>
 
@@ -223,10 +224,6 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div>
                     <Text className="font-medium">Auth Type</Text>
                     <div>{handleAuth(mcpServer.auth_type)}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Spec Version</Text>
-                    <div>{mcpServer.spec_version}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Access Groups</Text>

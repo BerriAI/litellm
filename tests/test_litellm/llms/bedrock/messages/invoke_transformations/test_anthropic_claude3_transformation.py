@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaude3MessagesConfig,
+    AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 
@@ -21,7 +21,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():
     """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""
 
-    cfg = AmazonAnthropicClaude3MessagesConfig()
+    cfg = AmazonAnthropicClaudeMessagesConfig()
 
     async def _dummy_stream():  # type: ignore[return-type]
         yield {"type": "message_delta", "text": "hello"}

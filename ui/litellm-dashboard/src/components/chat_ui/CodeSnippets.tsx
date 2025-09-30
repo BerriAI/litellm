@@ -17,6 +17,7 @@ interface GenerateCodeParams {
 	selectedTags: string[];
 	selectedVectorStores: string[];
 	selectedGuardrails: string[];
+	selectedMCPTools: string[];
 	endpointType: string;
 	selectedModel: string | undefined;
 	selectedSdk: 'openai' | 'azure';
@@ -32,6 +33,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
 		selectedTags,
 		selectedVectorStores,
 		selectedGuardrails,
+		selectedMCPTools,
 		endpointType,
 		selectedModel,
 		selectedSdk,
@@ -84,14 +86,48 @@ client = openai.OpenAI(
 						extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
 					}
 
+					// Create example for chat completions with optional image support
+					const messagesExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+
 					endpointSpecificCode = `
-# request sent to model set on litellm proxy, \`litellm --model\`
+import base64
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Example with text only
 response = client.chat.completions.create(
-	model="${modelNameForCode}",
-	messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+    model="${modelNameForCode}",
+    messages=${JSON.stringify(messagesExample, null, 4)}${extraBodyCode}
 )
 
 print(response)
+
+# Example with image or PDF (uncomment and provide file path to use)
+# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# response_with_file = client.chat.completions.create(
+#     model="${modelNameForCode}",
+#     messages=[
+#         {
+#             "role": "user",
+#             "content": [
+#                 {
+#                     "type": "text",
+#                     "text": "${safePrompt}"
+#                 },
+#                 {
+#                     "type": "image_url",
+#                     "image_url": {
+#                         "url": f"data:image/jpeg;base64,{base64_file}"  # or data:application/pdf;base64,{base64_file}
+#                     }
+#                 }
+#             ]
+#         }
+#     ]${extraBodyCode}
+# )
+# print(response_with_file)
 `;
 					break;
 			}
@@ -106,14 +142,43 @@ print(response)
 					extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
 				}
 
+				// Create example for responses API with optional image support
+				const inputExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+				
 				endpointSpecificCode = `
-# request sent to model set on litellm proxy, \`litellm --model\`
+import base64
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Example with text only
 response = client.responses.create(
-	model="${modelNameForCode}",
-	messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+    model="${modelNameForCode}",
+    input=${JSON.stringify(inputExample, null, 4)}${extraBodyCode}
 )
 
-print(response)
+print(response.output_text)
+
+# Example with image or PDF (uncomment and provide file path to use)
+# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# response_with_file = client.responses.create(
+#     model="${modelNameForCode}",
+#     input=[
+#         {
+#             "role": "user",
+#             "content": [
+#                 {"type": "input_text", "text": "${safePrompt}"},
+#                 {
+#                     "type": "input_image",
+#                     "image_url": f"data:image/jpeg;base64,{base64_file}",  # or data:application/pdf;base64,{base64_file}
+#                 },
+#             ],
+#         }
+#     ]${extraBodyCode}
+# )
+# print(response_with_file.output_text)
 `;
 				break;
 			}

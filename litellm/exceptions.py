@@ -153,6 +153,29 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
 
+class ImageFetchError(BadRequestError):
+    def __init__(
+        self,
+        message,
+        model=None,
+        llm_provider=None,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+        body: Optional[dict] = None,
+    ):
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
+            body=body,
+        )
+
 
 class UnprocessableEntityError(openai.UnprocessableEntityError):  # type: ignore
     def __init__(

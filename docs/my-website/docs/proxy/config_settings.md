@@ -17,24 +17,13 @@ model_list:
 
 litellm_settings:
   # Logging/Callback settings
-  success_callback: ["langfuse"] # list of success callbacks
-  failure_callback: ["sentry"] # list of failure callbacks
-  callbacks: ["otel"] # list of callbacks - runs on success and failure
-  service_callbacks: ["datadog", "prometheus"] # logs redis, postgres failures on datadog, prometheus
-  turn_off_message_logging: boolean # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged.
-  redact_user_api_key_info: boolean # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
-  langfuse_default_tags: [
-      "cache_hit",
-      "cache_key",
-      "proxy_base_url",
-      "user_api_key_alias",
-      "user_api_key_user_id",
-      "user_api_key_user_email",
-      "user_api_key_team_alias",
-      "semantic-similarity",
-      "proxy_base_url",
-    ] # default tags for Langfuse Logging
-
+  success_callback: ["langfuse"]  # list of success callbacks
+  failure_callback: ["sentry"]  # list of failure callbacks
+  callbacks: ["otel"]  # list of callbacks - runs on success and failure
+  service_callbacks: ["datadog", "prometheus"]  # logs redis, postgres failures on datadog, prometheus
+  turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged. Useful for privacy/compliance when handling sensitive data.
+  redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
+  langfuse_default_tags: ["cache_hit", "cache_key", "proxy_base_url", "user_api_key_alias", "user_api_key_user_id", "user_api_key_user_email", "user_api_key_team_alias", "semantic-similarity", "proxy_base_url"] # default tags for Langfuse Logging
   # Networking settings
   request_timeout: 10 # (int) llm requesttimeout in seconds. Raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout
   force_ipv4: boolean # If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API
@@ -64,7 +53,7 @@ litellm_settings:
     port: 6379 # The port number for the Redis cache. Required if type is "redis".
     password: "your_password" # The password for the Redis cache. Required if type is "redis".
     namespace: "litellm.caching.caching" # namespace for redis cache
-
+    max_connections: 100  # [OPTIONAL] Set Maximum number of Redis connections. Passed directly to redis-py. 
     # Optional - Redis Cluster Settings
     redis_startup_nodes: [{ "host": "127.0.0.1", "port": "7001" }]
 
@@ -112,15 +101,17 @@ callback_settings:
 
 general_settings:
   completion_model: string
-  disable_spend_logs: boolean # turn off writing each transaction to the db
-  disable_master_key_return: boolean # turn off returning master key on UI (checked on '/user/info' endpoint)
-  disable_retry_on_max_parallel_request_limit_error: boolean # turn off retries when max parallel request limit is reached
-  disable_reset_budget: boolean # turn off reset budget scheduled task
-  disable_adding_master_key_hash_to_db: boolean # turn off storing master key hash in db, for spend tracking
-  enable_jwt_auth: boolean # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
-  enforce_user_param: boolean # requires all openai endpoint requests to have a 'user' param
-  allowed_routes: ["route1", "route2"] # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
-  key_management_system: google_kms # either google_kms or azure_kms
+  store_prompts_in_spend_logs: boolean
+  forward_client_headers_to_llm_api: boolean
+  disable_spend_logs: boolean  # turn off writing each transaction to the db
+  disable_master_key_return: boolean  # turn off returning master key on UI (checked on '/user/info' endpoint)
+  disable_retry_on_max_parallel_request_limit_error: boolean  # turn off retries when max parallel request limit is reached
+  disable_reset_budget: boolean  # turn off reset budget scheduled task
+  disable_adding_master_key_hash_to_db: boolean  # turn off storing master key hash in db, for spend tracking
+  enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
+  enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
+  allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
+  key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
   maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
@@ -139,39 +130,68 @@ general_settings:
   health_check_interval: 300
   alerting: ["slack", "email"]
   alerting_threshold: 0
-  use_client_credentials_pass_through_routes: boolean # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
+  use_client_credentials_pass_through_routes: boolean  # use client credentials for all pass through routes like "/vertex-ai", /bedrock/. When this is True Virtual Key auth will not be applied on these endpoints
+
+router_settings:
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
+  redis_host: <your-redis-host>           # string
+  redis_password: <your-redis-password>   # string
+  redis_port: <your-redis-port>           # string
+  enable_pre_call_checks: true            # bool - Before call is made check if a call is within model context window 
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  disable_cooldowns: True                  # bool - Disable cooldowns for all models 
+  enable_tag_filtering: True                # bool - Use tag based routing for requests
+  retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
+    "AuthenticationErrorRetries": 3,
+    "TimeoutErrorRetries": 3,
+    "RateLimitErrorRetries": 3,
+    "ContentPolicyViolationErrorRetries": 4,
+    "InternalServerErrorRetries": 4
+  }
+  allowed_fails_policy: {
+    "BadRequestErrorAllowedFails": 1000, # Allow 1000 BadRequestErrors before cooling down a deployment
+    "AuthenticationErrorAllowedFails": 10, # int 
+    "TimeoutErrorAllowedFails": 12, # int 
+    "RateLimitErrorAllowedFails": 10000, # int 
+    "ContentPolicyViolationErrorAllowedFails": 15, # int 
+    "InternalServerErrorAllowedFails": 20, # int 
+  }
+  content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
+  fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
+
 ```
 
 ### litellm_settings - Reference
 
-| Name                                           | Type             | Description                                                                                                                                                                                                                                                                                   |
-| ---------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| success_callback                               | array of strings | List of success callbacks. [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus)                                                                                                                                                                                                  |
-| failure_callback                               | array of strings | List of failure callbacks [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus)                                                                                                                                                                                                   |
-| callbacks                                      | array of strings | List of callbacks - runs on success and failure [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus)                                                                                                                                                                             |
-| service_callbacks                              | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus)                                                                                                                                                           |
-| turn_off_message_logging                       | boolean          | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged [Proxy Logging](logging)                                                                                                                                                   |
-| modify_params                                  | boolean          | If true, allows modifying the parameters of the request before it is sent to the LLM provider                                                                                                                                                                                                 |
-| enable_preview_features                        | boolean          | If true, enables preview features - e.g. Azure O1 Models with streaming support.                                                                                                                                                                                                              |
-| redact_user_api_key_info                       | boolean          | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo)                                                                                                                                                                               |
-| mcp_aliases                                    | object           | Maps friendly aliases to MCP server names for easier tool access. Only the first alias for each server is used. [MCP Aliases](../mcp#mcp-aliases)                                                                                                                                             |
-| langfuse_default_tags                          | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
-| set_verbose                                    | boolean          | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION                                                                                                                                                                                         |
-| json_logs                                      | boolean          | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging)                                                                           |
-| default_fallbacks                              | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks)                                                                                                                                                              |
-| request_timeout                                | integer          | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py)                                                                |
-| force_ipv4                                     | boolean          | If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API                                                                                                                                                             |
-| content_policy_fallbacks                       | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks)                                                                                                                                                                    |
-| context_window_fallbacks                       | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks)                                                                                                                                                                     |
-| cache                                          | boolean          | If true, enables caching. [Further docs](./caching)                                                                                                                                                                                                                                           |
-| cache_params                                   | object           | Parameters for the cache. [Further docs](./caching#supported-cache_params-on-proxy-configyaml)                                                                                                                                                                                                |
-| disable_end_user_cost_tracking                 | boolean          | If true, turns off end user cost tracking on prometheus metrics + litellm spend logs table on proxy.                                                                                                                                                                                          |
-| disable_end_user_cost_tracking_prometheus_only | boolean          | If true, turns off end user cost tracking on prometheus metrics only.                                                                                                                                                                                                                         |
-| key_generation_settings                        | object           | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation)                                                                                                                                                                                                 |
-| disable_add_transform_inline_image_block       | boolean          | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model.                                                                                                                                             |
-| disable_hf_tokenizer_download                  | boolean          | If true, it defaults to using the openai tokenizer for all models (including huggingface models).                                                                                                                                                                                             |
-| enable_json_schema_validation                  | boolean          | If true, enables json schema validation for all requests.                                                                                                                                                                                                                                     |
-| disable_copilot_system_to_assistant            | boolean          | If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior. Useful for tools (like Claude Code) that send system messages, which Copilot does not support.                                                 |
+| Name | Type | Description |
+|------|------|-------------|
+| success_callback | array of strings | List of success callbacks. [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| failure_callback | array of strings | List of failure callbacks [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| callbacks | array of strings | List of callbacks - runs on success and failure [Doc Proxy logging callbacks](logging), [Doc Metrics](prometheus) |
+| service_callbacks | array of strings | System health monitoring - Logs redis, postgres failures on specified services (e.g. datadog, prometheus) [Doc Metrics](prometheus) |
+| turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged. Useful for privacy/compliance when handling sensitive data [Proxy Logging](logging) |
+| modify_params | boolean | If true, allows modifying the parameters of the request before it is sent to the LLM provider |
+| enable_preview_features | boolean | If true, enables preview features - e.g. Azure O1 Models with streaming support.|
+| redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+| mcp_aliases | object | Maps friendly aliases to MCP server names for easier tool access. Only the first alias for each server is used. [MCP Aliases](../mcp#mcp-aliases) |
+| langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
+| set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
+| json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
+| default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
+| request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
+| force_ipv4 | boolean | If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API |
+| content_policy_fallbacks | array of objects | Fallbacks to use when a ContentPolicyViolationError is encountered. [Further docs](./reliability#content-policy-fallbacks) |
+| context_window_fallbacks | array of objects | Fallbacks to use when a ContextWindowExceededError is encountered. [Further docs](./reliability#context-window-fallbacks) |
+| cache | boolean | If true, enables caching. [Further docs](./caching) |
+| cache_params | object | Parameters for the cache. [Further docs](./caching#supported-cache_params-on-proxy-configyaml) |
+| disable_end_user_cost_tracking | boolean | If true, turns off end user cost tracking on prometheus metrics + litellm spend logs table on proxy. |
+| disable_end_user_cost_tracking_prometheus_only | boolean | If true, turns off end user cost tracking on prometheus metrics only. |
+| key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
+| disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
+| disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
+| enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
+| disable_copilot_system_to_assistant | boolean | If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior. Useful for tools (like Claude Code) that send system messages, which Copilot does not support. |
 
 ### general_settings - Reference
 
@@ -256,7 +276,7 @@ Most values can also be set via `litellm_settings`. If you see overlapping value
 
 ```yaml
 router_settings:
-  routing_strategy: usage-based-routing-v2 # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle"
+  routing_strategy: simple-shuffle # Literal["simple-shuffle", "least-busy", "usage-based-routing","latency-based-routing"], default="simple-shuffle" - RECOMMENDED for best performance
   redis_host: <your-redis-host>           # string
   redis_password: <your-redis-password>   # string
   redis_port: <your-redis-port>           # string
@@ -330,404 +350,436 @@ router_settings:
 
 ### environment variables - Reference
 
-| Name                                               | Description                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ACTIONS_ID_TOKEN_REQUEST_TOKEN                     | Token for requesting ID in GitHub Actions                                                                                                                                                                                                                                            |
-| ACTIONS_ID_TOKEN_REQUEST_URL                       | URL for requesting ID token in GitHub Actions                                                                                                                                                                                                                                        |
-| AGENTOPS_ENVIRONMENT                               | Environment for AgentOps logging integration                                                                                                                                                                                                                                         |
-| AGENTOPS_API_KEY                                   | API Key for AgentOps logging integration                                                                                                                                                                                                                                             |
-| AGENTOPS_SERVICE_NAME                              | Service Name for AgentOps logging integration                                                                                                                                                                                                                                        |
-| AISPEND_ACCOUNT_ID                                 | Account ID for AI Spend                                                                                                                                                                                                                                                              |
-| AISPEND_API_KEY                                    | API Key for AI Spend                                                                                                                                                                                                                                                                 |
-| AIOHTTP_TRUST_ENV                                  | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)\_PROXY env vars. **Default is False**                                                                                                                                               |
-| ALLOWED_EMAIL_DOMAINS                              | List of email domains allowed for access                                                                                                                                                                                                                                             |
-| ARIZE_API_KEY                                      | API key for Arize platform integration                                                                                                                                                                                                                                               |
-| ARIZE_SPACE_KEY                                    | Space key for Arize platform                                                                                                                                                                                                                                                         |
-| ARGILLA_BATCH_SIZE                                 | Batch size for Argilla logging                                                                                                                                                                                                                                                       |
-| ARGILLA_API_KEY                                    | API key for Argilla platform                                                                                                                                                                                                                                                         |
-| ARGILLA_SAMPLING_RATE                              | Sampling rate for Argilla logging                                                                                                                                                                                                                                                    |
-| ARGILLA_DATASET_NAME                               | Dataset name for Argilla logging                                                                                                                                                                                                                                                     |
-| ARGILLA_BASE_URL                                   | Base URL for Argilla service                                                                                                                                                                                                                                                         |
-| ATHINA_API_KEY                                     | API key for Athina service                                                                                                                                                                                                                                                           |
-| ATHINA_BASE_URL                                    | Base URL for Athina service (defaults to `https://log.athina.ai`)                                                                                                                                                                                                                    |
-| AUTH_STRATEGY                                      | Strategy used for authentication (e.g., OAuth, API key)                                                                                                                                                                                                                              |
-| ANTHROPIC_API_KEY                                  | API key for Anthropic service                                                                                                                                                                                                                                                        |
-| ANTHROPIC_API_BASE                                 | Base URL for Anthropic API. Default is https://api.anthropic.com                                                                                                                                                                                                                     |
-| AWS_ACCESS_KEY_ID                                  | Access Key ID for AWS services                                                                                                                                                                                                                                                       |
-| AWS_PROFILE_NAME                                   | AWS CLI profile name to be used                                                                                                                                                                                                                                                      |
-| AWS_REGION_NAME                                    | Default AWS region for service interactions                                                                                                                                                                                                                                          |
-| AWS_ROLE_NAME                                      | Role name for AWS IAM usage                                                                                                                                                                                                                                                          |
-| AWS_SECRET_ACCESS_KEY                              | Secret Access Key for AWS services                                                                                                                                                                                                                                                   |
-| AWS_SESSION_NAME                                   | Name for AWS session                                                                                                                                                                                                                                                                 |
-| AWS_WEB_IDENTITY_TOKEN                             | Web identity token for AWS                                                                                                                                                                                                                                                           |
-| AZURE_API_VERSION                                  | Version of the Azure API being used                                                                                                                                                                                                                                                  |
-| AZURE_AUTHORITY_HOST                               | Azure authority host URL                                                                                                                                                                                                                                                             |
-| AZURE_CERTIFICATE_PASSWORD                         | Password for Azure OpenAI certificate                                                                                                                                                                                                                                                |
-| AZURE_CLIENT_ID                                    | Client ID for Azure services                                                                                                                                                                                                                                                         |
-| AZURE_CLIENT_SECRET                                | Client secret for Azure services                                                                                                                                                                                                                                                     |
-| AZURE_CODE_INTERPRETER_COST_PER_SESSION            | Cost per session for Azure Code Interpreter service                                                                                                                                                                                                                                  |
-| AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS        | Input cost per 1K tokens for Azure Computer Use service                                                                                                                                                                                                                              |
-| AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS       | Output cost per 1K tokens for Azure Computer Use service                                                                                                                                                                                                                             |
-| AZURE_TENANT_ID                                    | Tenant ID for Azure Active Directory                                                                                                                                                                                                                                                 |
-| AZURE_USERNAME                                     | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow                                                                                                                                                         |
-| AZURE_PASSWORD                                     | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow                                                                                                                                                         |
-| AZURE_FEDERATED_TOKEN_FILE                         | File path to Azure federated token                                                                                                                                                                                                                                                   |
-| AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY              | Cost per GB per day for Azure File Search service                                                                                                                                                                                                                                    |
-| AZURE_SCOPE                                        | For EntraID Auth, Scope for Azure services, defaults to "https://cognitiveservices.azure.com/.default"                                                                                                                                                                               |
-| AZURE_KEY_VAULT_URI                                | URI for Azure Key Vault                                                                                                                                                                                                                                                              |
-| AZURE_OPERATION_POLLING_TIMEOUT                    | Timeout in seconds for Azure operation polling                                                                                                                                                                                                                                       |
-| AZURE_STORAGE_ACCOUNT_KEY                          | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging                                                                                                                                                                                                |
-| AZURE_STORAGE_ACCOUNT_NAME                         | Name of the Azure Storage Account to use for logging to Azure Blob Storage                                                                                                                                                                                                           |
-| AZURE_STORAGE_FILE_SYSTEM                          | Name of the Azure Storage File System to use for logging to Azure Blob Storage. (Typically the Container name)                                                                                                                                                                       |
-| AZURE_STORAGE_TENANT_ID                            | The Application Tenant ID to use for Authentication to Azure Blob Storage logging                                                                                                                                                                                                    |
-| AZURE_STORAGE_CLIENT_ID                            | The Application Client ID to use for Authentication to Azure Blob Storage logging                                                                                                                                                                                                    |
-| AZURE_STORAGE_CLIENT_SECRET                        | The Application Client Secret to use for Authentication to Azure Blob Storage logging                                                                                                                                                                                                |
-| AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY             | Cost per GB per day for Azure Vector Store service                                                                                                                                                                                                                                   |
-| BATCH_STATUS_POLL_INTERVAL_SECONDS                 | Interval in seconds for polling batch status. Default is 3600 (1 hour)                                                                                                                                                                                                               |
-| BATCH_STATUS_POLL_MAX_ATTEMPTS                     | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)                                                                                                                                                                                                    |
-| BEDROCK_MAX_POLICY_SIZE                            | Maximum size for Bedrock policy. Default is 75                                                                                                                                                                                                                                       |
-| BERRISPEND_ACCOUNT_ID                              | Account ID for BerriSpend service                                                                                                                                                                                                                                                    |
-| BRAINTRUST_API_KEY                                 | API key for Braintrust integration                                                                                                                                                                                                                                                   |
-| CACHED_STREAMING_CHUNK_DELAY                       | Delay in seconds for cached streaming chunks. Default is 0.02                                                                                                                                                                                                                        |
-| CIRCLE_OIDC_TOKEN                                  | OpenID Connect token for CircleCI                                                                                                                                                                                                                                                    |
-| CIRCLE_OIDC_TOKEN_V2                               | Version 2 of the OpenID Connect token for CircleCI                                                                                                                                                                                                                                   |
-| CLOUDZERO_API_KEY                                  | CloudZero API key for authentication                                                                                                                                                                                                                                                 |
-| CLOUDZERO_CONNECTION_ID                            | CloudZero connection ID for data submission                                                                                                                                                                                                                                          |
-| CLOUDZERO_TIMEZONE                                 | Timezone for date handling (default: UTC)                                                                                                                                                                                                                                            |
-| CONFIG_FILE_PATH                                   | File path for configuration file                                                                                                                                                                                                                                                     |
-| CONFIDENT_API_KEY                                  | API key for DeepEval integration                                                                                                                                                                                                                                                     |
-| CUSTOM_TIKTOKEN_CACHE_DIR                          | Custom directory for Tiktoken cache                                                                                                                                                                                                                                                  |
-| CONFIDENT_API_KEY                                  | API key for Confident AI (Deepeval) Logging service                                                                                                                                                                                                                                  |
-| COHERE_API_BASE                                    | Base URL for Cohere API. Default is https://api.cohere.com                                                                                                                                                                                                                           |
-| DATABASE_HOST                                      | Hostname for the database server                                                                                                                                                                                                                                                     |
-| DATABASE_NAME                                      | Name of the database                                                                                                                                                                                                                                                                 |
-| DATABASE_PASSWORD                                  | Password for the database user                                                                                                                                                                                                                                                       |
-| DATABASE_PORT                                      | Port number for database connection                                                                                                                                                                                                                                                  |
-| DATABASE_SCHEMA                                    | Schema name used in the database                                                                                                                                                                                                                                                     |
-| DATABASE_URL                                       | Connection URL for the database                                                                                                                                                                                                                                                      |
-| DATABASE_USER                                      | Username for database connection                                                                                                                                                                                                                                                     |
-| DATABASE_USERNAME                                  | Alias for database user                                                                                                                                                                                                                                                              |
-| DATABRICKS_API_BASE                                | Base URL for Databricks API                                                                                                                                                                                                                                                          |
-| DAYS_IN_A_MONTH                                    | Days in a month for calculation purposes. Default is 28                                                                                                                                                                                                                              |
-| DAYS_IN_A_WEEK                                     | Days in a week for calculation purposes. Default is 7                                                                                                                                                                                                                                |
-| DAYS_IN_A_YEAR                                     | Days in a year for calculation purposes. Default is 365                                                                                                                                                                                                                              |
-| DD_BASE_URL                                        | Base URL for Datadog integration                                                                                                                                                                                                                                                     |
-| DATADOG_BASE_URL                                   | (Alternative to DD_BASE_URL) Base URL for Datadog integration                                                                                                                                                                                                                        |
-| \_DATADOG_BASE_URL                                 | (Alternative to DD_BASE_URL) Base URL for Datadog integration                                                                                                                                                                                                                        |
-| DD_API_KEY                                         | API key for Datadog integration                                                                                                                                                                                                                                                      |
-| DD_SITE                                            | Site URL for Datadog (e.g., datadoghq.com)                                                                                                                                                                                                                                           |
-| DD_SOURCE                                          | Source identifier for Datadog logs                                                                                                                                                                                                                                                   |
-| DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE           | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"                                                                                                                                                                                      |
-| DD_ENV                                             | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback                                                                                                                                                                                     |
-| DD_SERVICE                                         | Service identifier for Datadog logs. Defaults to "litellm-server"                                                                                                                                                                                                                    |
-| DD_VERSION                                         | Version identifier for Datadog logs. Defaults to "unknown"                                                                                                                                                                                                                           |
-| DEBUG_OTEL                                         | Enable debug mode for OpenTelemetry                                                                                                                                                                                                                                                  |
-| DEFAULT_ALLOWED_FAILS                              | Maximum failures allowed before cooling down a model. Default is 3                                                                                                                                                                                                                   |
-| DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS                  | Default maximum tokens for Anthropic chat completions. Default is 4096                                                                                                                                                                                                               |
-| DEFAULT_BATCH_SIZE                                 | Default batch size for operations. Default is 512                                                                                                                                                                                                                                    |
-| DEFAULT_COOLDOWN_TIME_SECONDS                      | Duration in seconds to cooldown a model after failures. Default is 5                                                                                                                                                                                                                 |
-| DEFAULT_CRON_JOB_LOCK_TTL_SECONDS                  | Time-to-live for cron job locks in seconds. Default is 60 (1 minute)                                                                                                                                                                                                                 |
-| DEFAULT_FAILURE_THRESHOLD_PERCENT                  | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)                                                                                                                                                                                                     |
-| DEFAULT_FLUSH_INTERVAL_SECONDS                     | Default interval in seconds for flushing operations. Default is 5                                                                                                                                                                                                                    |
-| DEFAULT_HEALTH_CHECK_INTERVAL                      | Default interval in seconds for health checks. Default is 300 (5 minutes)                                                                                                                                                                                                            |
-| DEFAULT_IMAGE_HEIGHT                               | Default height for images. Default is 300                                                                                                                                                                                                                                            |
-| DEFAULT_IMAGE_TOKEN_COUNT                          | Default token count for images. Default is 250                                                                                                                                                                                                                                       |
-| DEFAULT_IMAGE_WIDTH                                | Default width for images. Default is 300                                                                                                                                                                                                                                             |
-| DEFAULT_IN_MEMORY_TTL                              | Default time-to-live for in-memory cache in seconds. Default is 5                                                                                                                                                                                                                    |
-| DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL      | Default time-to-live in seconds for management objects (User, Team, Key, Organization) in memory cache. Default is 60 seconds.                                                                                                                                                       |
-| DEFAULT_MAX_LRU_CACHE_SIZE                         | Default maximum size for LRU cache. Default is 16                                                                                                                                                                                                                                    |
-| DEFAULT_MAX_RECURSE_DEPTH                          | Default maximum recursion depth. Default is 100                                                                                                                                                                                                                                      |
-| DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER    | Default maximum recursion depth for sensitive data masker. Default is 10                                                                                                                                                                                                             |
-| DEFAULT_MAX_RETRIES                                | Default maximum retry attempts. Default is 2                                                                                                                                                                                                                                         |
-| DEFAULT_MAX_TOKENS                                 | Default maximum tokens for LLM calls. Default is 4096                                                                                                                                                                                                                                |
-| DEFAULT_MAX_TOKENS_FOR_TRITON                      | Default maximum tokens for Triton models. Default is 2000                                                                                                                                                                                                                            |
-| DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT       | Default token count for mock response completions. Default is 20                                                                                                                                                                                                                     |
-| DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT           | Default token count for mock response prompts. Default is 10                                                                                                                                                                                                                         |
-| DEFAULT_MODEL_CREATED_AT_TIME                      | Default creation timestamp for models. Default is 1677610602                                                                                                                                                                                                                         |
-| DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD      | Default threshold for prompt injection similarity. Default is 0.7                                                                                                                                                                                                                    |
-| DEFAULT_POLLING_INTERVAL                           | Default polling interval for schedulers in seconds. Default is 0.03                                                                                                                                                                                                                  |
-| DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET   | Default reasoning effort disable thinking budget. Default is 0                                                                                                                                                                                                                       |
-| DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET      | Default high reasoning effort thinking budget. Default is 4096                                                                                                                                                                                                                       |
-| DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET       | Default low reasoning effort thinking budget. Default is 1024                                                                                                                                                                                                                        |
-| DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET    | Default medium reasoning effort thinking budget. Default is 2048                                                                                                                                                                                                                     |
-| DEFAULT_REDIS_SYNC_INTERVAL                        | Default Redis synchronization interval in seconds. Default is 1                                                                                                                                                                                                                      |
-| DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND             | Default price per second for Replicate GPU. Default is 0.001400                                                                                                                                                                                                                      |
-| DEFAULT_REPLICATE_POLLING_DELAY_SECONDS            | Default delay in seconds for Replicate polling. Default is 1                                                                                                                                                                                                                         |
-| DEFAULT_REPLICATE_POLLING_RETRIES                  | Default number of retries for Replicate polling. Default is 5                                                                                                                                                                                                                        |
-| DEFAULT_SQS_BATCH_SIZE                             | Default batch size for SQS logging. Default is 512                                                                                                                                                                                                                                   |
-| DEFAULT_SQS_FLUSH_INTERVAL_SECONDS                 | Default flush interval for SQS logging. Default is 10                                                                                                                                                                                                                                |
-| DEFAULT_S3_BATCH_SIZE                              | Default batch size for S3 logging. Default is 512                                                                                                                                                                                                                                    |
-| DEFAULT_S3_FLUSH_INTERVAL_SECONDS                  | Default flush interval for S3 logging. Default is 10                                                                                                                                                                                                                                 |
-| DEFAULT_SLACK_ALERTING_THRESHOLD                   | Default threshold for Slack alerting. Default is 300                                                                                                                                                                                                                                 |
-| DEFAULT_SOFT_BUDGET                                | Default soft budget for LiteLLM proxy keys. Default is 50.0                                                                                                                                                                                                                          |
-| DEFAULT_TRIM_RATIO                                 | Default ratio of tokens to trim from prompt end. Default is 0.75                                                                                                                                                                                                                     |
-| DIRECT_URL                                         | Direct URL for service endpoint                                                                                                                                                                                                                                                      |
-| DISABLE_ADMIN_UI                                   | Toggle to disable the admin UI                                                                                                                                                                                                                                                       |
-| DISABLE_AIOHTTP_TRANSPORT                          | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**                                                                                                                                                         |
-| DISABLE_AIOHTTP_TRUST_ENV                          | Flag to disable aiohttp trust environment. When this is set to True, litellm will not trust the environment for aiohttp eg. `HTTP_PROXY` and `HTTPS_PROXY` environment variables will not be used when this is set to True. **Default is False**                                     |
-| DISABLE_SCHEMA_UPDATE                              | Toggle to disable schema updates                                                                                                                                                                                                                                                     |
-| DOCS_DESCRIPTION                                   | Description text for documentation pages                                                                                                                                                                                                                                             |
-| DOCS_FILTERED                                      | Flag indicating filtered documentation                                                                                                                                                                                                                                               |
-| DOCS_TITLE                                         | Title of the documentation pages                                                                                                                                                                                                                                                     |
-| DOCS_URL                                           | The path to the Swagger API documentation. **By default this is "/"**                                                                                                                                                                                                                |
-| EMAIL_LOGO_URL                                     | URL for the logo used in emails                                                                                                                                                                                                                                                      |
-| EMAIL_SUPPORT_CONTACT                              | Support contact email address                                                                                                                                                                                                                                                        |
-| EMAIL_SIGNATURE                                    | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.                                                                                                                                                                                         |
-| EMAIL_SUBJECT_INVITATION                           | Custom subject template for invitation emails.                                                                                                                                                                                                                                       |
-| EMAIL_SUBJECT_KEY_CREATED                          | Custom subject template for key creation emails.                                                                                                                                                                                                                                     |
-| EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING          | Flag to enable new multi-instance rate limiting. **Default is False**                                                                                                                                                                                                                |
-| FIREWORKS_AI_4_B                                   | Size parameter for Fireworks AI 4B model. Default is 4                                                                                                                                                                                                                               |
-| FIREWORKS_AI_16_B                                  | Size parameter for Fireworks AI 16B model. Default is 16                                                                                                                                                                                                                             |
-| FIREWORKS_AI_56_B_MOE                              | Size parameter for Fireworks AI 56B MOE model. Default is 56                                                                                                                                                                                                                         |
-| FIREWORKS_AI_80_B                                  | Size parameter for Fireworks AI 80B model. Default is 80                                                                                                                                                                                                                             |
-| FIREWORKS_AI_176_B_MOE                             | Size parameter for Fireworks AI 176B MOE model. Default is 176                                                                                                                                                                                                                       |
-| FUNCTION_DEFINITION_TOKEN_COUNT                    | Token count for function definitions. Default is 9                                                                                                                                                                                                                                   |
-| GALILEO_BASE_URL                                   | Base URL for Galileo platform                                                                                                                                                                                                                                                        |
-| GALILEO_PASSWORD                                   | Password for Galileo authentication                                                                                                                                                                                                                                                  |
-| GALILEO_PROJECT_ID                                 | Project ID for Galileo usage                                                                                                                                                                                                                                                         |
-| GALILEO_USERNAME                                   | Username for Galileo authentication                                                                                                                                                                                                                                                  |
-| GOOGLE_SECRET_MANAGER_PROJECT_ID                   | Project ID for Google Secret Manager                                                                                                                                                                                                                                                 |
-| GCS_BUCKET_NAME                                    | Name of the Google Cloud Storage bucket                                                                                                                                                                                                                                              |
-| GCS_PATH_SERVICE_ACCOUNT                           | Path to the Google Cloud service account JSON file                                                                                                                                                                                                                                   |
-| GCS_FLUSH_INTERVAL                                 | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**                                                                                                                                                           |
-| GCS_BATCH_SIZE                                     | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**                                                                                                                  |
-| GCS_PUBSUB_TOPIC_ID                                | PubSub Topic ID to send LiteLLM SpendLogs to.                                                                                                                                                                                                                                        |
-| GCS_PUBSUB_PROJECT_ID                              | PubSub Project ID to send LiteLLM SpendLogs to.                                                                                                                                                                                                                                      |
-| GENERIC_AUTHORIZATION_ENDPOINT                     | Authorization endpoint for generic OAuth providers                                                                                                                                                                                                                                   |
-| GENERIC_CLIENT_ID                                  | Client ID for generic OAuth providers                                                                                                                                                                                                                                                |
-| GENERIC_CLIENT_SECRET                              | Client secret for generic OAuth providers                                                                                                                                                                                                                                            |
-| GENERIC_CLIENT_STATE                               | State parameter for generic client authentication                                                                                                                                                                                                                                    |
-| GENERIC_SSO_HEADERS                                | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.                                                                                                                                          |
-| GENERIC_INCLUDE_CLIENT_ID                          | Include client ID in requests for OAuth                                                                                                                                                                                                                                              |
-| GENERIC_SCOPE                                      | Scope settings for generic OAuth providers                                                                                                                                                                                                                                           |
-| GENERIC_TOKEN_ENDPOINT                             | Token endpoint for generic OAuth providers                                                                                                                                                                                                                                           |
-| GENERIC_USER_DISPLAY_NAME_ATTRIBUTE                | Attribute for user's display name in generic auth                                                                                                                                                                                                                                    |
-| GENERIC_USER_EMAIL_ATTRIBUTE                       | Attribute for user's email in generic auth                                                                                                                                                                                                                                           |
-| GENERIC_USER_FIRST_NAME_ATTRIBUTE                  | Attribute for user's first name in generic auth                                                                                                                                                                                                                                      |
-| GENERIC_USER_ID_ATTRIBUTE                          | Attribute for user ID in generic auth                                                                                                                                                                                                                                                |
-| GENERIC_USER_LAST_NAME_ATTRIBUTE                   | Attribute for user's last name in generic auth                                                                                                                                                                                                                                       |
-| GENERIC_USER_PROVIDER_ATTRIBUTE                    | Attribute specifying the user's provider                                                                                                                                                                                                                                             |
-| GENERIC_USER_ROLE_ATTRIBUTE                        | Attribute specifying the user's role                                                                                                                                                                                                                                                 |
-| GENERIC_USERINFO_ENDPOINT                          | Endpoint to fetch user information in generic OAuth                                                                                                                                                                                                                                  |
-| GEMINI_API_BASE                                    | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com                                                                                                                                                                                                        |
-| GALILEO_BASE_URL                                   | Base URL for Galileo platform                                                                                                                                                                                                                                                        |
-| GALILEO_PASSWORD                                   | Password for Galileo authentication                                                                                                                                                                                                                                                  |
-| GALILEO_PROJECT_ID                                 | Project ID for Galileo usage                                                                                                                                                                                                                                                         |
-| GALILEO_USERNAME                                   | Username for Galileo authentication                                                                                                                                                                                                                                                  |
-| GITHUB_COPILOT_TOKEN_DIR                           | Directory to store GitHub Copilot token for `github_copilot` llm provider                                                                                                                                                                                                            |
-| GITHUB_COPILOT_API_KEY_FILE                        | File to store GitHub Copilot API key for `github_copilot` llm provider                                                                                                                                                                                                               |
-| GITHUB_COPILOT_ACCESS_TOKEN_FILE                   | File to store GitHub Copilot access token for `github_copilot` llm provider                                                                                                                                                                                                          |
-| GREENSCALE_API_KEY                                 | API key for Greenscale service                                                                                                                                                                                                                                                       |
-| GREENSCALE_ENDPOINT                                | Endpoint URL for Greenscale service                                                                                                                                                                                                                                                  |
-| GOOGLE_APPLICATION_CREDENTIALS                     | Path to Google Cloud credentials JSON file                                                                                                                                                                                                                                           |
-| GOOGLE_CLIENT_ID                                   | Client ID for Google OAuth                                                                                                                                                                                                                                                           |
-| GOOGLE_CLIENT_SECRET                               | Client secret for Google OAuth                                                                                                                                                                                                                                                       |
-| GOOGLE_KMS_RESOURCE_NAME                           | Name of the resource in Google KMS                                                                                                                                                                                                                                                   |
-| GUARDRAILS_AI_API_BASE                             | Base URL for Guardrails AI API                                                                                                                                                                                                                                                       |
-| HEALTH_CHECK_TIMEOUT_SECONDS                       | Timeout in seconds for health checks. Default is 60                                                                                                                                                                                                                                  |
-| HF_API_BASE                                        | Base URL for Hugging Face API                                                                                                                                                                                                                                                        |
-| HCP_VAULT_ADDR                                     | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)                                                                                                                                                                                                           |
-| HCP_VAULT_CLIENT_CERT                              | Path to client certificate for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)                                                                                                                                                                                        |
-| HCP_VAULT_CLIENT_KEY                               | Path to client key for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)                                                                                                                                                                                                |
-| HCP_VAULT_NAMESPACE                                | Namespace for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)                                                                                                                                                                                                         |
-| HCP_VAULT_TOKEN                                    | Token for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)                                                                                                                                                                                                             |
-| HCP_VAULT_CERT_ROLE                                | Role for [Hashicorp Vault Secret Manager Auth](../secret.md#hashicorp-vault)                                                                                                                                                                                                         |
-| HELICONE_API_KEY                                   | API key for Helicone service                                                                                                                                                                                                                                                         |
-| HELICONE_API_BASE                                  | Base URL for Helicone service, defaults to `https://api.helicone.ai`                                                                                                                                                                                                                 |
-| HOSTNAME                                           | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)                                                                                                                                                                |
-| HOURS_IN_A_DAY                                     | Hours in a day for calculation purposes. Default is 24                                                                                                                                                                                                                               |
-| HUGGINGFACE_API_BASE                               | Base URL for Hugging Face API                                                                                                                                                                                                                                                        |
-| HUGGINGFACE_API_KEY                                | API key for Hugging Face API                                                                                                                                                                                                                                                         |
-| HUMANLOOP_PROMPT_CACHE_TTL_SECONDS                 | Time-to-live in seconds for cached prompts in Humanloop. Default is 60                                                                                                                                                                                                               |
-| IAM_TOKEN_DB_AUTH                                  | IAM token for database authentication                                                                                                                                                                                                                                                |
-| INITIAL_RETRY_DELAY                                | Initial delay in seconds for retrying requests. Default is 0.5                                                                                                                                                                                                                       |
-| JITTER                                             | Jitter factor for retry delay calculations. Default is 0.75                                                                                                                                                                                                                          |
-| JSON_LOGS                                          | Enable JSON formatted logging                                                                                                                                                                                                                                                        |
-| JWT_AUDIENCE                                       | Expected audience for JWT tokens                                                                                                                                                                                                                                                     |
-| JWT_PUBLIC_KEY_URL                                 | URL to fetch public key for JWT verification                                                                                                                                                                                                                                         |
-| LAGO_API_BASE                                      | Base URL for Lago API                                                                                                                                                                                                                                                                |
-| LAGO_API_CHARGE_BY                                 | Parameter to determine charge basis in Lago                                                                                                                                                                                                                                          |
-| LAGO_API_EVENT_CODE                                | Event code for Lago API events                                                                                                                                                                                                                                                       |
-| LAGO_API_KEY                                       | API key for accessing Lago services                                                                                                                                                                                                                                                  |
-| LANGFUSE_DEBUG                                     | Toggle debug mode for Langfuse                                                                                                                                                                                                                                                       |
-| LANGFUSE_FLUSH_INTERVAL                            | Interval for flushing Langfuse logs                                                                                                                                                                                                                                                  |
-| LANGFUSE_TRACING_ENVIRONMENT                       | Environment for Langfuse tracing                                                                                                                                                                                                                                                     |
-| LANGFUSE_HOST                                      | Host URL for Langfuse service                                                                                                                                                                                                                                                        |
-| LANGFUSE_PUBLIC_KEY                                | Public key for Langfuse authentication                                                                                                                                                                                                                                               |
-| LANGFUSE_RELEASE                                   | Release version of Langfuse integration                                                                                                                                                                                                                                              |
-| LANGFUSE_SECRET_KEY                                | Secret key for Langfuse authentication                                                                                                                                                                                                                                               |
-| LANGSMITH_API_KEY                                  | API key for Langsmith platform                                                                                                                                                                                                                                                       |
-| LANGSMITH_BASE_URL                                 | Base URL for Langsmith service                                                                                                                                                                                                                                                       |
-| LANGSMITH_BATCH_SIZE                               | Batch size for operations in Langsmith                                                                                                                                                                                                                                               |
-| LANGSMITH_DEFAULT_RUN_NAME                         | Default name for Langsmith run                                                                                                                                                                                                                                                       |
-| LANGSMITH_PROJECT                                  | Project name for Langsmith integration                                                                                                                                                                                                                                               |
-| LANGSMITH_SAMPLING_RATE                            | Sampling rate for Langsmith logging                                                                                                                                                                                                                                                  |
-| LANGTRACE_API_KEY                                  | API key for Langtrace service                                                                                                                                                                                                                                                        |
-| LASSO_API_BASE                                     | Base URL for Lasso API                                                                                                                                                                                                                                                               |
-| LASSO_API_KEY                                      | API key for Lasso service                                                                                                                                                                                                                                                            |
-| LASSO_USER_ID                                      | User ID for Lasso service                                                                                                                                                                                                                                                            |
-| LASSO_CONVERSATION_ID                              | Conversation ID for Lasso service                                                                                                                                                                                                                                                    |
-| LENGTH_OF_LITELLM_GENERATED_KEY                    | Length of keys generated by LiteLLM. Default is 16                                                                                                                                                                                                                                   |
-| LITERAL_API_KEY                                    | API key for Literal integration                                                                                                                                                                                                                                                      |
-| LITERAL_API_URL                                    | API URL for Literal service                                                                                                                                                                                                                                                          |
-| LITERAL_BATCH_SIZE                                 | Batch size for Literal operations                                                                                                                                                                                                                                                    |
-| LITELLM_DONT_SHOW_FEEDBACK_BOX                     | Flag to hide feedback box in LiteLLM UI                                                                                                                                                                                                                                              |
-| LITELLM_DROP_PARAMS                                | Parameters to drop in LiteLLM requests                                                                                                                                                                                                                                               |
-| LITELLM_MODIFY_PARAMS                              | Parameters to modify in LiteLLM requests                                                                                                                                                                                                                                             |
-| LITELLM_EMAIL                                      | Email associated with LiteLLM account                                                                                                                                                                                                                                                |
-| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES        | Maximum retries for parallel requests in LiteLLM                                                                                                                                                                                                                                     |
-| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT  | Timeout for retries of parallel requests in LiteLLM                                                                                                                                                                                                                                  |
-| LITELLM_MIGRATION_DIR                              | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.                                                                                                                                                                                 |
-| LITELLM_HOSTED_UI                                  | URL of the hosted UI for LiteLLM                                                                                                                                                                                                                                                     |
-| LITELM_ENVIRONMENT                                 | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.                                                                                                                                                                                          |
-| LITELLM_LICENSE                                    | License key for LiteLLM usage                                                                                                                                                                                                                                                        |
-| LITELLM_LOCAL_MODEL_COST_MAP                       | Local configuration for model cost mapping in LiteLLM                                                                                                                                                                                                                                |
-| LITELLM_LOG                                        | Enable detailed logging for LiteLLM                                                                                                                                                                                                                                                  |
-| LITELLM_MASTER_KEY                                 | Master key for proxy authentication                                                                                                                                                                                                                                                  |
-| LITELLM_MODE                                       | Operating mode for LiteLLM (e.g., production, development)                                                                                                                                                                                                                           |
-| LITELLM_RATE_LIMIT_WINDOW_SIZE                     | Rate limit window size for LiteLLM. Default is 60                                                                                                                                                                                                                                    |
-| LITELLM_SALT_KEY                                   | Salt key for encryption in LiteLLM                                                                                                                                                                                                                                                   |
-| LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE             | AWS KMS encrypted license for LiteLLM                                                                                                                                                                                                                                                |
-| LITELLM_TOKEN                                      | Access token for LiteLLM integration                                                                                                                                                                                                                                                 |
-| LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD             | If true, prints the standard logging payload to the console - useful for debugging                                                                                                                                                                                                   |
-| LITELM_ENVIRONMENT                                 | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.                                                                                                                                                   |
-| LOGFIRE_TOKEN                                      | Token for Logfire logging service                                                                                                                                                                                                                                                    |
-| MAX_EXCEPTION_MESSAGE_LENGTH                       | Maximum length for exception messages. Default is 2000                                                                                                                                                                                                                               |
-| MAX_IN_MEMORY_QUEUE_FLUSH_COUNT                    | Maximum count for in-memory queue flush operations. Default is 1000                                                                                                                                                                                                                  |
-| MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES                   | Maximum length for the long side of high-resolution images. Default is 2000                                                                                                                                                                                                          |
-| MAX_REDIS_BUFFER_DEQUEUE_COUNT                     | Maximum count for Redis buffer dequeue operations. Default is 100                                                                                                                                                                                                                    |
-| MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES                  | Maximum length for the short side of high-resolution images. Default is 768                                                                                                                                                                                                          |
-| MAX_SIZE_IN_MEMORY_QUEUE                           | Maximum size for in-memory queue. Default is 10000                                                                                                                                                                                                                                   |
-| MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB            | Maximum size in KB for each item in memory cache. Default is 512 or 1024                                                                                                                                                                                                             |
-| MAX_SPENDLOG_ROWS_TO_QUERY                         | Maximum number of spend log rows to query. Default is 1,000,000                                                                                                                                                                                                                      |
-| MAX_TEAM_LIST_LIMIT                                | Maximum number of teams to list. Default is 20                                                                                                                                                                                                                                       |
-| MAX_TILE_HEIGHT                                    | Maximum height for image tiles. Default is 512                                                                                                                                                                                                                                       |
-| MAX_TILE_WIDTH                                     | Maximum width for image tiles. Default is 512                                                                                                                                                                                                                                        |
-| MAX_TOKEN_TRIMMING_ATTEMPTS                        | Maximum number of attempts to trim a token message. Default is 10                                                                                                                                                                                                                    |
-| MAXIMUM_TRACEBACK_LINES_TO_LOG                     | Maximum number of lines to log in traceback in LiteLLM Logs UI. Default is 100                                                                                                                                                                                                       |
-| MAX_RETRY_DELAY                                    | Maximum delay in seconds for retrying requests. Default is 8.0                                                                                                                                                                                                                       |
-| MAX_LANGFUSE_INITIALIZED_CLIENTS                   | Maximum number of Langfuse clients to initialize on proxy. Default is 20. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times. |
-| MIN_NON_ZERO_TEMPERATURE                           | Minimum non-zero temperature value. Default is 0.0001                                                                                                                                                                                                                                |
-| MINIMUM_PROMPT_CACHE_TOKEN_COUNT                   | Minimum token count for caching a prompt. Default is 1024                                                                                                                                                                                                                            |
-| MISTRAL_API_BASE                                   | Base URL for Mistral API. Default is https://api.mistral.ai                                                                                                                                                                                                                          |
-| MISTRAL_API_KEY                                    | API key for Mistral API                                                                                                                                                                                                                                                              |
-| MICROSOFT_CLIENT_ID                                | Client ID for Microsoft services                                                                                                                                                                                                                                                     |
-| MICROSOFT_CLIENT_SECRET                            | Client secret for Microsoft services                                                                                                                                                                                                                                                 |
-| MICROSOFT_TENANT                                   | Tenant ID for Microsoft Azure                                                                                                                                                                                                                                                        |
-| MICROSOFT_SERVICE_PRINCIPAL_ID                     | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)                                                                                        |
-| NO_DOCS                                            | Flag to disable Swagger UI documentation                                                                                                                                                                                                                                             |
-| NO_REDOC                                           | Flag to disable Redoc documentation                                                                                                                                                                                                                                                  |
-| NO_PROXY                                           | List of addresses to bypass proxy                                                                                                                                                                                                                                                    |
-| NON_LLM_CONNECTION_TIMEOUT                         | Timeout in seconds for non-LLM service connections. Default is 15                                                                                                                                                                                                                    |
-| OAUTH_TOKEN_INFO_ENDPOINT                          | Endpoint for OAuth token info retrieval                                                                                                                                                                                                                                              |
-| OPENAI_BASE_URL                                    | Base URL for OpenAI API                                                                                                                                                                                                                                                              |
-| OPENAI_API_BASE                                    | Base URL for OpenAI API. Default is https://api.openai.com/                                                                                                                                                                                                                          |
-| OPENAI_API_KEY                                     | API key for OpenAI services                                                                                                                                                                                                                                                          |
-| OPENAI_FILE_SEARCH_COST_PER_1K_CALLS               | Cost per 1000 calls for OpenAI file search. Default is 0.0025                                                                                                                                                                                                                        |
-| OPENAI_ORGANIZATION                                | Organization identifier for OpenAI                                                                                                                                                                                                                                                   |
-| OPENID_BASE_URL                                    | Base URL for OpenID Connect services                                                                                                                                                                                                                                                 |
-| OPENID_CLIENT_ID                                   | Client ID for OpenID Connect authentication                                                                                                                                                                                                                                          |
-| OPENID_CLIENT_SECRET                               | Client secret for OpenID Connect authentication                                                                                                                                                                                                                                      |
-| OPENMETER_API_ENDPOINT                             | API endpoint for OpenMeter integration                                                                                                                                                                                                                                               |
-| OPENMETER_API_KEY                                  | API key for OpenMeter services                                                                                                                                                                                                                                                       |
-| OPENMETER_EVENT_TYPE                               | Type of events sent to OpenMeter                                                                                                                                                                                                                                                     |
-| OTEL_ENDPOINT                                      | OpenTelemetry endpoint for traces                                                                                                                                                                                                                                                    |
-| OTEL_EXPORTER_OTLP_ENDPOINT                        | OpenTelemetry endpoint for traces                                                                                                                                                                                                                                                    |
-| OTEL_ENVIRONMENT_NAME                              | Environment name for OpenTelemetry                                                                                                                                                                                                                                                   |
-| OTEL_EXPORTER                                      | Exporter type for OpenTelemetry                                                                                                                                                                                                                                                      |
-| OTEL_EXPORTER_OTLP_PROTOCOL                        | Exporter type for OpenTelemetry                                                                                                                                                                                                                                                      |
-| OTEL_HEADERS                                       | Headers for OpenTelemetry requests                                                                                                                                                                                                                                                   |
-| OTEL_MODEL_ID                                      | Model ID for OpenTelemetry tracing                                                                                                                                                                                                                                                   |
-| OTEL_EXPORTER_OTLP_HEADERS                         | Headers for OpenTelemetry requests                                                                                                                                                                                                                                                   |
-| OTEL_SERVICE_NAME                                  | Service name identifier for OpenTelemetry                                                                                                                                                                                                                                            |
-| OTEL_TRACER_NAME                                   | Tracer name for OpenTelemetry tracing                                                                                                                                                                                                                                                |
-| PAGERDUTY_API_KEY                                  | API key for PagerDuty Alerting                                                                                                                                                                                                                                                       |
-| PANW_PRISMA_AIRS_API_KEY                           | API key for PANW Prisma AIRS service                                                                                                                                                                                                                                                 |
-| PANW_PRISMA_AIRS_API_BASE                          | Base URL for PANW Prisma AIRS service                                                                                                                                                                                                                                                |
-| PHOENIX_API_KEY                                    | API key for Arize Phoenix                                                                                                                                                                                                                                                            |
-| PHOENIX_COLLECTOR_ENDPOINT                         | API endpoint for Arize Phoenix                                                                                                                                                                                                                                                       |
-| PHOENIX_COLLECTOR_HTTP_ENDPOINT                    | API http endpoint for Arize Phoenix                                                                                                                                                                                                                                                  |
-| PILLAR_API_BASE                                    | Base URL for Pillar API Guardrails                                                                                                                                                                                                                                                   |
-| PILLAR_API_KEY                                     | API key for Pillar API Guardrails                                                                                                                                                                                                                                                    |
-| PILLAR_ON_FLAGGED_ACTION                           | Action to take when content is flagged ('block' or 'monitor')                                                                                                                                                                                                                        |
-| POD_NAME                                           | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME`                                                                                                                                                  |
-| PREDIBASE_API_BASE                                 | Base URL for Predibase API                                                                                                                                                                                                                                                           |
-| PRESIDIO_ANALYZER_API_BASE                         | Base URL for Presidio Analyzer service                                                                                                                                                                                                                                               |
-| PRESIDIO_ANONYMIZER_API_BASE                       | Base URL for Presidio Anonymizer service                                                                                                                                                                                                                                             |
-| PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES | Refresh interval in minutes for Prometheus budget metrics. Default is 5                                                                                                                                                                                                              |
-| PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS          | Fallback time in hours for sending stats to Prometheus. Default is 9                                                                                                                                                                                                                 |
-| PROMETHEUS_URL                                     | URL for Prometheus service                                                                                                                                                                                                                                                           |
-| PROMPTLAYER_API_KEY                                | API key for PromptLayer integration                                                                                                                                                                                                                                                  |
-| PROXY_ADMIN_ID                                     | Admin identifier for proxy server                                                                                                                                                                                                                                                    |
-| PROXY_BASE_URL                                     | Base URL for proxy service                                                                                                                                                                                                                                                           |
-| PROXY_BATCH_WRITE_AT                               | Time in seconds to wait before batch writing spend logs to the database. Default is 10                                                                                                                                                                                               |
-| PROXY_BATCH_POLLING_INTERVAL                       | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)                                                                                                                                                                                |
-| PROXY_BUDGET_RESCHEDULER_MAX_TIME                  | Maximum time in seconds to wait before checking database for budget resets. Default is 605                                                                                                                                                                                           |
-| PROXY_BUDGET_RESCHEDULER_MIN_TIME                  | Minimum time in seconds to wait before checking database for budget resets. Default is 597                                                                                                                                                                                           |
-| PROXY_LOGOUT_URL                                   | URL for logging out of the proxy service                                                                                                                                                                                                                                             |
-| QDRANT_API_BASE                                    | Base URL for Qdrant API                                                                                                                                                                                                                                                              |
-| QDRANT_API_KEY                                     | API key for Qdrant service                                                                                                                                                                                                                                                           |
-| QDRANT_SCALAR_QUANTILE                             | Scalar quantile for Qdrant operations. Default is 0.99                                                                                                                                                                                                                               |
-| QDRANT_URL                                         | Connection URL for Qdrant database                                                                                                                                                                                                                                                   |
-| QDRANT_VECTOR_SIZE                                 | Vector size for Qdrant operations. Default is 1536                                                                                                                                                                                                                                   |
-| REDIS_CONNECTION_POOL_TIMEOUT                      | Timeout in seconds for Redis connection pool. Default is 5                                                                                                                                                                                                                           |
-| REDIS_HOST                                         | Hostname for Redis server                                                                                                                                                                                                                                                            |
-| REDIS_PASSWORD                                     | Password for Redis service                                                                                                                                                                                                                                                           |
-| REDIS_PORT                                         | Port number for Redis server                                                                                                                                                                                                                                                         |
-| REDIS_SOCKET_TIMEOUT                               | Timeout in seconds for Redis socket operations. Default is 0.1                                                                                                                                                                                                                       |
-| REDIS_GCP_SERVICE_ACCOUNT                          | GCP service account for IAM authentication with Redis. Format: "projects/-/serviceAccounts/name@project.iam.gserviceaccount.com"                                                                                                                                                     |
-| REDIS_GCP_SSL_CA_CERTS                             | Path to SSL CA certificate file for secure GCP Memorystore Redis connections                                                                                                                                                                                                         |
-| REDOC_URL                                          | The path to the Redoc Fast API documentation. **By default this is "/redoc"**                                                                                                                                                                                                        |
-| REPEATED_STREAMING_CHUNK_LIMIT                     | Limit for repeated streaming chunks to detect looping. Default is 100                                                                                                                                                                                                                |
-| REPLICATE_MODEL_NAME_WITH_ID_LENGTH                | Length of Replicate model names with ID. Default is 64                                                                                                                                                                                                                               |
-| REPLICATE_POLLING_DELAY_SECONDS                    | Delay in seconds for Replicate polling operations. Default is 0.5                                                                                                                                                                                                                    |
-| REQUEST_TIMEOUT                                    | Timeout in seconds for requests. Default is 6000                                                                                                                                                                                                                                     |
-| ROUTER_MAX_FALLBACKS                               | Maximum number of fallbacks for router. Default is 5                                                                                                                                                                                                                                 |
-| SECRET_MANAGER_REFRESH_INTERVAL                    | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)                                                                                                                                                                                                          |
-| SEPARATE_HEALTH_APP                                | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.                                                                                                                                                                                                  |
-| SEPARATE_HEALTH_PORT                               | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.                                                                                                                                                                                       |
-| SERVER_ROOT_PATH                                   | Root path for the server application                                                                                                                                                                                                                                                 |
-| SET_VERBOSE                                        | Flag to enable verbose logging                                                                                                                                                                                                                                                       |
-| SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD        | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000                                                                                                                                                                    |
-| SLACK_DAILY_REPORT_FREQUENCY                       | Frequency of daily Slack reports (e.g., daily, weekly)                                                                                                                                                                                                                               |
-| SLACK_WEBHOOK_URL                                  | Webhook URL for Slack integration                                                                                                                                                                                                                                                    |
-| SMTP_HOST                                          | Hostname for the SMTP server                                                                                                                                                                                                                                                         |
-| SMTP_PASSWORD                                      | Password for SMTP authentication (do not set if SMTP does not require auth)                                                                                                                                                                                                          |
-| SMTP_PORT                                          | Port number for SMTP server                                                                                                                                                                                                                                                          |
-| SMTP_SENDER_EMAIL                                  | Email address used as the sender in SMTP transactions                                                                                                                                                                                                                                |
-| SMTP_SENDER_LOGO                                   | Logo used in emails sent via SMTP                                                                                                                                                                                                                                                    |
-| SMTP_TLS                                           | Flag to enable or disable TLS for SMTP connections                                                                                                                                                                                                                                   |
-| SMTP_USERNAME                                      | Username for SMTP authentication (do not set if SMTP does not require auth)                                                                                                                                                                                                          |
-| SPEND_LOGS_URL                                     | URL for retrieving spend logs                                                                                                                                                                                                                                                        |
-| SPEND_LOG_CLEANUP_BATCH_SIZE                       | Number of logs deleted per batch during cleanup. Default is 1000                                                                                                                                                                                                                     |
-| SSL_CERTIFICATE                                    | Path to the SSL certificate file                                                                                                                                                                                                                                                     |
-| SSL_SECURITY_LEVEL                                 | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`                                                                                                                                                                                                             |
-| SSL_VERIFY                                         | Flag to enable or disable SSL certificate verification                                                                                                                                                                                                                               |
-| SSL_CERT_FILE                                      | Path to the SSL certificate file for custom CA bundle                                                                                                                                                                                                                                |
-| SUPABASE_KEY                                       | API key for Supabase service                                                                                                                                                                                                                                                         |
-| SUPABASE_URL                                       | Base URL for Supabase instance                                                                                                                                                                                                                                                       |
-| STORE_MODEL_IN_DB                                  | If true, enables storing model + credential information in the DB.                                                                                                                                                                                                                   |
-| SYSTEM_MESSAGE_TOKEN_COUNT                         | Token count for system messages. Default is 4                                                                                                                                                                                                                                        |
-| TEST_EMAIL_ADDRESS                                 | Email address used for testing purposes                                                                                                                                                                                                                                              |
-| TOGETHER_AI_4_B                                    | Size parameter for Together AI 4B model. Default is 4                                                                                                                                                                                                                                |
-| TOGETHER_AI_8_B                                    | Size parameter for Together AI 8B model. Default is 8                                                                                                                                                                                                                                |
-| TOGETHER_AI_21_B                                   | Size parameter for Together AI 21B model. Default is 21                                                                                                                                                                                                                              |
-| TOGETHER_AI_41_B                                   | Size parameter for Together AI 41B model. Default is 41                                                                                                                                                                                                                              |
-| TOGETHER_AI_80_B                                   | Size parameter for Together AI 80B model. Default is 80                                                                                                                                                                                                                              |
-| TOGETHER_AI_110_B                                  | Size parameter for Together AI 110B model. Default is 110                                                                                                                                                                                                                            |
-| TOGETHER_AI_EMBEDDING_150_M                        | Size parameter for Together AI 150M embedding model. Default is 150                                                                                                                                                                                                                  |
-| TOGETHER_AI_EMBEDDING_350_M                        | Size parameter for Together AI 350M embedding model. Default is 350                                                                                                                                                                                                                  |
-| TOOL_CHOICE_OBJECT_TOKEN_COUNT                     | Token count for tool choice objects. Default is 4                                                                                                                                                                                                                                    |
-| UI_LOGO_PATH                                       | Path to the logo image used in the UI                                                                                                                                                                                                                                                |
-| UI_PASSWORD                                        | Password for accessing the UI                                                                                                                                                                                                                                                        |
-| UI_USERNAME                                        | Username for accessing the UI                                                                                                                                                                                                                                                        |
-| UPSTREAM_LANGFUSE_DEBUG                            | Flag to enable debugging for upstream Langfuse                                                                                                                                                                                                                                       |
-| UPSTREAM_LANGFUSE_HOST                             | Host URL for upstream Langfuse service                                                                                                                                                                                                                                               |
-| UPSTREAM_LANGFUSE_PUBLIC_KEY                       | Public key for upstream Langfuse authentication                                                                                                                                                                                                                                      |
-| UPSTREAM_LANGFUSE_RELEASE                          | Release version identifier for upstream Langfuse                                                                                                                                                                                                                                     |
-| UPSTREAM_LANGFUSE_SECRET_KEY                       | Secret key for upstream Langfuse authentication                                                                                                                                                                                                                                      |
-| USE_AWS_KMS                                        | Flag to enable AWS Key Management Service for encryption                                                                                                                                                                                                                             |
-| USE_PRISMA_MIGRATE                                 | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.                                                                                                                                                                                       |
-| WEBHOOK_URL                                        | URL for receiving webhooks from external services                                                                                                                                                                                                                                    |
-| SPEND_LOG_RUN_LOOPS                                | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run                                                                                                                                                                                           |
-| SPEND_LOG_CLEANUP_BATCH_SIZE                       | Number of logs deleted per batch during cleanup. Default is 1000                                                                                                                                                                                                                     |
+| Name | Description |
+|------|-------------|
+| ACTIONS_ID_TOKEN_REQUEST_TOKEN | Token for requesting ID in GitHub Actions
+| ACTIONS_ID_TOKEN_REQUEST_URL | URL for requesting ID token in GitHub Actions
+| AGENTOPS_ENVIRONMENT | Environment for AgentOps logging integration
+| AGENTOPS_API_KEY | API Key for AgentOps logging integration
+| AGENTOPS_SERVICE_NAME | Service Name for AgentOps logging integration
+| AISPEND_ACCOUNT_ID | Account ID for AI Spend
+| AISPEND_API_KEY | API Key for AI Spend
+| AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
+| ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
+| ARIZE_API_KEY | API key for Arize platform integration
+| ARIZE_SPACE_KEY | Space key for Arize platform
+| ARGILLA_BATCH_SIZE | Batch size for Argilla logging
+| ARGILLA_API_KEY | API key for Argilla platform
+| ARGILLA_SAMPLING_RATE | Sampling rate for Argilla logging
+| ARGILLA_DATASET_NAME | Dataset name for Argilla logging
+| ARGILLA_BASE_URL | Base URL for Argilla service
+| ATHINA_API_KEY | API key for Athina service
+| ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
+| AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| ANTHROPIC_API_KEY | API key for Anthropic service
+| ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
+| AWS_ACCESS_KEY_ID | Access Key ID for AWS services
+| AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
+| AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
+| AWS_PROFILE_NAME | AWS CLI profile name to be used
+| AWS_REGION | AWS region for service interactions (takes precedence over AWS_DEFAULT_REGION)
+| AWS_REGION_NAME | Default AWS region for service interactions
+| AWS_ROLE_ARN | ARN of the AWS IAM role to assume for authentication
+| AWS_ROLE_NAME | Role name for AWS IAM usage
+| AWS_S3_BUCKET_NAME | Name of the AWS S3 bucket for file operations
+| AWS_S3_OUTPUT_BUCKET_NAME | Name of the AWS S3 output bucket for batch operations
+| AWS_SECRET_ACCESS_KEY | Secret Access Key for AWS services
+| AWS_SESSION_NAME | Name for AWS session
+| AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
+| AWS_WEB_IDENTITY_TOKEN_FILE | Path to file containing web identity token for AWS
+| AZURE_API_VERSION | Version of the Azure API being used
+| AZURE_AUTHORITY_HOST | Azure authority host URL
+| AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
+| AZURE_CLIENT_ID | Client ID for Azure services
+| AZURE_CLIENT_SECRET | Client secret for Azure services
+| AZURE_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for Azure Code Interpreter service
+| AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS | Input cost per 1K tokens for Azure Computer Use service
+| AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS | Output cost per 1K tokens for Azure Computer Use service
+| AZURE_DEFAULT_RESPONSES_API_VERSION | Version of the Azure Default Responses API being used. Default is "preview"
+| AZURE_TENANT_ID | Tenant ID for Azure Active Directory
+| AZURE_USERNAME | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow
+| AZURE_PASSWORD | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow
+| AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
+| AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY | Cost per GB per day for Azure File Search service
+| AZURE_SCOPE | For EntraID Auth, Scope for Azure services, defaults to "https://cognitiveservices.azure.com/.default"
+| AZURE_KEY_VAULT_URI | URI for Azure Key Vault
+| AZURE_OPERATION_POLLING_TIMEOUT | Timeout in seconds for Azure operation polling
+| AZURE_STORAGE_ACCOUNT_KEY | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_ACCOUNT_NAME | Name of the Azure Storage Account to use for logging to Azure Blob Storage
+| AZURE_STORAGE_FILE_SYSTEM | Name of the Azure Storage File System to use for logging to Azure Blob Storage.  (Typically the Container name)
+| AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
+| AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
+| AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY | Cost per GB per day for Azure Vector Store service
+| BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
+| BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
+| BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
+| BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
+| BRAINTRUST_API_KEY | API key for Braintrust integration
+| BRAINTRUST_API_BASE | Base URL for Braintrust API. Default is https://api.braintrustdata.com/v1
+| CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
+| CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
+| CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
+| CLOUDZERO_API_KEY | CloudZero API key for authentication
+| CLOUDZERO_CONNECTION_ID | CloudZero connection ID for data submission
+| CLOUDZERO_EXPORT_INTERVAL_MINUTES | Interval in minutes for CloudZero data export operations
+| CLOUDZERO_MAX_FETCHED_DATA_RECORDS | Maximum number of data records to fetch from CloudZero
+| CLOUDZERO_TIMEZONE | Timezone for date handling (default: UTC)
+| CONFIG_FILE_PATH | File path for configuration file
+| CONFIDENT_API_KEY | API key for DeepEval integration
+| CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
+| CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
+| COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com
+| DATABASE_HOST | Hostname for the database server
+| DATABASE_NAME | Name of the database
+| DATABASE_PASSWORD | Password for the database user
+| DATABASE_PORT | Port number for database connection
+| DATABASE_SCHEMA | Schema name used in the database
+| DATABASE_URL | Connection URL for the database
+| DATABASE_USER | Username for database connection
+| DATABASE_USERNAME | Alias for database user
+| DATABRICKS_API_BASE | Base URL for Databricks API
+| DAYS_IN_A_MONTH | Days in a month for calculation purposes. Default is 28
+| DAYS_IN_A_WEEK | Days in a week for calculation purposes. Default is 7
+| DAYS_IN_A_YEAR | Days in a year for calculation purposes. Default is 365
+| DD_BASE_URL | Base URL for Datadog integration
+| DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
+| _DATADOG_BASE_URL | (Alternative to DD_BASE_URL) Base URL for Datadog integration
+| DD_API_KEY | API key for Datadog integration
+| DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
+| DD_SOURCE | Source identifier for Datadog logs
+| DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
+| DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
+| DD_SERVICE | Service identifier for Datadog logs. Defaults to "litellm-server"
+| DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
+| DEBUG_OTEL | Enable debug mode for OpenTelemetry
+| DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
+| DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
+| DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
+| DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS | Timeout in seconds for checking client disconnection. Default is 1
+| DEFAULT_COOLDOWN_TIME_SECONDS | Duration in seconds to cooldown a model after failures. Default is 5
+| DEFAULT_CRON_JOB_LOCK_TTL_SECONDS | Time-to-live for cron job locks in seconds. Default is 60 (1 minute)
+| DEFAULT_FAILURE_THRESHOLD_PERCENT | Threshold percentage of failures to cool down a deployment. Default is 0.5 (50%)
+| DEFAULT_FLUSH_INTERVAL_SECONDS | Default interval in seconds for flushing operations. Default is 5
+| DEFAULT_HEALTH_CHECK_INTERVAL | Default interval in seconds for health checks. Default is 300 (5 minutes)
+| DEFAULT_IMAGE_HEIGHT | Default height for images. Default is 300
+| DEFAULT_IMAGE_TOKEN_COUNT | Default token count for images. Default is 250
+| DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
+| DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
+| DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL | Default time-to-live in seconds for management objects (User, Team, Key, Organization) in memory cache. Default is 60 seconds.
+| DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
+| DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
+| DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
+| DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
+| DEFAULT_MAX_TOKENS | Default maximum tokens for LLM calls. Default is 4096
+| DEFAULT_MAX_TOKENS_FOR_TRITON | Default maximum tokens for Triton models. Default is 2000
+| DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
+| DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
+| DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
+| DEFAULT_NUM_WORKERS_LITELLM_PROXY | Default number of workers for LiteLLM proxy. Default is 4. **We strongly recommend setting NUM Workers to Number of vCPUs available**
+| DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD | Default threshold for prompt injection similarity. Default is 0.7
+| DEFAULT_POLLING_INTERVAL | Default polling interval for schedulers in seconds. Default is 0.03
+| DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET | Default reasoning effort disable thinking budget. Default is 0
+| DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET | Default high reasoning effort thinking budget. Default is 4096
+| DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET | Default low reasoning effort thinking budget. Default is 1024
+| DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET | Default medium reasoning effort thinking budget. Default is 2048
+| DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET | Default minimal reasoning effort thinking budget. Default is 512
+| DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH | Default minimal reasoning effort thinking budget for Gemini 2.5 Flash. Default is 512
+| DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE | Default minimal reasoning effort thinking budget for Gemini 2.5 Flash Lite. Default is 512
+| DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO | Default minimal reasoning effort thinking budget for Gemini 2.5 Pro. Default is 512
+| DEFAULT_REDIS_SYNC_INTERVAL | Default Redis synchronization interval in seconds. Default is 1
+| DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
+| DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
+| DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
+| DEFAULT_SQS_BATCH_SIZE | Default batch size for SQS logging. Default is 512
+| DEFAULT_SQS_FLUSH_INTERVAL_SECONDS | Default flush interval for SQS logging. Default is 10
+| DEFAULT_S3_BATCH_SIZE | Default batch size for S3 logging. Default is 512
+| DEFAULT_S3_FLUSH_INTERVAL_SECONDS | Default flush interval for S3 logging. Default is 10
+| DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
+| DEFAULT_SOFT_BUDGET | Default soft budget for LiteLLM proxy keys. Default is 50.0
+| DEFAULT_TRIM_RATIO | Default ratio of tokens to trim from prompt end. Default is 0.75
+| DIRECT_URL | Direct URL for service endpoint
+| DISABLE_ADMIN_UI | Toggle to disable the admin UI
+| DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
+| DISABLE_AIOHTTP_TRUST_ENV | Flag to disable aiohttp trust environment. When this is set to True, litellm will not trust the environment for aiohttp eg. `HTTP_PROXY` and `HTTPS_PROXY` environment variables will not be used when this is set to True. **Default is False**
+| DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
+| DOCS_DESCRIPTION | Description text for documentation pages
+| DOCS_FILTERED | Flag indicating filtered documentation
+| DOCS_TITLE | Title of the documentation pages
+| DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
+| EMAIL_LOGO_URL | URL for the logo used in emails
+| EMAIL_SUPPORT_CONTACT | Support contact email address
+| EMAIL_SIGNATURE | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.
+| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails. 
+| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails. 
+| EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
+| FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
+| FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
+| FIREWORKS_AI_56_B_MOE | Size parameter for Fireworks AI 56B MOE model. Default is 56
+| FIREWORKS_AI_80_B | Size parameter for Fireworks AI 80B model. Default is 80
+| FIREWORKS_AI_176_B_MOE | Size parameter for Fireworks AI 176B MOE model. Default is 176
+| FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
+| GALILEO_BASE_URL | Base URL for Galileo platform
+| GALILEO_PASSWORD | Password for Galileo authentication
+| GALILEO_PROJECT_ID | Project ID for Galileo usage
+| GALILEO_USERNAME | Username for Galileo authentication
+| GOOGLE_SECRET_MANAGER_PROJECT_ID | Project ID for Google Secret Manager
+| GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
+| GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
+| GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
+| GCS_BATCH_SIZE | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**
+| GCS_PUBSUB_TOPIC_ID | PubSub Topic ID to send LiteLLM SpendLogs to.
+| GCS_PUBSUB_PROJECT_ID | PubSub Project ID to send LiteLLM SpendLogs to.
+| GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
+| GENERIC_CLIENT_ID | Client ID for generic OAuth providers
+| GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
+| GENERIC_CLIENT_STATE | State parameter for generic client authentication
+| GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.
+| GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
+| GENERIC_SCOPE | Scope settings for generic OAuth providers
+| GENERIC_TOKEN_ENDPOINT | Token endpoint for generic OAuth providers
+| GENERIC_USER_DISPLAY_NAME_ATTRIBUTE | Attribute for user's display name in generic auth
+| GENERIC_USER_EMAIL_ATTRIBUTE | Attribute for user's email in generic auth
+| GENERIC_USER_FIRST_NAME_ATTRIBUTE | Attribute for user's first name in generic auth
+| GENERIC_USER_ID_ATTRIBUTE | Attribute for user ID in generic auth
+| GENERIC_USER_LAST_NAME_ATTRIBUTE | Attribute for user's last name in generic auth
+| GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
+| GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
+| GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
+| GALILEO_BASE_URL | Base URL for Galileo platform
+| GALILEO_PASSWORD | Password for Galileo authentication
+| GALILEO_PROJECT_ID | Project ID for Galileo usage
+| GALILEO_USERNAME | Username for Galileo authentication
+| GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
+| GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
+| GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
+| GREENSCALE_API_KEY | API key for Greenscale service
+| GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
+| GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
+| GOOGLE_CLIENT_ID | Client ID for Google OAuth
+| GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
+| GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
+| GUARDRAILS_AI_API_BASE | Base URL for Guardrails AI API
+| HEALTH_CHECK_TIMEOUT_SECONDS | Timeout in seconds for health checks. Default is 60
+| HEROKU_API_BASE | Base URL for Heroku API
+| HEROKU_API_KEY | API key for Heroku services
+| HF_API_BASE | Base URL for Hugging Face API
+| HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CLIENT_CERT | Path to client certificate for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CLIENT_KEY | Path to client key for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_NAMESPACE | Namespace for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_TOKEN | Token for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
+| HCP_VAULT_CERT_ROLE | Role for [Hashicorp Vault Secret Manager Auth](../secret.md#hashicorp-vault)
+| HELICONE_API_KEY | API key for Helicone service
+| HELICONE_API_BASE | Base URL for Helicone service, defaults to `https://api.helicone.ai`
+| HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
+| HOURS_IN_A_DAY | Hours in a day for calculation purposes. Default is 24
+| HUGGINGFACE_API_BASE | Base URL for Hugging Face API
+| HUGGINGFACE_API_KEY | API key for Hugging Face API
+| HUMANLOOP_PROMPT_CACHE_TTL_SECONDS | Time-to-live in seconds for cached prompts in Humanloop. Default is 60
+| IAM_TOKEN_DB_AUTH | IAM token for database authentication
+| INITIAL_RETRY_DELAY | Initial delay in seconds for retrying requests. Default is 0.5
+| JITTER | Jitter factor for retry delay calculations. Default is 0.75
+| JSON_LOGS | Enable JSON formatted logging
+| JWT_AUDIENCE | Expected audience for JWT tokens
+| JWT_PUBLIC_KEY_URL | URL to fetch public key for JWT verification
+| LAGO_API_BASE | Base URL for Lago API
+| LAGO_API_CHARGE_BY | Parameter to determine charge basis in Lago
+| LAGO_API_EVENT_CODE | Event code for Lago API events
+| LAGO_API_KEY | API key for accessing Lago services
+| LANGFUSE_DEBUG | Toggle debug mode for Langfuse
+| LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
+| LANGFUSE_HOST | Host URL for Langfuse service
+| LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
+| LANGFUSE_RELEASE | Release version of Langfuse integration
+| LANGFUSE_SECRET_KEY | Secret key for Langfuse authentication
+| LANGSMITH_API_KEY | API key for Langsmith platform
+| LANGSMITH_BASE_URL | Base URL for Langsmith service
+| LANGSMITH_BATCH_SIZE | Batch size for operations in Langsmith
+| LANGSMITH_DEFAULT_RUN_NAME | Default name for Langsmith run
+| LANGSMITH_PROJECT | Project name for Langsmith integration
+| LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
+| LANGTRACE_API_KEY | API key for Langtrace service
+| LASSO_API_BASE | Base URL for Lasso API
+| LASSO_API_KEY | API key for Lasso service
+| LASSO_USER_ID | User ID for Lasso service
+| LASSO_CONVERSATION_ID | Conversation ID for Lasso service
+| LENGTH_OF_LITELLM_GENERATED_KEY | Length of keys generated by LiteLLM. Default is 16
+| LEGACY_MULTI_INSTANCE_RATE_LIMITING | Flag to enable legacy multi-instance rate limiting. **Default is False**
+| LITERAL_API_KEY | API key for Literal integration
+| LITERAL_API_URL | API URL for Literal service
+| LITERAL_BATCH_SIZE | Batch size for Literal operations
+| LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
+| LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
+| LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
+| LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
+| LITELLM_EMAIL | Email associated with LiteLLM account
+| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES | Maximum retries for parallel requests in LiteLLM
+| LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRY_TIMEOUT | Timeout for retries of parallel requests in LiteLLM
+| LITELLM_MIGRATION_DIR | Custom migrations directory for prisma migrations, used for baselining db in read-only file systems.
+| LITELLM_HOSTED_UI | URL of the hosted UI for LiteLLM
+| LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
+| LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
+| LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
+| LITELLM_LICENSE | License key for LiteLLM usage
+| LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
+| LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_LOG_FILE | File path to write LiteLLM logs to. When set, logs will be written to both console and the specified file
+| LITELLM_LOGGER_NAME | Name for OTEL logger 
+| LITELLM_METER_NAME | Name for OTEL Meter 
+| LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS | Optionally enable semantic logs for OTEL
+| LITELLM_OTEL_INTEGRATION_ENABLE_METRICS | Optionally enable emantic metrics for OTEL
+| LITELLM_MASTER_KEY | Master key for proxy authentication
+| LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
+| LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
+| LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
+| LITELLM_TOKEN | Access token for LiteLLM integration
+| LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
+| LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
+| LOGFIRE_TOKEN | Token for Logfire logging service
+| MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
+| MAX_STRING_LENGTH_PROMPT_IN_DB | Maximum length for strings in spend logs when sanitizing request bodies. Strings longer than this will be truncated. Default is 1000
+| MAX_IN_MEMORY_QUEUE_FLUSH_COUNT | Maximum count for in-memory queue flush operations. Default is 1000
+| MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the long side of high-resolution images. Default is 2000
+| MAX_REDIS_BUFFER_DEQUEUE_COUNT | Maximum count for Redis buffer dequeue operations. Default is 100
+| MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES | Maximum length for the short side of high-resolution images. Default is 768
+| MAX_SIZE_IN_MEMORY_QUEUE | Maximum size for in-memory queue. Default is 10000
+| MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB | Maximum size in KB for each item in memory cache. Default is 512 or 1024
+| MAX_SPENDLOG_ROWS_TO_QUERY | Maximum number of spend log rows to query. Default is 1,000,000
+| MAX_TEAM_LIST_LIMIT | Maximum number of teams to list. Default is 20
+| MAX_TILE_HEIGHT | Maximum height for image tiles. Default is 512
+| MAX_TILE_WIDTH | Maximum width for image tiles. Default is 512
+| MAX_TOKEN_TRIMMING_ATTEMPTS | Maximum number of attempts to trim a token message. Default is 10
+| MAXIMUM_TRACEBACK_LINES_TO_LOG | Maximum number of lines to log in traceback in LiteLLM Logs UI. Default is 100
+| MAX_RETRY_DELAY | Maximum delay in seconds for retrying requests. Default is 8.0
+| MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 20. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
+| MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
+| MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
+| MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
+| MISTRAL_API_KEY | API key for Mistral API
+| MICROSOFT_CLIENT_ID | Client ID for Microsoft services
+| MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
+| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
+| MICROSOFT_SERVICE_PRINCIPAL_ID | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)
+| NO_DOCS | Flag to disable Swagger UI documentation
+| NO_REDOC | Flag to disable Redoc documentation
+| NO_PROXY | List of addresses to bypass proxy
+| NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
+| OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
+| OPENAI_BASE_URL | Base URL for OpenAI API
+| OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
+| OPENAI_API_KEY | API key for OpenAI services
+| OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
+| OPENAI_ORGANIZATION | Organization identifier for OpenAI
+| OPENID_BASE_URL | Base URL for OpenID Connect services
+| OPENID_CLIENT_ID | Client ID for OpenID Connect authentication
+| OPENID_CLIENT_SECRET | Client secret for OpenID Connect authentication
+| OPENMETER_API_ENDPOINT | API endpoint for OpenMeter integration
+| OPENMETER_API_KEY | API key for OpenMeter services
+| OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
+| OTEL_ENDPOINT | OpenTelemetry endpoint for traces
+| OTEL_EXPORTER_OTLP_ENDPOINT | OpenTelemetry endpoint for traces
+| OTEL_ENVIRONMENT_NAME | Environment name for OpenTelemetry
+| OTEL_EXPORTER | Exporter type for OpenTelemetry
+| OTEL_EXPORTER_OTLP_PROTOCOL | Exporter type for OpenTelemetry
+| OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_MODEL_ID | Model ID for OpenTelemetry tracing
+| OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
+| OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
+| OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
+| PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
+| PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service
+| PHOENIX_API_KEY | API key for Arize Phoenix
+| PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
+| PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
+| PILLAR_API_BASE | Base URL for Pillar API Guardrails
+| PILLAR_API_KEY | API key for Pillar API Guardrails
+| PILLAR_ON_FLAGGED_ACTION | Action to take when content is flagged ('block' or 'monitor')
+| POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
+| POSTHOG_API_KEY | API key for PostHog analytics integration
+| POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
+| PREDIBASE_API_BASE | Base URL for Predibase API
+| PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
+| PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
+| PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES | Refresh interval in minutes for Prometheus budget metrics. Default is 5
+| PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS | Fallback time in hours for sending stats to Prometheus. Default is 9
+| PROMETHEUS_URL | URL for Prometheus service
+| PROMPTLAYER_API_KEY | API key for PromptLayer integration
+| PROXY_ADMIN_ID | Admin identifier for proxy server
+| PROXY_BASE_URL | Base URL for proxy service
+| PROXY_BATCH_WRITE_AT | Time in seconds to wait before batch writing spend logs to the database. Default is 10
+| PROXY_BATCH_POLLING_INTERVAL | Time in seconds to wait before polling a batch, to check if it's completed. Default is 6000s (1 hour)
+| PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
+| PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
+| PROXY_LOGOUT_URL | URL for logging out of the proxy service
+| QDRANT_API_BASE | Base URL for Qdrant API
+| QDRANT_API_KEY | API key for Qdrant service
+| QDRANT_SCALAR_QUANTILE | Scalar quantile for Qdrant operations. Default is 0.99
+| QDRANT_URL | Connection URL for Qdrant database
+| QDRANT_VECTOR_SIZE | Vector size for Qdrant operations. Default is 1536
+| REDIS_CONNECTION_POOL_TIMEOUT | Timeout in seconds for Redis connection pool. Default is 5
+| REDIS_HOST | Hostname for Redis server
+| REDIS_PASSWORD | Password for Redis service
+| REDIS_PORT | Port number for Redis server
+| REDIS_SOCKET_TIMEOUT | Timeout in seconds for Redis socket operations. Default is 0.1
+| REDIS_GCP_SERVICE_ACCOUNT | GCP service account for IAM authentication with Redis. Format: "projects/-/serviceAccounts/name@project.iam.gserviceaccount.com"
+| REDIS_GCP_SSL_CA_CERTS | Path to SSL CA certificate file for secure GCP Memorystore Redis connections
+| REDOC_URL | The path to the Redoc Fast API documentation. **By default this is "/redoc"**
+| REPEATED_STREAMING_CHUNK_LIMIT | Limit for repeated streaming chunks to detect looping. Default is 100
+| REPLICATE_MODEL_NAME_WITH_ID_LENGTH | Length of Replicate model names with ID. Default is 64
+| REPLICATE_POLLING_DELAY_SECONDS | Delay in seconds for Replicate polling operations. Default is 0.5
+| REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
+| ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
+| SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
+| SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
+| SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.
+| SERVER_ROOT_PATH | Root path for the server application
+| SET_VERBOSE | Flag to enable verbose logging
+| SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000
+| SLACK_DAILY_REPORT_FREQUENCY | Frequency of daily Slack reports (e.g., daily, weekly)
+| SLACK_WEBHOOK_URL | Webhook URL for Slack integration
+| SMTP_HOST | Hostname for the SMTP server
+| SMTP_PASSWORD | Password for SMTP authentication (do not set if SMTP does not require auth)
+| SMTP_PORT | Port number for SMTP server
+| SMTP_SENDER_EMAIL | Email address used as the sender in SMTP transactions
+| SMTP_SENDER_LOGO | Logo used in emails sent via SMTP
+| SMTP_TLS | Flag to enable or disable TLS for SMTP connections
+| SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
+| SPEND_LOGS_URL | URL for retrieving spend logs
+| SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
+| SSL_CERTIFICATE | Path to the SSL certificate file
+| SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
+| SSL_VERIFY | Flag to enable or disable SSL certificate verification
+| SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle
+| SUPABASE_KEY | API key for Supabase service
+| SUPABASE_URL | Base URL for Supabase instance
+| STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 
+| SYSTEM_MESSAGE_TOKEN_COUNT | Token count for system messages. Default is 4
+| TEST_EMAIL_ADDRESS | Email address used for testing purposes
+| TOGETHER_AI_4_B | Size parameter for Together AI 4B model. Default is 4
+| TOGETHER_AI_8_B | Size parameter for Together AI 8B model. Default is 8
+| TOGETHER_AI_21_B | Size parameter for Together AI 21B model. Default is 21
+| TOGETHER_AI_41_B | Size parameter for Together AI 41B model. Default is 41
+| TOGETHER_AI_80_B | Size parameter for Together AI 80B model. Default is 80
+| TOGETHER_AI_110_B | Size parameter for Together AI 110B model. Default is 110
+| TOGETHER_AI_EMBEDDING_150_M | Size parameter for Together AI 150M embedding model. Default is 150
+| TOGETHER_AI_EMBEDDING_350_M | Size parameter for Together AI 350M embedding model. Default is 350
+| TOOL_CHOICE_OBJECT_TOKEN_COUNT | Token count for tool choice objects. Default is 4
+| UI_LOGO_PATH | Path to the logo image used in the UI
+| UI_PASSWORD | Password for accessing the UI
+| UI_USERNAME | Username for accessing the UI
+| UPSTREAM_LANGFUSE_DEBUG | Flag to enable debugging for upstream Langfuse
+| UPSTREAM_LANGFUSE_HOST | Host URL for upstream Langfuse service
+| UPSTREAM_LANGFUSE_PUBLIC_KEY | Public key for upstream Langfuse authentication
+| UPSTREAM_LANGFUSE_RELEASE | Release version identifier for upstream Langfuse
+| UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
+| USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
+| USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
+| WEBHOOK_URL | URL for receiving webhooks from external services
+| SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run |
+| SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000 |
+| COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY | Maximum size for CoroutineChecker in-memory cache. Default is 1000 |

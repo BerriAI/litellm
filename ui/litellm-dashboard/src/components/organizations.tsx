@@ -32,6 +32,7 @@ import { Organization, organizationListCall, organizationCreateCall, organizatio
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector"
 import { formatNumberWithCommas } from "../utils/dataUtils"
+import NotificationsManager from "./molecules/notifications_manager"
 
 interface OrganizationsTableProps {
   organizations: Organization[]
@@ -92,7 +93,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
 
     try {
       await organizationDeleteCall(accessToken, orgToDelete)
-      message.success("Organization deleted successfully")
+      NotificationsManager.success("Organization deleted successfully")
 
       setIsDeleteModalOpen(false)
       setOrgToDelete(null)
@@ -138,6 +139,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       }
 
       await organizationCreateCall(accessToken, values)
+      NotificationsManager.success("Organization created successfully")
       setIsOrgModalVisible(false)
       form.resetFields()
       // Refresh organizations list

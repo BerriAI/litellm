@@ -529,7 +529,7 @@ def _get_count_function(
                 encoding = tiktoken.get_encoding("cl100k_base")
 
             def count_tokens(text: str) -> int:
-                return len(encoding.encode(text))
+                return len(encoding.encode(text, disallowed_special=()))
 
         else:
             raise ValueError("Unsupported tokenizer type")

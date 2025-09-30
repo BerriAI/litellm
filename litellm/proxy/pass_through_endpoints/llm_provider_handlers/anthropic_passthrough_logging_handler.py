@@ -96,7 +96,6 @@ class AnthropicPassthroughLoggingHandler:
         handles streaming and non-streaming responses
         """
         try:
-
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model,

@@ -18,6 +18,7 @@
     "@docusaurus/plugin-google-gtag": "3.8.1",
     "@docusaurus/plugin-ideal-image": "3.8.1",
     "@docusaurus/preset-classic": "3.8.1",
+    "@docusaurus/theme-mermaid": "^3.8.1",
     "@inkeep/cxkit-docusaurus": "^0.5.89",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^1.2.1",
@@ -48,6 +49,7 @@
   },
   "overrides": {
     "webpack-dev-server": ">=5.2.1",
-    "form-data": ">=4.0.4"
+    "form-data": ">=4.0.4",
+    "mermaid": ">=11.10.0"
   }
 }

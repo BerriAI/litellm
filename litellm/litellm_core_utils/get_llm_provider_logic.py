@@ -196,6 +196,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == "https://inference.baseten.co/v1":
+                        custom_llm_provider = "baseten"
+                        dynamic_api_key = get_secret_str("BASETEN_API_KEY")
                     elif endpoint == "https://api.sambanova.ai/v1":
                         custom_llm_provider = "sambanova"
                         dynamic_api_key = get_secret_str("SAMBANOVA_API_KEY")
@@ -246,6 +249,12 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
+                    elif endpoint == "https://ai-gateway.vercel.sh/v1":
+                        custom_llm_provider = "vercel_ai_gateway"
+                        dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.inference.wandb.ai/v1":
+                        custom_llm_provider = "wandb"
+                        dynamic_api_key = get_secret_str("WANDB_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -314,6 +323,7 @@ def get_llm_provider(  # noqa: PLR0915
             or model in litellm.vertex_embedding_models
             or model in litellm.vertex_vision_models
             or model in litellm.vertex_ai_image_models
+            or model in litellm.vertex_ai_video_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21
@@ -351,13 +361,24 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "openai"
         elif model in litellm.empower_models:
             custom_llm_provider = "empower"
+        elif model in litellm.gradient_ai_models:
+            custom_llm_provider = "gradient_ai"
         elif model == "*":
             custom_llm_provider = "openai"
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("heroku/"):
+            custom_llm_provider = "heroku"
+        # cometapi models
+        elif model.startswith("cometapi/"):
+            custom_llm_provider = "cometapi"
         elif model.startswith("oci/"):
             custom_llm_provider = "oci"
+        elif model.startswith("compactifai/"):
+            custom_llm_provider = "compactifai"
+        elif model.startswith("ovhcloud/"):
+            custom_llm_provider = "ovhcloud"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -473,6 +494,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "baseten":
+        # Use BasetenConfig to determine the appropriate API base URL
+        if api_base is None:
+            api_base = litellm.BasetenConfig.get_api_base_for_model(model)
+        else:
+            api_base = api_base or get_secret_str("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
+        dynamic_api_key = api_key or get_secret_str("BASETEN_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
             api_base
@@ -664,6 +692,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+    elif custom_llm_provider == "gradient_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.GradientAIConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "featherless_ai":
         (
             api_base,
@@ -677,6 +712,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             dynamic_api_key,
         ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
+        )
+    elif custom_llm_provider == "heroku":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
         )
     elif custom_llm_provider == "dashscope":
         (
@@ -720,6 +762,27 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.HyperbolicChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "vercel_ai_gateway":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "aiml":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.AIMLChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "wandb":
+        api_base = (
+            api_base
+            or get_secret("WANDB_API_BASE")
+            or "https://api.inference.wandb.ai/v1"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("WANDB_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

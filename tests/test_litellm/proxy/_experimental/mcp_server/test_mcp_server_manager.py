@@ -1,17 +1,18 @@
 import sys
 from datetime import datetime
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, '../../../../../')
+sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_env_dict,
 )
-from litellm.proxy._types import LiteLLM_MCPServerTable, MCPSpecVersion, MCPTransport
+from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -24,12 +25,12 @@ class TestMCPServerManager:
         env_json = '{"PATH": "/usr/bin", "DEBUG": "1"}'
         result = _deserialize_env_dict(env_json)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
-        
+
         # Test already dict
         env_dict = {"PATH": "/usr/bin", "DEBUG": "1"}
         result = _deserialize_env_dict(env_dict)
         assert result == {"PATH": "/usr/bin", "DEBUG": "1"}
-        
+
         # Test invalid JSON
         invalid_json = '{"PATH": "/usr/bin", "DEBUG": 1'
         result = _deserialize_env_dict(invalid_json)
@@ -38,27 +39,26 @@ class TestMCPServerManager:
     def test_add_update_server_stdio(self):
         """Test adding stdio MCP server"""
         manager = MCPServerManager()
-        
+
         stdio_server = LiteLLM_MCPServerTable(
             server_id="stdio-server-1",
             alias="test_stdio_server",
             description="Test stdio server",
             url=None,
             transport=MCPTransport.stdio,
-            spec_version=MCPSpecVersion.mar_2025,
             command="python",
             args=["-m", "server"],
             env={"DEBUG": "1", "TEST": "1"},
             created_at=datetime.now(),
-            updated_at=datetime.now()
+            updated_at=datetime.now(),
         )
-        
+
         manager.add_update_server(stdio_server)
-        
+
         # Verify server was added
         assert "stdio-server-1" in manager.registry
         added_server = manager.registry["stdio-server-1"]
-        
+
         assert added_server.server_id == "stdio-server-1"
         assert added_server.name == "test_stdio_server"
         assert added_server.transport == MCPTransport.stdio
@@ -69,20 +69,19 @@ class TestMCPServerManager:
     def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()
-        
+
         stdio_server = MCPServer(
             server_id="stdio-server-2",
             name="test_stdio_server",
             url=None,
             transport=MCPTransport.stdio,
-            spec_version=MCPSpecVersion.mar_2025,
             command="node",
             args=["server.js"],
-            env={"NODE_ENV": "test"}
+            env={"NODE_ENV": "test"},
         )
-        
+
         client = manager._create_mcp_client(stdio_server)
-        
+
         assert client.transport_type == MCPTransport.stdio
         assert client.stdio_config is not None
         assert client.stdio_config["command"] == "node"
@@ -93,24 +92,28 @@ class TestMCPServerManager:
     async def test_list_tools_with_server_specific_auth_headers(self):
         """Test list_tools method with server-specific auth headers"""
         manager = MCPServerManager()
-        
+
         # Mock servers
         server1 = MagicMock()
         server1.name = "github"
         server1.alias = "github"
         server1.server_name = "github"
-        
+
         server2 = MagicMock()
         server2.name = "zapier"
         server2.alias = "zapier"
         server2.server_name = "zapier"
-        
+
         # Mock get_allowed_mcp_servers to return our test servers
         manager.get_allowed_mcp_servers = AsyncMock(return_value=["github", "zapier"])
-        manager.get_mcp_server_by_id = MagicMock(side_effect=lambda x: server1 if x == "github" else server2)
-        
+        manager.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda x: server1 if x == "github" else server2
+        )
+
         # Mock _get_tools_from_server to return different results
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(
+            server, mcp_auth_header=None, mcp_protocol_version=None
+        ):
             if server.name == "github":
                 tool1 = MagicMock()
                 tool1.name = "github_tool_1"
@@ -121,20 +124,22 @@ class TestMCPServerManager:
                 tool1 = MagicMock()
                 tool1.name = "zapier_tool_1"
                 return [tool1]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Test with server-specific auth headers
         mcp_server_auth_headers = {
             "github": "Bearer github-token",
-            "zapier": "zapier-api-key"
+            "zapier": "zapier-api-key",
         }
-        
-        result = await manager.list_tools(mcp_server_auth_headers=mcp_server_auth_headers)
-        
+
+        result = await manager.list_tools(
+            mcp_server_auth_headers=mcp_server_auth_headers
+        )
+
         # Verify that both servers were called with their specific auth headers
         assert len(result) == 3  # 2 from github + 1 from zapier
-        
+
         # Verify the tools have the expected names
         tool_names = [tool.name for tool in result]
         assert "github_tool_1" in tool_names
@@ -145,32 +150,34 @@ class TestMCPServerManager:
     async def test_list_tools_fallback_to_legacy_auth_header(self):
         """Test that list_tools falls back to legacy auth header when server-specific not available"""
         manager = MCPServerManager()
-        
+
         # Mock server
         server = MagicMock()
         server.name = "github"
         server.alias = "github"
         server.server_name = "github"
-        
+
         # Mock get_allowed_mcp_servers
         manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(
+            server, mcp_auth_header=None, mcp_protocol_version=None
+        ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
             tool.name = "github_tool_1"
             return [tool]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Test with only legacy auth header (no server-specific headers)
         result = await manager.list_tools(
             mcp_auth_header="legacy-token",
-            mcp_server_auth_headers={}  # Empty server-specific headers
+            mcp_server_auth_headers={},  # Empty server-specific headers
         )
-        
+
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
 
@@ -178,32 +185,36 @@ class TestMCPServerManager:
     async def test_list_tools_prioritizes_server_specific_over_legacy(self):
         """Test that server-specific auth headers take priority over legacy header"""
         manager = MCPServerManager()
-        
+
         # Mock server
         server = MagicMock()
         server.name = "github"
         server.alias = "github"
         server.server_name = "github"
-        
+
         # Mock get_allowed_mcp_servers
         manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
-            assert mcp_auth_header == "server-specific-token"  # Should use server-specific header
+        async def mock_get_tools_from_server(
+            server, mcp_auth_header=None, mcp_protocol_version=None
+        ):
+            assert (
+                mcp_auth_header == "server-specific-token"
+            )  # Should use server-specific header
             tool = MagicMock()
             tool.name = "github_tool_1"
             return [tool]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Test with both legacy and server-specific headers
         result = await manager.list_tools(
             mcp_auth_header="legacy-token",
-            mcp_server_auth_headers={"github": "server-specific-token"}
+            mcp_server_auth_headers={"github": "server-specific-token"},
         )
-        
+
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
 
@@ -211,32 +222,36 @@ class TestMCPServerManager:
     async def test_list_tools_handles_missing_server_alias(self):
         """Test that list_tools handles servers without alias gracefully"""
         manager = MCPServerManager()
-        
+
         # Mock server without alias
         server = MagicMock()
         server.name = "github"
         server.alias = None  # No alias
         server.server_name = "github"
-        
+
         # Mock get_allowed_mcp_servers
         manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
-            assert mcp_auth_header == "server-specific-token"  # Should use server-specific header via server_name
+        async def mock_get_tools_from_server(
+            server, mcp_auth_header=None, mcp_protocol_version=None
+        ):
+            assert (
+                mcp_auth_header == "server-specific-token"
+            )  # Should use server-specific header via server_name
             tool = MagicMock()
             tool.name = "github_tool_1"
             return [tool]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Test with server-specific headers that match server_name (even without alias)
         result = await manager.list_tools(
             mcp_auth_header="legacy-token",
-            mcp_server_auth_headers={"github": "server-specific-token"}
+            mcp_server_auth_headers={"github": "server-specific-token"},
         )
-        
+
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
 
@@ -244,14 +259,14 @@ class TestMCPServerManager:
     async def test_health_check_server_healthy(self):
         """Test health check for a healthy server"""
         manager = MCPServerManager()
-        
+
         # Mock server
         server = MagicMock()
         server.server_id = "test-server"
         server.name = "test-server"
-        
+
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock successful _get_tools_from_server
         async def mock_get_tools_from_server(server, mcp_auth_header=None):
             tool1 = MagicMock()
@@ -259,12 +274,12 @@ class TestMCPServerManager:
             tool2 = MagicMock()
             tool2.name = "tool2"
             return [tool1, tool2]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Perform health check
         result = await manager.health_check_server("test-server")
-        
+
         # Verify results
         assert result["server_id"] == "test-server"
         assert result["status"] == "healthy"
@@ -278,23 +293,23 @@ class TestMCPServerManager:
     async def test_health_check_server_unhealthy(self):
         """Test health check for an unhealthy server"""
         manager = MCPServerManager()
-        
+
         # Mock server
         server = MagicMock()
         server.server_id = "test-server"
         server.name = "test-server"
-        
+
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock failed _get_tools_from_server
         async def mock_get_tools_from_server(server, mcp_auth_header=None):
             raise Exception("Connection timeout")
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Perform health check
         result = await manager.health_check_server("test-server")
-        
+
         # Verify results
         assert result["server_id"] == "test-server"
         assert result["status"] == "unhealthy"
@@ -307,13 +322,13 @@ class TestMCPServerManager:
     async def test_health_check_server_not_found(self):
         """Test health check for a server that doesn't exist"""
         manager = MCPServerManager()
-        
+
         # Mock server not found
         manager.get_mcp_server_by_id = MagicMock(return_value=None)
-        
+
         # Perform health check
         result = await manager.health_check_server("non-existent-server")
-        
+
         # Verify results
         assert result["server_id"] == "non-existent-server"
         assert result["status"] == "unknown"
@@ -325,22 +340,19 @@ class TestMCPServerManager:
     async def test_health_check_all_servers(self):
         """Test health check for all servers"""
         manager = MCPServerManager()
-        
+
         # Mock servers
         server1 = MagicMock()
         server1.server_id = "server1"
         server1.name = "server1"
-        
+
         server2 = MagicMock()
         server2.server_id = "server2"
         server2.name = "server2"
-        
+
         # Mock registry
-        manager.registry = {
-            "server1": server1,
-            "server2": server2
-        }
-        
+        manager.registry = {"server1": server1, "server2": server2}
+
         # Mock get_mcp_server_by_id
         def mock_get_server_by_id(server_id):
             if server_id == "server1":
@@ -348,9 +360,9 @@ class TestMCPServerManager:
             elif server_id == "server2":
                 return server2
             return None
-        
+
         manager.get_mcp_server_by_id = mock_get_server_by_id
-        
+
         # Mock _get_tools_from_server with different results
         async def mock_get_tools_from_server(server, mcp_auth_header=None):
             if server.server_id == "server1":
@@ -360,22 +372,22 @@ class TestMCPServerManager:
             elif server.server_id == "server2":
                 raise Exception("Connection failed")
             return []
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Perform health check for all servers
         result = await manager.health_check_all_servers()
-        
+
         # Verify results
         assert len(result) == 2
         assert "server1" in result
         assert "server2" in result
-        
+
         # Check server1 (healthy)
         assert result["server1"]["status"] == "healthy"
         assert result["server1"]["tools_count"] == 1
         assert result["server1"]["error"] is None
-        
+
         # Check server2 (unhealthy)
         assert result["server2"]["status"] == "unhealthy"
         assert result["server2"]["error"] == "Connection failed"
@@ -384,31 +396,369 @@ class TestMCPServerManager:
     async def test_health_check_server_with_auth_header(self):
         """Test health check with authentication header"""
         manager = MCPServerManager()
-        
+
         # Mock server
         server = MagicMock()
         server.server_id = "test-server"
         server.name = "test-server"
-        
+
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        
+
         # Mock _get_tools_from_server to verify auth header is passed
         async def mock_get_tools_from_server(server, mcp_auth_header=None):
             assert mcp_auth_header == "test-token"
             tool = MagicMock()
             tool.name = "tool1"
             return [tool]
-        
+
         manager._get_tools_from_server = mock_get_tools_from_server
-        
+
         # Perform health check with auth header
         result = await manager.health_check_server("test-server", "test-token")
-        
+
         # Verify results
         assert result["server_id"] == "test-server"
         assert result["status"] == "healthy"
         assert result["tools_count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
+        """Test pre_call_tool_check allows tool when it's in allowed_tools list"""
+        manager = MCPServerManager()
+
+        # Create server with allowed_tools list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=["allowed_tool", "another_allowed_tool"],
+            disallowed_tools=None,
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # This should not raise an exception
+        await manager.pre_call_tool_check(
+            name="allowed_tool",
+            arguments={"param": "value"},
+            server_name_from_prefix="test-server",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_allowed_tools_list_blocks_tool(self):
+        """Test pre_call_tool_check blocks tool when it's not in allowed_tools list"""
+        manager = MCPServerManager()
+
+        # Create server with allowed_tools list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=["allowed_tool", "another_allowed_tool"],
+            disallowed_tools=None,
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # This should raise an HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="blocked_tool",
+                arguments={"param": "value"},
+                server_name_from_prefix="test-server",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert (
+            "Tool blocked_tool is not allowed for server test-server"
+            in exc_info.value.detail["error"]
+        )
+        assert (
+            "Contact proxy admin to allow this tool" in exc_info.value.detail["error"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_disallowed_tools_list_allows_tool(self):
+        """Test pre_call_tool_check allows tool when it's not in disallowed_tools list"""
+        manager = MCPServerManager()
+
+        # Create server with disallowed_tools list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=None,
+            disallowed_tools=["banned_tool", "another_banned_tool"],
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # This should not raise an exception
+        await manager.pre_call_tool_check(
+            name="allowed_tool",
+            arguments={"param": "value"},
+            server_name_from_prefix="test-server",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_disallowed_tools_list_blocks_tool(self):
+        """Test pre_call_tool_check blocks tool when it's in disallowed_tools list"""
+        manager = MCPServerManager()
+
+        # Create server with disallowed_tools list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=None,
+            disallowed_tools=["banned_tool", "another_banned_tool"],
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # This should raise an HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="banned_tool",
+                arguments={"param": "value"},
+                server_name_from_prefix="test-server",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert (
+            "Tool banned_tool is not allowed for server test-server"
+            in exc_info.value.detail["error"]
+        )
+        assert (
+            "Contact proxy admin to allow this tool" in exc_info.value.detail["error"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_no_restrictions_allows_any_tool(self):
+        """Test pre_call_tool_check allows any tool when no restrictions are set"""
+        manager = MCPServerManager()
+
+        # Create server with no tool restrictions
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # This should not raise an exception
+        await manager.pre_call_tool_check(
+            name="any_tool",
+            arguments={"param": "value"},
+            server_name_from_prefix="test-server",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_allowed_tools_takes_precedence(self):
+        """Test that allowed_tools list takes precedence over disallowed_tools list"""
+        manager = MCPServerManager()
+
+        # Create server with both allowed_tools and disallowed_tools
+        # Note: The logic in check_allowed_or_banned_tools prioritizes allowed_tools
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.stdio,
+            allowed_tools=["tool1", "tool2"],
+            disallowed_tools=["tool2", "tool3"],  # tool2 is in both lists
+        )
+
+        # Mock dependencies
+        user_api_key_auth = MagicMock()
+        proxy_logging_obj = MagicMock()
+
+        # Mock the async methods that pre_call_tool_check calls
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+
+        # tool2 should be allowed since it's in allowed_tools (takes precedence)
+        await manager.pre_call_tool_check(
+            name="tool2",
+            arguments={"param": "value"},
+            server_name_from_prefix="test-server",
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+
+        # tool3 should be blocked since it's not in allowed_tools
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="tool3",
+                arguments={"param": "value"},
+                server_name_from_prefix="test-server",
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert (
+            "Tool tool3 is not allowed for server test-server"
+            in exc_info.value.detail["error"]
+        )
+    async def test_get_tools_from_server_add_prefix(self):
+        """Verify _get_tools_from_server respects add_prefix True/False."""
+        manager = MCPServerManager()
+
+        # Create a minimal server with alias used as prefix
+        server = MCPServer(
+            server_id="zapier",
+            name="zapier",
+            transport=MCPTransport.http,
+        )
+
+        # Mock client creation and fetching tools
+        manager._create_mcp_client = MagicMock(return_value=object())
+
+        # Tools returned upstream (unprefixed from provider)
+        upstream_tool = MagicMock()
+        upstream_tool.name = "send_email"
+        upstream_tool.description = "Send an email"
+        upstream_tool.inputSchema = {}
+
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
+
+        # Case 1: add_prefix=True (default for multi-server) -> expect prefixed
+        tools_prefixed = await manager._get_tools_from_server(server, add_prefix=True)
+        assert len(tools_prefixed) == 1
+        assert tools_prefixed[0].name == "zapier-send_email"
+
+        # Case 2: add_prefix=False (single-server) -> expect unprefixed
+        tools_unprefixed = await manager._get_tools_from_server(
+            server, add_prefix=False
+        )
+        assert len(tools_unprefixed) == 1
+        assert tools_unprefixed[0].name == "send_email"
+
+    def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
+        """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="jira",
+            name="jira",
+            transport=MCPTransport.http,
+        )
+
+        # Input tools as would come from upstream
+        t1 = MagicMock()
+        t1.name = "create_issue"
+        t1.description = ""
+        t1.inputSchema = {}
+        t2 = MagicMock()
+        t2.name = "close_issue"
+        t2.description = ""
+        t2.inputSchema = {}
+
+        # Do not add prefix in returned objects
+        out_tools = manager._create_prefixed_tools([t1, t2], server, add_prefix=False)
+
+        # Returned names should be unprefixed
+        names = sorted([t.name for t in out_tools])
+        assert names == ["close_issue", "create_issue"]
+
+        # Mapping should include both original and prefixed names -> resolves calls either way
+        assert manager.tool_name_to_mcp_server_name_mapping["create_issue"] == "jira"
+        assert (
+            manager.tool_name_to_mcp_server_name_mapping["jira-create_issue"] == "jira"
+        )
+        assert manager.tool_name_to_mcp_server_name_mapping["close_issue"] == "jira"
+        assert (
+            manager.tool_name_to_mcp_server_name_mapping["jira-close_issue"] == "jira"
+        )
+
+    def test_get_mcp_server_from_tool_name_with_prefixed_and_unprefixed(self):
+        """After mapping is populated, manager resolves both prefixed and unprefixed tool names to the same server."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="zapier",
+            name="zapier",
+            server_name="zapier",
+            transport=MCPTransport.http,
+        )
+
+        # Register server so resolution can find it
+        manager.registry = {server.server_id: server}
+
+        # Populate mapping (add_prefix value doesn't matter for mapping population)
+        base_tool = MagicMock()
+        base_tool.name = "create_zap"
+        base_tool.description = ""
+        base_tool.inputSchema = {}
+        _ = manager._create_prefixed_tools([base_tool], server, add_prefix=False)
+
+        # Unprefixed resolution
+        resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
+        print(resolved_server_unpref)
+        assert resolved_server_unpref is not None
+        assert resolved_server_unpref.server_id == server.server_id
+
+        # Prefixed resolution
+        resolved_server_pref = manager._get_mcp_server_from_tool_name(
+            "zapier-create_zap"
+        )
+        assert resolved_server_pref is not None
+        assert resolved_server_pref.server_id == server.server_id
+
 
 if __name__ == "__main__":
-    pytest.main([__file__]) 
+    pytest.main([__file__])

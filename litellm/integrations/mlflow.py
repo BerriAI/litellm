@@ -60,10 +60,7 @@ class MlflowLogger(CustomLogger):
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [
-            c.message.model_dump(exclude_none=True)
-            for c in getattr(response_obj, "choices", [])
-        ]
+        output_messages = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -168,6 +165,10 @@ class MlflowLogger(CustomLogger):
         for key in ["functions", "tools", "stream", "tool_choice", "user"]:
             if value := kwargs.get("optional_params", {}).pop(key, None):
                 inputs[key] = value
+
+        if prediction := kwargs.get("prediction"):
+            inputs["prediction"] = prediction
+
         return inputs
 
     def _extract_attributes(self, kwargs):
@@ -189,9 +190,9 @@ class MlflowLogger(CustomLogger):
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "usage": {
-                        "completion_tokens": standard_obj.get("completion_tokens"),
-                        "prompt_tokens": standard_obj.get("prompt_tokens"),
+                    "mlflow.chat.tokenUsage": {
+                        "input_tokens": standard_obj.get("prompt_tokens"),
+                        "output_tokens": standard_obj.get("completion_tokens"),
                         "total_tokens": standard_obj.get("total_tokens"),
                     },
                     "raw_llm_response": standard_obj.get("response"),
@@ -232,7 +233,6 @@ class MlflowLogger(CustomLogger):
         """
         import mlflow
 
-
         call_type = kwargs.get("call_type", "completion")
         span_name = f"litellm-{call_type}"
         span_type = self._get_span_type(call_type)
@@ -260,6 +260,7 @@ class MlflowLogger(CustomLogger):
                 tags=self._transform_tag_list_to_dict(attributes.get("request_tags", [])),
                 start_time_ns=start_time_ns,
             )
+
     def _transform_tag_list_to_dict(self, tag_list: list) -> dict:
         return {tag: "" for tag in tag_list}
 

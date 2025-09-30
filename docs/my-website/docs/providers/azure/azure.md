@@ -9,8 +9,8 @@ import TabItem from '@theme/TabItem';
 
 | Property | Details |
 |-------|-------|
-| Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
-| Provider Route on LiteLLM | `azure/`, [`azure/o_series/`](#azure-o-series-models) |
+| Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-5, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
+| Provider Route on LiteLLM | `azure/`, [`azure/o_series/`](#o-series-models), [`azure/gpt5_series/`](#gpt-5-models) |
 | Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/responses`](./azure_responses), [`/completions`](#azure-instruct-models), [`/embeddings`](./azure_embedding), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
 | Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
 
@@ -207,6 +207,7 @@ model_list:
 |------------------|----------------------------------------|
 | o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
 | o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+| gpt-5 | `response = completion(model="azure/<your deployment name>", messages=messages)` |
 | gpt-4o-mini            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4o            | `completion('azure/<your deployment name>', messages)`         |
 | gpt-4            | `completion('azure/<your deployment name>', messages)`         |
@@ -366,6 +367,82 @@ model_list:
 ```
 </TabItem>
 </Tabs>
+
+
+## GPT-5 Models
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI GPT-5 models |
+| Provider Route on LiteLLM | `azure/gpt5_series/<custom-name>` or `azure/gpt-5-deployment-name` |
+
+LiteLLM supports using Azure GPT-5 models in one of the two ways:
+1. Explicit Routing: `model = azure/gpt5_series/<deployment-name>`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt5_series/<deployment-name>`.
+2. Inferred Routing (If the azure deployment name contains `gpt-5` in the name): `model = azure/gpt-5-mini`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt-5-mini`.
+
+#### Explicit Routing
+Use `azure/gpt5_series/<deployment-name>` for explicit GPT-5 model routing. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="azure/gpt5_series/my-gpt-5-deployment",
+    messages=[{"role": "user", "content": "Hello, world!"}]
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-5
+    litellm_params:
+      model: azure/gpt5_series/my-gpt-5-deployment
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+
+</TabItem>
+</Tabs>
+
+#### Inferred Routing (gpt-5 in the deployment name)
+If your Azure deployment name contains `gpt-5`, LiteLLM automatically recognizes it as a GPT-5 model.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Deployment name contains 'gpt-5' - automatically inferred
+response = litellm.completion(
+    model="azure/my-gpt-5-deployment", 
+    messages=[{"role": "user", "content": "Hello, world!"}]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: azure/my-gpt-5-deployment  # deployment name contains 'gpt-5'
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
 
 
 ## Azure Audio Model
@@ -854,7 +931,7 @@ curl http://localhost:4000/v1/batches \
 ```python
 retrieved_batch = client.batches.retrieve(
     batch.id,
-    extra_body={"custom_llm_provider": "azure"}
+    extra_query={"custom_llm_provider": "azure"}
 )
 ```
 
@@ -901,7 +978,7 @@ curl http://localhost:4000/v1/batches/batch_abc123/cancel \
 <TabItem value="sdk" label="OpenAI Python SDK">
 
 ```python
-client.batches.list(extra_body={"custom_llm_provider": "azure"})
+client.batches.list(extra_query={"custom_llm_provider": "azure"})
 ```
 
 </TabItem>

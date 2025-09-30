@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import {
@@ -8,12 +8,19 @@ import {
   mcpServerHasAuth,
 } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
+import { 
+  getMCPAuthToken, 
+  setMCPAuthToken, 
+  removeMCPAuthToken, 
+  hasMCPAuthToken 
+} from "./mcp_auth_storage";
 
-import { Modal, Input, Form } from "antd";
+import { Modal, Input, Form, message } from "antd";
 import { Button, Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ApiOutlined, KeyOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
 
 import { AUTH_TYPE } from "./types";
+import NotificationsManager from "../molecules/notifications_manager"
 
 type AuthModalProps = {
   visible: boolean;
@@ -92,10 +99,12 @@ export const AuthModal = ({
 const AuthSection = ({ 
   authType, 
   onAuthSubmit,
+  onClearAuth,
   hasAuth
 }: {
   authType: string | null | undefined;
   onAuthSubmit: (value: string) => void;
+  onClearAuth: () => void;
   hasAuth: boolean;
 }) => {
   const [modalVisible, setModalVisible] = useState(false);
@@ -109,23 +118,39 @@ const AuthSection = ({
 
   const handleModalCancel = () => setModalVisible(false);
 
+  const handleClearAuth = () => {
+    onClearAuth();
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Text className="text-sm font-medium text-gray-700">
           Authentication {hasAuth ? '✓' : ''}
         </Text>
-        <Button 
-          onClick={handleAddAuth}
-          size="sm"
-          variant="secondary"
-          className="text-xs"
-        >
-          {hasAuth ? 'Update' : 'Add Auth'}
-        </Button>
+        <div className="flex gap-2">
+          {hasAuth && (
+            <Button 
+              onClick={handleClearAuth}
+              size="sm"
+              variant="secondary"
+              className="text-xs text-red-600 hover:text-red-700"
+            >
+              Clear
+            </Button>
+          )}
+          <Button 
+            onClick={handleAddAuth}
+            size="sm"
+            variant="secondary"
+            className="text-xs"
+          >
+            {hasAuth ? 'Update' : 'Add Auth'}
+          </Button>
+        </div>
       </div>
       <Text className="text-xs text-gray-500">
-        {hasAuth ? 'Authentication configured' : 'Some tools may require authentication'}
+        {hasAuth ? 'Authentication configured and saved locally' : 'Some tools may require authentication'}
       </Text>
       <AuthModal
         visible={modalVisible}
@@ -143,20 +168,48 @@ const MCPToolsViewer = ({
   auth_type,
   userRole,
   userID,
+  serverAlias, // Add serverAlias prop
 }: MCPToolsViewerProps) => {
   const [mcpAuthValue, setMcpAuthValue] = useState("");
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<CallMCPToolResponse | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
 
+  // Load stored auth token on component mount
+  useEffect(() => {
+    if (mcpServerHasAuth(auth_type)) {
+      const storedAuthValue = getMCPAuthToken(serverId, serverAlias || undefined);
+      if (storedAuthValue) {
+        setMcpAuthValue(storedAuthValue);
+      }
+    }
+  }, [serverId, serverAlias, auth_type]);
+
+  // Function to handle auth submission with localStorage persistence
+  const handleAuthSubmit = (authValue: string) => {
+    setMcpAuthValue(authValue);
+    if (authValue && mcpServerHasAuth(auth_type)) {
+      setMCPAuthToken(serverId, authValue, auth_type || 'none', serverAlias || undefined);
+      NotificationsManager.success('Authentication token saved locally');
+    }
+  };
+
+  // Function to clear auth token
+  const handleClearAuth = () => {
+    setMcpAuthValue("");
+    removeMCPAuthToken(serverId);
+    NotificationsManager.info('Authentication token cleared');
+  };
+
   // Query to fetch MCP tools
   const { data: mcpToolsResponse, isLoading: isLoadingTools, error: mcpToolsError } = useQuery({
-    queryKey: ["mcpTools"],
+    queryKey: ["mcpTools", serverId, mcpAuthValue, serverAlias],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId);
+      return listMCPTools(accessToken, serverId, mcpAuthValue, serverAlias || undefined);
     },
     enabled: !!accessToken,
+    staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
   // Mutation for calling a tool
@@ -165,7 +218,7 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
       
       try {
-        const result = await callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue);
+        const result = await callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue, serverAlias || undefined);
         return result;
       } catch (error) {
         throw error;
@@ -193,7 +246,7 @@ const MCPToolsViewer = ({
             <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
             
             <div className="flex flex-col flex-1">
-              {/* Tool Selection */}
+              {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
                 <Text className="font-medium block mb-3 text-gray-700 flex items-center">
                   <ToolOutlined className="mr-2" /> Available Tools
@@ -216,7 +269,7 @@ const MCPToolsViewer = ({
                 )}
 
                 {/* Error State */}
-                {mcpToolsResponse?.error && (
+                {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
                   <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                     <p className="font-medium">Error: {mcpToolsResponse.message}</p>
                   </div>
@@ -293,17 +346,40 @@ const MCPToolsViewer = ({
                 )}
               </div>
 
-              {/* Authentication Section */}
+              {/* Authentication Section - Below tools list */}
               {mcpServerHasAuth(auth_type) && (
                 <div className="pt-4 border-t border-gray-200 flex-shrink-0 mt-6">
-                  <Text className="font-medium block mb-3 text-gray-700 flex items-center">
-                    <SafetyOutlined className="mr-2" /> Authentication
-                  </Text>
-                  <AuthSection
-                    authType={auth_type}
-                    onAuthSubmit={(value) => setMcpAuthValue(value)}
-                    hasAuth={hasAuth}
-                  />
+                  {!hasAuth ? (
+                    /* Prominent display when auth required but not provided */
+                    <div className="p-4 bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-lg">
+                      <div className="flex items-center mb-3">
+                        <SafetyOutlined className="mr-2 text-orange-600 text-lg" />
+                        <Text className="font-semibold text-orange-800">Authentication Required</Text>
+                      </div>
+                      <Text className="text-sm text-orange-700 mb-4">
+                        This MCP server requires authentication. You must add your credentials below to access the tools.
+                      </Text>
+                      <AuthSection
+                        authType={auth_type}
+                        onAuthSubmit={handleAuthSubmit}
+                        onClearAuth={handleClearAuth}
+                        hasAuth={hasAuth}
+                      />
+                    </div>
+                  ) : (
+                    /* Subtle display when already authenticated */
+                    <>
+                      <Text className="font-medium block mb-3 text-gray-700 flex items-center">
+                        <SafetyOutlined className="mr-2" /> Authentication
+                      </Text>
+                      <AuthSection
+                        authType={auth_type}
+                        onAuthSubmit={handleAuthSubmit}
+                        onClearAuth={handleClearAuth}
+                        hasAuth={hasAuth}
+                      />
+                    </>
+                  )}
                 </div>
               )}
             </div>

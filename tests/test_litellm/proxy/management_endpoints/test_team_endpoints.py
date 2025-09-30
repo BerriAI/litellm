@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-import uuid
+from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -762,7 +762,7 @@ async def test_validate_team_member_add_permissions_admin():
     )
 
     # Create admin user
-    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Create mock team
     team = MagicMock(spec=LiteLLM_TeamTable)
@@ -787,7 +787,7 @@ async def test_validate_team_member_add_permissions_non_admin():
     # Create non-admin user
     regular_user = UserAPIKeyAuth(
         user_id="regular-user",
-        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        user_role=LitellmUserRoles.INTERNAL_USER,
         team_id="different-team",
     )
 
@@ -886,8 +886,8 @@ async def test_process_team_members_multiple_members():
 
     # Create multiple members as dictionaries (they will be converted to Member objects)
     members = [
-        {"user_email": "user1@example.com", "role": "user"},
-        {"user_email": "user2@example.com", "role": "admin"},
+        Member(user_email="user1@example.com", role="user"),
+        Member(user_email="user2@example.com", role="admin"),
     ]
     request_data = TeamMemberAddRequest(
         team_id="test-team-123",
@@ -1055,7 +1055,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
     ), patch(
         "litellm.proxy.auth.auth_checks._cache_team_object"
     ) as mock_cache_team, patch(
-        "litellm.proxy.management_endpoints.team_endpoints._upsert_team_member_budget_table"
+        "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
 
         # Setup mock prisma client
@@ -1082,7 +1082,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, updated_kv, team_member_budget, user_api_key_dict
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1505,9 +1505,9 @@ async def test_list_team_v2_security_check_non_admin_user():
 
         assert exc_info.value.status_code == 401
         assert "Only admin users can query all teams/other teams" in str(
-            exc_info.value.detail["error"]
+            exc_info.value.detail
         )
-        assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.detail["error"])
+        assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1545,7 +1545,7 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
 
         assert exc_info.value.status_code == 401
         assert "Only admin users can query all teams/other teams" in str(
-            exc_info.value.detail["error"]
+            exc_info.value.detail
         )
 
 
@@ -1654,3 +1654,55 @@ async def test_list_team_v2_security_check_admin_user():
         assert "teams" in result
         assert "total" in result
         assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_auth):
+    """
+    Verify that /team/member_delete removes the corresponding LiteLLM_TeamMembership row
+    so the same user can be re-added without unique constraint issues.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-123"
+    test_user_id = "user@example.com"
+
+    # Mock Team row with the user as a member
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+
+    # Configure DB mocks used by team_member_delete
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team_row)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    # User row to allow removal from user's teams list
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.teams = [test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user_row])
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    # Membership deletion should be called
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+
+    # Execute
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Assert membership cleanup executed
+    mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
+    )

@@ -496,6 +496,36 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+    new_value = [
+        {
+            "type": "function",
+            "function": {
+                "name": "git_create_branch",
+                "description": "Creates a new branch from an optional base branch",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"title": "Repo Path", "type": "string"},
+                        "branch_name": {"title": "Branch Name", "type": "string"},
+                        "base_branch": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                            "default": None,
+                        },
+                    },
+                    "required": ["repo_path", "branch_name"],
+                    "title": "GitCreateBranch",
+                },
+            },
+        }
+    ]
+    new_tools = v._map_function(value=new_value)
+
+    assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
+        "base_branch"
+    ] == {
+        "anyOf": [{"type": "string", "nullable": True}]
+    }, f"Expected only anyOf field and its contents to be kept, but got {new_tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+
 
 def test_vertex_ai_streaming_usage_calculation():
     """
@@ -1003,10 +1033,11 @@ def test_vertex_ai_code_line_length():
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
+
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
-    
+
     # Get the source code of the _transform_parts method
     source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
     

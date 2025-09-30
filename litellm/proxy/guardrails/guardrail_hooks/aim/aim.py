@@ -80,7 +80,6 @@ class AimGuardrail(CustomGuardrail):
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
-
         return await self.call_aim_guardrail(
             data, hook="pre_call", key_alias=user_api_key_dict.key_alias
         )
@@ -118,7 +117,7 @@ class AimGuardrail(CustomGuardrail):
             litellm_call_id=call_id,
         )
         response = await self.async_handler.post(
-            f"{self.api_base}/detect/openai/v2",
+            f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": data.get("messages", [])},
         )
@@ -183,14 +182,17 @@ class AimGuardrail(CustomGuardrail):
         )
         call_id = request_data.get("litellm_call_id")
         response = await self.async_handler.post(
-            f"{self.api_base}/detect/output/v2",
+            f"{self.api_base}/fw/v1/analyze",
             headers=self._build_aim_headers(
                 hook=hook,
                 key_alias=key_alias,
                 user_email=user_email,
                 litellm_call_id=call_id,
             ),
-            json={"output": output, "messages": request_data.get("messages", [])},
+            json={
+                "messages": request_data.get("messages", [])
+                + [{"role": "assistant", "content": output}]
+            },
         )
         response.raise_for_status()
         res = response.json()
@@ -243,13 +245,13 @@ class AimGuardrail(CustomGuardrail):
                 "x-aim-litellm-version": litellm_version,
             }
             # Used by Aim to track together single call input and output
-            | ({"x-aim-litellm-call-id": litellm_call_id} if litellm_call_id else {})
+            | ({"x-aim-call-id": litellm_call_id} if litellm_call_id else {})
             # Used by Aim to track guardrails violations by user.
             | ({"x-aim-user-email": user_email} if user_email else {})
             | (
                 {
                     # Used by Aim apply only the guardrails that are associated with the key alias.
-                    "x-aim-litellm-key-alias": key_alias,
+                    "x-aim-gateway-key-alias": key_alias,
                 }
                 if key_alias
                 else {}
@@ -297,7 +299,7 @@ class AimGuardrail(CustomGuardrail):
         )
         call_id = request_data.get("litellm_call_id")
         async with connect(
-            f"{self.ws_api_base}/detect/output/ws",
+            f"{self.ws_api_base}/fw/v1/analyze/stream",
             additional_headers=self._build_aim_headers(
                 hook="output",
                 key_alias=user_api_key_dict.key_alias,

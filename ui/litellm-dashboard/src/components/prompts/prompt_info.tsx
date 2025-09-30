@@ -17,6 +17,7 @@ import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline"
 import { getPromptInfo, PromptInfoResponse, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking"
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
+import NotificationsManager from "../molecules/notifications_manager"
 
 export interface PromptInfoProps {
   promptId: string
@@ -44,7 +45,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       setPromptTemplate(response.raw_prompt_template)
       setRawApiResponse(response) // Store the raw response for the Raw JSON tab
     } catch (error) {
-      message.error("Failed to load prompt information")
+      NotificationsManager.fromBackend("Failed to load prompt information")
       console.error("Error fetching prompt info:", error)
     } finally {
       setLoading(false)
@@ -90,12 +91,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setIsDeleting(true)
     try {
       await deletePromptCall(accessToken, promptData.prompt_id)
-      message.success(`Prompt "${promptData.prompt_id}" deleted successfully`)
+      NotificationsManager.success(`Prompt "${promptData.prompt_id}" deleted successfully`)
       onDelete?.() // Call the callback to refresh the parent component
       onClose() // Close the info view
     } catch (error) {
       console.error("Error deleting prompt:", error)
-      message.error("Failed to delete prompt")
+      NotificationsManager.fromBackend("Failed to delete prompt")
     } finally {
       setIsDeleting(false)
       setShowDeleteConfirm(false)

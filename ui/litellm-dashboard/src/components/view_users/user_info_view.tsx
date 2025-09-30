@@ -14,7 +14,9 @@ import { rolesWithWriteAccess } from "../../utils/roles"
 import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
-import { CopyIcon, CheckIcon } from "lucide-react";
+import { CopyIcon, CheckIcon } from "lucide-react"
+import NotificationsManager from "../molecules/notifications_manager"
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown"
 
 interface UserInfoViewProps {
   userId: string
@@ -35,6 +37,7 @@ interface UserInfo {
     teams: any[] | null
     models: string[] | null
     max_budget: number | null
+    budget_duration: string | null
     spend: number | null
     metadata: Record<string, any> | null
     created_at: string | null
@@ -54,16 +57,17 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(startInEditMode);
-  const [userModels, setUserModels] = useState<string[]>([]);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(initialTab);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [userData, setUserData] = useState<UserInfo | null>(null)
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isEditing, setIsEditing] = useState(startInEditMode)
+  const [userModels, setUserModels] = useState<string[]>([])
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
+  const [baseUrl, setBaseUrl] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState(initialTab)
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [isTeamsExpanded, setIsTeamsExpanded] = useState(false)
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl())
@@ -83,7 +87,7 @@ export default function UserInfoView({
         setUserModels(availableModels)
       } catch (error) {
         console.error("Error fetching user data:", error)
-        message.error("Failed to fetch user data")
+        NotificationsManager.fromBackend("Failed to fetch user data")
       } finally {
         setIsLoading(false)
       }
@@ -94,16 +98,16 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      message.error("Access token not found")
+      NotificationsManager.fromBackend("Access token not found")
       return
     }
     try {
-      message.success("Generating password reset link...")
+      NotificationsManager.success("Generating password reset link...")
       const data = await invitationCreateCall(accessToken, userId)
       setInvitationLinkData(data)
       setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      message.error("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link")
     }
   }
 
@@ -111,14 +115,14 @@ export default function UserInfoView({
     try {
       if (!accessToken) return
       await userDeleteCall(accessToken, [userId])
-      message.success("User deleted successfully")
+      NotificationsManager.success("User deleted successfully")
       if (onDelete) {
         onDelete()
       }
       onClose()
     } catch (error) {
       console.error("Error deleting user:", error)
-      message.error("Failed to delete user")
+      NotificationsManager.fromBackend("Failed to delete user")
     }
   }
 
@@ -136,15 +140,16 @@ export default function UserInfoView({
           user_email: formValues.user_email,
           models: formValues.models,
           max_budget: formValues.max_budget,
+          budget_duration: formValues.budget_duration,
           metadata: formValues.metadata,
         },
       })
 
-      message.success("User updated successfully")
+      NotificationsManager.success("User updated successfully")
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating user:", error)
-      message.error("Failed to update user")
+      NotificationsManager.fromBackend("Failed to update user")
     }
   }
 
@@ -171,14 +176,14 @@ export default function UserInfoView({
   }
 
   const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
+    const success = await utilCopyToClipboard(text)
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
     }
-  };
+  }
 
   return (
     <div className="p-4">
@@ -196,9 +201,9 @@ export default function UserInfoView({
               icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
               className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["user-id"] 
-                  ? 'text-green-600 bg-green-50 border-green-200' 
-                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                copiedStates["user-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
             />
           </div>
@@ -280,7 +285,35 @@ export default function UserInfoView({
               <Card>
                 <Text>Teams</Text>
                 <div className="mt-2">
-                  <Text>{userData.teams?.length || 0} teams</Text>
+                  {userData.teams?.length && userData.teams?.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                        <Badge key={index} color="blue" title={team.team_alias}>
+                          {team.team_alias}
+                        </Badge>
+                      ))}
+                      {!isTeamsExpanded && userData.teams?.length > 20 && (
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(true)}
+                        >
+                          +{userData.teams.length - 20} more
+                        </Badge>
+                      )}
+                      {isTeamsExpanded && userData.teams?.length > 20 && (
+                        <Badge
+                          color="gray"
+                          className="cursor-pointer hover:bg-gray-200 transition-colors"
+                          onClick={() => setIsTeamsExpanded(false)}
+                        >
+                          Show Less
+                        </Badge>
+                      )}
+                    </div>
+                  ) : (
+                    <Text>No teams</Text>
+                  )}
                 </div>
               </Card>
 
@@ -340,9 +373,9 @@ export default function UserInfoView({
                         icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
                         onClick={() => copyToClipboard(userData.user_id, "user-id")}
                         className={`left-2 z-10 transition-all duration-200 ${
-                          copiedStates["user-id"] 
-                            ? 'text-green-600 bg-green-50 border-green-200' 
-                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          copiedStates["user-id"]
+                            ? "text-green-600 bg-green-50 border-green-200"
+                            : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                         }`}
                       />
                     </div>
@@ -354,7 +387,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Role</Text>
+                    <Text className="font-medium">Global Proxy Role</Text>
                     <Text>{userData.user_info?.user_role || "Not Set"}</Text>
                   </div>
 
@@ -380,11 +413,33 @@ export default function UserInfoView({
                     <Text className="font-medium">Teams</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.teams?.length && userData.teams?.length > 0 ? (
-                        userData.teams?.map((team, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
-                            {team.team_alias || team.team_id}
-                          </span>
-                        ))
+                        <>
+                          {userData.teams?.slice(0, isTeamsExpanded ? userData.teams.length : 20).map((team, index) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-blue-100 rounded text-xs"
+                              title={team.team_alias || team.team_id}
+                            >
+                              {team.team_alias || team.team_id}
+                            </span>
+                          ))}
+                          {!isTeamsExpanded && userData.teams?.length > 20 && (
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(true)}
+                            >
+                              +{userData.teams.length - 20} more
+                            </span>
+                          )}
+                          {isTeamsExpanded && userData.teams?.length > 20 && (
+                            <span
+                              className="px-2 py-1 bg-gray-100 rounded text-xs cursor-pointer hover:bg-gray-200 transition-colors"
+                              onClick={() => setIsTeamsExpanded(false)}
+                            >
+                              Show Less
+                            </span>
+                          )}
+                        </>
                       ) : (
                         <Text>No teams</Text>
                       )}
@@ -392,7 +447,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Models</Text>
+                    <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
                         userData.user_info?.models?.map((model, index) => (
@@ -419,6 +474,20 @@ export default function UserInfoView({
                         <Text>No API keys</Text>
                       )}
                     </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Max Budget</Text>
+                    <Text>
+                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                        : "Unlimited"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
                   </div>
 
                   <div>

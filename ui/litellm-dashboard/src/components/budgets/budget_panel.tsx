@@ -39,7 +39,8 @@ import {
 } from "@heroicons/react/outline";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { getBudgetList, budgetDeleteCall } from "../networking";
-import { message } from "antd";
+import NotificationsManager from "../molecules/notifications_manager";
+
 interface BudgetSettingsPageProps {
   accessToken: string | null;
 }
@@ -84,7 +85,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
       return;
     }
 
-    message.info("Request made");
+    NotificationsManager.info("Request made");
 
     await budgetDeleteCall(accessToken, budget_id);
 
@@ -92,7 +93,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     newBudgetList.splice(index, 1);
     setBudgetList(newBudgetList);
 
-    message.success("Budget Deleted.");
+    NotificationsManager.success("Budget Deleted.");
   };
 
   const handleUpdateCall = async () => {

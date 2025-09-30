@@ -3,7 +3,7 @@ import { Modal, Form, InputNumber, message } from "antd";
 import { TextInput } from "@tremor/react";
 import { Button as Button2 } from "antd";
 import { modelUpdateCall } from "../networking";
-
+import NotificationsManager from "../molecules/notifications_manager";
 interface EditModelModalProps {
   visible: boolean;
   onCancel: () => void;
@@ -55,7 +55,7 @@ export const handleEditModelSubmit = async (formValues: Record<string, any>, acc
 
   try {
     let newModelValue = await modelUpdateCall(accessToken, payload);
-    message.success(
+    NotificationsManager.success(
       "Model updated successfully, restart server to see updates"
     );
 

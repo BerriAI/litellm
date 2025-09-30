@@ -15,7 +15,7 @@ class TestGoogleGenAIStudio(BaseGoogleGenAITest):
     @property
     def model_config(self):
         return {
-            "model": "gemini/gemini-1.5-flash",
+            "model": "gemini/gemini-2.5-flash-lite",
         }
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_mock_stream_generate_content_with_tools():
 
         print("\n--- Testing async agenerate_content_stream with function call parsing ---")
         response = await litellm.google_genai.agenerate_content_stream(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash-lite",
             contents=contents,
             tools=[
                 {
@@ -299,7 +299,7 @@ async def test_validate_post_request_parameters():
         
         # Make the API call
         response = await litellm.google_genai.agenerate_content_stream(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash-lite",
             contents=contents,
             tools=tools
         )
@@ -341,9 +341,9 @@ async def test_validate_post_request_parameters():
         
         # Validate model field
         assert "model" in request_data, "Expected 'model' field in request data"
-        # Model might be transformed, but should contain gemini-1.5-flash
+        # Model might be transformed, but should contain gemini-2.5-flash-lite
         model_value = request_data["model"]
-        assert "gemini-1.5-flash" in model_value, f"Expected model to contain 'gemini-1.5-flash', got: {model_value}"
+        assert "gemini-2.5-flash-lite" in model_value, f"Expected model to contain 'gemini-2.5-flash-lite', got: {model_value}"
         print(f"✅ Model validation passed: {model_value}")
         
         # Validate contents field

@@ -206,6 +206,22 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true
     }
   ],
+  [Providers.Dashscope]: [
+    {
+      key: "api_key",
+      label: "Dashscope API Key",
+      type: "password",
+      required: true
+    },
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      defaultValue: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      required: true,
+      tooltip: "The base URL for your Dashscope server. Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 if not specified."
+    }
+  ],
   [Providers.OpenAI_Text_Compatible]: [
     {
       key: "api_base",
@@ -236,11 +252,53 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     },
     {
+      key: "aws_session_token",
+      label: "AWS Session Token",
+      type: "password",
+      required: false,
+      tooltip: "Temporary credentials session token. You can provide the raw token or the environment variable (e.g. `os.environ/MY_SESSION_TOKEN`)."
+    },
+    {
       key: "aws_region_name",
       label: "AWS Region Name",
       placeholder: "us-east-1",
       required: false,
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+    },
+    {
+      key: "aws_session_name",
+      label: "AWS Session Name",
+      placeholder: "my-session",
+      required: false,
+      tooltip: "Name for the AWS session. You can provide the raw value or the environment variable (e.g. `os.environ/MY_SESSION_NAME`)."
+    },
+    {
+      key: "aws_profile_name",
+      label: "AWS Profile Name",
+      placeholder: "default",
+      required: false,
+      tooltip: "AWS profile name to use for authentication. You can provide the raw value or the environment variable (e.g. `os.environ/MY_PROFILE_NAME`)."
+    },
+    {
+      key: "aws_role_name",
+      label: "AWS Role Name",
+      placeholder: "MyRole",
+      required: false,
+      tooltip: "AWS IAM role name to assume. You can provide the raw value or the environment variable (e.g. `os.environ/MY_ROLE_NAME`)."
+    },
+    {
+      key: "aws_web_identity_token",
+      label: "AWS Web Identity Token",
+      type: "password",
+      required: false,
+      tooltip: "Web identity token for OIDC authentication. You can provide the raw token or the environment variable (e.g. `os.environ/MY_WEB_IDENTITY_TOKEN`)."
+    },
+    {
+      key: "aws_bedrock_runtime_endpoint",
+      label: "AWS Bedrock Runtime Endpoint",
+      placeholder: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      required: false,
+      tooltip: "Custom Bedrock runtime endpoint URL. You can provide the raw value or the environment variable (e.g. `os.environ/MY_BEDROCK_ENDPOINT`)."
     }
   ],
   [Providers.SageMaker]: [
@@ -338,6 +396,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     type: "password",
     required: true
   }],
+  [Providers.AIML]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
   [Providers.Cerebras]: [{
     key: "api_key",
     label: "API Key",
@@ -374,6 +438,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     type: "password",
     required: true
   }],
+  [Providers.GradientAI]: [
+    {
+      key: "api_base",
+      label: "GradientAI Endpoint",
+      placeholder: "https://...",
+      required: false
+    },
+    {
+      key: "api_key",
+      label: "GradientAI API Key",
+      type: "password",
+      required: true
+    }
+  ],
   [Providers.Triton]: [{
     key: "api_key",
     label: "API Key",
@@ -386,6 +464,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     placeholder: "http://localhost:8000/generate",
     required: false
   }],
+  [Providers.Hosted_Vllm]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://...",
+      required: true
+    },
+    {
+      key: "api_key",
+      label: "OpenAI API Key",
+      type: "password",
+      required: true
+    }
+  ],
   [Providers.Voyage]: [{
     key: "api_key",
     label: "API Key",
@@ -405,6 +497,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     required: true
   }],
   [Providers.DeepInfra]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
+  [Providers.Oracle]: [{
     key: "api_key",
     label: "API Key",
     type: "password",
@@ -446,7 +544,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
     onChange(info: any) {
       console.log("Upload onChange triggered in ProviderSpecificFields");
       console.log("Current form values:", form.getFieldsValue());
-      
+
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
@@ -465,7 +563,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
             {field.type === "select" ? (
-              <Select 
+              <Select
                 placeholder={field.placeholder}
                 defaultValue={field.defaultValue}
               >
@@ -476,14 +574,14 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 ))}
               </Select>
             ) : field.type === "upload" ? (
-              <Upload 
+              <Upload
                 {...handleUpload}
                 onChange={(info) => {
                   // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-                  
+
                   // Check the field value after a short delay
                   setTimeout(() => {
                     const value = form.getFieldValue(field.key);
@@ -494,9 +592,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (
-              <TextInput 
-                placeholder={field.placeholder} 
-                type={field.type === "password" ? "password" : "text"} 
+              <TextInput
+                placeholder={field.placeholder}
+                type={field.type === "password" ? "password" : "text"}
               />
             )}
           </Form.Item>

@@ -37,15 +37,28 @@ from openai.types.responses.response import (
     IncompleteDetails,
     Response,
     ResponseOutputItem,
-    ResponseTextConfig,
     Tool,
     ToolChoice,
 )
+
+# Handle OpenAI SDK version compatibility for Text type
+try:
+    # fmt: off
+    from openai.types.responses.response_create_params import ( # type: ignore[attr-defined]
+        Text as ResponseText,  # type: ignore[attr-defined]
+    )
+
+    # fmt: on
+except (ImportError, AttributeError):
+    # Fall back to the concrete config type available in all SDK versions
+    from openai.types.responses.response_text_config_param import (
+        ResponseTextConfigParam as ResponseText,
+    )
+
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
-    ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
 )
@@ -186,9 +199,15 @@ class ImageFileObject(TypedDict):
     detail: Optional[str]
 
 
-class ImageURLObject(TypedDict):
+class ImageURLObject(TypedDict, total=False):
     url: Required[str]
     detail: Optional[str]
+
+
+class ImageURLListItem(TypedDict):
+    image_url: ImageURLObject
+    index: int
+    type: Literal["image_url"]
 
 
 class MessageContentTextObject(TypedDict):
@@ -707,6 +726,7 @@ ValidUserMessageContentTypes = [
     "input_audio",
     "audio_url",
     "document",
+    "guarded_text",
     "video_url",
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
@@ -778,6 +798,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     response_format: dict
     seed: int
     service_tier: str
+    safety_identifier: str
     stop: Union[str, List[str]]
     stream_options: dict
     temperature: float
@@ -903,7 +924,6 @@ OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "us
 
 OpenAIImageGenerationOptionalParams = Literal[
     "background",
-    "input_fidelity",
     "moderation",
     "n",
     "output_compression",
@@ -959,7 +979,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     background: Optional[bool]
     stream: Optional[bool]
     temperature: Optional[float]
-    text: Optional[ResponseTextConfigParam]
+    text: Optional["ResponseText"]
     tool_choice: Optional[ToolChoice]
     tools: Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]]
     top_p: Optional[float]
@@ -968,6 +988,10 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     service_tier: Optional[str]
     safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
+    max_tool_calls: Optional[int]
+    prompt_cache_key: Optional[str]
+    stream_options: Optional[dict]
+    top_logprobs: Optional[int]
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1009,35 +1033,38 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     total_tokens: int
     """The total number of tokens used."""
 
+    cost: Optional[float] = None
+    """The cost of the request."""
+
     model_config = {"extra": "allow"}
 
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
-    error: Optional[dict]
-    incomplete_details: Optional[IncompleteDetails]
-    instructions: Optional[str]
-    metadata: Optional[Dict]
-    model: Optional[str]
-    object: Optional[str]
+    error: Optional[dict] = None
+    incomplete_details: Optional[IncompleteDetails] = None
+    instructions: Optional[str] = None
+    metadata: Optional[Dict] = None
+    model: Optional[str] = None
+    object: Optional[str] = None
     output: Union[
         List[Union[ResponseOutputItem, Dict]],
         List[Union[GenericResponseOutputItem, OutputFunctionToolCall]],
     ]
     parallel_tool_calls: bool
-    temperature: Optional[float]
+    temperature: Optional[float] = None
     tool_choice: ToolChoice
-    tools: Union[List[Tool], List[ResponseFunctionToolCall]]
+    tools: Union[List[Tool], List[ResponseFunctionToolCall], List[Dict[str, Any]]]
     top_p: Optional[float]
-    max_output_tokens: Optional[int]
-    previous_response_id: Optional[str]
-    reasoning: Optional[Reasoning]
-    status: Optional[str]
-    text: Optional[ResponseTextConfig]
-    truncation: Optional[Literal["auto", "disabled"]]
-    usage: Optional[ResponseAPIUsage]
-    user: Optional[str]
+    max_output_tokens: Optional[int] = None
+    previous_response_id: Optional[str] = None
+    reasoning: Optional[Reasoning] = None
+    status: Optional[str] = None
+    text: Optional[Union["ResponseText", Dict[str, Any]]] = None
+    truncation: Optional[Literal["auto", "disabled"]] = None
+    usage: Optional[ResponseAPIUsage] = None
+    user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
@@ -1091,6 +1118,16 @@ class ResponsesAPIStreamEvents(str, Enum):
     WEB_SEARCH_CALL_IN_PROGRESS = "response.web_search_call.in_progress"
     WEB_SEARCH_CALL_SEARCHING = "response.web_search_call.searching"
     WEB_SEARCH_CALL_COMPLETED = "response.web_search_call.completed"
+
+    # MCP events - matching OpenAI's official specification
+    MCP_LIST_TOOLS_IN_PROGRESS = "response.mcp_list_tools.in_progress"
+    MCP_LIST_TOOLS_COMPLETED = "response.mcp_list_tools.completed"
+    MCP_LIST_TOOLS_FAILED = "response.mcp_list_tools.failed"
+    MCP_CALL_IN_PROGRESS = "response.mcp_call.in_progress"
+    MCP_CALL_ARGUMENTS_DELTA = "response.mcp_call_arguments.delta"
+    MCP_CALL_ARGUMENTS_DONE = "response.mcp_call_arguments.done"
+    MCP_CALL_COMPLETED = "response.mcp_call.completed"
+    MCP_CALL_FAILED = "response.mcp_call.failed"
 
     # Error event
     ERROR = "error"
@@ -1255,6 +1292,66 @@ class WebSearchCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
 
 
+# MCP List Tools Events
+class MCPListToolsInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_IN_PROGRESS]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPListToolsCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPListToolsFailedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_LIST_TOOLS_FAILED]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+# MCP Call Events
+class MCPCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS]
+    sequence_number: int
+    output_index: int
+    item_id: str
+
+
+class MCPCallArgumentsDeltaEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA]
+    output_index: int
+    item_id: str
+    delta: str  # JSON string containing partial update to arguments
+    sequence_number: int
+
+
+class MCPCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE]
+    output_index: int
+    item_id: str
+    arguments: str  # JSON string containing finalized arguments
+    sequence_number: int
+
+
+class MCPCallCompletedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_COMPLETED]
+    sequence_number: int
+    item_id: str
+    output_index: int
+
+
+class MCPCallFailedEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.MCP_CALL_FAILED]
+    sequence_number: int
+    item_id: str
+    output_index: int
+
+
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     code: Optional[str]
@@ -1295,6 +1392,14 @@ ResponsesAPIStreamingResponse = Annotated[
         WebSearchCallInProgressEvent,
         WebSearchCallSearchingEvent,
         WebSearchCallCompletedEvent,
+        MCPListToolsInProgressEvent,
+        MCPListToolsCompletedEvent,
+        MCPListToolsFailedEvent,
+        MCPCallInProgressEvent,
+        MCPCallArgumentsDeltaEvent,
+        MCPCallArgumentsDoneEvent,
+        MCPCallCompletedEvent,
+        MCPCallFailedEvent,
         ErrorEvent,
         GenericEvent,
     ],
@@ -1302,7 +1407,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["low", "medium", "high"]
+REASONING_EFFORT = Literal["minimal", "low", "medium", "high"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):

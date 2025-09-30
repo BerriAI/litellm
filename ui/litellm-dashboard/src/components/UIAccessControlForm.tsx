@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Form, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface UIAccessControlFormProps {
   accessToken: string | null;
@@ -52,26 +53,35 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
   const handleUIAccessSubmit = async (formValues: Record<string, any>) => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationManager.fromBackend("No access token available");
       return;
     }
 
     setLoading(true);
     try {
       // Transform form data to match API expected structure
-      const apiPayload = {
-        ui_access_mode: {
-          type: formValues.ui_access_mode_type,
-          restricted_sso_group: formValues.restricted_sso_group,
-          sso_group_jwt_field: formValues.sso_group_jwt_field,
-        }
-      };
+      let apiPayload;
+      
+      if (formValues.ui_access_mode_type === 'all_authenticated_users') {
+        // Set ui_access_mode to none when all_authenticated_users is selected
+        apiPayload = {
+          ui_access_mode: "none"
+        };
+      } else {
+        apiPayload = {
+          ui_access_mode: {
+            type: formValues.ui_access_mode_type,
+            restricted_sso_group: formValues.restricted_sso_group,
+            sso_group_jwt_field: formValues.sso_group_jwt_field,
+          }
+        };
+      }
 
       await updateSSOSettings(accessToken, apiPayload);
       onSuccess();
     } catch (error) {
       console.error("Failed to save UI access settings:", error);
-      message.error("Failed to save UI access settings");
+      NotificationManager.fromBackend("Failed to save UI access settings");
     } finally {
       setLoading(false);
     }

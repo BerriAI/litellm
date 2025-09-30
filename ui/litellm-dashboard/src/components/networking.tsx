@@ -1,3 +1,10 @@
+// Shared date formatter for daily activity endpoints
+export const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -18,6 +25,7 @@ import {
   EmailEventSettingsUpdateRequest,
 } from "./email_events/types";
 import { jsonFields } from "./common_components/check_openapi_schema"
+import NotificationsManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -159,7 +167,7 @@ const handleError = async (errorData: string) => {
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
     if (errorData.includes("Authentication Error - Expired Key")) {
-      message.info("UI Session Expired. Logging out.");
+      NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       document.cookie =
         "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
@@ -250,6 +258,99 @@ export const modelCostMap = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const reloadModelCostMap = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/reload/model_cost_map`
+      : `/reload/model_cost_map`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to reload model cost map:", error);
+    throw error;
+  }
+};
+
+export const scheduleModelCostMapReload = async (accessToken: string, hours: number) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload?hours=${hours}`
+      : `/schedule/model_cost_map_reload?hours=${hours}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Schedule model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to schedule model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const cancelModelCostMapReload = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload`
+      : `/schedule/model_cost_map_reload`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Cancel model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to cancel model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const getModelCostMapReloadStatus = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload/status`
+      : `/schedule/model_cost_map_reload/status`;
+    console.log("Fetching status from URL:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Status request failed with status: ${response.status}`);
+      const errorText = await response.text();
+      console.error("Error response:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const jsonData = await response.json();
+    console.log(`Model cost map reload status:`, jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map reload status:", error);
+    throw error;
+  }
+};
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
@@ -268,11 +369,12 @@ export const modelCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMsg = errorData || "Network response was not ok";
-      message.error(errorMsg);
-      throw new Error(errorMsg);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -281,7 +383,7 @@ export const modelCreateCall = async (
     message.destroy();
 
     // Sequential success messages
-    message.success(`Model ${formValues.model_name} created successfully`, 2);
+    NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
 
     return data;
   } catch (error) {
@@ -299,7 +401,7 @@ export const modelSettingsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/model/settings`
       : `/model/settings`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -309,13 +411,15 @@ export const modelSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error: any) {
@@ -342,11 +446,12 @@ export const modelDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -383,11 +488,12 @@ export const budgetDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -418,11 +524,12 @@ export const budgetCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -457,11 +564,12 @@ export const budgetUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -493,11 +601,12 @@ export const invitationCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -532,11 +641,12 @@ export const invitationClaimCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -557,7 +667,7 @@ export const alertingSettingsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/alerting/settings`
       : `/alerting/settings`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -567,13 +677,15 @@ export const alertingSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -776,7 +888,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
     console.log("in keyDeleteCall:", user_key);
-    //message.info("Making key delete request");
+    //NotificationsManager.info("Making key delete request");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -789,14 +901,16 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("API Key Deleted");
+    //NotificationsManager.success("API Key Deleted");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -825,14 +939,16 @@ export const userDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("User(s) Deleted");
+    //NotificationsManager.success("User(s) Deleted");
     return data;
   } catch (error) {
     console.error("Failed to delete user(s):", error);
@@ -856,10 +972,12 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -950,10 +1068,12 @@ export const userListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = (await response.json()) as UserListResponse;
     console.log("/user/list API Response:", data);
@@ -1011,10 +1131,12 @@ export const userInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1044,10 +1166,12 @@ export const teamInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1116,10 +1240,12 @@ export const v2TeamListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/v2/team/list API Response:", data);
@@ -1176,10 +1302,12 @@ export const teamListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/list API Response:", data);
@@ -1209,10 +1337,12 @@ export const availableTeamListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/available_teams API Response:", data);
@@ -1239,10 +1369,12 @@ export const organizationListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1273,10 +1405,12 @@ export const organizationInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1321,11 +1455,12 @@ export const organizationCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1359,11 +1494,12 @@ export const organizationUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log("Update Team Response:", data);
     return data;
@@ -1430,10 +1566,12 @@ export const transformRequestCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1457,13 +1595,6 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1482,10 +1613,12 @@ export const userDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1510,13 +1643,6 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1538,10 +1664,12 @@ export const tagDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1566,13 +1694,6 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1595,10 +1716,12 @@ export const teamDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1615,7 +1738,7 @@ export const getTotalSpendCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend` : `/global/spend`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1625,10 +1748,12 @@ export const getTotalSpendCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1657,10 +1782,12 @@ export const getOnboardingCredentials = async (inviteUUID: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1695,10 +1822,12 @@ export const claimOnboardingToken = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -1729,10 +1858,12 @@ export const regenerateKeyCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Regenerate key Response:", data);
@@ -1763,7 +1894,7 @@ export const modelInfoCall = async (
       url += `?${params.toString()}`;
     }
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1779,7 +1910,7 @@ export const modelInfoCall = async (
         if (errorData.includes("No model list passed")) {
           errorData = "No Models Exist. Click Add Model to get started.";
         }
-        message.info(errorData, 10);
+        NotificationsManager.info(errorData);
         ModelListerrorShown = true;
 
         if (errorTimer) clearTimeout(errorTimer);
@@ -1793,7 +1924,7 @@ export const modelInfoCall = async (
 
     const data = await response.json();
     console.log("modelInfoCall:", data);
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1819,9 +1950,12 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("modelInfoV1Call:", data);
@@ -1852,7 +1986,7 @@ export const modelHubCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/model_group/info`
       : `/model_group/info`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1862,13 +1996,16 @@ export const modelHubCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("modelHubCall:", data);
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1893,9 +2030,12 @@ export const getAllowedIPs = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("getAllowedIPs:", data);
@@ -1923,9 +2063,12 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("addAllowedIP:", data);
@@ -1953,9 +2096,12 @@ export const deleteAllowedIP = async (accessToken: String, ip: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("deleteAllowedIP:", data);
@@ -1984,7 +2130,7 @@ export const modelMetricsCall = async (
     if (modelGroup) {
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
-    // message.info("Requesting model data");
+    // NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1994,12 +2140,14 @@ export const modelMetricsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
-    // message.info("Received model data");
+    // NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2023,7 +2171,7 @@ export const streamingModelMetricsCall = async (
     if (modelGroup) {
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
     }
-    // message.info("Requesting model data");
+    // NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2033,12 +2181,14 @@ export const streamingModelMetricsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
-    // message.info("Received model data");
+    // NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2068,7 +2218,7 @@ export const modelMetricsSlowResponsesCall = async (
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
 
-    // message.info("Requesting model data");
+    // NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2078,12 +2228,14 @@ export const modelMetricsSlowResponsesCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
-    // message.info("Received model data");
+    // NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2122,12 +2274,14 @@ export const modelExceptionsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
-    // message.info("Received model data");
+    // NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2148,10 +2302,12 @@ export const updateUsefulLinksCall = async (accessToken: String, useful_links: R
       body: JSON.stringify({ useful_links: useful_links }),
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2192,7 +2348,7 @@ export const modelAvailableCall = async (
       url += `?${params.toString()}`;
     }
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2202,13 +2358,15 @@ export const modelAvailableCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2231,10 +2389,12 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2259,10 +2419,12 @@ export const teamSpendLogsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2302,9 +2464,12 @@ export const tagsSpendLogsCall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2330,9 +2495,12 @@ export const allTagNamesCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2358,9 +2526,12 @@ export const allEndUsersCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2395,10 +2566,12 @@ export const userFilterUICall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2422,7 +2595,7 @@ export const userSpendLogsCall = async (
     } else {
       url = `${url}?start_date=${startTime}&end_date=${endTime}`;
     }
-    //message.info("Making spend logs request");
+    //NotificationsManager.info("Making spend logs request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2431,14 +2604,16 @@ export const userSpendLogsCall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Spend Logs received");
+    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2458,7 +2633,8 @@ export const uiSpendLogsCall = async (
   user_id?: string,
   end_user?: string,
   status_filter?: string,
-  model?: string
+  model?: string,
+  keyAlias?: string
 ) => {
   try {
     // Construct base URL
@@ -2477,6 +2653,7 @@ export const uiSpendLogsCall = async (
     if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
+    if (keyAlias) queryParams.append("key_alias", keyAlias);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -2492,10 +2669,12 @@ export const uiSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Spend Logs Response:", data);
@@ -2512,7 +2691,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/global/spend/logs`
       : `/global/spend/logs`;
 
-    //message.info("Making spend logs request");
+    //NotificationsManager.info("Making spend logs request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2521,14 +2700,16 @@ export const adminSpendLogsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Spend Logs received");
+    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2542,7 +2723,7 @@ export const adminTopKeysCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/global/spend/keys?limit=5`
       : `/global/spend/keys?limit=5`;
 
-    //message.info("Making spend keys request");
+    //NotificationsManager.info("Making spend keys request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2551,14 +2732,16 @@ export const adminTopKeysCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Spend Logs received");
+    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2588,7 +2771,7 @@ export const adminTopEndUsersCall = async (
       body = JSON.stringify({ startTime: startTime, endTime: endTime });
     }
 
-    //message.info("Making top end users request");
+    //NotificationsManager.info("Making top end users request");
 
     // Define requestOptions with body as an optional property
     const requestOptions = {
@@ -2602,14 +2785,16 @@ export const adminTopEndUsersCall = async (
 
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Top End users received");
+    //NotificationsManager.success("Top End users received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2646,10 +2831,12 @@ export const adminspendByProvider = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2684,9 +2871,12 @@ export const adminGlobalActivity = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2720,9 +2910,12 @@ export const adminGlobalCacheActivity = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2756,9 +2949,12 @@ export const adminGlobalActivityPerModel = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2797,9 +2993,12 @@ export const adminGlobalActivityExceptions = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2838,9 +3037,12 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2856,7 +3058,7 @@ export const adminTopModelsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/global/spend/models?limit=5`
       : `/global/spend/models?limit=5`;
 
-    //message.info("Making top models request");
+    //NotificationsManager.info("Making top models request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2865,14 +3067,16 @@ export const adminTopModelsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Top Models received");
+    //NotificationsManager.success("Top Models received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2916,6 +3120,7 @@ export const keyInfoCall = async (accessToken: String, keys: String[]) => {
 export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
+  model_info: Record<string, any>,
   mode: string
 ) => {
   try {
@@ -2937,6 +3142,7 @@ export const testConnectionRequest = async (
       },
       body: JSON.stringify({
         litellm_params: litellm_params,
+        model_info: model_info,
         mode: mode,
       }),
     });
@@ -2997,7 +3203,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      message.error("Failed to fetch key info - " + errorData);
+      NotificationsManager.fromBackend("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
@@ -3066,6 +3272,7 @@ export const keyListCall = async (
     }
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
+    queryParams.append("include_created_by_keys", "true");
 
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3081,10 +3288,12 @@ export const keyListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/list API Response:", data);
@@ -3108,10 +3317,12 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -3146,13 +3357,15 @@ export const userRequestModelCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
-    //message.success("");
+    //NotificationsManager.success("");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3176,13 +3389,15 @@ export const userGetRequesedtModelsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
-    //message.success("");
+    //NotificationsManager.success("");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3197,6 +3412,57 @@ export interface User {
   user_email: string;
   [key: string]: string; // Include any other potential keys in the dictionary
 }
+
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
 
 export const userGetAllUsersCall = async (
   accessToken: String,
@@ -3216,13 +3482,15 @@ export const userGetAllUsersCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
-    //message.success("Got all users");
+    //NotificationsManager.success("Got all users");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3245,9 +3513,12 @@ export const getPossibleUserRoles = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = (await response.json()) as Record<
       string,
       Record<string, string>
@@ -3289,11 +3560,12 @@ export const teamCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3334,11 +3606,12 @@ export const credentialCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3367,10 +3640,12 @@ export const credentialListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/credentials API Response:", data);
@@ -3407,10 +3682,12 @@ export const credentialGetCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/credentials API Response:", data);
@@ -3440,10 +3717,12 @@ export const credentialDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -3486,11 +3765,12 @@ export const credentialUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3544,7 +3824,7 @@ export const keyUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
     const data = await response.json();
     console.log("Update key Response:", data);
@@ -3579,7 +3859,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      message.error("Failed to update team settings: " + errorData);
+      NotificationsManager.fromBackend("Failed to update team settings: " + errorData);
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -3676,6 +3956,9 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  max_budget_in_team?: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
 }
 
 export const teamMemberAddCall = async (
@@ -3800,21 +4083,43 @@ export const teamMemberUpdateCall = async (
 ) => {
   try {
     console.log("Form Values in teamMemberUpdateCall:", formValues);
+    console.log("Budget value:", formValues.max_budget_in_team);
+    console.log("TPM limit:", formValues.tpm_limit);
+    console.log("RPM limit:", formValues.rpm_limit);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
       : `/team/member_update`;
+    
+    const requestBody: any = {
+      team_id: teamId,
+      role: formValues.role,
+      user_id: formValues.user_id,
+    };
+
+    // Add optional budget and rate limit fields
+    if (formValues.user_email !== undefined) {
+      requestBody.user_email = formValues.user_email;
+    }
+    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
+      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    }
+    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
+      requestBody.tpm_limit = formValues.tpm_limit;
+    }
+    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
+      requestBody.rpm_limit = formValues.rpm_limit;
+    }
+
+    console.log("Final request body:", requestBody);
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        team_id: teamId,
-        role: formValues.role,
-        user_id: formValues.user_id,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -3873,11 +4178,12 @@ export const teamMemberDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3954,11 +4260,12 @@ export const organizationMemberDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3993,11 +4300,12 @@ export const organizationMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -4032,18 +4340,19 @@ export const userUpdateUserCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = (await response.json()) as {
       user_id: string;
       data: UserInfo;
     };
     console.log("API Response:", data);
-    //message.success("User role updated");
+    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4099,11 +4408,12 @@ export const userBulkUpdateUserCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = (await response.json()) as {
       results: Array<{
@@ -4118,7 +4428,7 @@ export const userBulkUpdateUserCall = async (
       failed_updates: number;
     };
     console.log("API Response:", data);
-    //message.success("User role updated");
+    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4136,7 +4446,7 @@ export const PredictedSpendLogsCall = async (
       ? `${proxyBaseUrl}/global/predict/spend/logs`
       : `/global/predict/spend/logs`;
 
-    //message.info("Predicting spend logs request");
+    //NotificationsManager.info("Predicting spend logs request");
 
     const response = await fetch(url, {
       method: "POST",
@@ -4150,14 +4460,16 @@ export const PredictedSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
-    //message.success("Predicted Logs received");
+    //NotificationsManager.success("Predicted Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -4172,7 +4484,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
       : `/health/services?service=slack_budget_alerts`;
 
     console.log("Checking Slack Budget Alerts service health");
-    //message.info("Sending Test Slack alert...");
+    //NotificationsManager.info("Sending Test Slack alert...");
 
     const response = await fetch(url, {
       method: "GET",
@@ -4190,7 +4502,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
     }
 
     const data = await response.json();
-    message.success("Test Slack Alert worked - check your Slack!");
+    NotificationsManager.success("Test Slack Alert worked - check your Slack!");
     console.log("Service Health Response:", data);
 
     // You can add additional logic here based on the response if needed
@@ -4229,9 +4541,6 @@ export const serviceHealthCheck = async (
     }
 
     const data = await response.json();
-    message.success(
-      `Test request to ${service} made - check logs/alerts on ${service} to verify`
-    );
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {
@@ -4247,7 +4556,7 @@ export const getBudgetList = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/budget/list` : `/budget/list`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4257,13 +4566,15 @@ export const getBudgetList = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4280,7 +4591,7 @@ export const getBudgetSettings = async (accessToken: String) => {
       ? `${proxyBaseUrl}/budget/settings`
       : `/budget/settings`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4290,13 +4601,15 @@ export const getBudgetSettings = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4318,7 +4631,7 @@ export const getCallbacksCall = async (
       ? `${proxyBaseUrl}/get/config/callbacks`
       : `/get/config/callbacks`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4328,13 +4641,15 @@ export const getCallbacksCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4349,7 +4664,7 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/config/list?config_type=general_settings`
       : `/config/list?config_type=general_settings`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4359,13 +4674,15 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4380,7 +4697,7 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
       ? `${proxyBaseUrl}/config/pass_through_endpoint`
       : `/config/pass_through_endpoint`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4390,13 +4707,15 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4414,7 +4733,7 @@ export const getConfigFieldSetting = async (
       ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
       : `/config/field/info?field_name=${fieldName}`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4424,9 +4743,12 @@ export const getConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4451,7 +4773,7 @@ export const updatePassThroughFieldSetting = async (
       field_name: fieldName,
       field_value: fieldValue,
     };
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4462,14 +4784,16 @@ export const updatePassThroughFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
-    message.success("Successfully updated value!");
+    //NotificationsManager.info("Received model data");
+    NotificationsManager.success("Successfully updated value!");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4490,7 +4814,7 @@ export const createPassThroughEndpoint = async (
       ? `${proxyBaseUrl}/config/pass_through_endpoint`
       : `/config/pass_through_endpoint`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4503,13 +4827,15 @@ export const createPassThroughEndpoint = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4533,7 +4859,7 @@ export const updateConfigFieldSetting = async (
       field_value: fieldValue,
       config_type: "general_settings",
     };
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4544,14 +4870,16 @@ export const updateConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
-    message.success("Successfully updated value!");
+    //NotificationsManager.info("Received model data");
+    NotificationsManager.success("Successfully updated value!");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4573,7 +4901,7 @@ export const deleteConfigFieldSetting = async (
       field_name: fieldName,
       config_type: "general_settings",
     };
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4584,13 +4912,15 @@ export const deleteConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    message.success("Field reset on proxy");
+    NotificationsManager.success("Field reset on proxy");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4606,9 +4936,9 @@ export const deletePassThroughEndpointsCall = async (
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
-      : `/config/pass_through_endpoint${endpointId}`;
+      : `/config/pass_through_endpoint?endpoint_id=${endpointId}`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -4618,13 +4948,15 @@ export const deletePassThroughEndpointsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4643,7 +4975,7 @@ export const setCallbacksCall = async (
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4656,13 +4988,15 @@ export const setCallbacksCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4678,7 +5012,7 @@ export const healthCheckCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/health` : `/health`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4688,13 +5022,15 @@ export const healthCheckCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4724,9 +5060,12 @@ export const individualModelHealthCheckCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(errorData || "Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4743,7 +5082,7 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/ping` : `/cache/ping`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4759,7 +5098,7 @@ export const cachingHealthCheckCall = async (accessToken: String) => {
     }
 
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4856,7 +5195,7 @@ export const getProxyUISettings = async (accessToken: String) => {
       ? `${proxyBaseUrl}/sso/get/ui_settings`
       : `/sso/get/ui_settings`;
 
-    //message.info("Requesting model data");
+    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4866,12 +5205,15 @@ export const getProxyUISettings = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    //message.info("Received model data");
+    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4894,10 +5236,12 @@ export const getGuardrailsList = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4921,10 +5265,12 @@ export const getPromptsList = async (accessToken: String) : Promise<ListPromptsR
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4946,10 +5292,12 @@ export const getPromptInfo = async (accessToken: String, promptId: string): Prom
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4976,10 +5324,12 @@ export const createPromptCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5007,10 +5357,12 @@ export const updatePromptCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5036,10 +5388,12 @@ export const deletePromptCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5070,10 +5424,12 @@ export const convertPromptFileToJson = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     return await response.json();
   } catch (error) {
@@ -5100,10 +5456,12 @@ export const patchPromptCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5168,10 +5526,12 @@ export const uiSpendLogDetailsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched log details:", data);
@@ -5200,10 +5560,12 @@ export const getInternalUserSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched SSO settings:", data);
@@ -5243,7 +5605,7 @@ export const updateInternalUserSettings = async (
 
     const data = await response.json();
     console.log("Updated internal user settings:", data);
-    message.success("Internal user settings updated successfully");
+    NotificationsManager.success("Internal user settings updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update internal user settings:", error);
@@ -5269,10 +5631,12 @@ export const fetchMCPServers = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched MCP servers:", data);
@@ -5301,10 +5665,12 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched MCP access groups:", data);
@@ -5338,10 +5704,10 @@ export const createMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
@@ -5372,10 +5738,12 @@ export const updateMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     return await response.json();
   } catch (error) {
     console.error("Failed to update MCP server:", error);
@@ -5400,17 +5768,19 @@ export const deleteMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5419,12 +5789,22 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
     console.log("Fetching MCP tools from:", url);
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias && authValue) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else if (authValue) {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     const data = await response.json();
@@ -5712,10 +6092,12 @@ export const getDefaultTeamSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched default team settings:", data);
@@ -5748,14 +6130,16 @@ export const updateDefaultTeamSettings = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Updated default team settings:", data);
-    message.success("Default team settings updated successfully");
+    NotificationsManager.success("Default team settings updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update default team settings:", error);
@@ -5781,10 +6165,12 @@ export const getTeamPermissionsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Team permissions response:", data);
@@ -5818,10 +6204,12 @@ export const teamPermissionsUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Team permissions response:", data);
@@ -5853,10 +6241,12 @@ export const sessionSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6295,10 +6685,12 @@ export const getSSOSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched SSO configuration:", data);
@@ -6331,10 +6723,12 @@ export const updateSSOSettings = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Updated SSO configuration:", data);
@@ -6378,10 +6772,12 @@ export const uiAuditLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6451,13 +6847,15 @@ export const updatePassThroughEndpoint = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
+
     const data = await response.json();
-    message.success("Pass through endpoint updated successfully");
+    NotificationsManager.success("Pass through endpoint updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update pass through endpoint:", error);
@@ -6483,10 +6881,12 @@ export const getPassThroughEndpointInfo = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     const endpoints = data["endpoints"];
@@ -6526,10 +6926,12 @@ export const deleteCallback = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6758,10 +7160,12 @@ export const userAgentAnalyticsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6821,10 +7225,12 @@ export const tagDauCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6883,10 +7289,12 @@ export const tagWauCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6945,10 +7353,12 @@ export const tagMauCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -6978,10 +7388,12 @@ export const tagDistinctCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -7039,10 +7451,12 @@ export const userAgentSummaryCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -7092,10 +7506,12 @@ export const perUserAnalyticsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -7105,3 +7521,10 @@ export const perUserAnalyticsCall = async (
   }
 };
 
+const deriveErrorMessage = (errorData: any): string => {
+  return (errorData?.error && (errorData.error.message || errorData.error)) ||
+    errorData?.message ||
+    errorData?.detail ||
+    errorData?.error ||
+    JSON.stringify(errorData);
+};

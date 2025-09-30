@@ -4,6 +4,7 @@ import { Typography, Spin, message, Switch, Select, Form } from "antd";
 import { getDefaultTeamSettings, updateDefaultTeamSettings, modelAvailableCall } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -47,7 +48,7 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
         }
       } catch (error) {
         console.error("Error fetching team SSO settings:", error);
-        message.error("Failed to fetch team settings");
+        NotificationsManager.fromBackend("Failed to fetch team settings");
       } finally {
         setLoading(false);
       }
@@ -64,10 +65,10 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
       const updatedSettings = await updateDefaultTeamSettings(accessToken, editedValues);
       setSettings({...settings, values: updatedSettings.settings});
       setIsEditing(false);
-      message.success("Default team settings updated successfully");
+      NotificationsManager.success("Default team settings updated successfully");
     } catch (error) {
       console.error("Error updating team settings:", error);
-      message.error("Failed to update team settings");
+      NotificationsManager.fromBackend("Failed to update team settings");
     } finally {
       setSaving(false);
     }

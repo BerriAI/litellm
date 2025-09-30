@@ -19,8 +19,11 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     create_pass_through_route,
+    llm_passthrough_factory_proxy_route,
+    vllm_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
+    bedrock_llm_proxy_route,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
@@ -716,6 +719,85 @@ class TestVertexAIPassThroughHandler:
         empty_response = {}
         assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(empty_response) is False
 
+    def test_vertex_passthrough_handler_predict_cost_tracking(self):
+        """
+        Test that vertex_passthrough_handler correctly tracks costs for /predict endpoint
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        # Create mock embedding response data
+        embedding_response_data = {
+            "predictions": [
+                {
+                    "embeddings": {
+                        "values": [0.1, 0.2, 0.3, 0.4, 0.5],
+                        "statistics": {
+                            "token_count": 10
+                        }
+                    }
+                }
+            ]
+        }
+
+        # Create mock httpx.Response
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = embedding_response_data
+        mock_httpx_response.status_code = 200
+
+        # Create mock logging object
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-123"
+        mock_logging_obj.model_call_details = {}
+
+        # Test URL with /predict endpoint
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict"
+        
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            # Mock the completion cost calculation
+            mock_completion_cost.return_value = 0.0001
+            
+            # Call the handler
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False
+            )
+
+            # Verify cost tracking was implemented
+            assert result is not None
+            assert "result" in result
+            assert "kwargs" in result
+            
+            # Verify cost calculation was called
+            mock_completion_cost.assert_called_once()
+            
+            # Verify cost is set in kwargs
+            assert "response_cost" in result["kwargs"]
+            assert result["kwargs"]["response_cost"] == 0.0001
+            
+            # Verify cost is set in logging object
+            assert "response_cost" in mock_logging_obj.model_call_details
+            assert mock_logging_obj.model_call_details["response_cost"] == 0.0001
+            
+            # Verify model is set in kwargs
+            assert "model" in result["kwargs"]
+            assert result["kwargs"]["model"] == "textembedding-gecko@001"
+
 
 class TestVertexAIDiscoveryPassThroughHandler:
     """
@@ -853,3 +935,179 @@ async def test_is_streaming_request_fn():
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.form = AsyncMock(return_value={"stream": "true"})
     assert await is_streaming_request_fn(mock_request) is True
+
+class TestBedrockLLMProxyRoute:
+    @pytest.mark.asyncio
+    async def test_bedrock_llm_proxy_route_application_inference_profile(self):
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_response = Mock()
+        mock_user_api_key_dict = Mock()
+        mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
+        mock_processor = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body", return_value=mock_request_body), \
+             patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=mock_processor):
+            
+            # Test application-inference-profile endpoint
+            endpoint = "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
+            
+            result = await bedrock_llm_proxy_route(
+                endpoint=endpoint,
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            
+            mock_processor.base_passthrough_process_llm_request.assert_called_once()
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            
+            # For application-inference-profile, model should be "arn:aws:bedrock:us-east-1:026090525607:application-inference-profile/r742sbn2zckd"
+            assert call_kwargs["model"] == "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd"
+            assert result == "success"
+            
+    @pytest.mark.asyncio
+    async def test_bedrock_llm_proxy_route_regular_model(self):
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_response = Mock()
+        mock_user_api_key_dict = Mock()
+        mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
+        mock_processor = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        
+        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body", return_value=mock_request_body), \
+             patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=mock_processor):
+            
+            # Test regular model endpoint
+            endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
+            
+            result = await bedrock_llm_proxy_route(
+                endpoint=endpoint,
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            mock_processor.base_passthrough_process_llm_request.assert_called_once()
+            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            
+            # For regular models, model should be just the model ID
+            assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
+            assert result == "success"
+
+
+class TestLLMPassthroughFactoryProxyRoute:
+    @pytest.mark.asyncio
+    async def test_llm_passthrough_factory_proxy_route_success(self):
+        from litellm.types.utils import LlmProviders
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.json = AsyncMock(return_value={"stream": False})
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.utils.ProviderConfigManager.get_provider_model_info"
+        ) as mock_get_provider, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
+        ) as mock_get_creds, patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_provider_config = MagicMock()
+            mock_provider_config.get_api_base.return_value = "https://example.com/v1"
+            mock_provider_config.validate_environment.return_value = {
+                "x-api-key": "dummy"
+            }
+            mock_get_provider.return_value = mock_provider_config
+            mock_get_creds.return_value = "dummy"
+
+            mock_endpoint_func = AsyncMock(return_value="success")
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await llm_passthrough_factory_proxy_route(
+                custom_llm_provider=LlmProviders.VLLM,
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            assert result == "success"
+            mock_get_provider.assert_called_once_with(
+                provider=litellm.LlmProviders(LlmProviders.VLLM), model=None
+            )
+            mock_get_creds.assert_called_once_with(
+                custom_llm_provider=LlmProviders.VLLM, region_name=None
+            )
+            mock_create_route.assert_called_once_with(
+                endpoint="/chat/completions",
+                target="https://example.com/v1/chat/completions",
+                custom_headers={"x-api-key": "dummy"},
+            )
+            mock_endpoint_func.assert_awaited_once()
+
+
+class TestVLLMProxyRoute:
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "stream": False},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch("litellm.proxy.proxy_server.llm_router")
+    async def test_vllm_proxy_route_with_router_model(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_is_router.assert_called_once()
+        mock_llm_router.allm_passthrough_route.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "other-model"},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=False,
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.llm_passthrough_factory_proxy_route"
+    )
+    async def test_vllm_proxy_route_fallback_to_factory(
+        self, mock_factory_route, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_factory_route.return_value = "factory_success"
+
+        result = await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert result == "factory_success"
+        mock_factory_route.assert_awaited_once()

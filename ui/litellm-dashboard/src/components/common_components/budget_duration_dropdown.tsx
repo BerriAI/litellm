@@ -5,7 +5,7 @@ const { Option } = Select;
 
 interface BudgetDurationDropdownProps {
   value?: string | null;
-  onChange: (value: string) => void;
+  onChange?: (value: string) => void;
   className?: string;
   style?: React.CSSProperties;
 }

@@ -32,10 +32,18 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
 
         // Create mappings first
-        const mappings = values.map(model => ({
-          public_name: model,
-          litellm_model: model
-        }));
+        const mappings = values.map(model => {
+          if (selectedProvider === Providers.Azure) {
+            return {
+              public_name: model,
+              litellm_model: `azure/${model}`
+            };
+          }
+          return {
+            public_name: model,
+            litellm_model: model
+          };
+        });
         
         // Update both fields in one call to reduce re-renders
         form.setFieldsValue({ 
@@ -47,6 +55,22 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     }
   };
 
+  const handleAzureDeploymentNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const deploymentName = e.target.value;
+
+    // Create mapping with Azure-specific format
+    const mappings = deploymentName ? [{
+      public_name: deploymentName,
+      litellm_model: `azure/${deploymentName}`
+    }] : [];
+    
+    // Update both fields
+    form.setFieldsValue({ 
+      model: deploymentName,
+      model_mappings: mappings
+    });
+  };
+
   // Handle custom model name changes
   const handleCustomModelNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const customName = e.target.value;
@@ -55,6 +79,12 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     const currentMappings = form.getFieldValue('model_mappings') || [];
     const updatedMappings = currentMappings.map((mapping: any) => {
       if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
+        if (selectedProvider === Providers.Azure) {
+          return {
+            public_name: customName,
+            litellm_model: `azure/${customName}`
+          };
+        }
         return {
           public_name: customName,
           litellm_model: customName
@@ -70,12 +100,12 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     <>
       <Form.Item
         label="LiteLLM Model Name(s)"
-        tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
+        tooltip="The model name LiteLLM will send to the LLM API"
         className="mb-0"
       >
         <Form.Item
           name="model"
-          rules={[{ required: true, message: "Please select at least one model." }]}
+          rules={[{ required: true, message: `Please enter ${selectedProvider === Providers.Azure ? 'a deployment name' : 'at least one model'}.` }]}
           noStyle
         >
           {(selectedProvider === Providers.Azure) || 
@@ -84,6 +114,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             <>
               <TextInput 
                 placeholder={getPlaceholder(selectedProvider)} 
+                onChange={selectedProvider === Providers.Azure ? handleAzureDeploymentNameChange : undefined}
               />
             </>
           ) : providerModels.length > 0 ? (
@@ -135,7 +166,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 className="mt-2"
               >
                 <TextInput 
-                  placeholder="Enter custom model name" 
+                  placeholder={selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"}
                   onChange={handleCustomModelNameChange}
                 />
               </Form.Item>
@@ -145,9 +176,12 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       </Form.Item>
       <Row>
         <Col span={10}></Col>
-        <Col span={10}>
+        <Col span={14}>
           <Text className="mb-3 mt-1">
-            Actual model name used for making litellm.completion() call. We loadbalance models with the same public name
+            {selectedProvider === Providers.Azure 
+              ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
+              : "The model name LiteLLM will send to the LLM API"
+            }
           </Text>
         </Col>
       </Row>

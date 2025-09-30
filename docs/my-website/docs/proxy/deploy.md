@@ -12,10 +12,8 @@ To start using Litellm, run the following commands in a shell:
 
 ```bash
 # Get the code
-git clone https://github.com/BerriAI/litellm
-
-# Go to folder
-cd litellm
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/BerriAI/litellm/main/prometheus.yml
 
 # Add the master key - you can change this after setup
 echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
@@ -127,6 +125,8 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 
 Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
 
+**Note:** You'll need to copy the `schema.prisma` file from the [litellm repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) to your build directory alongside the Dockerfile and requirements.txt.
+
 Dockerfile 
 
 ```shell
@@ -148,6 +148,12 @@ RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -r requirements.txt
+
+# Copy Prisma schema file
+COPY schema.prisma .
+
+# Generate prisma client
+RUN prisma generate
 
 EXPOSE 4000/tcp
 
@@ -1002,5 +1008,13 @@ User-agent: *
 Disallow: /
 ```
 
+## Deployment FAQ
+
+**Q: Is Postgres the only supported database, or do you support other ones (like Mongo)?**
+
+A: We explored MySQL but that was hard to maintain and led to bugs for customers. Currently, PostgreSQL is our primary supported database for production deployments.
 
 
+**Q: If there is Postgres downtime, how does LiteLLM react? Does it fail-open or is there API downtime?**
+
+A: You can gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)

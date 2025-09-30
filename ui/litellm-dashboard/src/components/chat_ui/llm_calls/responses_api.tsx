@@ -4,6 +4,8 @@ import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPTool } from "@/components/chat_ui/llm_calls/fetch_mcp_tools";
+import NotificationManager from "@/components/molecules/notifications_manager";
+import { MCPEvent } from "../MCPEventsDisplay";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -18,7 +20,10 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string
+  selectedMCPTools?: string[],
+  previousResponseId?: string | null,
+  onResponseId?: (responseId: string) => void,
+  onMCPEvent?: (event: MCPEvent) => void
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -49,21 +54,30 @@ export async function makeOpenAIResponsesRequest(
     let firstTokenReceived = false;
     
     // Format messages for the API
-    const formattedInput = messages.map(message => ({
-      role: message.role,
-      content: message.content,
-      type: "message"
-    }));
+    const formattedInput = messages.map(message => {
+      // If content is already an array (multimodal), use it directly
+      if (Array.isArray(message.content)) {
+        return {
+          role: message.role,
+          content: message.content,
+          type: "message"
+        };
+      }
+      // Otherwise, wrap text content in the expected format
+      return {
+        role: message.role,
+        content: message.content,
+        type: "message"
+      };
+    });
 
-    // Format MCP tool if selected
-    const tools = selectedMCPTool ? [{
+    // Format MCP tools if selected
+    const tools = selectedMCPTools && selectedMCPTools.length > 0 ? [{
       type: "mcp",
       server_label: "litellm",
-      server_url: `${proxyBaseUrl}/mcp`,
+      server_url: `litellm_proxy/mcp`,
       require_approval: "never",
-      headers: {
-        "x-litellm-api-key": `Bearer ${accessToken}`
-      }
+      allowed_tools: selectedMCPTools,
     }] : undefined;
 
     // Create request to OpenAI responses API
@@ -73,6 +87,7 @@ export async function makeOpenAIResponsesRequest(
       input: formattedInput,
       stream: true,
       litellm_trace_id: traceId,
+      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
       ...(tools ? { tools, tool_choice: "required" } : {}),
@@ -85,6 +100,29 @@ export async function makeOpenAIResponsesRequest(
 
       // Use a type-safe approach to handle events
       if (typeof event === 'object' && event !== null) {
+        // Handle MCP events first
+        if (event.type?.startsWith('response.mcp_') || 
+            (event.type === "response.output_item.done" && 
+             (event.item?.type === "mcp_list_tools" || event.item?.type === "mcp_call"))) {
+          console.log("MCP event received:", event);
+          
+          if (onMCPEvent) {
+            const mcpEvent: MCPEvent = {
+              type: event.type,
+              sequence_number: event.sequence_number,
+              output_index: event.output_index,
+              item_id: event.item_id || event.item?.id, // Handle both structures
+              item: event.item,
+              delta: event.delta,
+              arguments: event.arguments,
+              timestamp: Date.now()
+            };
+            onMCPEvent(mcpEvent);
+          }
+          
+          // Continue processing other aspects of the event
+        }
+
         // Check for MCP tool usage
         if (event.type === "response.output_item.done" && 
             event.item?.type === "mcp_call" && 
@@ -133,6 +171,14 @@ export async function makeOpenAIResponsesRequest(
           const response_obj = event.response;
           const usage = response_obj.usage;
           console.log("Usage data:", usage);
+          console.log("Response completed event:", response_obj);
+          
+          // Extract response_id for session management
+          if (response_obj.id && onResponseId) {
+            console.log("Response ID for session management:", response_obj.id);
+            onResponseId(response_obj.id);
+          }
+          
           if (usage && onUsageData) {
             console.log("Usage data:", usage);
             
@@ -159,7 +205,7 @@ export async function makeOpenAIResponsesRequest(
     if (signal?.aborted) {
       console.log("Responses API request was cancelled");
     } else {
-      message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
+      NotificationManager.fromBackend(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

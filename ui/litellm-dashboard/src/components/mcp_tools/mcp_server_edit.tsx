@@ -6,6 +6,7 @@ import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -58,7 +59,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         server_name: mcpServer.server_name,
         url: mcpServer.url,
         transport: mcpServer.transport,
-        spec_version: mcpServer.spec_version,
         auth_type: mcpServer.auth_type,
         mcp_info: mcpServer.mcp_info,
       };
@@ -128,10 +128,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       };
 
       const updated = await updateMCPServer(accessToken, payload);
-      message.success("MCP Server updated successfully");
+      NotificationsManager.success("MCP Server updated successfully");
       onSuccess(updated);
     } catch (error: any) {
-      message.error("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      NotificationsManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
     }
   };
 
@@ -176,13 +176,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                 <Select.Option value="api_key">API Key</Select.Option>
                 <Select.Option value="bearer_token">Bearer Token</Select.Option>
                 <Select.Option value="basic">Basic Auth</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item label="MCP Version" name="spec_version" rules={[{ required: true }]}> 
-              <Select>
-                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
-                <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
 

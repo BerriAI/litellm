@@ -166,3 +166,57 @@ class TestGetRoutes:
         assert mount_route["endpoint"] == "handle_streamable_http_mcp"
         assert mount_route["mounted_app"] is True
 
+    def test_get_routes_for_mounted_app_with_static_files(self):
+        """
+        Test getting routes for mounted app with StaticFiles object (reproduces AttributeError bug).
+        
+        This test reproduces the exact stacktrace scenario:
+        AttributeError: 'StaticFiles' object has no attribute '__name__'. Did you mean: '__ne__'?
+        
+        The original bug occurred when the code tried to access endpoint_func.__name__ 
+        directly on a StaticFiles object. The fix uses _safe_get_endpoint_name() which 
+        gracefully handles objects without __name__ by falling back to class name.
+        """
+        # Mock the main mount route (e.g., /ui)
+        mock_mount_route = Mock()
+        mock_mount_route.path = "/ui"
+        
+        # Mock sub-app with routes
+        mock_sub_app = Mock()
+        mock_sub_app.routes = []
+        
+        # Create a mock StaticFiles route (this is the problematic case)
+        mock_static_route = Mock(spec=['path', 'name', 'endpoint', 'app'])
+        mock_static_route.path = ""
+        mock_static_route.name = "ui"
+        mock_static_route.endpoint = None
+        
+        # Mock StaticFiles object - this is the key part that caused the AttributeError
+        # Real StaticFiles objects don't have __name__ attribute
+        # Create a mock that simulates StaticFiles behavior (no __name__ attribute)
+        class StaticFiles:
+            """Mock class that simulates real StaticFiles without __name__ attribute"""
+            pass
+        
+        mock_static_files = StaticFiles()
+        # Verify no __name__ attribute exists on the instance (reproduces bug condition)
+        assert not hasattr(mock_static_files, '__name__')
+        
+        mock_static_route.app = mock_static_files
+        
+        mock_sub_app.routes.append(mock_static_route)
+        mock_mount_route.app = mock_sub_app
+        
+        # This should NOT raise AttributeError thanks to _safe_get_endpoint_name
+        # In the old code, this would fail with: 'StaticFiles' object has no attribute '__name__'
+        result = GetRoutes.get_routes_for_mounted_app(mock_mount_route)
+        
+        # Should handle StaticFiles gracefully without throwing AttributeError
+        assert len(result) == 1
+        assert result[0]["path"] == "/ui"
+        assert result[0]["methods"] == ["GET", "POST"]  # Default methods
+        assert result[0]["name"] == "ui"
+        # Should fall back to class name since instance doesn't have __name__ attribute
+        assert result[0]["endpoint"] == "StaticFiles"  # Falls back to class name
+        assert result[0]["mounted_app"] is True
+

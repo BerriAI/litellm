@@ -5,7 +5,7 @@ PANW Prisma AIRS Built-in Guardrail for LiteLLM
 """
 
 import os
-import uuid
+from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, cast
 
 from fastapi import HTTPException
@@ -64,7 +64,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
         self.profile_name = profile_name
 
-        verbose_proxy_logger.info(
+        verbose_proxy_logger.debug(
             f"Initialized PANW Prisma AIRS Guardrail: {guardrail_name}"
         )
 
@@ -253,7 +253,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         Raises HTTPException if content should be blocked.
         """
-        verbose_proxy_logger.info("PANW Prisma AIRS: Running pre-call prompt scan")
+        verbose_proxy_logger.debug("PANW Prisma AIRS: Running pre-call prompt scan")
 
         # Extract prompt text from messages
         messages = data.get("messages", [])
@@ -280,7 +280,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         category = scan_result.get("category", "unknown")
 
         if action == "allow":
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"PANW Prisma AIRS: Response allowed (Category: {category})"
             )
 
@@ -305,7 +305,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         Raises HTTPException if response should be blocked.
         """
-        verbose_proxy_logger.info("PANW Prisma AIRS: Running post-call response scan")
+        verbose_proxy_logger.debug("PANW Prisma AIRS: Running post-call response scan")
 
         # Extract response text
         response_text = self._extract_response_text(response)
@@ -331,7 +331,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         category = scan_result.get("category", "unknown")
 
         if action == "allow":
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"PANW Prisma AIRS: Response allowed (Category: {category})"
             )
 

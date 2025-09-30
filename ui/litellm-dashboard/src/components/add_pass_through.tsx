@@ -28,6 +28,7 @@ import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
+import NotificationsManager from "./molecules/notifications_manager";
 const { Option } = Select2;
 
 interface AddFallbacksProps {
@@ -80,14 +81,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       const updatedPassThroughSettings = [...passThroughItems, createdEndpoint]
       setPassThroughItems(updatedPassThroughSettings)
       
-      message.success("Pass-through endpoint created successfully");
+      NotificationsManager.success("Pass-through endpoint created successfully");
       form.resetFields();
       setPathValue("");
       setTargetValue("");
       setIncludeSubpath(true);
       setIsModalVisible(false);
     } catch (error) {
-      message.error("Error creating pass-through endpoint: " + error, 20);
+      NotificationsManager.fromBackend("Error creating pass-through endpoint: " + error);
     } finally {
       setIsLoading(false);
     }
@@ -95,7 +96,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    message.success('Copied to clipboard!');
+    NotificationsManager.success('Copied to clipboard!');
   };
 
 

@@ -29,6 +29,7 @@ import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface EntityMetrics {
   metrics: {
@@ -688,7 +689,28 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           <TableBody>
                             {getProviderSpend().map((provider) => (
                               <TableRow key={provider.provider}>
-                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>
+                                  <div className="flex items-center space-x-2">
+                                    {provider.provider && (
+                                      <img
+                                        src={getProviderLogoAndName(provider.provider).logo}
+                                        alt={`${provider.provider} logo`}
+                                        className="w-4 h-4"
+                                        onError={(e) => {
+                                          const target = e.target as HTMLImageElement;
+                                          const parent = target.parentElement;
+                                          if (parent) {
+                                            const fallbackDiv = document.createElement('div');
+                                            fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                            fallbackDiv.textContent = provider.provider?.charAt(0) || '-';
+                                            parent.replaceChild(fallbackDiv, target);
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                    <span>{provider.provider}</span>
+                                  </div>
+                                </TableCell>
                                 <TableCell>
                                   ${formatNumberWithCommas(provider.spend, 2)}
                                 </TableCell>

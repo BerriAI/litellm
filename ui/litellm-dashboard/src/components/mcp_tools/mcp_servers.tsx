@@ -12,6 +12,7 @@ import { MCPServerView } from "./mcp_server_view"
 import CreateMCPServer from "./create_mcp_server"
 import MCPConnect from "./mcp_connect"
 import { QuestionCircleOutlined } from "@ant-design/icons"
+import NotificationsManager from "../molecules/notifications_manager"
 
 const { Option } = Select
 
@@ -39,6 +40,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     data: mcpServers,
     isLoading: isLoadingServers,
     refetch,
+    dataUpdatedAt,
   } = useQuery({
     queryKey: ["mcpServers"],
     queryFn: () => {
@@ -46,7 +48,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return fetchMCPServers(accessToken)
     },
     enabled: !!accessToken,
-  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void }
+  }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number }
 
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null)
@@ -116,11 +118,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setFilteredServers(filtered)
   }
 
-  // Initial and effect-based filtering
+  // Initial and effect-based filtering (trigger on query data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup)
-    // eslint-disable-next-line
-  }, [mcpServers])
+  }, [dataUpdatedAt])
 
   const columns = React.useMemo(
     () =>
@@ -150,7 +151,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
     try {
       await deleteMCPServer(accessToken, serverIdToDelete)
-      message.success("Deleted MCP Server successfully")
+      NotificationsManager.success("Deleted MCP Server successfully")
       refetch()
     } catch (error) {
       console.error("Error deleting the mcp server:", error)
@@ -184,7 +185,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             alias: "",
             url: "",
             transport: "",
-            spec_version: "",
             auth_type: "",
             created_at: "",
             created_by: "",

@@ -7,7 +7,6 @@ JWT token must have 'litellm_proxy_admin' in scope.
 """
 
 import fnmatch
-import json
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
 
@@ -28,6 +27,7 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -50,6 +50,7 @@ from .auth_checks import (
     get_org_object,
     get_role_based_models,
     get_role_based_routes,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -162,6 +163,7 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
+
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
             team_ids: Optional[List[str]] = get_nested_value(
                 data=token,
@@ -412,7 +414,16 @@ class JWTHandler:
             if cached_keys is None:
                 response = await self.http_handler.get(key_url)
 
-                response_json = response.json()
+                try:
+                    response_json = response.json()
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"Error parsing response: {e}. Original Response: {response.text}"
+                    )
+                    raise Exception(
+                        f"Error parsing response: {e}. Check server logs for original response."
+                    )
+
                 if "keys" in response_json:
                     keys: JWKKeyValue = response.json()["keys"]
                 else:
@@ -473,7 +484,18 @@ class JWTHandler:
         # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
         # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
         #   the key in different ways (e.g. HS* and RS*)."
-        algorithms = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"]
+        algorithms = [
+            "RS256",
+            "RS384",
+            "RS512",
+            "PS256",
+            "PS384",
+            "PS512",
+            "ES256",
+            "ES384",
+            "ES512",
+            "EdDSA",
+        ]
 
         audience = os.getenv("JWT_AUDIENCE")
         decode_options = None
@@ -481,7 +503,7 @@ class JWTHandler:
             decode_options = {"verify_aud": False}
 
         import jwt
-        from jwt.algorithms import RSAAlgorithm
+        from jwt.api_jwk import PyJWK
 
         header = jwt.get_unverified_header(token)
 
@@ -501,14 +523,21 @@ class JWTHandler:
                 jwk["n"] = public_key["n"]
             if "e" in public_key:
                 jwk["e"] = public_key["e"]
+            if "x" in public_key:
+                jwk["x"] = public_key["x"]
+            if "y" in public_key:
+                jwk["y"] = public_key["y"]
+            if "crv" in public_key:
+                jwk["crv"] = public_key["crv"]
 
-            public_key_rsa = RSAAlgorithm.from_jwk(json.dumps(jwk))
+            # parse RSA/EC/OKP keys
+            public_key_obj = PyJWK.from_dict(jwk).key
 
             try:
                 # decode the token using the public key
                 payload = jwt.decode(
                     token,
-                    public_key_rsa,  # type: ignore
+                    public_key_obj,  # type: ignore
                     algorithms=algorithms,
                     options=decode_options,
                     audience=audience,
@@ -707,6 +736,7 @@ class JWTAuthManager:
             user_id=user_id,
             end_user_id=None,
             org_id=org_id,
+            team_membership=None,
         )
 
     @staticmethod
@@ -763,6 +793,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
+        from litellm.proxy.proxy_server import llm_router
 
         if not team_ids:
             if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
@@ -789,7 +820,7 @@ class JWTAuthManager:
                         or can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
-                            llm_router=None,
+                            llm_router=llm_router,
                             team_model_aliases=None,
                         )
                     ):
@@ -838,6 +869,7 @@ class JWTAuthManager:
         user_email: Optional[str],
         org_id: Optional[str],
         end_user_id: Optional[str],
+        team_id: Optional[str],
         valid_user_email: Optional[bool],
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
@@ -849,6 +881,7 @@ class JWTAuthManager:
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
         Optional[LiteLLM_EndUserTable],
+        Optional[LiteLLM_TeamMembership],
     ]:
         """Get user, org, and end user objects"""
         org_object: Optional[LiteLLM_OrganizationTable] = None
@@ -899,7 +932,22 @@ class JWTAuthManager:
                 else None
             )
 
-        return user_object, org_object, end_user_object
+        team_membership_object: Optional[LiteLLM_TeamMembership] = None
+        if user_id and team_id:
+            team_membership_object = (
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id and team_id
+                else None
+            )
+
+        return user_object, org_object, end_user_object, team_membership_object
 
     @staticmethod
     def validate_object_id(
@@ -1124,18 +1172,21 @@ class JWTAuthManager:
             )
 
         # Get other objects
-        user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
-            user_id=user_id,
-            user_email=user_email,
-            org_id=org_id,
-            end_user_id=end_user_id,
-            valid_user_email=valid_user_email,
-            jwt_handler=jwt_handler,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            route=route,
+        user_object, org_object, end_user_object, team_membership_object = (
+            await JWTAuthManager.get_objects(
+                user_id=user_id,
+                user_email=user_email,
+                org_id=org_id,
+                end_user_id=end_user_id,
+                team_id=team_id,
+                valid_user_email=valid_user_email,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
         )
 
         await JWTAuthManager.sync_user_role_and_teams(
@@ -1176,4 +1227,5 @@ class JWTAuthManager:
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             token=api_key,
+            team_membership=team_membership_object,
         )
