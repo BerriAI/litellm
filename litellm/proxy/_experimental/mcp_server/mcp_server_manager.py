@@ -443,6 +443,7 @@ class MCPServerManager:
         server: MCPServer,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        add_prefix: bool = True,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -468,9 +469,11 @@ class MCPServerManager:
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
 
-            prefixed_tools = self._create_prefixed_tools(tools, server)
+            prefixed_or_original_tools = self._create_prefixed_tools(
+                tools, server, add_prefix=add_prefix
+            )
 
-            return prefixed_tools
+            return prefixed_or_original_tools
 
         except Exception as e:
             verbose_logger.warning(
@@ -539,7 +542,7 @@ class MCPServerManager:
             return []
 
     def _create_prefixed_tools(
-        self, tools: List[MCPTool], server: MCPServer
+        self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
     ) -> List[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -557,14 +560,16 @@ class MCPServerManager:
         for tool in tools:
             prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
 
-            prefixed_tool = MCPTool(
-                name=prefixed_name,
+            name_to_use = prefixed_name if add_prefix else tool.name
+
+            tool_obj = MCPTool(
+                name=name_to_use,
                 description=tool.description,
                 inputSchema=tool.inputSchema,
             )
-            prefixed_tools.append(prefixed_tool)
+            prefixed_tools.append(tool_obj)
 
-            # Update tool to server mapping with both original and prefixed names
+            # Update tool to server mapping for resolution (support both forms)
             self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
             self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
@@ -729,7 +734,7 @@ class MCPServerManager:
             )
 
         # Get server-specific auth header if available
-        server_auth_header = None
+        server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers and mcp_server.alias:
             server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
         elif mcp_server_auth_headers and mcp_server.server_name:
