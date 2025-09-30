@@ -3680,7 +3680,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_config = getattr(litellm, "global_gitlab_config", None)
             if gitlab_config is None:
                 raise ValueError(
-                    "BitBucket configuration not found. Please set litellm.global_gitlab_config first."
+                    "Gitlab configuration not found. Please set litellm.global_gitlab_config first."
                 )
 
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
