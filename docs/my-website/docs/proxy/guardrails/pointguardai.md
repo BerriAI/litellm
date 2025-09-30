@@ -63,31 +63,18 @@ export OPENAI_API_KEY="sk-proj-xxxx...XxxX"
 <TabItem label="LiteLLM CLI (Pip package)" value="litellm-cli">
 
 ```shell
-litellm --config config.yaml
+litellm --config config.yaml --detailed_debug
 ```
 
 </TabItem>
 <TabItem label="LiteLLM Docker (Container)" value="litellm-docker">
 
-```shell
-docker run --rm \
-  --name litellm-proxy \
-  -p 4000:4000 \
-  -e POINTGUARDAI_ORG_CODE=$POINTGUARDAI_ORG_CODE \
-  -e POINTGUARDAI_API_URL_BASE=$POINTGUARDAI_API_URL_BASE \
-  -e POINTGUARDAI_API_EMAIL=$POINTGUARDAI_API_EMAIL \
-  -e POINTGUARDAI_API_KEY=$POINTGUARDAI_API_KEY \
-  -e POINTGUARDAI_CONFIG_NAME=$POINTGUARDAI_CONFIG_NAME \
-  -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:main-latest \
-  --config /app/config.yaml
-```
+
 
 </TabItem>
 </Tabs>
 
-### 4. Test your first request
+### 3. Test your first request
 
 <Tabs>
 <TabItem label="Blocked request" value = "blocked">
