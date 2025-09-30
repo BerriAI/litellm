@@ -2591,6 +2591,15 @@ def get_optional_params_image_gen(
             model=model or "",
             drop_params=drop_params if drop_params is not None else False,
         )
+        # When provider config is used and drop_params is enabled, 
+        # remove dropped params from passed_params to prevent them from being added to extra_body
+        if drop_params is True or litellm.drop_params is True:
+            # Filter passed_params to only include supported parameters
+            filtered_passed_params = {}
+            for k, v in passed_params.items():
+                if k in supported_params or k in ["model", "custom_llm_provider", "provider_config", "drop_params", "additional_drop_params"]:
+                    filtered_passed_params[k] = v
+            passed_params = filtered_passed_params
     elif (
         custom_llm_provider == "openai"
         or custom_llm_provider == "azure"
