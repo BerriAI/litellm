@@ -107,6 +107,7 @@ async def create_streaming_response(
     """
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
+    verbose_proxy_logger.debug(f"🔥 Creating streaming response with generator: {generator}")
 
     try:
         # Handle coroutine that returns a generator
@@ -115,7 +116,7 @@ async def create_streaming_response(
 
         # Now get the first chunk from the actual generator
         first_chunk_value = await generator.__anext__()
-
+        verbose_proxy_logger.debug(f"🔥 First chunk value: {first_chunk_value}")
         if first_chunk_value is not None:
             try:
                 error_code_from_chunk = await _parse_event_data_for_error(
@@ -131,6 +132,7 @@ async def create_streaming_response(
 
     except StopAsyncIteration:
         # Generator was empty. Default status
+        verbose_proxy_logger.debug(f"🔥 Generator was empty. Default status code: {default_status_code}")
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
                 yield  # type: ignore
@@ -730,10 +732,14 @@ class ProxyBaseLLMRequestProcessing:
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
         from litellm.types.utils import ModelResponse, ModelResponseStream
+        import litellm
+        import json
 
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
+            collected_chunks = []  # Collect all chunks for post-processing
+            
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -751,11 +757,54 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    verbose_proxy_logger.debug(f"🔥 Is ModelResponse or ModelResponseStream")
                     response_str = litellm.get_response_string(response_obj=chunk)
+                    verbose_proxy_logger.debug(f"🔥 Response string: {response_str}")
                     str_so_far += response_str
 
-                # Format chunk using helper function
-                yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+                # Collect chunk for post-processing
+                collected_chunks.append(chunk)
+
+                # Format chunk using helper function    
+                sse_chunk = ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+                verbose_proxy_logger.debug(f"🔥 SSE chunk: {sse_chunk}")
+                yield sse_chunk
+            
+            # After streaming stops, calculate cost and inject into message_delta events
+            # This follows the same pattern as _emit_response_completed_event() in streaming_iterator.py
+            if collected_chunks and getattr(litellm, "include_cost_in_streaming_usage", False):
+                verbose_proxy_logger.debug("🔥 Streaming stopped, calculating cost like _emit_response_completed_event()")
+                
+                # Build complete response from collected chunks (same as stream_chunk_builder)
+                complete_response = await ProxyBaseLLMRequestProcessing._build_complete_response_from_chunks(
+                    collected_chunks=collected_chunks,
+                    request_data=request_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                
+                if complete_response is not None:
+                    # Get the litellm_logging_obj from proxy_logging_obj
+                    litellm_logging_obj = getattr(proxy_logging_obj, 'litellm_logging_obj', None)
+                    if litellm_logging_obj is not None:
+                        # Add cost to usage object (same pattern as _emit_response_completed_event)
+                        usage = getattr(complete_response, "usage", None)
+                        if usage is not None:
+                            cost = litellm_logging_obj._response_cost_calculator(result=complete_response)
+                            verbose_proxy_logger.debug(f"🔥 Calculated cost using _response_cost_calculator: {cost}")
+                            
+                            if cost is not None:
+                                # Re-process collected chunks to inject cost into message_delta events
+                                modified_chunks = await ProxyBaseLLMRequestProcessing._inject_cost_into_message_delta_chunks(
+                                    collected_chunks=collected_chunks,
+                                    calculated_cost=cost,
+                                )
+                                
+                                # Yield the modified chunks with cost information
+                                for modified_chunk in modified_chunks:
+                                    sse_chunk = ProxyBaseLLMRequestProcessing.return_sse_chunk(modified_chunk)
+                                    verbose_proxy_logger.debug(f"🔥 Modified SSE chunk with cost: {sse_chunk}")
+                                    yield sse_chunk
+                        
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
@@ -785,3 +834,126 @@ class ProxyBaseLLMRequestProcessing:
             )
             error_returned = json.dumps({"error": proxy_exception.to_dict()})
             yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+    @staticmethod
+    async def _build_complete_response_from_chunks(
+        collected_chunks: list,
+        request_data: dict,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Build complete response from collected chunks, following the same pattern as stream_chunk_builder.
+        This is similar to how _emit_response_completed_event() works in streaming_iterator.py.
+        """
+        import litellm
+        from litellm.types.utils import ModelResponse, TextCompletionResponse
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import AnthropicPassthroughLoggingHandler
+        from typing import Union, Optional, cast
+        
+        try:
+            verbose_proxy_logger.debug("🔥 Building complete response from collected chunks")
+            
+            # Get the litellm_logging_obj from proxy_logging_obj
+            litellm_logging_obj = getattr(proxy_logging_obj, 'litellm_logging_obj', None)
+            if not litellm_logging_obj:
+                verbose_proxy_logger.debug("🔥 No litellm_logging_obj found in proxy_logging_obj")
+                return None
+            
+            # Convert collected chunks to string format (same as passthrough handler expects)
+            all_chunks = []
+            for chunk in collected_chunks:
+                if isinstance(chunk, bytes):
+                    all_chunks.append(chunk.decode('utf-8'))
+                elif isinstance(chunk, str):
+                    all_chunks.append(chunk)
+                else:
+                    continue
+            
+            if not all_chunks:
+                verbose_proxy_logger.debug("🔥 No valid chunks found for building complete response")
+                return None
+            
+            # Extract model from request_data (same pattern as passthrough handler)
+            model = request_data.get("model", "")
+            if (
+                not model
+                and hasattr(litellm_logging_obj, "model_call_details")
+                and litellm_logging_obj.model_call_details.get("model")
+            ):
+                model = cast(str, litellm_logging_obj.model_call_details.get("model"))
+                custom_llm_provider = litellm_logging_obj.model_call_details.get("custom_llm_provider")
+                if custom_llm_provider and not model.startswith(custom_llm_provider):
+                    model = f"{custom_llm_provider}/{model}"
+            
+            # Build complete response using the same approach as passthrough handler
+            complete_streaming_response = (
+                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                    all_chunks=all_chunks,
+                    litellm_logging_obj=litellm_logging_obj,
+                    model=model,
+                )
+            )
+            
+            verbose_proxy_logger.debug(f"🔥 Built complete response: {complete_streaming_response}")
+            return complete_streaming_response
+            
+        except Exception as e:
+            verbose_proxy_logger.debug(f"🔥 Error building complete response from chunks: {e}")
+            return None
+
+    @staticmethod
+    async def _inject_cost_into_message_delta_chunks(
+        collected_chunks: list,
+        calculated_cost: float,
+    ) -> list:
+        """
+        Re-process collected chunks to inject calculated cost into message_delta events.
+        """
+        import json
+        
+        try:
+            verbose_proxy_logger.debug(f"🔥 Injecting cost {calculated_cost} into message_delta chunks")
+            modified_chunks = []
+            
+            for chunk in collected_chunks:
+                if isinstance(chunk, (str, bytes)):
+                    # Parse SSE format to extract JSON data
+                    chunk_str = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
+                    lines = chunk_str.strip().split('\n')
+                    
+                    # Check if this is a message_delta event
+                    is_message_delta = False
+                    for i, line in enumerate(lines):
+                        if line.startswith('event: message_delta'):
+                            if i + 1 < len(lines) and lines[i + 1].startswith('data: '):
+                                data_line = lines[i + 1][6:]  # Remove 'data: ' prefix
+                                try:
+                                    chunk_data = json.loads(data_line)
+                                    if chunk_data.get("type") == "message_delta" and chunk_data.get("usage"):
+                                        # Add cost to usage data
+                                        chunk_data["usage"]["cost"] = calculated_cost
+                                        verbose_proxy_logger.debug(f"🔥 Added cost to message_delta usage: {chunk_data['usage']}")
+                                        
+                                        # Reconstruct the data line with updated cost
+                                        updated_json = json.dumps(chunk_data)
+                                        lines[i + 1] = f"data: {updated_json}"
+                                        is_message_delta = True
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    # Reconstruct the chunk
+                    updated_chunk = '\n'.join(lines) + '\n\n'
+                    modified_chunk = updated_chunk.encode('utf-8') if isinstance(chunk, bytes) else updated_chunk
+                    modified_chunks.append(modified_chunk)
+                else:
+                    # Non-SSE chunks pass through unchanged
+                    modified_chunks.append(chunk)
+            
+            verbose_proxy_logger.debug(f"🔥 Processed {len(modified_chunks)} chunks for cost injection")
+            return modified_chunks
+            
+        except Exception as e:
+            verbose_proxy_logger.debug(f"🔥 Error injecting cost into chunks: {e}")
+            return collected_chunks  # Return original chunks if error
+

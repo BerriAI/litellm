@@ -193,14 +193,26 @@ async def anthropic_response(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                 )
             )
+            verbose_proxy_logger.debug("🔥Selected data generator:\n{}".format(selected_data_generator))
 
-            return await create_streaming_response(
+            litellm_streaming_response = await create_streaming_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
                 headers=dict(fastapi_response.headers),
             )
 
+            if litellm.include_cost_in_streaming_usage:
+                usage = getattr(litellm_streaming_response, "usage", None)
+                if usage is not None:
+                    setattr(
+                        usage, "cost", ProxyBaseLLMRequestProcessing._response_cost_calculator(result=litellm_streaming_response)
+                    )
+            verbose_proxy_logger.debug("🔥 Litellm streaming response:\n{}".format(litellm_streaming_response))
+
+            return litellm_streaming_response
+
         ### CALL HOOKS ### - modify outgoing data
+        verbose_proxy_logger.debug("Response from Litellm:\n{}".format(response))
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response # type: ignore
         )
