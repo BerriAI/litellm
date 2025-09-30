@@ -258,6 +258,71 @@ class TestGuardrailStatusConsistency:
             assert field in guardrail_info
             assert guardrail_info[field] is not None
 
+    def test_status_fields_creation(self):
+        """Test that status fields are created correctly based on guardrail status."""
+        from litellm.litellm_core_utils.litellm_logging import _get_status_fields
+        from litellm.types.utils import StandardLoggingGuardrailInformation
+        
+        # Test successful request with no guardrail issues
+        status_fields = _get_status_fields(
+            status="success",
+            guardrail_information=None,
+            error_str=None
+        )
+        assert status_fields["is_guardrail_failed"] == False
+        assert status_fields["is_guardrail_intervened"] == False
+        assert status_fields["is_llm_request_successful"] == True
+        
+        # Test guardrail intervention
+        guardrail_info = {
+            "guardrail_status": "blocked",
+            "guardrail_provider": "noma"
+        }
+        status_fields = _get_status_fields(
+            status="success",
+            guardrail_information=guardrail_info,
+            error_str=None
+        )
+        assert status_fields["is_guardrail_failed"] == False
+        assert status_fields["is_guardrail_intervened"] == True
+        assert status_fields["is_llm_request_successful"] == True
+        
+        # Test guardrail failure
+        guardrail_info = {
+            "guardrail_status": "failure",
+            "guardrail_provider": "bedrock"
+        }
+        status_fields = _get_status_fields(
+            status="failure",
+            guardrail_information=guardrail_info,
+            error_str="Guardrail API failed"
+        )
+        assert status_fields["is_guardrail_failed"] == True
+        assert status_fields["is_guardrail_intervened"] == False
+        assert status_fields["is_llm_request_successful"] == False
+
+    def test_status_fields_with_error_string(self):
+        """Test status field determination based on error strings."""
+        from litellm.litellm_core_utils.litellm_logging import _get_status_fields
+        
+        # Test guardrail blocked error
+        status_fields = _get_status_fields(
+            status="failure",
+            guardrail_information=None,
+            error_str="Request blocked by guardrail policy"
+        )
+        assert status_fields["is_guardrail_intervened"] == True
+        assert status_fields["is_guardrail_failed"] == False
+        
+        # Test guardrail failure error
+        status_fields = _get_status_fields(
+            status="failure", 
+            guardrail_information=None,
+            error_str="Guardrail service error: timeout"
+        )
+        assert status_fields["is_guardrail_failed"] == True
+        assert status_fields["is_guardrail_intervened"] == False
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -30,12 +30,19 @@ verbose_logger.setLevel(logging.DEBUG)
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
+    from litellm.types.utils import StandardLoggingPayloadStatusFields
+    
     return StandardLoggingPayload(
         id="test_id",
         call_type="completion",
         response_cost=0.1,
         response_cost_failure_debug_info=None,
         status="success",
+        status_fields=StandardLoggingPayloadStatusFields(
+            is_guardrail_failed=False,
+            is_guardrail_intervened=False,
+            is_llm_request_successful=True
+        ),
         total_tokens=30,
         prompt_tokens=20,
         completion_tokens=10,

@@ -4425,6 +4425,52 @@ class StandardLoggingPayloadSetup:
         return request_tags
 
 
+def _get_status_fields(
+    status: StandardLoggingPayloadStatus,
+    guardrail_information: Optional[dict],
+    error_str: Optional[str]
+) -> "StandardLoggingPayloadStatusFields":
+    """
+    Determine boolean status fields based on request status and guardrail information.
+    
+    Args:
+        status: Overall request status ("success" or "failure")
+        guardrail_information: Guardrail information from metadata
+        error_str: Error string if any
+        
+    Returns:
+        StandardLoggingPayloadStatusFields with boolean flags
+    """
+    from litellm.types.utils import StandardLoggingPayloadStatusFields
+    
+    # Default values
+    is_guardrail_failed = False
+    is_guardrail_intervened = False
+    is_llm_request_successful = (status == "success")
+    
+    # Check guardrail information if available
+    if guardrail_information and isinstance(guardrail_information, dict):
+        guardrail_status = guardrail_information.get("guardrail_status")
+        
+        if guardrail_status == "failure":
+            is_guardrail_failed = True
+        elif guardrail_status == "blocked":
+            is_guardrail_intervened = True
+            
+    # If there's an error string, check if it's guardrail-related
+    if error_str and any(keyword in error_str.lower() for keyword in ["guardrail", "blocked", "moderation"]):
+        if "failed" in error_str.lower() or "error" in error_str.lower():
+            is_guardrail_failed = True
+        else:
+            is_guardrail_intervened = True
+    
+    return StandardLoggingPayloadStatusFields(
+        is_guardrail_failed=is_guardrail_failed,
+        is_guardrail_intervened=is_guardrail_intervened,
+        is_llm_request_successful=is_llm_request_successful
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -4580,6 +4626,13 @@ def get_standard_logging_object_payload(
         ) and kwargs.get("stream") is True:
             stream = True
 
+        # Determine status fields based on current status and guardrail information
+        status_fields = _get_status_fields(
+            status=status,
+            guardrail_information=metadata.get("standard_logging_guardrail_information", None),
+            error_str=error_str
+        )
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -4590,6 +4643,7 @@ def get_standard_logging_object_payload(
             cache_hit=cache_hit,
             stream=stream,
             status=status,
+            status_fields=status_fields,
             custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,

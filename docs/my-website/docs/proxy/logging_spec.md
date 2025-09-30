@@ -14,6 +14,7 @@ Found under `kwargs["standard_logging_object"]`. This is a standard payload, log
 | `cost_breakdown` | `Optional[CostBreakdown]` | Detailed cost breakdown object |
 | `response_cost_failure_debug_info` | `StandardLoggingModelCostFailureDebugInformation` | Debug information if cost tracking fails |
 | `status` | `StandardLoggingPayloadStatus` | Status of the payload |
+| `status_fields` | `StandardLoggingPayloadStatusFields` | Boolean status fields for easy filtering and troubleshooting |
 | `total_tokens` | `int` | Total number of tokens |
 | `prompt_tokens` | `int` | Number of prompt tokens |
 | `completion_tokens` | `int` | Number of completion tokens |
@@ -173,6 +174,45 @@ A literal type with two possible values:
 | `end_time` | `Optional[float]` | End time of the guardrail |
 | `duration` | `Optional[float]` | Duration of the guardrail in seconds |
 | `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities |
+
+## StandardLoggingPayloadStatusFields
+
+Boolean status fields for easy filtering and analytics.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_guardrail_failed` | `bool` | `true` if any guardrail had a technical failure/error |
+| `is_guardrail_intervened` | `bool` | `true` if any guardrail blocked or modified content due to policy violations |
+| `is_llm_request_successful` | `bool` | `true` if the underlying LLM request completed successfully (regardless of guardrails) |
+
+### Usage Examples
+
+Filter logs for requests where guardrails intervened:
+```json
+{
+  "status_fields": {
+    "is_guardrail_intervened": true
+  }
+}
+```
+
+Find guardrail technical failures:
+```json
+{
+  "status_fields": {
+    "is_guardrail_failed": true
+  }
+}
+```
+
+Get successful LLM requests (ignoring guardrail status):
+```json
+{
+  "status_fields": {
+    "is_llm_request_successful": true
+  }
+}
+```
 
 ## StandardLoggingPromptManagementMetadata
 
