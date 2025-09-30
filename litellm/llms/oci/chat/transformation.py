@@ -615,11 +615,6 @@ class OCIChatConfig(BaseConfig):
         if "stream" in data:
             del data["stream"]
 
-        stops = data.get("chatRequest", {}).get("stop")
-        if stops and len(stops) > 8:
-            # mantém apenas os 8 primeiros
-            data["chatRequest"]["stop"] = stops[:8]
-
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
