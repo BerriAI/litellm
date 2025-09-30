@@ -228,3 +228,22 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
         )
 
     assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+
+
+def test_anthropic_count_tokens_route_is_llm_api_route():
+    """Test that /v1/messages/count_tokens is recognized as an LLM API route for Anthropic"""
+    
+    # Test the core anthropic routes
+    assert RouteChecks.is_llm_api_route("/v1/messages") is True
+    assert RouteChecks.is_llm_api_route("/v1/messages/count_tokens") is True
+
+
+def test_anthropic_count_tokens_route_accessible_to_internal_users():
+    """Test that internal users can access the Anthropic count_tokens route"""
+    
+    # Test that the route is recognized as an LLM API route (which means it's accessible to internal users)
+    # This is the core check that was failing in the original issue
+    assert RouteChecks.is_llm_api_route("/v1/messages/count_tokens") is True
+    
+    # Also test that the regular messages route still works
+    assert RouteChecks.is_llm_api_route("/v1/messages") is True
