@@ -36,12 +36,16 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    update_response_metadata,
+)
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 from litellm.types.caching import CachedEmbedding
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
+    CachingDetails,
     CallTypes,
     Embedding,
     EmbeddingResponse,
@@ -136,6 +140,13 @@ class LLMCachingHandler:
 
         kwargs = kwargs.copy()
         args = args or ()
+        #########################################################
+        # Init cache timing metrics
+        #########################################################
+        cache_check_start_time = datetime.datetime.now()
+        cache_check_end_time = None
+        #########################################################
+
 
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
         kwargs["parent_otel_span"] = parent_otel_span
@@ -157,6 +168,7 @@ class LLMCachingHandler:
                     kwargs=kwargs,
                     args=args,
                 )
+                cache_check_end_time = datetime.datetime.now()
 
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
@@ -168,6 +180,7 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
+                    cache_duration_ms = (cache_check_end_time - cache_check_start_time).total_seconds() * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -175,10 +188,12 @@ class LLMCachingHandler:
                         cached_result=cached_result,
                         is_async=True,
                         custom_llm_provider=custom_llm_provider,
+                        cache_duration_ms=cache_duration_ms,
                     )
 
                     call_type = original_function.__name__
 
+      
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -716,6 +731,18 @@ class LLMCachingHandler:
             and isinstance(cached_result._hidden_params, dict)
         ):
             cached_result._hidden_params["cache_hit"] = True
+        
+        #########################################################
+        # Add final timing metrics to the cached result
+        #########################################################
+        update_response_metadata(
+            result=cached_result,
+            logging_obj=logging_obj,
+            model=model,
+            kwargs=kwargs,
+            start_time=self.start_time,
+            end_time=datetime.datetime.now(),
+        )
         return cached_result
 
     def _convert_cached_stream_response(
@@ -944,6 +971,7 @@ class LLMCachingHandler:
         is_async: bool,
         is_embedding: bool = False,
         custom_llm_provider: Optional[str] = None,
+        cache_duration_ms: Optional[float] = None,
     ):
         """
         Helper function to update the LiteLLMLoggingObj environment variables.
@@ -993,6 +1021,11 @@ class LLMCachingHandler:
             additional_args=None,
             stream=kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
+        )
+
+        logging_obj.caching_details = CachingDetails(
+            cache_hit=True,
+            cache_duration_ms=cache_duration_ms,
         )
 
 
