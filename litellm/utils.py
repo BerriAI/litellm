@@ -4775,8 +4775,6 @@ def _get_model_info_helper(  # noqa: PLR0915
             custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
         ) and not _is_potential_model_name_in_model_cost(potential_model_names):
             return litellm.OllamaConfig().get_model_info(model)
-        elif (custom_llm_provider == "lemonade" and not _is_potential_model_name_in_model_cost(potential_model_names)):
-            return litellm.LemonadeChatConfig().get_model_info(model)
         else:
             """
             Check if: (in order of specificity)
@@ -7319,6 +7317,8 @@ class ProviderConfigManager:
             )
 
             return VLLMModelInfo()
+        elif LlmProviders.LEMONADE == provider:
+            return litellm.LemonadeChatConfig()
         return None
 
     @staticmethod
