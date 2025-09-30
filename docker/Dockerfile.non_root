@@ -19,9 +19,15 @@ COPY . .
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Build package and wheel dependencies
+# Build litellm-proxy-extras package first (includes new migrations)
+RUN cd litellm-proxy-extras && \
+    python -m build && \
+    cd ..
+
+# Build main package and wheel dependencies
 RUN rm -rf dist/* && python -m build && \
     pip install dist/*.whl && \
+    pip wheel --no-cache-dir --wheel-dir=/wheels/ litellm-proxy-extras/dist/*.whl && \
     pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # -----------------
