@@ -1,211 +1,199 @@
 # Quick Start (Fork)
 
-This fork adds an opt‑in Mini‑Agent, an env‑gated `codex-agent` provider, a pragmatic HTTP tools adapter, and deterministic/live E2E smokes. Defaults remain upstream‑compatible. This page gives copy‑paste, working examples for the paved‑road features.
+This fork adds an opt-in Mini-Agent, an env-gated `codex-agent` provider, and a standardized readiness/smoke harness. The sections below mirror the runnable assets in `scenarios/` so you can reproduce a green run end-to-end.
 
 ## 1) Prereqs
 - Python 3.10+
-- Optional: Docker + Docker Compose
-- Optional: model keys (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`)
+- Optional but recommended: Docker + Docker Compose
+- Optional: provider keys (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`)
+- Put them in `.env`; every script calls `load_dotenv(find_dotenv())` so values auto-load.
 
 ## 2) Install
-- Editable install for local iteration:
-  - `pip install -e .`
+- Local editable install for iteration: `pip install -e .`
 
-## 3) Run the Mini‑Agent (Docker first; local also supported)
-- Docker/compose (recommended):
-  - Create network (once): `docker network create llmnet || true`
-  - Start: `make docker-up`
-  - Logs: `make docker-logs`
-  - Health: `curl -sf http://127.0.0.1:8788/ready`
-- Local uvicorn (fastest for dev):
-  - `uvicorn litellm.experimental_mcp_client.mini_agent.agent_proxy:app --host 127.0.0.1 --port 8788`
-  - Health: `curl -sf http://127.0.0.1:8788/ready`
-
-Tips for Ollama in Docker:
-- Bring up Ollama on the same network: `make docker-ollama-up`
-- Resolve base URL on host: `scripts/resolve_ollama_base.sh` → e.g., `http://127.0.0.1:11434`
-
-## 4) Mini‑Agent in code (local tools)
-```python
-from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import AgentConfig, LocalMCPInvoker, run_mcp_mini_agent
-
-messages = [{"role": "user", "content": "echo hi and finish"}]
-cfg = AgentConfig(model="openai/gpt-4o-mini", max_iterations=3)
-res = run_mcp_mini_agent(messages, mcp=LocalMCPInvoker(shell_allow_prefixes=("echo",)), cfg=cfg)
-print(res.stopped_reason, res.final_answer)
-```
-
-## 5) Mini‑Agent over HTTP tools (MCP‑style)
-- Start your tools host exposing `/tools` and `/invoke` (bearer‑protected is fine).
-- Call via the HTTP tools adapter:
-
-```python
-from litellm.experimental_mcp_client.mini_agent.litellm_mcp_mini_agent import AgentConfig, run_mcp_mini_agent
-from litellm.experimental_mcp_client.mini_agent.http_tools_invoker import HttpToolsInvoker
-
-mcp = HttpToolsInvoker("http://127.0.0.1:8788", headers={"Authorization": "Bearer <token>"})
-messages = [{"role": "user", "content": "call echo('hi') and finish"}]
-cfg = AgentConfig(model="openai/gpt-4o-mini", max_iterations=4)
-res = run_mcp_mini_agent(messages, mcp=mcp, cfg=cfg)
-print(res.stopped_reason, res.final_answer)
-```
-
-- Local stub server (no external deps):
-  - Start: `uvicorn examples.http_tools_stub:app --host 127.0.0.1 --port 8791`
-  - Then call with the HTTP tools adapter using base `http://127.0.0.1:8791`.
-
-## 6) Agent Proxy (HTTP API)
-- Run the endpoint:
+## 3) One-command smoke run
 
 ```bash
-uvicorn litellm.experimental_mcp_client.mini_agent.agent_proxy:app --port 8788
+make run-scenarios
 ```
 
-// Minimal call from Python or: `python examples/agent_proxy_client.py`
+This wraps `scenarios/run_all.py`, which:
+- Loads `.env`
+- Ensures `LITELLM_ENABLE_MINI_AGENT=1` and `LITELLM_ENABLE_CODEX_AGENT=1`
+- Runs the release scenarios listed below
+- Prints a colour summary and exits non-zero if any scenario fails
 
-```python
-import httpx
-payload = {
-  "messages": [{"role": "user", "content": "hi"}],
-  "model": "openai/gpt-4o-mini",
-  "tool_backend": "http",
-  "tool_http_base_url": "http://127.0.0.1:8788",
-  "tool_http_headers": {"Authorization": "Bearer <token>"}
+Set `SCENARIOS_STOP_ON_FIRST_FAILURE=1` to short-circuit on the first failure.
+
+## 4) Mini-Agent (local shim)
+
+Script: `scenarios/mini_agent_http_release.py`
+
+```bash
+python scenarios/mini_agent_http_release.py
+```
+
+This spins up the in-process shim if port 8788 is free, asks the mini-agent to run a short Python snippet, and prints the final answer along with `additional_kwargs.mini_agent.metrics`. Expect a JSON summary like:
+
+```json
+{
+  "ok": true,
+  "final_answer": "{\"release_scenario\":{\"ping\":\"Feature update...\"}}",
+  "metrics": {"iterations": 1, "used_model": "ollama/glm4:latest"}
 }
-resp = httpx.post("http://127.0.0.1:8788/agent/run", json=payload, timeout=30.0)
-resp.raise_for_status()
-print(resp.json())
 ```
 
-## 7) Codex‑Agent (env‑gated provider)
-- Enable provider and point to an OpenAI‑compatible API (e.g., the agent shim above):
-  - `export LITELLM_ENABLE_CODEX_AGENT=1`
-  - `export CODEX_AGENT_API_BASE=http://127.0.0.1:8788`
-- Router example:
-  - `python examples/codex_agent_router.py`
-```python
-from litellm import Router
-r = Router(model_list=[{"model_name":"codex-agent-1","litellm_params":{
-  "model":"codex-agent/mini",
-  "api_base": "http://127.0.0.1:8788",
-  "api_key": ""}}
-])
-out = r.completion(model="codex-agent-1", messages=[{"role":"user","content":"Say hello and finish."}])
-print(getattr(out.choices[0].message, "content", ""))
-```
+## 5) Mini-Agent over Docker tools
 
-## 8) Exec‑RPC quick check (Docker or local)
-- Start (compose path above) or run locally:
-  - `uvicorn litellm.experimental_mcp_client.mini_agent.exec_rpc_server:app --host 127.0.0.1 --port 8790`
-- Probe and run Python:
+Script: `scenarios/mini_agent_docker_release.py`
+
+Requirements:
+- `LITELLM_ENABLE_MINI_AGENT=1`
+- `LITELLM_MINI_AGENT_DOCKER_CONTAINER=<container name>` pointing at the tools container (the bundled stack exposes `litellm-mini-agent`)
+- Container must expose `/tools` and `/invoke` on the default bridge or a shared network
+
+The script refuses to run unless the container is reachable. The repo ships a compose file that launches the mini-agent shim, codex sidecar, and Ollama with the shared language toolchains:
+
 ```bash
-curl -sf http://127.0.0.1:8790/health
-curl -sf -X POST http://127.0.0.1:8790/exec -H 'content-type: application/json' -d '{"language":"python","code":"print(123)"}'
+docker compose -f local/docker/compose.agents.yml up --build -d
+
+LITELLM_MINI_AGENT_DOCKER_CONTAINER=litellm-mini-agent \
+python scenarios/mini_agent_docker_release.py
 ```
 
-## 9) Streaming (OpenAI‑compatible)
-- Requires `OPENAI_API_BASE` and `OPENAI_API_KEY` (or compatible shim):
-```python
-import os, asyncio, litellm
-async def go():
-  chunks = []
-  async for ch in await litellm.acompletion(
-    model=os.getenv("OPENAI_COMPAT_MODEL","gpt-3.5-turbo"),
-    messages=[{"role":"user","content":"Stream the word HELLO."}],
-    api_base=os.getenv("OPENAI_API_BASE"),
-    api_key=os.getenv("OPENAI_API_KEY"),
-    stream=True,
-  ):
-    try:
-      delta = ((ch or {}).get("choices") or [{}])[0].get("delta", {})
-      txt = delta.get("content") or ""
-      if txt: chunks.append(txt)
-    except Exception: pass
-  print("got:", "".join(chunks))
-asyncio.run(go())
+By default both the local and Docker mini-agent invokers allow Python, Rust, Go, and JavaScript. Adjust via `LITELLM_MINI_AGENT_LANGUAGES` if you need to tighten or extend the tool surface.
+
+On success it prints the agent conversation and `parsed_tools` emitted by the container.
+
+## 6) Mini-Agent live loopback
+
+Script: `scenarios/mini_agent_live.py`
+
+This hits the FastAPI shim via `Router.acompletion`, confirming the loopback path and reporting iterations/duration. Run it alone for a quick confidence check:
+
+```bash
+python scenarios/mini_agent_live.py
 ```
 
-## 10) Deterministic + E2E tests
-- Deterministic (no network):
-  - `PYTHONPATH=$(pwd) pytest -q tests/local_testing`
-- E2E (skip‑friendly):
-  - Docker mini‑agent: `make docker-up`
-  - Docker ndsmokes (loopback by default): `make ndsmoke-docker`
-  - Optional Ollama: `make docker-ollama-up` and set `LITELLM_DEFAULT_CODE_MODEL=ollama/<model>`
+## 7) Router parallel + batch
 
-## 11) Router streaming seam (opt‑in; default=legacy)
-- Only for canaries until parity proven:
-  - `export LITELLM_ROUTER_CORE=extracted`
-- Parity harness:
-  - `OPENAI_API_KEY=… LITELLM_DEFAULT_MODEL=openai/gpt-4o-mini PARITY_ROUNDS=5 PARITY_THRESH_PCT=3.0 PARITY_OUT=/tmp/parity.jsonl python local/scripts/router_core_parity.py`
-  - `python local/scripts/parity_summarize.py --in /tmp/parity.jsonl --thresh 3.0`
-  - Acceptance: same_text True and worst ttft/total ≤ 3% for 1 week.
+Scripts:
+- `scenarios/router_parallel_release.py`
+- `scenarios/router_batch_release.py`
 
-## 12) Extras (optional helpers)
-- Images (local/remote → data URL):
+Each script builds a `Router` with mixed providers and demonstrates the respective helper (`acompletion_parallel` vs batch). Both print the model response plus raw payload for inspection:
 
-```python
-from litellm.extras.images import compress_image
-url = compress_image("/path/to/image.png", max_kb=64, cache_dir=".cache")
-print(url[:64], "...")
+```bash
+python scenarios/router_parallel_release.py
+python scenarios/router_batch_release.py
 ```
-- Cache (Redis one‑liner for Router):
+
+## 8) Codex-Agent provider
+
+Script: `scenarios/codex_agent_router.py`
+
+Ensure the env shim or remote endpoint is running, then:
+
+```bash
+export LITELLM_ENABLE_CODEX_AGENT=1
+python scenarios/codex_agent_router.py
+```
+
+You should see the shim response (`{"name": ..., "arguments": ...}`) followed by the final aggregated text.
+
+## 9) Codex-Agent via Docker sidecar
+
+Script: `scenarios/codex_agent_docker_release.py`
+
+Requirements:
+- `LITELLM_ENABLE_CODEX_AGENT=1`
+- `CODEX_AGENT_DOCKER_CONTAINER=<container name>` (defaults to `litellm-codex-agent`)
+- Optional `CODEX_AGENT_API_BASE`; defaults to `http://127.0.0.1:8077` when using the bundled Compose stack
+
+```bash
+docker compose -f local/docker/compose.agents.yml up --build -d
+
+CODEX_AGENT_DOCKER_CONTAINER=litellm-codex-agent \
+python scenarios/codex_agent_docker_release.py
+```
+
+The script verifies the container is running, checks `/healthz`, then invokes the codex-agent provider via Router.
+
+## 10) Chutes release flow
+
+Script: `scenarios/chutes_release.py`
+
+Requires `CHUTES_MODEL` and matching credentials (see `.env.example`). The script prints request/response JSON and the `provider_specific_fields` returned by Chutes. When credentials are absent it exits gracefully with a skip message.
+
+## 11) Code Agent tool call
+
+Script: `scenarios/code_agent_release.py`
+
+This uses the mini-agent with tool choice `required`, drives the `python_eval` tool, and shows the resulting tool call + response payload. It’s a good verification that tool routing and parsed metadata remain intact.
+
+## 12) Image helper demo
+
+Script: `scenarios/image_compression_release.py`
+
+Runs the helper in `litellm.extras.images` against a sample asset and prints a data URL preview. Change `IMAGE_PATH` in your `.env` to point at a local image if needed.
+
+## 13) Parallel acompletions demo
+
+Script: `scenarios/parallel_acompletions_demo.py`
+
+Showcases the router’s fan-out helper and verifies ordering/metadata. Useful for quick parity checks when adding providers.
+
+## 14) Ready checks & tests
+
+- Deterministic/local smokes: `make project-ready`
+- Strict deploy-ready (live smokes, no skips): `make project-ready-live`
+- After touching router/agent code, rerun `make run-scenarios` to confirm all live demos still pass.
+
+## 15) Extras (optional helpers)
+
+All extras live under `litellm/extras/` and are import-safe. Highlights:
 
 ```python
 from litellm.extras.cache import configure_cache_redis
-from litellm.router import Router
+from litellm.extras.json_utils import clean_json_string
+from litellm.extras.log_utils import truncate_large_value
 
-r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
-configure_cache_redis(r, host="127.0.0.1", port=6379, ttl_seconds=300)
-```
-- Response utils (extract text from Router response):
+# Router cache in one line
+configure_cache_redis(router, host="127.0.0.1", port=6379, ttl=600)
 
-```python
-from litellm.extras.response_utils import extract_content
-from litellm.router import Router
+# JSON repair fallback (uses json_repair when installed, graceful degrade otherwise)
+clean = clean_json_string("{\"ok\": true,,}")
 
-r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
-resp = await r.acompletion(model="m", messages=[{"role":"user","content":"hi"}])
-print(extract_content(resp))
-```
-- Batch helper (concurrent acompletions):
-
-```python
-import asyncio
-from litellm.extras.batch import acompletion_as_completed
-from litellm.router import Router
-
-r = Router(model_list=[{"model_name":"m","litellm_params":{"model":"openai/gpt-4o-mini","api_key":"sk-..."}}])
-reqs = [
-  {"model":"m","messages":[{"role":"user","content":f"hi {i}"}]}
-  for i in range(5)
-]
-async def go():
-  async for idx, resp in acompletion_as_completed(r, reqs, concurrency=2):
-    print(idx, getattr(getattr(resp.choices[0],"message",{}),"content",None))
-asyncio.run(go())
+# Logging helper for large payloads
+print(truncate_large_value(data, max_chars=512))
 ```
 
-## 15) Examples (runnable)
-- `python examples/codex_agent_router.py`
-- `python examples/router_parallel_multimodal.py`
-- `python examples/mini_agent_inprocess.py`
-- `python examples/agent_proxy_client.py`
-- `uvicorn examples.http_tools_stub:app --host 127.0.0.1 --port 8791`
+All helpers accept environment overrides and respect `LITELLM_DISABLE_CACHE` / `LITELLM_LOG_SENSITIVE_FIELDS` where applicable.
 
-## 16) MVP Readiness (one-command summary)
-- Local deterministic + low E2E (shim) + optional Docker readiness:
-  - `python scripts/mvp_check.py`
-- Docker‑first quick check:
-  - `make docker-up && make ndsmoke-docker`
-  - Optional heavier live run (requires model deps): `make ndsmoke-docker-live`
+## 16) When something fails
 
-## 13) Troubleshooting
-- Mini‑Agent returns empty content with model "dummy": set `MINI_AGENT_ALLOW_DUMMY=1` to force the stub, or provide a real model/key.
-- Async tests skipped: ensure you run inside your Poetry env so `pytest-asyncio` is loaded (e.g., `poetry run pytest …`).
-- HTTP tools medium E2E skips: start a tools host and set `MINI_AGENT_TOOL_HTTP_HEADERS` and `NDSMOKE_E2E_AGENT_MODEL`.
+- Inspect the individual scenario script to see the exact `Router` or agent call that failed.
+- Ensure `.env` is loaded (every script calls `load_dotenv(find_dotenv())`, but missing keys still surface as explicit errors).
+- For Docker scenarios, verify `docker ps` shows the named container and that it exposes `/tools` and `/invoke`.
 
-## 14) More reading
-- `STATE_OF_PROJECT.md` — status, capabilities, risks.
-- `docs/my-website/docs/experimental/mini-agent.md` — deeper agent guide.
-- `docs/my-website/docs/providers/codex_agent.md` — codex‑agent provider usage.
+Once you can run `make run-scenarios` and `make project-ready-live` without skips, you have the same coverage we use for release readiness.
+
+## 17) CodeWorld Bridge (provider demo)
+
+Script: `feature_recipes/codeworld_bridge.py`
+
+Use CodeWorld's Bridge API from LiteLLM. Configure:
+
+```bash
+export CODEWORLD_BASE=http://codeworld:8000
+export CODEWORLD_TOKEN=...   # if CodeWorld enforces tokens
+
+python feature_recipes/codeworld_bridge.py
+```
+
+The script prints a structured JSON payload with `summary` and the full
+payload for `additional_kwargs["codeworld"]` (duration_ms, run_id, run_url,
+artifacts, metrics, scorecard, winner). See CodeWorld's `docs/guides/BRIDGE_API.md`
+for exact schemas. In production, wire this as a LiteLLM custom provider so a
+single `router.acompletion(model="codeworld", ...)` call returns both a human
+summary and the machine-friendly metrics.

@@ -24,7 +24,18 @@ except Exception as exc:  # pragma: no cover - import guard
     arun_mcp_mini_agent = None  # type: ignore
 
 
-DEFAULT_LANGS = ["python"]
+DEFAULT_LANGS = ["python", "rust", "go", "javascript"]
+
+LANGUAGE_PREFIXES = {
+    "python": ("python", "python3"),
+    "rust": ("cargo", "rustc"),
+    "go": ("go",),
+    "bash": ("bash", "sh"),
+    "shell": ("sh", "bash"),
+    "javascript": ("node", "npm", "npx"),
+    "typescript": ("ts-node", "npx ts-node"),
+    "deno": ("deno",),
+}
 DEFAULT_MAX_ITER = int(os.getenv("LITELLM_MINI_AGENT_MAX_ITERATIONS", "6"))
 DEFAULT_MAX_SECONDS = float(os.getenv("LITELLM_MINI_AGENT_MAX_SECONDS", "180"))
 
@@ -52,6 +63,26 @@ def _gather_allowed_languages(optional_params: dict) -> Tuple[str, ...]:
         seen.add(token)
         normalized.append(token)
     return tuple(normalized)
+
+
+def _expand_shell_prefixes(languages: Tuple[str, ...]) -> Tuple[str, ...]:
+    prefixes: List[str] = []
+    def _add_prefix(value: str) -> None:
+        token = value.strip()
+        if not token:
+            return
+        if token not in prefixes:
+            prefixes.append(token)
+
+    for lang in languages:
+        mapping = LANGUAGE_PREFIXES.get(lang, (lang,))
+        if isinstance(mapping, str):
+            mapping = (mapping,)
+        for prefix in mapping:
+            _add_prefix(prefix)
+    # Always allow echo for trivial smoke tests / readiness probes
+    _add_prefix("echo")
+    return tuple(prefixes)
 
 
 def _pick_base_model(optional_params: dict) -> str:
@@ -135,6 +166,7 @@ class MiniAgentLLM(CustomLLM):
         return cfg, allowed_langs
 
     def _make_invoker(self, allowed: Tuple[str, ...], cfg: "AgentConfig", optional_params: dict):
+        shell_prefixes = _expand_shell_prefixes(allowed)
         backend = (
             optional_params.get("tool_backend")
             or optional_params.get("mini_agent_backend")
@@ -157,13 +189,13 @@ class MiniAgentLLM(CustomLLM):
                 )
             return DockerMCPInvoker(
                 container=str(container),
-                shell_allow_prefixes=allowed,
+                shell_allow_prefixes=shell_prefixes,
                 tool_timeout_sec=timeout,
                 docker_exec_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_EXEC_BIN", "docker"),
                 python_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_PYTHON", "python"),
                 shell_bin=os.getenv("LITELLM_MINI_AGENT_DOCKER_SHELL", "/bin/sh"),
             )
-        return LocalMCPInvoker(shell_allow_prefixes=allowed, tool_timeout_sec=timeout)
+        return LocalMCPInvoker(shell_allow_prefixes=shell_prefixes, tool_timeout_sec=timeout)
 
     def _to_model_response(self, model_response: ModelResponse, result) -> ModelResponse:
         content = result.final_answer or ""
@@ -197,11 +229,59 @@ class MiniAgentLLM(CustomLLM):
             setattr(model_response.choices[0], "finish_reason", result.stopped_reason or "stop")
         except Exception:
             pass
+        parsed_tools: List[Dict[str, Any]] = []
+        for iter_idx, iteration in enumerate(getattr(result, "iterations", []) or []):
+            tool_invocations = getattr(iteration, "tool_invocations", []) or []
+            for tool_idx, invocation in enumerate(tool_invocations):
+                if not isinstance(invocation, dict):
+                    continue
+                tool_name = invocation.get("tool_name") or invocation.get("name")
+                call_index = invocation.get("call_index", tool_idx)
+                t_ms = invocation.get("t_ms")
+                try:
+                    t_ms_val = float(t_ms) if t_ms is not None else None
+                except Exception:
+                    t_ms_val = t_ms
+
+                arguments_raw = invocation.get("arguments_raw")
+                arguments_value = invocation.get("arguments")
+                if isinstance(arguments_value, dict):
+                    arguments_dict = arguments_value
+                elif isinstance(arguments_value, str):
+                    try:
+                        arguments_dict = json.loads(arguments_value)
+                    except Exception:
+                        arguments_dict = None
+                else:
+                    arguments_dict = None
+
+                entry: Dict[str, Any] = {
+                    "iteration": iter_idx,
+                    "call_index": call_index,
+                    "tool_name": tool_name,
+                    "tool_call_id": invocation.get("tool_call_id"),
+                    "arguments_raw": arguments_raw if isinstance(arguments_raw, str) else None,
+                    "arguments": arguments_dict,
+                    "ok": invocation.get("ok"),
+                    "rc": invocation.get("rc"),
+                    "result": invocation.get("result"),
+                    "stdout": invocation.get("stdout"),
+                    "stderr": invocation.get("stderr"),
+                    "error": invocation.get("error"),
+                    "t_ms": t_ms_val,
+                    "model": invocation.get("model"),
+                }
+                # Preserve backwards-compatible keys for downstream consumers expecting older schema
+                entry.setdefault("name", tool_name)
+                entry.setdefault("index", call_index)
+                parsed_tools.append(entry)
+
         additional = {
             "mini_agent": {
                 "iterations": len(result.iterations),
                 "stopped_reason": result.stopped_reason,
                 "conversation": result.messages,
+                "parsed_tools": parsed_tools,
             }
         }
         try:

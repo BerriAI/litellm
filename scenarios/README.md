@@ -2,7 +2,7 @@
 
 These scripts exercise the fork’s three headline integrations (mini-agent,
 codex-agent, parallel `acompletion`). They are **live** checks, so run them
-manually once the necessary providers or local services are available.π
+manually once the necessary providers or local services are available.
 
 ## How to Run
 
@@ -35,8 +35,10 @@ make run-scenarios
   Docker container.
 - **Env**: `LITELLM_ENABLE_MINI_AGENT=1`,
   `LITELLM_MINI_AGENT_DOCKER_CONTAINER=<container>`.
-- **Quick start**: `docker compose -f local/docker/compose.exec.yml up --build -d`
-  will launch the sandbox container this repo ships under `local/docker/`.
+- **Quick start**: `docker compose -f local/docker/compose.agents.yml up --build -d`
+  launches the bundled mini-agent shim + codex sidecar + Ollama stack.
+- **Languages**: defaults to Python/Rust/Go/JavaScript; set `LITELLM_MINI_AGENT_LANGUAGES`
+  to override the allowlist if you need fewer or more prefixes.
 
 ### `codex_agent_router.py`
 
@@ -47,6 +49,14 @@ make run-scenarios
   associated keys are present. When `LITELLM_DEFAULT_CODE_MODEL` starts with
   `codex-agent/`, be sure to set `CODEX_AGENT_API_BASE` (and optionally
   `CODEX_AGENT_API_KEY`). Otherwise it falls back to the local Ollama model.
+
+### `codex_agent_docker_release.py`
+
+- **Purpose**: Confirms the codex-agent sidecar exposed via the Docker stack responds to chat completions.
+- **Env**: `LITELLM_ENABLE_CODEX_AGENT=1`, optional `CODEX_AGENT_API_BASE`, and
+  `CODEX_AGENT_DOCKER_CONTAINER` (defaults to `litellm-codex-agent`).
+- **Quick start**: `docker compose -f local/docker/compose.agents.yml up --build -d`.
+  The script verifies `/healthz` before making a Router call.
 
 ### `parallel_acompletions_demo.py`
 
@@ -121,7 +131,7 @@ make run-scenarios
 
 ## Stress tests
 
-Complementary high-load scenarios live in `stress_test/`:
+Complementary high-load scenarios live in `stress_tests/`:
 
 - `parallel_throughput_benchmark.py`
 - `parallel_acompletions_burst.py`
@@ -131,3 +141,10 @@ Complementary high-load scenarios live in `stress_test/`:
 Run them with `make run-stress-tests`. Each script emits live metrics and
 respects the same environment variables described above. No mocking occurs, so
 ensure the relevant providers are reachable before executing the stress suite.
+
+### Notes on the scenario orchestrator
+
+`make run-scenarios` uses `scenarios/run_all.py`, which sets
+`LITELLM_ENABLE_MINI_AGENT=1` and `LITELLM_ENABLE_CODEX_AGENT=1` when launching
+child processes. For production deployments, configure these flags in your
+environment instead of relying on the orchestrator.

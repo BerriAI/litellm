@@ -10,10 +10,10 @@ regular LiteLLM `completion`/`acompletion` APIs.
 2. Optionally set `LITELLM_DEFAULT_CODE_MODEL` or `LITELLM_DEFAULT_MODEL` to the
    base LLM you want the agent to delegate to. You can override the base model
    per call with `litellm_params["target_model"]`.
-3. (Docker execution) Start the sandbox container and point the provider at it:
+3. (Docker execution) Start the bundled stack (mini-agent shim + codex sidecar + Ollama) and point the provider at it:
 
    ```bash
-   docker compose -f local/docker/compose.exec.yml up --build -d
+   docker compose -f local/docker/compose.agents.yml up --build -d
    export LITELLM_MINI_AGENT_DOCKER_CONTAINER=litellm-mini-agent
    ```
 
@@ -62,13 +62,17 @@ router = Router(
                 "model": "mini-agent",
                 "custom_llm_provider": "mini-agent",
                 "target_model": "ollama/gpt-4.1-mini",
-                "allowed_languages": ["python"],
+                "allowed_languages": ["python", "rust", "go", "javascript"],
                 "max_iterations": 4,
             },
         }
     ]
 )
 ```
+
+By default the provider allows Python, Rust, Go, and JavaScript snippets (mapped to
+the command prefixes `python`, `cargo`, `go`, `node`). Override via `allowed_languages`
+ or the `LITELLM_MINI_AGENT_LANGUAGES` environment variable to tighten or extend the list.
 
 The provider exposes a minimal tool catalog by default (`exec_python`,
 `exec_shell`, `research_echo`, `compress_runs`). Avoid instructing the model to

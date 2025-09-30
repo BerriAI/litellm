@@ -31,7 +31,7 @@ model_list = [
             "model": "mini-agent",
             "custom_llm_provider": "mini-agent",
             "target_model": BASE_MODEL,
-            "allowed_languages": ["python", "rust"],
+            "allowed_languages": ["python", "rust", "go", "javascript"],
             "max_iterations": 6,
             "max_seconds": 180,
         },

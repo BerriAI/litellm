@@ -16,6 +16,10 @@ PYTHON = sys.executable
 SCENARIOS: List[Tuple[str, List[str]]] = [
     ("mini_agent_live.py", [PYTHON, str(SCENARIO_DIR / "mini_agent_live.py")]),
     (
+        "mini_agent_docker_release.py",
+        [PYTHON, str(SCENARIO_DIR / "mini_agent_docker_release.py")],
+    ),
+    (
         "mini_agent_http_release.py",
         [PYTHON, str(SCENARIO_DIR / "mini_agent_http_release.py")],
     ),
@@ -40,6 +44,10 @@ SCENARIOS: List[Tuple[str, List[str]]] = [
         [PYTHON, str(SCENARIO_DIR / "codex_agent_router.py")],
     ),
     (
+        "codex_agent_docker_release.py",
+        [PYTHON, str(SCENARIO_DIR / "codex_agent_docker_release.py")],
+    ),
+    (
         "chutes_release.py",
         [PYTHON, str(SCENARIO_DIR / "chutes_release.py")],
     ),
@@ -54,12 +62,18 @@ BLUE = "\033[1;34m"
 GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
+
 load_dotenv(find_dotenv())
 def main() -> None:
     results = []
     env = os.environ.copy()
     env.setdefault("LITELLM_ENABLE_MINI_AGENT", "1")
     env.setdefault("LITELLM_ENABLE_CODEX_AGENT", "1")
+
+    print(
+        f"{YELLOW}Note: enabling env flags for local run: "
+        f"LITELLM_ENABLE_MINI_AGENT=1, LITELLM_ENABLE_CODEX_AGENT=1{RESET}"
+    )
 
     for name, cmd in SCENARIOS:
         print(f"{BLUE}▶ Running {name}{RESET}")

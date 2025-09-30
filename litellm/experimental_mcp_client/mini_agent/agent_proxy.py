@@ -228,7 +228,7 @@ async def run(req: AgentRunReq):
 
     if backend == "local":
         # Deterministic, no-network envelope. Honor max_iterations from the request
-        # so smokes can assert iteration counts without hitting providers.
+        # so deterministic harnesses can assert iteration counts without hitting providers.
         ttotal_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
         iterations = req.max_iterations if isinstance(req.max_iterations, int) and req.max_iterations > 0 else 1
         q = ""
@@ -325,10 +325,10 @@ class OpenAIChatReq(BaseModel):
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(req: OpenAIChatReq):
     """
-    Minimal OpenAI-compatible shim used by smokes. It runs the mini-agent with a local
+    Minimal OpenAI-compatible shim used by deterministic checks. It runs the mini-agent with a local
     invoker and returns an OpenAI-shaped response envelope.
     """
-    # Echo mode: allow readiness/smokes to validate transport without invoking Router/LLMs
+    # Echo mode: allow readiness checks to validate transport without invoking Router/LLMs
     try:
         if os.getenv("MINI_AGENT_OPENAI_SHIM_MODE", "") == "echo":
             return build_shim_completion(req.model)

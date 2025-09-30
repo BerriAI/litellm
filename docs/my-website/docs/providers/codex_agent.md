@@ -51,6 +51,16 @@ export CODEX_AGENT_API_BASE=http://127.0.0.1:8788    # e.g., mini-agent shim /v1
 export CODEX_AGENT_API_KEY=sk-your-key               # optional; becomes Authorization: Bearer ...
 ```
 
+For a local stack with the bundled toolchains (mini-agent shim + codex sidecar + Ollama), run:
+
+```bash
+docker compose -f local/docker/compose.agents.yml up --build -d
+export CODEX_AGENT_API_BASE=http://127.0.0.1:8077
+# optional: export CODEX_AGENT_API_KEY=...
+```
+
+See `scenarios/codex_agent_docker_release.py` for a ready-to-run validation script that targets the Docker sidecar.
+
 Then wire the Router (note the `api_base`/`api_key` in `litellm_params`):
 
 ```python

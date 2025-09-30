@@ -1,4 +1,4 @@
-"""Mock research tools used by mini-agent demos and unit tests."""
+"""Mock research tools used by deterministic mini-agent demos and tests."""
 
 from __future__ import annotations
 

@@ -1,40 +1,22 @@
-"""Mini-agent public surface and event-loop guards.
+"""Mini-agent public surface plus a minimal event-loop fallback.
 
-This module exports the key mini-agent types and functions used in smokes and
-lightweight integrations, while also ensuring an event loop exists in
-environments that still call `asyncio.get_event_loop()` directly (e.g., some
-test runners).
+This module exposes the types needed by the deterministic mini-agent scenarios
+and safeguards older harnesses that still rely on `asyncio.get_event_loop()`
+without configuring a loop first. The fallback is intentionally minimal to
+avoid the brittle layering that used to accumulate in this namespace.
 """
 
 from __future__ import annotations
 
-# Minimal namespace for mini-agent helpers used in smokes.
-# Ensure an event loop exists for tests that call asyncio.get_event_loop().run_until_complete(...)
+# Minimal namespace for the deterministic mini-agent harness.
+# Ensure callers that reach for get_event_loop() on Python 3.12 still receive a loop.
 import asyncio  # noqa: E402
 
-# Normalize policy first (helps Python 3.12+ behavior)
-try:
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-except Exception:
-    pass
-
-try:
+try:  # pragma: no cover - safety belt for legacy harnesses
     asyncio.get_running_loop()
 except RuntimeError:
     try:
-        _loop_pkg = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop_pkg)
-    except Exception:
-        # Best-effort; test runners may manage the loop differently
-        pass
-
-# Final guard for get_event_loop() callers
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    try:
-        _loop_pkg2 = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop_pkg2)
+        asyncio.set_event_loop(asyncio.new_event_loop())
     except Exception:
         pass
 

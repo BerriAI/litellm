@@ -1,5 +1,4 @@
 """Optional helpers to reduce app boilerplate. Import-safe; no core API changes."""
-from .cache import configure_cache_redis  # noqa: F401
 from .cache_utils import initialize_litellm_cache, test_litellm_cache  # noqa: F401
 from .json_utils import (  # noqa: F401
     PathEncoder,
@@ -17,7 +16,6 @@ from .log_utils import (  # noqa: F401
 )
 
 __all__ = [
-    "configure_cache_redis",
     "initialize_litellm_cache",
     "test_litellm_cache",
     "PathEncoder",

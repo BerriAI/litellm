@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
-"""
-Run multiple mini-agent tasks concurrently to validate reentrancy and stability.
-Env:
-  SCENARIO_MINI_CONCURRENCY=10
-  SCENARIO_MINI_TOTAL=30
-"""
+"""Run multiple mini-agent jobs concurrently to validate reentrancy."""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from dotenv import find_dotenv, load_dotenv
 
 load_dotenv(find_dotenv())
 
+
+def _env_int(default: int, *names: str) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    return default
+
 try:
     from litellm.experimental_mcp_client.mini_agent.agent_proxy import AgentRunReq, run
-except Exception as import_err:  # noqa: BLE001
-    print(
-        "Skipping mini-agent concurrency scenario (components unavailable): "
-        f"{import_err}"
-    )
+except Exception as exc:  # pragma: no cover - optional dependency
+    print(f"Skipping mini-agent concurrency scenario (components unavailable): {exc}")
     raise SystemExit(0)
 
-PROMPTS = [
+PROMPTS: List[List[Dict[str, Any]]] = [
     [{"role": "user", "content": "Say hi"}],
     [{"role": "user", "content": "Name two fruits."}],
     [{"role": "user", "content": "Provide a short motivational quote."}],
@@ -34,19 +41,7 @@ PROMPTS = [
 ]
 
 
-def _normalize_payload(resp: Any) -> Any:
-    try:
-        return resp.model_dump()  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        try:
-            return resp.dict()  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            if isinstance(resp, (dict, list, str, int, float, bool, type(None))):
-                return resp
-            return str(resp)
-
-
-async def _run_one(i: int) -> tuple[bool, Any]:
+async def _one(i: int) -> Tuple[bool, Dict[str, Any]]:
     req = AgentRunReq(
         messages=PROMPTS[i % len(PROMPTS)],
         model=f"mini-agent-concurrency-{i}",
@@ -56,27 +51,40 @@ async def _run_one(i: int) -> tuple[bool, Any]:
     )
     try:
         resp = await run(req)
-        return True, _normalize_payload(resp)
-    except Exception as exc:  # noqa: BLE001
+        payload: Any
+        try:
+            payload = resp.model_dump()
+        except Exception:
+            try:
+                payload = resp.dict()
+            except Exception:
+                payload = resp
+        if not isinstance(payload, dict):
+            payload = {"result": payload}
+        return True, payload
+    except Exception as exc:  # pragma: no cover - live path
         return False, {"error": str(exc)}
 
 
 async def main() -> None:
-    total = int(os.getenv("SCENARIO_MINI_TOTAL", "30"))
-    concurrency = int(os.getenv("SCENARIO_MINI_CONCURRENCY", "10"))
+    total = max(1, _env_int(8, "STRESS_TOTAL", "SCENARIO_MINI_TOTAL"))
+    concurrency = max(1, _env_int(4, "STRESS_CONCURRENCY", "SCENARIO_MINI_CONCURRENCY"))
+    if (total > 16 or concurrency > 8) and os.getenv("STRESS_HEAVY") != "1":
+        print(
+            f"Requested total={total} concurrency={concurrency} exceeds safe defaults. "
+            "Set STRESS_HEAVY=1 to opt into heavier mini-agent concurrency runs or lower STRESS_TOTAL/STRESS_CONCURRENCY."
+        )
+        return
     sem = asyncio.Semaphore(concurrency)
 
-    async def wrapped(i: int) -> tuple[bool, Any]:
+    async def runner(i: int) -> Tuple[bool, Dict[str, Any]]:
         async with sem:
-            return await _run_one(i)
+            return await _one(i)
 
-    results = await asyncio.gather(*(wrapped(i) for i in range(total)))
+    results = await asyncio.gather(*(runner(i) for i in range(total)))
     successes = sum(1 for ok, _ in results if ok)
     errors = total - successes
-    print(
-        f"=== mini-agent concurrency === total={total} concurrency={concurrency} "
-        f"successes={successes} errors={errors}"
-    )
+    print(f"=== mini-agent concurrency === total={total} concurrency={concurrency} successes={successes} errors={errors}")
     for idx, (ok, payload) in enumerate(results[:3]):
         print(f"sample[{idx}] ok={ok}")
         print(json.dumps(payload, indent=2))

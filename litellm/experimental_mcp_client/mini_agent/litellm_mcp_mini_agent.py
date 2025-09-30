@@ -103,7 +103,7 @@ class AgentConfig:
     tool_timeout_sec: float = 10.0
     max_total_seconds: Optional[float] = None
 
-    # Compatibility / optional behavior toggles used by smokes
+    # Compatibility toggles surfaced to deterministic harnesses
     use_tools: bool = False
     auto_run_code_on_code_block: bool = False
     escalate_on_budget_exceeded: bool = False
@@ -213,7 +213,7 @@ class LocalMCPInvoker(MCPInvoker):
                 "type": "function",
                 "function": {
                     "name": "compress_runs",
-                    "description": "Compress runs of repeated characters; helper for readiness smokes.",
+                    "description": "Compress runs of repeated characters; helper for deterministic readiness runs.",
                     "parameters": {
                         "type": "object",
                         "properties": {"s": {"type": "string"}},
@@ -915,10 +915,10 @@ async def arun_mcp_mini_agent(
                 t0 = time.perf_counter()
                 out_json = await mcp.call_openai_tool(payload)
                 t_ms = (time.perf_counter() - t0) * 1000.0
-                return (idx, out_json, None, tool_name, tc.get("id"), t_ms)
+                return (idx, out_json, None, tool_name, tc.get("id"), t_ms, args)
             except Exception as e:
                 t_ms = (time.perf_counter() - t0) * 1000.0 if 't0' in locals() else 0.0
-                return (idx, None, e, tool_name, tc.get("id"), t_ms)
+                return (idx, None, e, tool_name, tc.get("id"), t_ms, args)
 
         results = []
         if getattr(cfg, "tool_concurrency", 1) > 1 and len(to_run) > 1:
@@ -933,21 +933,72 @@ async def arun_mcp_mini_agent(
                 results.append(await _invoke(i, tc))
 
         # Append tool results in submission order
-        for idx, out_json, err, tool_name, tool_call_id, t_ms in sorted(results, key=lambda x: x[0]):
+        for idx, out_json, err, tool_name, tool_call_id, t_ms, raw_args in sorted(results, key=lambda x: x[0]):
+            arguments_raw: Optional[str] = None
+            arguments_parsed: Optional[Dict[str, Any]] = None
+            if isinstance(raw_args, str):
+                arguments_raw = raw_args
+                try:
+                    arguments_parsed = json.loads(raw_args)
+                except Exception:
+                    arguments_parsed = None
+            elif isinstance(raw_args, dict):
+                arguments_parsed = raw_args
+                try:
+                    arguments_raw = json.dumps(raw_args)
+                except Exception:
+                    arguments_raw = None
+
+            record: Dict[str, Any] = {
+                "call_index": idx,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "arguments_raw": arguments_raw,
+                "arguments": arguments_parsed,
+                "t_ms": t_ms,
+                "model": chosen_model,
+                "name": tool_name,  # backwards compatibility for older callers
+            }
+
             if err is not None:
                 err_s = str(err)
                 conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"error: {err_s}"})
-                inv_recs.append({"name": tool_name, "ok": False, "error": err_s, "t_ms": t_ms})
-            else:
-                try:
-                    inv = json.loads(out_json) if isinstance(out_json, str) else (out_json or {})
-                except Exception:
-                    inv = {"ok": False, "error": "invalid tool JSON"}
-                text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
-                conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": text})
-                inv_recs.append({"name": tool_name, **inv, "t_ms": t_ms})
-                if text:
-                    tool_outputs.append(text)
+                record.update({
+                    "ok": False,
+                    "rc": None,
+                    "result": None,
+                    "stdout": None,
+                    "stderr": None,
+                    "error": err_s,
+                })
+                inv_recs.append(record)
+                continue
+
+            try:
+                inv = json.loads(out_json) if isinstance(out_json, str) else (out_json or {})
+            except Exception:
+                inv = {"ok": False, "error": "invalid tool JSON"}
+
+            text = inv.get("result") or inv.get("answer") or inv.get("text") or inv.get("stdout") or ""
+            conv.append({"role": "tool", "tool_call_id": tool_call_id, "content": text})
+
+            ok_val = inv.get("ok")
+            if ok_val is None:
+                ok_val = True
+            record.update({
+                "ok": ok_val,
+                "rc": inv.get("rc") or inv.get("returncode"),
+                "result": inv.get("result") or inv.get("answer"),
+                "stdout": inv.get("stdout"),
+                "stderr": inv.get("stderr"),
+                "error": inv.get("error"),
+                "model": inv.get("model") or inv.get("used_model") or chosen_model,
+            })
+
+            if text:
+                tool_outputs.append(text)
+
+            inv_recs.append(record)
 
         iters.append(IterationRecord(tool_invocations=inv_recs, router_call_ms=router_ms))
 

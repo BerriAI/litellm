@@ -51,7 +51,9 @@ Fork Status (our fork)
 - See `STATE_OF_PROJECT.md` for a concise, operator‑friendly status of this fork, including the router_core seam (opt‑in), extras, mini‑agent helper, validation steps, CI, and roadmap.
 
 Fork Quick Start
-- See QUICK_START.md for copy-paste examples (mini-agent, smokes, parity).
+- Run `make run-scenarios` for the live smoke suite (mini-agent, codex-agent, router fan-out, Chutes, code-agent).
+- Bring up both local agents (mini + codex) with `docker compose -f local/docker/compose.agents.yml up --build -d` if you want HTTP endpoints available.
+- See QUICK_START.md for the per-scenario commands lifted directly from `scenarios/`.
 - Mini-agent usage + troubleshooting: docs/my-website/docs/experimental/mini-agent.md
 - Project status and guardrails: STATE_OF_PROJECT.md
 
