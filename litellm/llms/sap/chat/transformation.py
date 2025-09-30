@@ -15,7 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from .handler import OptionalDependencyError
 try:
     from gen_ai_hub.orchestration.models.config import OrchestrationConfig
-    from gen_ai_hub.orchestration.models.message import Message
+    from gen_ai_hub.orchestration.models.message import Message, ToolMessage, MessageToolCall, FunctionCall
     from gen_ai_hub.orchestration.models.llm import LLM
     from gen_ai_hub.orchestration.models.template import Template
     from gen_ai_hub.orchestration.models.response_format import (
@@ -128,11 +128,34 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
     ) -> OrchestrationConfig:
         supported_params = self.get_supported_openai_params(model)
-        model_params = {
-            k: v for k, v in optional_params.items() if k in supported_params
-        }
-        messages_ = [Message(**kwargs) for kwargs in messages]
-        model_version = optional_params.pop("model_version", "latest")
+        model_params = {k: v for k, v in optional_params.items() if k in supported_params}
+        messages_ = []
+        for message in messages:
+            if message.get("role") == "tool":
+                content = message.get("content")
+                tool_call_id = message.get("tool_call_id")
+                messages_.append(ToolMessage(tool_call_id=tool_call_id, content=content))
+
+            elif message.get("role") == "assistant" and message.get("tool_calls"):
+                content = message.get("content")
+                tool_calls_list = message.get("tool_calls", [])
+                if tool_calls_list:
+                    tool_calls = []
+                    for tool_call in tool_calls_list:
+                        tool_calls.append(MessageToolCall(
+                            id=tool_call.get("id"),
+                            type=tool_call.get("type", "function"),
+                            function=FunctionCall(
+                                name=tool_call["function"]["name"],
+                                arguments=tool_call["function"].get("arguments", {})
+                            )
+                        ))
+                    messages_.append(Message(role="assistant", content=content, tool_calls=tool_calls))
+            elif message.get("role") == "assistant":
+                messages_.append(Message(role=message["role"], content=message.get("content")))
+            else:
+                messages_.append(Message(**message))
+        model_version = optional_params.pop('model_version', 'latest')
         tools_input = optional_params.pop("tools", None)
         tools = []
         if tools_input is not None:
@@ -141,8 +164,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response_format = optional_params.pop("response_format", None)
         if isinstance(response_format, dict):
             if (
-                response_format.get("type", None) == "json_schema"
-                and "json_schema" in response_format
+                    response_format.get("type", None) == "json_schema"
+                    and "json_schema" in response_format
             ):
                 schema = response_format["json_schema"]
                 if not schema.get("description", None):
