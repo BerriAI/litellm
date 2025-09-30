@@ -21,17 +21,17 @@ router = Router(
             "litellm_params": {
                 "model": "mini-agent",
                 "custom_llm_provider": "mini-agent",
-            "target_model": BASE_MODEL,
-            "allowed_languages": ["python"],
-            "max_iterations": MAX_ITER,
-            "max_seconds": 180,
-            "temperature": 0,
-            "tool_choice": "required",
-            "response_format": {"type": "json_object"},
-            "seed": 7,
-        },
-    }
-]
+                "target_model": BASE_MODEL,
+                "allowed_languages": ["python"],
+                "max_iterations": MAX_ITER,
+                "max_seconds": 180,
+                "temperature": float(os.getenv("DEBUG_MINI_AGENT_TEMPERATURE", "0")),
+                "tool_choice": os.getenv("DEBUG_MINI_AGENT_TOOL_CHOICE", "required"),
+                "response_format": json.loads(os.getenv("DEBUG_MINI_AGENT_RESPONSE_FORMAT", '{"type":"json_object"}')),
+                "seed": int(os.getenv("DEBUG_MINI_AGENT_SEED", "7")),
+            },
+        }
+    ]
 )
 
 PROMPT = [

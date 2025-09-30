@@ -8,30 +8,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-# Py3.12+ safety: ensure a default event loop exists for tests that call
-# asyncio.get_event_loop().run_until_complete(...) without prior loop setup.
-# Belt-and-suspenders: try running + current loop checks.
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    try:
-        # No running loop; ensure a loop is set on this thread
-        _loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop)
-    except Exception:
-        # Best-effort; if the test runner or framework manages the loop, avoid hard failures
-        pass
-
-# If get_event_loop() still raises on 3.12+, create and set one explicitly.
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    try:
-        _loop2 = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop2)
-    except Exception:
-        pass
-
 
 # --- Minimal Router call wrapper -------------------------------------------------
 async def arouter_call(
