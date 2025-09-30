@@ -15,7 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from .handler import OptionalDependencyError
 try:
     from gen_ai_hub.orchestration.models.config import OrchestrationConfig
-    from gen_ai_hub.orchestration.models.message import Message
+    from gen_ai_hub.orchestration.models.message import Message, ToolMessage
     from gen_ai_hub.orchestration.models.llm import LLM
     from gen_ai_hub.orchestration.models.template import Template
     from gen_ai_hub.orchestration.models.response_format import (
@@ -131,7 +131,39 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_params = {
             k: v for k, v in optional_params.items() if k in supported_params
         }
-        messages_ = [Message(**kwargs) for kwargs in messages]
+
+        filtered_messages = []
+        for msg in messages:
+            msg_copy = msg.copy()
+
+            if msg_copy.get("role") == "tool":
+                content = msg_copy.get("content", "")
+                name = msg_copy.get("name", "function")
+
+                filtered_messages.append({
+                    "role": "user",
+                    "content": f"Function {name} returned: {content}"
+                })
+                continue
+
+            msg_copy.pop("tool_call_id", None)
+            msg_copy.pop("name", None)
+
+            if "tool_calls" in msg_copy and msg_copy["tool_calls"]:
+                if isinstance(msg_copy["tool_calls"], list) and len(msg_copy["tool_calls"]) > 0:
+                    if isinstance(msg_copy["tool_calls"][0], dict):
+                        msg_copy.pop("tool_calls", None)
+                        if not msg_copy.get("content"):
+                            msg_copy["content"] = ""
+
+            filtered_messages.append(msg_copy)
+        messages_ = []
+        for msg in filtered_messages:
+            if isinstance(msg, dict):
+                messages_.append(Message(**msg))
+            else:
+                messages_.append(msg)
+
         model_version = optional_params.pop("model_version", "latest")
         tools_input = optional_params.pop("tools", None)
         tools = []
@@ -141,8 +173,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         response_format = optional_params.pop("response_format", None)
         if isinstance(response_format, dict):
             if (
-                response_format.get("type", None) == "json_schema"
-                and "json_schema" in response_format
+                    response_format.get("type", None) == "json_schema"
+                    and "json_schema" in response_format
             ):
                 schema = response_format["json_schema"]
                 if not schema.get("description", None):
