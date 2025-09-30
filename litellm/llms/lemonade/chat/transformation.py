@@ -11,7 +11,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
 )
-from litellm.types.utils import ModelResponse, ModelInfoBase
+from litellm.types.utils import ModelResponse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
