@@ -225,18 +225,15 @@ class GitLabTemplateManager:
         except TypeError:
             # Fallback to the "classic" signature
             raw = self.gitlab_client.list_files(
-                path=self.prompts_path or "",
+                directory_path=self.prompts_path or "",
                 ref=None,
                 recursive=recursive,
             )
             # Classic returns GitLab tree entries; filter *.prompt blobs
-            files = [
-                f["path"]
-                for f in (raw or [])
-                if isinstance(f, dict)
-                   and f.get("type") == "blob"
-                   and str(f.get("path", "")).endswith(".prompt")
-            ]
+            files = []
+            for f in (raw or []):
+                if isinstance(f, dict) and f.get("type") == "blob" and str(f.get("path", "")).endswith(".prompt") and 'path' in f:
+                    files.append(f['path'])
 
             return [self._repo_path_to_id(p) for p in files]
 
