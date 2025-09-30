@@ -83,6 +83,7 @@ from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
+    CachingDetails,
     CallTypes,
     CostBreakdown,
     CostResponseTypes,
@@ -347,6 +348,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: Optional[CostBreakdown] = None
+
+        # Init Caching related details
+        self.caching_details: Optional[CachingDetails] = None
 
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
