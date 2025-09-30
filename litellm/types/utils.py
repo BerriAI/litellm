@@ -2082,6 +2082,16 @@ class CostBreakdown(TypedDict):
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
+class StandardLoggingPayloadStatusFields(TypedDict, total=False):
+    """Boolean status fields for easy filtering and analytics"""
+    is_guardrail_failed: bool
+    """True if any guardrail had a technical failure/error"""
+    is_guardrail_intervened: bool  
+    """True if any guardrail blocked or modified content due to policy violations"""
+    is_llm_request_successful: bool
+    """True if the underlying LLM request completed successfully (regardless of guardrails)"""
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
@@ -2093,6 +2103,7 @@ class StandardLoggingPayload(TypedDict):
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
