@@ -100,7 +100,7 @@ return results
 
 # Redis cluster slot count
 REDIS_CLUSTER_SLOTS = 16384
-REDIS_NODE_HASHTAG_NAME="all_keys"
+REDIS_NODE_HASHTAG_NAME = "all_keys"
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
