@@ -11,15 +11,16 @@ Use PointGuardAI to add advanced AI safety and security checks to your LLM appli
 ### 1. Configure PointGuardAI Service
 
 Get your API credentials from PointGuardAI:
-- API Key
-- API Email
 - Organization Code
-- Policy Configuration Name
 - API Base URL
+- API Email
+- API Key
+- Policy Configuration Name
+
 
 ### 2. Add PointGuardAI to your LiteLLM config.yaml
 
-Define the PointGuardAI guardrail under the `guardrails` section of your configuration file.
+Define the PointGuardAI guardrail under the `guardrails` section of your configuration file. The following configuration example illustrates how to config the guardrails for prompts (pre-call).
 
 ```yaml title="config.yaml"
 model_list:
@@ -50,11 +51,11 @@ guardrails:
 ### 3. Start LiteLLM Proxy (AI Gateway)
 
 ```bash title="Set environment variables"
-export POINTGUARDAI_API_KEY="your-api-key"
-export POINTGUARDAI_API_EMAIL="your-email@company.com"
 export POINTGUARDAI_ORG_CODE="your-org-code"
-export POINTGUARDAI_CONFIG_NAME="your-policy-config-name"
 export POINTGUARDAI_API_URL_BASE="https://api.eval1.appsoc.com"
+export POINTGUARDAI_API_EMAIL="your-email@company.com"
+export POINTGUARDAI_API_KEY="your-api-key"
+export POINTGUARDAI_CONFIG_NAME="your-policy-config-name"
 export OPENAI_API_KEY="sk-proj-xxxx...XxxX"
 ```
 
@@ -72,11 +73,11 @@ litellm --config config.yaml
 docker run --rm \
   --name litellm-proxy \
   -p 4000:4000 \
-  -e POINTGUARDAI_API_KEY=$POINTGUARDAI_API_KEY \
-  -e POINTGUARDAI_API_EMAIL=$POINTGUARDAI_API_EMAIL \
   -e POINTGUARDAI_ORG_CODE=$POINTGUARDAI_ORG_CODE \
-  -e POINTGUARDAI_CONFIG_NAME=$POINTGUARDAI_CONFIG_NAME \
   -e POINTGUARDAI_API_URL_BASE=$POINTGUARDAI_API_URL_BASE \
+  -e POINTGUARDAI_API_EMAIL=$POINTGUARDAI_API_EMAIL \
+  -e POINTGUARDAI_API_KEY=$POINTGUARDAI_API_KEY \
+  -e POINTGUARDAI_CONFIG_NAME=$POINTGUARDAI_CONFIG_NAME \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
   ghcr.io/berriai/litellm:main-latest \
@@ -184,22 +185,23 @@ Expected successful response:
 
 | Parameter | Environment Variable | Description |
 |-----------|---------------------|-------------|
-| `api_key` | `POINTGUARDAI_API_KEY` | Your PointGuardAI API key |
-| `api_email` | `POINTGUARDAI_API_EMAIL` | Email associated with your PointGuardAI account |
 | `org_code` | `POINTGUARDAI_ORG_CODE` | Your organization code in PointGuardAI |
-| `policy_config_name` | `POINTGUARDAI_CONFIG_NAME` | Name of the policy configuration to use |
 | `api_base` | `POINTGUARDAI_API_URL_BASE` | Base URL for PointGuardAI API (e.g., https://api.eval1.appsoc.com) |
+| `api_email` | `POINTGUARDAI_API_EMAIL` | Email associated with your PointGuardAI account |
+| `api_key` | `POINTGUARDAI_API_KEY` | Your PointGuardAI API key |
+| `policy_config_name` | `POINTGUARDAI_CONFIG_NAME` | Name of the policy configuration to use |
+
 
 ### Optional Parameters
 
 | Parameter | Environment Variable | Default | Description |
 |-----------|---------------------|---------|-------------|
-| `model_provider_name` | - | None | Model provider identifier |
-| `model_name` | - | None | Model name identifier |
+| `model_provider_name` | - | None | Model provider identifier,for example, Open AI |
+| `model_name` | - | None | Model name identifier, for example, gpt-4 |
 
-## Multiple Guardrails Configuration
+## Sample configuration for pre-call, during-call, and post-call
 
-You can configure multiple PointGuardAI guardrails for different use cases:
+The following sample illustrates how to configure PointGuard AI's guardrails in pre-call, during-call, and post-call modes.
 
 ```yaml title="config.yaml"
 guardrails:
@@ -208,11 +210,11 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "pre_call"
-      api_key: os.environ/POINTGUARDAI_API_KEY
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       org_code: os.environ/POINTGUARDAI_ORG_CODE
-      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
+      api_email: os.environ/POINTGUARDAI_API_EMAIL
+      api_key: os.environ/POINTGUARDAI_API_KEY
+      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       model_provider_name: "provider-name"  # Optional - for example, "Open AI"
       model_name: "model-name"              # Optional - for example, "gpt-4"
       default_on: true
@@ -222,11 +224,11 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "during_call"
-      api_key: os.environ/POINTGUARDAI_API_KEY
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       org_code: os.environ/POINTGUARDAI_ORG_CODE
-      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
+      api_email: os.environ/POINTGUARDAI_API_EMAIL
+      api_key: os.environ/POINTGUARDAI_API_KEY
+      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       model_provider_name: "provider-name"  # Optional - for example, "Open AI"
       model_name: "model-name"              # Optional - for example, "gpt-4"
       default_on: true
@@ -236,85 +238,20 @@ guardrails:
     litellm_params:
       guardrail: pointguard_ai
       mode: "post_call"
-      api_key: os.environ/POINTGUARDAI_API_KEY
-      api_email: os.environ/POINTGUARDAI_API_EMAIL
       org_code: os.environ/POINTGUARDAI_ORG_CODE
-      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       api_base: os.environ/POINTGUARDAI_API_URL_BASE
+      api_email: os.environ/POINTGUARDAI_API_EMAIL
+      api_key: os.environ/POINTGUARDAI_API_KEY
+      policy_config_name: os.environ/POINTGUARDAI_CONFIG_NAME
       model_provider_name: "provider-name"  # Optional - for example, "OpenAI"
       model_name: "model-name"              # Optional - for example, "gpt-4"
       default_on: true
 ```
 
-## ✨ Control Guardrails per Project (API Key)
-
-:::info
-
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
-
-:::
-
-Use this to control what guardrails run per project. In this tutorial we only want the PointGuardAI guardrail to run for specific API keys.
-
-**Step 1** Create Key with guardrail settings
-
-<Tabs>
-<TabItem value="/key/generate" label="/key/generate">
-
-```shell
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
-    -H 'Authorization: Bearer sk-1234' \
-    -H 'Content-Type: application/json' \
-    -d '{
-            "guardrails": ["pointguardai-input-guard"]
-        }
-    }'
-```
-
-</TabItem>
-<TabItem value="/key/update" label="/key/update">
-
-```shell
-curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "key": "sk-jNm1Zar7XfNdZXp49Z1kSQ",
-        "guardrails": ["pointguardai-input-guard"]
-        }
-}'
-```
-
-</TabItem>
-</Tabs>
-
-**Step 2** Test it with new key
-
-```shell
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-    --header 'Authorization: Bearer sk-jNm1Zar7XfNdZXp49Z1kSQ' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-4",
-    "messages": [
-        {
-        "role": "user",
-        "content": "Analyze this sensitive data for security risks"
-        }
-    ]
-}'
-```
 
 ## Supported Detection Types
 
-PointGuardAI can detect various types of risks and policy violations:
-
-- **Prompt Injection Attacks**: Attempts to manipulate AI behavior
-- **Data Leakage**: Potential exposure of sensitive information
-- **Policy Violations**: Content that violates organizational policies
-- **Malicious Content**: Harmful or inappropriate requests
-- **PII Detection**: Personally identifiable information in prompts/responses
-- **Compliance Checks**: Regulatory compliance validation
+PointGuardAI can detect various types of risks and policy violations. This includes checks for prompt injection, jail breaking, DLP, etc.Please refer to PointGuard AI's platform documentation for the comprehensive list of policies.
 
 ## Troubleshooting
 
