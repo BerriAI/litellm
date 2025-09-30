@@ -2082,14 +2082,26 @@ class CostBreakdown(TypedDict):
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
+LLMAPIStatus = Literal["success", "failure"]
+GuardrailStatus = Literal[
+    "success",
+    "guardrail_intervened", 
+    "guardrail_failed_to_respond",
+    "not_run"
+]
+
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
-    """Boolean status fields for easy filtering and analytics"""
-    is_guardrail_failed: bool
-    """True if any guardrail had a technical failure/error"""
-    is_guardrail_intervened: bool  
-    """True if any guardrail blocked or modified content due to policy violations"""
-    is_llm_request_successful: bool
-    """True if the underlying LLM request completed successfully (regardless of guardrails)"""
+    """Status fields for easy filtering and analytics"""
+    llm_api_status: LLMAPIStatus
+    """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
+    guardrail_status: GuardrailStatus
+    """
+    Status of guardrail execution:
+    - 'success': Guardrail ran and allowed content through
+    - 'guardrail_intervened': Guardrail blocked or modified content
+    - 'guardrail_failed_to_respond': Guardrail had technical failure
+    - 'not_run': No guardrail was run
+    """
 
 
 class StandardLoggingPayload(TypedDict):
