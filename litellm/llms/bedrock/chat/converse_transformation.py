@@ -930,6 +930,11 @@ class AmazonConverseConfig(BaseConfig):
             drop_params=False,
         )
 
+        # Preserve config blocks and other non-OpenAI params that weren't handled by map_openai_params
+        for key in list(self.get_config_blocks().keys()):
+            if key in non_default_params and key not in optional_params:
+                optional_params[key] = non_default_params[key]
+
         # Prepare and separate parameters
         inference_params, additional_request_params, request_metadata = (
             self._prepare_request_params(optional_params, model)
