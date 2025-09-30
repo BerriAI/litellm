@@ -89,6 +89,7 @@ from litellm.types.utils import (
     CostResponseTypes,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
+    GuardrailStatus,
     ImageResponse,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
@@ -107,6 +108,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingPayloadStatusFields,
     StandardLoggingPromptManagementMetadata,
     StandardLoggingVectorStoreRequest,
     TextCompletionResponse,
@@ -4424,6 +4426,49 @@ class StandardLoggingPayloadSetup:
             request_tags.extend(additional_header_tags)
         return request_tags
 
+GUARDRAIL_STATUS_MAP: Dict[str, GuardrailStatus] = {
+    "success": "success",
+    "blocked": "guardrail_intervened",
+    "failure": "guardrail_failed_to_respond",
+    "not_run": "not_run"
+}
+
+def _get_status_fields(
+    status: StandardLoggingPayloadStatus,
+    guardrail_information: Optional[dict],
+    error_str: Optional[str]
+) -> "StandardLoggingPayloadStatusFields":
+    """
+    Determine status fields based on request status and guardrail information.
+    
+    Args:
+        status: Overall request status ("success" or "failure")
+        guardrail_information: Guardrail information from metadata
+        error_str: Error string if any
+        
+    Returns:
+        StandardLoggingPayloadStatusFields with llm_api_status and guardrail_status
+    """
+    # Set LLM API status
+    llm_api_status: StandardLoggingPayloadStatus = status
+    
+    # Determine guardrail status
+    guardrail_status: GuardrailStatus = "not_run"
+    
+    #########################################################
+    # Map - guardrail_information.guardrail_status to guardrail_status
+    #########################################################
+    if guardrail_information and isinstance(guardrail_information, dict):
+        gr_status = guardrail_information.get("guardrail_status")
+        if gr_status is not None:
+            guardrail_status = GUARDRAIL_STATUS_MAP.get(gr_status, "not_run")
+            
+    
+    return StandardLoggingPayloadStatusFields(
+        llm_api_status=llm_api_status,
+        guardrail_status=guardrail_status
+    )
+
 
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
@@ -4580,6 +4625,13 @@ def get_standard_logging_object_payload(
         ) and kwargs.get("stream") is True:
             stream = True
 
+        # Determine status fields based on current status and guardrail information
+        status_fields = _get_status_fields(
+            status=status,
+            guardrail_information=metadata.get("standard_logging_guardrail_information", None),
+            error_str=error_str
+        )
+
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -4590,6 +4642,7 @@ def get_standard_logging_object_payload(
             cache_hit=cache_hit,
             stream=stream,
             status=status,
+            status_fields=status_fields,
             custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
