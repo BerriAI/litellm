@@ -688,10 +688,8 @@ async def pass_through_request(  # noqa: PLR0915
 
         # combine url with query params for logging
         requested_query_params: Optional[dict] = (
-            query_params or request.query_params.__dict__
+            query_params or dict(request.query_params)
         )
-        if requested_query_params == request.query_params.__dict__:
-            requested_query_params = None
 
         requested_query_params_str = None
         if requested_query_params:
