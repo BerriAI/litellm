@@ -13545,6 +13545,19 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "groq/moonshotai/kimi-k2-instruct-0905": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "cache_read_input_token_cost": 0.5e-06,
+        "litellm_provider": "groq",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 278528,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "groq/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "groq",
