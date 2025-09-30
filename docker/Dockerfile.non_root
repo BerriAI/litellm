@@ -62,14 +62,21 @@ RUN pip uninstall jwt -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 
 # --- Prisma Handling for Non-Root User ---
-# Set Prisma cache directories
-ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
+# Pre-download Prisma binaries during build to avoid runtime downloads
+# This eliminates the need for outbound traffic to registry.npmjs.org and binaries.prisma.sh at runtime
+ENV PRISMA_BINARY_CACHE_DIR=/app/.prisma-binaries
 ENV NPM_CONFIG_CACHE=/.npm
 
 # Install prisma and make entrypoints executable
 RUN pip install --no-cache-dir prisma && \
     chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh
+
+# Pre-fetch Prisma binaries during build (requires internet access)
+# This runs as root and downloads binaries to a permanent location
+RUN mkdir -p ${PRISMA_BINARY_CACHE_DIR} && \
+    prisma generate && \
+    echo "Prisma binaries cached at build time"
 
 # Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
@@ -83,21 +90,21 @@ RUN mkdir -p /nonexistent /.npm && \
 RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
     # Set group ownership to 0 (root group) for OpenShift compatibility && \
-    chgrp -R 0 $PRISMA_PATH && \
+    chgrp -R 0 $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
     # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
-    chmod -R g=u $PRISMA_PATH && \
+    chmod -R g=u $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
-    # Ensure directories are writable by group && \
-    chmod -R g+w $PRISMA_PATH && \
+    # Ensure directories are readable by group (binaries are read-only at runtime) && \
+    chmod -R g+rX $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user
 USER nobody
 
-# Set HOME for prisma generate to have a writable directory
+# Set HOME for non-root user
 ENV HOME=/app
-RUN prisma generate
+# Prisma binaries already generated and cached during build as root
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
