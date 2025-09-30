@@ -91,21 +91,22 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
         # Handle image parameter
         if _image_list is not None:
-            image_list = [_image_list] if not isinstance(_image_list, list) else _image_list
+            image_list = (
+                [_image_list] if not isinstance(_image_list, list) else _image_list
+            )
             for _image in image_list:
                 if _image is not None:
-                    image_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                        _image
+                    image_content_type: str = (
+                        ImageEditRequestUtils.get_image_content_type(_image)
                     )
                     if isinstance(_image, BufferedReader):
                         files_list.append(
-                            ("image", (_image.name, _image, image_content_type))
+                            ("image[]", (_image.name, _image, image_content_type))
                         )
                     else:
                         files_list.append(
-                            ("image", ("image.png", _image, image_content_type))
+                            ("image[]", ("image.png", _image, image_content_type))
                         )
-
         # Handle mask parameter if provided
         if _mask is not None:
             # Handle case where mask can be a list (extract first mask)
@@ -120,6 +121,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+
         return data_without_files, files_list
 
     def transform_image_edit_response(

@@ -89,7 +89,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     },
                     "endpoint": "http://localhost:4000/chat/completions",
                     "model_group": "gpt-3.5-turbo",
-                    "deployment": "azure/chatgpt-v-3",
+                    "deployment": "azure/gpt-4.1-nano",
                     "model_info": {
                         "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                         "db_model": False,

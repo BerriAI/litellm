@@ -377,7 +377,9 @@ public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
 #### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
-priority_reservation_settings: "PriorityReservationSettings" = PriorityReservationSettings()
+priority_reservation_settings: "PriorityReservationSettings" = (
+    PriorityReservationSettings()
+)
 
 
 ######## Networking Settings ########
@@ -443,7 +445,7 @@ def identify(event_details):
 ####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base: Optional[str] = None
 headers = None
-api_version = None
+api_version: Optional[str] = None
 organization = None
 project = None
 config_path = None
@@ -494,7 +496,7 @@ azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
 infinity_models: Set = set()
-heroku_models: Set = set() 
+heroku_models: Set = set()
 databricks_models: Set = set()
 cloudflare_models: Set = set()
 codestral_models: Set = set()
@@ -1363,6 +1365,7 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
+
 
 def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""

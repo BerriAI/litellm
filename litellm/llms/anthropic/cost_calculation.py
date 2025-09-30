@@ -49,7 +49,7 @@ def get_cost_for_anthropic_web_search(
 
     ## Get the cost per web search request
     search_context_pricing: SearchContextCostPerQuery = (
-        model_info.get("search_context_cost_per_query", {}) or {}
+        model_info.get("search_context_cost_per_query") or SearchContextCostPerQuery()
     )
     cost_per_web_search_request = search_context_pricing.get(
         "search_context_size_medium", 0.0

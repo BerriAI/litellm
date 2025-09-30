@@ -393,21 +393,21 @@ async def test_async_chat_azure():
         litellm.set_verbose = True
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",  # openai model name
+                "model_name": "gpt-4.1-nano",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4o-new-test",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                 },
-                "model_info": {"base_model": "azure/gpt-4-1106-preview"},
+                "model_info": {"base_model": "azure/gpt-4.1-nano"},
                 "tpm": 240000,
                 "rpm": 1800,
             },
         ]
         router = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
         print("got response, sleeping 5 seconds....")
@@ -422,7 +422,7 @@ async def test_async_chat_azure():
         litellm.callbacks = [customHandler_streaming_azure_router]
         router2 = Router(model_list=model_list, num_retries=0)  # type: ignore
         response = await router2.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-nano",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
             stream=True,
         )
@@ -471,7 +471,6 @@ async def test_async_chat_azure():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# asyncio.run(test_async_chat_azure())
 ## EMBEDDING
 @pytest.mark.asyncio
 async def test_async_embedding_azure():
@@ -483,7 +482,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -504,7 +503,7 @@ async def test_async_embedding_azure():
             {
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/azure-embedding-model",
+                    "model": "azure/text-embedding-ada-002",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -547,7 +546,7 @@ async def test_async_chat_azure_with_fallbacks():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-nano",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -606,9 +605,9 @@ async def test_async_completion_azure_caching():
     unique_time = time.time()
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",  # openai model name
+            "model_name": "gpt-4.1-nano",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-nano",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -627,7 +626,7 @@ async def test_async_completion_azure_caching():
     ]
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -636,7 +635,7 @@ async def test_async_completion_azure_caching():
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
-        model="gpt-3.5-turbo",
+        model="gpt-4.1-nano",
         messages=[
             {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
         ],
@@ -646,6 +645,108 @@ async def test_async_completion_azure_caching():
     print(
         f"customHandler_caching.states post-cache hit: {customHandler_caching.states}"
     )
+    assert len(customHandler_caching.errors) == 0
+    assert len(customHandler_caching.states) == 4  # pre, post, success, success
+
+
+@pytest.mark.asyncio
+async def test_async_completion_azure_caching_streaming():
+    import copy
+    import uuid
+
+    litellm.set_verbose = True
+    customHandler_caching = CompletionCustomHandler()
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    litellm.callbacks = [customHandler_caching]
+    unique_time = uuid.uuid4()
+    
+    # Use Router instead of direct litellm.acompletion to get router-specific metadata
+    model_list = [
+        {
+            "model_name": "gpt-4.1-nano",
+            "litellm_params": {
+                "model": "azure/gpt-4.1-nano",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+            "tpm": 240000,
+            "rpm": 1800,
+        },
+    ]
+    router = Router(model_list=model_list)
+    
+    response1 = await router.acompletion(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
+        caching=True,
+        stream=True,
+    )
+    async for chunk in response1:
+        print(f"chunk in response1: {chunk}")
+    await asyncio.sleep(1)
+    initial_customhandler_caching_states = len(customHandler_caching.states)
+    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+    response2 = await router.acompletion(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
+        ],
+        caching=True,
+        stream=True,
+    )
+    async for chunk in response2:
+        print(f"chunk in response2: {chunk}")
+    await asyncio.sleep(1)  # success callbacks are done in parallel
+    print(
+        f"customHandler_caching.states post-cache hit: {customHandler_caching.states}"
+    )
+    assert len(customHandler_caching.errors) == 0
+    assert (
+        len(customHandler_caching.states) > initial_customhandler_caching_states
+    )  # pre, post, streaming .., success, success
+
+
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
+async def test_async_embedding_azure_caching():
+    print("Testing custom callback input - Azure Caching")
+    customHandler_caching = CompletionCustomHandler()
+    litellm.cache = Cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+        password=os.environ["REDIS_PASSWORD"],
+    )
+    router = Router(model_list=[{
+        "model_name": "text-embedding-ada-002",
+        "litellm_params": {
+            "model": "openai/text-embedding-ada-002",
+        },
+    }])
+    litellm.callbacks = [customHandler_caching]
+    unique_time = time.time()
+    response1 = await router.aembedding(
+        model="text-embedding-ada-002",
+        input=[f"good morning from litellm1 {unique_time}"],
+        caching=True,
+    )
+    await asyncio.sleep(1)  # set cache is async for aembedding()
+    response2 = await router.aembedding(
+        model="text-embedding-ada-002",
+        input=[f"good morning from litellm1 {unique_time}"],
+        caching=True,
+    )
+    await asyncio.sleep(1)  # success callbacks are done in parallel
+    print(customHandler_caching.states)
+    print(customHandler_caching.errors)
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
 
@@ -717,3 +818,4 @@ async def test_rate_limit_error_callback():
 
         assert "original_model_group" in mock_client.call_args.kwargs
         assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"
+

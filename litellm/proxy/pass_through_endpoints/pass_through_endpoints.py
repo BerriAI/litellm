@@ -3,7 +3,6 @@ import asyncio
 import copy
 import json
 import traceback
-from litellm._uuid import uuid
 from base64 import b64encode
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union
@@ -25,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -215,7 +215,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
                 llm_router.aadapter_completion(**data, specific_deployment=True)
             )
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
@@ -424,10 +424,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         for field_name, field_value in form_data.items():
             if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[
-                    field_name
-                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
-                    upload_file=field_value
+                files[field_name] = (
+                    await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+                        upload_file=field_value
+                    )
                 )
             else:
                 form_data_dict[field_name] = field_value
@@ -476,7 +476,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_request_route=user_api_key_dict.request_route,
                 user_api_key_spend=user_api_key_dict.spend,
                 user_api_key_max_budget=user_api_key_dict.max_budget,
-                user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+                user_api_key_budget_reset_at=(
+                    user_api_key_dict.budget_reset_at.isoformat()
+                    if user_api_key_dict.budget_reset_at
+                    else None
+                ),
             )
         )
 
@@ -496,7 +500,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         kwargs = {
             "litellm_params": {
-                **litellm_params_in_body,
+                **litellm_params_in_body,  # type: ignore
                 "metadata": _metadata,
                 "proxy_server_request": {
                     "url": str(request.url),
@@ -509,9 +513,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "passthrough_logging_payload": passthrough_logging_payload,
         }
 
-        logging_obj.model_call_details[
-            "passthrough_logging_payload"
-        ] = passthrough_logging_payload
+        logging_obj.model_call_details["passthrough_logging_payload"] = (
+            passthrough_logging_payload
+        )
 
         return kwargs
 
@@ -923,7 +927,6 @@ def create_pass_through_route(
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
-
     from litellm.proxy.types_utils.utils import get_instance_fn
 
     try:
@@ -1367,7 +1370,6 @@ async def create_pass_through_endpoints(
     Create new pass-through endpoint
     """
     from litellm._uuid import uuid
-
     from litellm.proxy.proxy_server import (
         get_config_general_settings,
         update_config_general_settings,
