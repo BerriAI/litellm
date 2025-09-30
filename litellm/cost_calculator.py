@@ -58,6 +58,9 @@ from litellm.llms.vertex_ai.cost_calculator import (
 )
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
+from litellm.llms.lemonade.cost_calculator import (
+    cost_per_token as lemonade_cost_per_token,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -347,6 +350,8 @@ def cost_per_token(  # noqa: PLR0915
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
         return xai_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "lemonade":
+        return lemonade_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "dashscope":
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
