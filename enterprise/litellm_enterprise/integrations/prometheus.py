@@ -1649,9 +1649,22 @@ class PrometheusLogger(CustomLogger):
         api_base: Optional[str],
         api_provider: str,
     ):
-        self.litellm_deployment_state.labels(
-            litellm_model_name, model_id, api_base, api_provider
-        ).set(state)
+        """
+        Set the deployment state.
+        """
+        ### get labels
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_deployment_state"
+            ),
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=api_provider,
+            ),
+        )
+        self.litellm_deployment_state.labels(**_labels).set(state)
 
     def set_deployment_healthy(
         self,
@@ -2230,6 +2243,10 @@ def prometheus_label_factory(
         for key, value in enum_values.custom_metadata_labels.items():
             if key in supported_enum_labels:
                 filtered_labels[key] = value
+            else:
+                filtered_labels[key] = (
+                    "None"  # this happens for dynamically added metadata labels
+                )
 
     # Add custom tags if configured
     if enum_values.tags is not None:
