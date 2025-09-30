@@ -21,6 +21,7 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build litellm-proxy-extras package first (includes new migrations)
 RUN cd litellm-proxy-extras && \
+    rm -rf dist/* && \
     python -m build && \
     cd ..
 

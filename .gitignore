@@ -8,6 +8,10 @@ litellm_uuid.txt
 __pycache__/
 *.pyc
 bun.lockb
+# Build artifacts
+dist/
+build/
+*.egg-info/
 **/.DS_Store
 .aider*
 litellm_results.jsonl
