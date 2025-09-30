@@ -412,6 +412,7 @@ class OllamaConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         images = optional_params.pop("images", None)
+        think = optional_params.pop("think", None)
         data = {
             "model": model,
             "prompt": ollama_prompt,
@@ -425,6 +426,8 @@ class OllamaConfig(BaseConfig):
             data["images"] = [
                 _convert_image(convert_to_ollama_image(image)) for image in images
             ]
+        if think is not None:
+            data["think"] = think
 
         return data
 

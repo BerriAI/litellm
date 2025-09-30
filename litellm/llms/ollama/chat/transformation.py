@@ -281,6 +281,7 @@ class OllamaChatConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         keep_alive = optional_params.pop("keep_alive", None)
+        think = optional_params.pop("think", None)
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
@@ -344,6 +345,8 @@ class OllamaChatConfig(BaseConfig):
             data["tools"] = tools
         if keep_alive is not None:
             data["keep_alive"] = keep_alive
+        if think is not None:
+            data["think"] = think
 
         return data
 
