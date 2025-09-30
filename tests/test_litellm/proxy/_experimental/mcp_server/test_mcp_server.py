@@ -689,9 +689,6 @@ async def test_call_mcp_tool_user_unauthorized_access():
     """Test that a user cannot call a tool from a server they don't have access to"""
     from fastapi import HTTPException
 
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-        MCPRequestHandler,
-    )
     from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -703,45 +700,27 @@ async def test_call_mcp_tool_user_unauthorized_access():
         object_permission_id="key-permission-123",
     )
 
-    # Mock the database calls that determine access permissions
-    # Mock get_object_permission to return no MCP servers for the key
+    # Mock global_mcp_server_manager.get_mcp_server_names_from_ids to return
+    # a list that doesn't include "restricted_server" (the server the user is trying to access)
     with patch(
-        "litellm.proxy.auth.auth_checks.get_object_permission"
-    ) as mock_get_object_permission:
-        # Mock get_team_object to return no MCP access for the team
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_object"
-        ) as mock_get_team_object:
-            # Mock object permission - key has no MCP server access
-            mock_key_permission = MagicMock()
-            mock_key_permission.mcp_servers = []  # No direct server access
-            mock_key_permission.mcp_access_groups = []  # No access groups
-            mock_get_object_permission.return_value = mock_key_permission
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_names_from_ids"
+    ) as mock_get_server_names:
+        # User has access to "allowed_server" but not "restricted_server"
+        mock_get_server_names.return_value = ["allowed_server", "another_server"]
 
-            # Mock team object - team also has no MCP access
-            mock_team = MagicMock()
-            mock_team.object_permission = None  # Team has no MCP permissions
-            mock_get_team_object.return_value = mock_team
+        # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="restricted_server-send_email",
+                arguments={
+                    "to": "test@example.com",
+                    "subject": "Test",
+                    "body": "Test",
+                },
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+            )
 
-            # Mock _get_mcp_servers_from_access_groups to return empty list
-            with patch.object(
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups"
-            ) as mock_get_servers_from_groups:
-                mock_get_servers_from_groups.return_value = []
-
-                # Try to call a tool - should raise HTTPException with 403 status
-                with pytest.raises(HTTPException) as exc_info:
-                    await call_mcp_tool(
-                        name="restricted_server-send_email",
-                        arguments={
-                            "to": "test@example.com",
-                            "subject": "Test",
-                            "body": "Test",
-                        },
-                        user_api_key_auth=mock_user_auth,
-                        mcp_auth_header="Bearer test_token",
-                    )
-
-                # Verify the exception details
-                assert exc_info.value.status_code == 403
-                assert "User not allowed to call this tool" in exc_info.value.detail
+        # Verify the exception details
+        assert exc_info.value.status_code == 403
+        assert "User not allowed to call this tool" in exc_info.value.detail
