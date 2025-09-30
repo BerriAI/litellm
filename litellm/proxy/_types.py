@@ -1,17 +1,7 @@
 import enum
 import json
-import uuid
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
 from pydantic import (
@@ -24,13 +14,10 @@ from pydantic import (
 )
 from typing_extensions import Required, TypedDict
 
+from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
-from litellm.types.mcp import (
-    MCPAuthType,
-    MCPTransport,
-    MCPTransportType,
-)
+from litellm.types.mcp import MCPAuthType, MCPTransport, MCPTransportType
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -343,6 +330,7 @@ class LiteLLMRoutes(enum.Enum):
 
     anthropic_routes = [
         "/v1/messages",
+        "/v1/messages/count_tokens",
     ]
 
     mcp_routes = [
@@ -404,16 +392,16 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     key_management_routes = [
-        KeyManagementRoutes.KEY_GENERATE,
-        KeyManagementRoutes.KEY_UPDATE,
-        KeyManagementRoutes.KEY_DELETE,
-        KeyManagementRoutes.KEY_INFO,
-        KeyManagementRoutes.KEY_REGENERATE,
-        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
-        KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM,
-        KeyManagementRoutes.KEY_LIST,
-        KeyManagementRoutes.KEY_BLOCK,
-        KeyManagementRoutes.KEY_UNBLOCK,
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+        KeyManagementRoutes.KEY_DELETE.value,
+        KeyManagementRoutes.KEY_INFO.value,
+        KeyManagementRoutes.KEY_REGENERATE.value,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
+        KeyManagementRoutes.KEY_REGENERATE_WITH_PATH_PARAM.value,
+        KeyManagementRoutes.KEY_LIST.value,
+        KeyManagementRoutes.KEY_BLOCK.value,
+        KeyManagementRoutes.KEY_UNBLOCK.value,
     ]
 
     management_routes = [
@@ -422,6 +410,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/update",
         "/user/delete",
         "/user/info",
+        "/user/list",
         # team
         "/team/new",
         "/team/update",
@@ -746,9 +735,9 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
     permissions: Optional[dict] = {}
-    model_max_budget: Optional[
-        dict
-    ] = {}  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
+    model_max_budget: Optional[dict] = (
+        {}
+    )  # {"gpt-4": 5.0, "gpt-3.5-turbo": 5.0}, defaults to {}
 
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
@@ -785,6 +774,13 @@ class GenerateKeyRequest(KeyRequestBase):
     key_type: Optional[LiteLLMKeyType] = Field(
         default=LiteLLMKeyType.DEFAULT,
         description="Type of key that determines default allowed routes.",
+    )
+    auto_rotate: Optional[bool] = Field(
+        default=False, description="Whether this key should be automatically rotated"
+    )
+    rotation_interval: Optional[str] = Field(
+        default=None,
+        description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
 
 
@@ -833,6 +829,8 @@ class UpdateKeyRequest(KeyRequestBase):
     metadata: Optional[dict] = None
     temp_budget_increase: Optional[float] = None
     temp_budget_expiry: Optional[datetime] = None
+    auto_rotate: Optional[bool] = None
+    rotation_interval: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -1146,12 +1144,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1173,12 +1171,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
@@ -1252,15 +1250,15 @@ class NewTeamRequest(TeamBase):
     guardrails: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
-    team_member_budget: Optional[
-        float
-    ] = None  # allow user to set a budget for all team members
-    team_member_rpm_limit: Optional[
-        int
-    ] = None  # allow user to set RPM limit for all team members
-    team_member_tpm_limit: Optional[
-        int
-    ] = None  # allow user to set TPM limit for all team members
+    team_member_budget: Optional[float] = (
+        None  # allow user to set a budget for all team members
+    )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
+    )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1339,9 +1337,9 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
-    callback_type: Optional[
-        Literal["success", "failure", "success_and_failure"]
-    ] = "success_and_failure"
+    callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
+        "success_and_failure"
+    )
     callback_vars: Dict[str, str]
 
     @model_validator(mode="before")
@@ -1610,9 +1608,9 @@ class ConfigList(LiteLLMPydanticObjectBase):
     stored_in_db: Optional[bool]
     field_default_value: Any
     premium_field: bool = False
-    nested_fields: Optional[
-        List[FieldDetail]
-    ] = None  # For nested dictionary or Pydantic fields
+    nested_fields: Optional[List[FieldDetail]] = (
+        None  # For nested dictionary or Pydantic fields
+    )
 
 
 class UserHeaderMapping(LiteLLMPydanticObjectBase):
@@ -1801,6 +1799,11 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    rotation_count: Optional[int] = 0  # Number of times key has been rotated
+    auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
+    rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
+    last_rotation_at: Optional[datetime] = None  # When this key was last rotated
+    key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1915,7 +1918,7 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
-    
+
     @classmethod
     def get_litellm_cli_user_api_key_auth(cls) -> "UserAPIKeyAuth":
         """
@@ -1930,6 +1933,23 @@ class UserAPIKeyAuth(
             team_id=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             key_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+        )
+
+    @classmethod
+    def get_litellm_internal_jobs_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for internal LiteLLM jobs like key rotation.
+
+        This is used to track actions performed by automated system jobs.
+        """
+        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+
+        return cls(
+            api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_id="system",
+            key_alias=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+            team_alias="system",
+            user_id="system",
         )
 
 
@@ -1957,9 +1977,9 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
     budget_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    user: Optional[
-        Any
-    ] = None  # You might want to replace 'Any' with a more specific type if available
+    user: Optional[Any] = (
+        None  # You might want to replace 'Any' with a more specific type if available
+    )
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -2854,9 +2874,9 @@ class TeamModelDeleteRequest(BaseModel):
 # Organization Member Requests
 class OrganizationMemberAddRequest(OrgMemberAddRequest):
     organization_id: str
-    max_budget_in_organization: Optional[
-        float
-    ] = None  # Users max budget within the organization
+    max_budget_in_organization: Optional[float] = (
+        None  # Users max budget within the organization
+    )
 
 
 class OrganizationMemberDeleteRequest(MemberDeleteRequest):
@@ -3066,9 +3086,9 @@ class ProviderBudgetResponse(LiteLLMPydanticObjectBase):
     Maps provider names to their budget configs.
     """
 
-    providers: Dict[
-        str, ProviderBudgetResponseObject
-    ] = {}  # Dictionary mapping provider names to their budget configurations
+    providers: Dict[str, ProviderBudgetResponseObject] = (
+        {}
+    )  # Dictionary mapping provider names to their budget configurations
 
 
 class ProxyStateVariables(TypedDict):
@@ -3202,9 +3222,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     enforce_rbac: bool = False
     roles_jwt_field: Optional[str] = None  # v2 on role mappings
     role_mappings: Optional[List[RoleMapping]] = None
-    object_id_jwt_field: Optional[
-        str
-    ] = None  # can be either user / team, inferred from the role mapping
+    object_id_jwt_field: Optional[str] = (
+        None  # can be either user / team, inferred from the role mapping
+    )
     scope_mappings: Optional[List[ScopeMapping]] = None
     enforce_scope_based_access: bool = False
     enforce_team_based_model_access: bool = False

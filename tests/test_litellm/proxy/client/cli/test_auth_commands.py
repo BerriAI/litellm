@@ -204,7 +204,7 @@ class TestLoginCommand:
              patch('requests.get', return_value=mock_response) as mock_get, \
              patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
              patch('litellm.proxy.client.cli.interface.show_commands') as mock_show_commands, \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -240,7 +240,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep') as mock_sleep, \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             # Mock time.sleep to avoid actual delays in tests
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -260,7 +260,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -276,7 +276,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=requests.RequestException("Connection failed")), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -290,7 +290,7 @@ class TestLoginCommand:
         
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=KeyboardInterrupt), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -313,7 +313,7 @@ class TestLoginCommand:
         with patch('webbrowser.open'), \
              patch('requests.get', return_value=mock_response), \
              patch('time.sleep'), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -327,7 +327,7 @@ class TestLoginCommand:
         
         with patch('webbrowser.open'), \
              patch('requests.get', side_effect=ValueError("Invalid value")), \
-             patch('uuid.uuid4', return_value='test-uuid-123'):
+             patch('litellm._uuid.uuid.uuid4', return_value='test-uuid-123'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -465,7 +465,7 @@ class TestCLIKeyRegenerationFlow:
              patch('litellm.proxy.client.cli.commands.auth.get_stored_api_key', return_value=existing_key) as mock_get_stored, \
              patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
              patch('litellm.proxy.client.cli.interface.show_commands') as mock_show_commands, \
-             patch('uuid.uuid4', return_value='new-session-uuid-789'):
+             patch('litellm._uuid.uuid.uuid4', return_value='new-session-uuid-789'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             
@@ -517,7 +517,7 @@ class TestCLIKeyRegenerationFlow:
              patch('litellm.proxy.client.cli.commands.auth.get_stored_api_key', return_value=None) as mock_get_stored, \
              patch('litellm.proxy.client.cli.commands.auth.save_token') as mock_save, \
              patch('litellm.proxy.client.cli.interface.show_commands'), \
-             patch('uuid.uuid4', return_value='new-session-uuid-999'):
+             patch('litellm._uuid.uuid.uuid4', return_value='new-session-uuid-999'):
             
             result = self.runner.invoke(login, obj=mock_context.obj)
             

@@ -764,7 +764,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-1.5-pro"])  # "vertex_ai",
+@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
@@ -977,7 +977,7 @@ def vertex_httpx_mock_reject_prompt_post(*args, **kwargs):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-def vertex_httpx_mock_post(url, data=None, json=None, headers=None):
+def vertex_httpx_mock_post(url, data=None, json=None, headers=None, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "application/json"}
@@ -2489,7 +2489,7 @@ def mock_gemini_list_request(*args, **kwargs):
     return mock_response
 
 
-import uuid
+from litellm._uuid import uuid
 
 
 @pytest.mark.parametrize(

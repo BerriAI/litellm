@@ -812,8 +812,14 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 ]
 
 BEDROCK_CONVERSE_MODELS = [
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-235b-a22b-2507-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -984,7 +990,11 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
+LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
+# Key Rotation Constants
+LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
