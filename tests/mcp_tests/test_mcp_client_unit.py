@@ -44,7 +44,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Basic auth
@@ -55,7 +54,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": f"Basic {expected_encoded}",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # API key
@@ -65,7 +63,6 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "X-API-Key": "api_key_123",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Custom authorization header
@@ -77,13 +74,12 @@ class TestMCPClientUnitTests:
         headers = client._get_auth_headers()
         assert headers == {
             "Authorization": "Token custom_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # No auth
         client = MCPClient("http://example.com")
         headers = client._get_auth_headers()
-        assert headers == {"MCP-Protocol-Version": "2025-06-18"}
+        assert headers == {}
 
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
@@ -112,7 +108,6 @@ class TestMCPClientUnitTests:
         call_args = mock_transport.call_args
         assert call_args[1]["headers"] == {
             "Authorization": "Bearer test_token",
-            "MCP-Protocol-Version": "2025-06-18",
         }
 
         # Verify session was initialized

@@ -20,10 +20,9 @@ from typing import (
     cast,
 )
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import ParallelRequestLimitError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
@@ -702,9 +701,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             f"Limit resets at: {reset_time_formatted}"
                         )
 
-                        raise HTTPException(
-                            status_code=429,
-                            detail=detail,
+                        raise ParallelRequestLimitError(
+                            message=detail,
                             headers={
                                 "retry-after": str(self.window_size),
                                 "rate_limit_type": str(status["rate_limit_type"]),

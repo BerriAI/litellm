@@ -9448,96 +9448,6 @@
         "supports_vision": true,
         "supports_web_search": true
     },
-    "gemini-flash-latest": {
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_audio_length_hours": 8.4,
-        "max_audio_per_prompt": 1,
-        "max_images_per_prompt": 3000,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
-        "max_pdf_size_mb": 30,
-        "max_tokens": 65535,
-        "max_video_length": 1,
-        "max_videos_per_prompt": 10,
-        "mode": "chat",
-        "output_cost_per_reasoning_token": 2.5e-06,
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://developers.googleblog.com/en/continuing-to-bring-you-our-latest-models-with-an-improved-gemini-2-5-flash-and-flash-lite-release/",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image",
-            "audio",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_output": false,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_url_context": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
-    "gemini-flash-lite-latest": {
-        "cache_read_input_token_cost": 2.5e-08,
-        "input_cost_per_audio_token": 3e-07,
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "vertex_ai-language-models",
-        "max_audio_length_hours": 8.4,
-        "max_audio_per_prompt": 1,
-        "max_images_per_prompt": 3000,
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
-        "max_pdf_size_mb": 30,
-        "max_tokens": 65535,
-        "max_video_length": 1,
-        "max_videos_per_prompt": 10,
-        "mode": "chat",
-        "output_cost_per_reasoning_token": 4e-07,
-        "output_cost_per_token": 4e-07,
-        "source": "https://developers.googleblog.com/en/continuing-to-bring-you-our-latest-models-with-an-improved-gemini-2-5-flash-and-flash-lite-release/",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions",
-            "/v1/batch"
-        ],
-        "supported_modalities": [
-            "text",
-            "image",
-            "audio",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_output": false,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_url_context": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
     "gemini-2.5-flash-lite-preview-06-17": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_audio_token": 5e-07,
@@ -13346,6 +13256,18 @@
         ],
         "supports_tool_choice": false
     },
+    "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
+        "input_cost_per_token": 0,
+        "litellm_provider": "lemonade",
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 0,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "groq/deepseek-r1-distill-llama-70b": {
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "groq",
@@ -13631,6 +13553,19 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "groq/moonshotai/kimi-k2-instruct-0905": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "cache_read_input_token_cost": 0.5e-06,
+        "litellm_provider": "groq",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 278528,
+        "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
