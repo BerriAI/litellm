@@ -21,13 +21,17 @@ router = Router(
             "litellm_params": {
                 "model": "mini-agent",
                 "custom_llm_provider": "mini-agent",
-                "target_model": BASE_MODEL,
-                "allowed_languages": ["python"],
-                "max_iterations": MAX_ITER,
-                "max_seconds": 180,
-            },
-        }
-    ]
+            "target_model": BASE_MODEL,
+            "allowed_languages": ["python"],
+            "max_iterations": MAX_ITER,
+            "max_seconds": 180,
+            "temperature": 0,
+            "tool_choice": "required",
+            "response_format": {"type": "json_object"},
+            "seed": 7,
+        },
+    }
+]
 )
 
 PROMPT = [

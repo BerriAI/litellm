@@ -57,3 +57,33 @@ make run-scenarios
   stack.
 - **Tip**: Because not every Ollama model supports vision, the script prints a
   reminder when responses do not contain visual detail.
+
+## Structured fallback for mini-agent
+
+- `mini_agent_live.py` emits a deterministic `synthetic_summary` JSON object derived from
+  the tool output (keys: `peak_change_pct`, `peak_week`, `recommendation`). If parsing
+  fails or the tool output is empty, it prints `{"synthetic_summary": {}}`. This lets
+  downstream callers rely on a stable schema even if the base model’s final assistant
+  message is empty or highly variable.
+
+## Known-good models for tool-calling (and current tips)
+
+- Observed as working well:
+  - `qwen2.5-coder:14b` (Ollama) — reliably produces tool calls
+  - `openai/gpt-4o-mini` — strong baseline for deterministic tool behavior
+  - Llama 3.1 Instruct (tool-tuned variants) — generally solid tool calling
+  - Mistral function-call variants — good compliance with tool schemas
+- Less reliable without extra nudging:
+  - `qwen3:14b` (Ollama) — tends to return `{}` or malformed tool payloads
+- Default tuning applied in the scenarios:
+  - `tool_choice="required"` to force tool usage when supported
+  - `temperature=0` to reduce hallucinated parentheses/syntax errors
+  - Where supported, `response_format={"type":"json_object"}` to bias toward JSON
+  - A fixed `seed` for providers that honor it (OpenAI/Azure) to reduce variance
+
+## Notes on iteration and timeouts
+
+- If weaker models stop early or fail to complete a tool call:
+  - Increase `SCENARIO_MINI_MAX_ITER` and/or `SCENARIO_MINI_MAX_SECONDS`
+  - Switch to a stronger base model via `SCENARIO_MINI_TARGET_MODEL`
+  - Ensure the tool schema is minimal and unambiguous

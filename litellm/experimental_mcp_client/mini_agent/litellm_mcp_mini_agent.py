@@ -130,6 +130,7 @@ class AgentConfig:
     auto_run_code_on_code_block: bool = False
     escalate_on_budget_exceeded: bool = False
     escalate_model: Optional[str] = None
+    completion_kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -770,6 +771,8 @@ async def arun_mcp_mini_agent(
     metrics: Dict[str, Any] = {"escalated": False}
     used_model = cfg.model
     escalate_next = False
+    completion_kwargs = dict(cfg.completion_kwargs or {})
+    forced_tool_choice = completion_kwargs.pop("tool_choice", None)
 
     for step in range(cfg.max_iterations):
         # wall-clock budget check
@@ -792,11 +795,14 @@ async def arun_mcp_mini_agent(
             escalate_this_step = bool(cfg.escalate_model)
 
         t_router0 = time.perf_counter()
+        call_kwargs = dict(completion_kwargs)
+        effective_tool_choice = forced_tool_choice or tool_choice
         resp = await arouter_call(
             model=chosen_model,
-            messages=conv, 
-            tools=tools_to_pass, 
-            tool_choice=tool_choice
+            messages=conv,
+            tools=tools_to_pass,
+            tool_choice=effective_tool_choice,
+            **call_kwargs,
         )
         router_ms = (time.perf_counter() - t_router0) * 1000.0
         asst = _extract_assistant_message(resp)

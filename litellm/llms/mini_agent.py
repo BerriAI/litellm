@@ -79,12 +79,58 @@ class MiniAgentLLM(CustomLLM):
         max_seconds = float(optional_params.get("max_seconds") or optional_params.get("mini_agent_max_seconds") or DEFAULT_MAX_SECONDS)
         allowed_langs = _gather_allowed_languages(optional_params)
 
+        completion_kwargs: Dict[str, Any] = {}
+
+        provider_hint = ""
+        if isinstance(base_model, str) and "/" in base_model:
+            provider_hint = base_model.split("/", 1)[0].lower()
+        else:
+            provider_hint = str(optional_params.get("mini_agent_provider") or "").lower()
+
+        def _cast_float(value):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _cast_int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        temperature = optional_params.get("temperature")
+        seed = optional_params.get("seed")
+        response_format = optional_params.get("response_format")
+        tool_choice = optional_params.get("tool_choice")
+
+        openai_like = {"openai", "azure", "azure_openai"}
+
+        def _maybe_set(key: str, value) -> None:
+            if value is not None:
+                completion_kwargs[key] = value
+
+        if provider_hint in openai_like:
+            _maybe_set("temperature", _cast_float(temperature))
+            _maybe_set("seed", _cast_int(seed))
+            if isinstance(response_format, dict):
+                completion_kwargs["response_format"] = response_format
+            if tool_choice is not None:
+                completion_kwargs["tool_choice"] = tool_choice
+        elif provider_hint == "ollama":
+            _maybe_set("temperature", _cast_float(temperature))
+        elif provider_hint.startswith("gemini"):
+            _maybe_set("temperature", _cast_float(temperature))
+        else:
+            _maybe_set("temperature", _cast_float(temperature))
+
         cfg = AgentConfig(
             model=base_model,
             max_iterations=max_iterations,
             max_total_seconds=max_seconds,
             use_tools=True,
             auto_run_code_on_code_block=True,
+            completion_kwargs=completion_kwargs,
         )
         return cfg, allowed_langs
 
