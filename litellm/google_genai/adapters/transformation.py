@@ -9,6 +9,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
     ChatCompletionRequest,
+    ChatCompletionSystemMessage,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceValues,
     ChatCompletionToolMessage,
@@ -33,7 +34,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
     sent_first_chunk: bool = False
     # State tracking for accumulating partial tool calls
-    gccumulated_tool_calls: Dict[str, Dict[str, Any]]
+    accumulated_tool_calls: Dict[str, Dict[str, Any]]
 
     def __init__(self, completion_stream: Any):
         self.sent_first_chunk = False
@@ -373,7 +374,7 @@ class GoogleGenAIAdapter:
             system_parts = system_instruction.get("parts", [])
             if system_parts and "text" in system_parts[0]:
                 messages.append(
-                    ChatCompletionUserMessage(
+                    ChatCompletionSystemMessage(
                         role="system", content=system_parts[0]["text"]
                     )
                 )
@@ -466,10 +467,7 @@ class GoogleGenAIAdapter:
         Returns:
             Dict in Google GenAI generate_content response format
         """
-        if isinstance(response, AdapterCompletionStreamWrapper):
-            return self.translate_streaming_completion_to_generate_content(
-                response, wrapper=response
-            )
+
 
         # Extract the main response content
         choice = response.choices[0] if response.choices else None
