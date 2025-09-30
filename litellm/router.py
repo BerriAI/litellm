@@ -3442,7 +3442,7 @@ class Router:
             *[try_retrieve_batch(model) for model in filtered_model_list]
         )
 
-        final_results = {
+        final_results: Dict = {
             "object": "list",
             "data": [],
             "first_id": None,
@@ -4981,8 +4981,7 @@ class Router:
             deployment = self._add_deployment(deployment=deployment)
 
             model = deployment.to_json(exclude_none=True)
-
-            self.model_list.append(model)
+            self._add_model_to_list_and_index_map(model=model, model_id=deployment.model_info.id)
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:

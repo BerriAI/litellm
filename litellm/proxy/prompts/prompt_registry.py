@@ -1,7 +1,7 @@
 import importlib
 import os
 from pathlib import Path
-from typing import Callable, Dict, Optional, Any
+from typing import Callable, Dict, Optional, Any, List
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
