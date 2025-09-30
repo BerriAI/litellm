@@ -44,7 +44,7 @@ from openai.types.responses.response import (
 # Handle OpenAI SDK version compatibility for Text type
 try:
     # fmt: off
-    from openai.types.responses.response_create_params import ( # type: ignore[attr-defined]
+    from openai.types.responses.response_create_params import (
         Text as ResponseText,  # type: ignore[attr-defined]
     )
 
@@ -1032,6 +1032,9 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     total_tokens: int
     """The total number of tokens used."""
+
+    cost: Optional[float] = None
+    """The cost of the request."""
 
     model_config = {"extra": "allow"}
 
