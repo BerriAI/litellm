@@ -59,6 +59,7 @@ def get_ollama_response(  # noqa: PLR0915
     stream = optional_params.pop("stream", False)
     format = optional_params.pop("format", None)
     keep_alive = optional_params.pop("keep_alive", None)
+    think = optional_params.pop("think", None)
     function_name = optional_params.pop("function_name", None)
     tools = optional_params.pop("tools", None)
 
@@ -98,6 +99,8 @@ def get_ollama_response(  # noqa: PLR0915
         data["tools"] = tools
     if keep_alive is not None:
         data["keep_alive"] = keep_alive
+    if think is not None:
+        data["think"] = think
     ## LOGGING
     logging_obj.pre_call(
         input=None,
