@@ -565,6 +565,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         == "Bearer github_oauth_token_12345"
     )
 
+
 @pytest.mark.asyncio
 async def test_list_tools_single_server_unprefixed_names():
     """When only one MCP server is allowed, list tools should return unprefixed names."""
@@ -589,8 +590,8 @@ async def test_list_tools_single_server_unprefixed_names():
     # Mock manager: allow just one server and return a tool based on add_prefix flag
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
-    mock_manager.get_mcp_server_by_id = (
-        lambda server_id: server if server_id == "server1" else None
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        server if server_id == "server1" else None
     )
 
     async def mock_get_tools_from_server(
@@ -651,8 +652,8 @@ async def test_list_tools_multiple_servers_prefixed_names():
     mock_manager.get_allowed_mcp_servers = AsyncMock(
         return_value=["server1", "server2"]
     )
-    mock_manager.get_mcp_server_by_id = (
-        lambda server_id: server1 if server_id == "server1" else server2
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        server1 if server_id == "server1" else server2
     )
 
     async def mock_get_tools_from_server(
@@ -681,3 +682,45 @@ async def test_list_tools_multiple_servers_prefixed_names():
     # Should be prefixed since multiple servers are allowed
     names = sorted([t.name for t in tools])
     assert names == ["jira-toolA", "zapier-toolA"]
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_user_unauthorized_access():
+    """Test that a user cannot call a tool from a server they don't have access to"""
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Create a mock user without access to the server
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-basic",
+        object_permission_id="key-permission-123",
+    )
+
+    # Mock global_mcp_server_manager.get_mcp_server_names_from_ids to return
+    # a list that doesn't include "restricted_server" (the server the user is trying to access)
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_names_from_ids"
+    ) as mock_get_server_names:
+        # User has access to "allowed_server" but not "restricted_server"
+        mock_get_server_names.return_value = ["allowed_server", "another_server"]
+
+        # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="restricted_server-send_email",
+                arguments={
+                    "to": "test@example.com",
+                    "subject": "Test",
+                    "body": "Test",
+                },
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+            )
+
+        # Verify the exception details
+        assert exc_info.value.status_code == 403
+        assert "User not allowed to call this tool" in exc_info.value.detail
