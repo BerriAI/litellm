@@ -330,6 +330,7 @@ class LiteLLMRoutes(enum.Enum):
 
     anthropic_routes = [
         "/v1/messages",
+        "/v1/messages/count_tokens",
     ]
 
     mcp_routes = [
