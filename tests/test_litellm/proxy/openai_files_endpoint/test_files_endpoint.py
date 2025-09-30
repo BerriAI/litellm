@@ -134,14 +134,14 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
                 custom_llm_provider="azure",
                 model="azure/chatgpt-v-2",
                 api_key="azure_api_key",
-                file=file_data,
+                file=file_data[1],
                 purpose=purpose_data,
             )
             await litellm.files.main.create_file(
                 custom_llm_provider="openai",
                 model="openai/gpt-3.5-turbo",
                 api_key="openai_api_key",
-                file=file_data,
+                file=file_data[1],
                 purpose=purpose_data,
             )
             # Return a dummy response object as needed by the test
