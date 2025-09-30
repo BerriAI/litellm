@@ -1886,3 +1886,88 @@ async def test_add_router_settings_shallow_merge_behavior():
 
     assert merged_settings["nested_setting"] == expected_nested
     assert merged_settings["top_level"] == "db_top"
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_oci_secrets_not_leaked():
+    """
+    Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v1
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = ["oci-grok-test"]
+    
+    # Mock model data with OCI sensitive information
+    mock_model_data = {
+        "model_name": "oci-grok-test",
+        "litellm_params": {
+            "model": "oci/xai.grok-4",
+            "oci_key": "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_region": "us-phoenix-1",
+            "oci_user": "ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_fingerprint": "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00",
+            "oci_tenancy": "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "oci_key_file": "/path/to/oci_api_key.pem",
+            "oci_compartment_id": "ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk",
+            "drop_params": True
+        },
+        "model_info": {
+            "mode": "completion",
+            "id": "test-model-id"
+        }
+    }
+    
+    # Mock the llm_router to return our test data
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["oci-grok-test"]
+    mock_router.get_model_access_groups.return_value = {}
+    mock_router.get_model_list.return_value = [mock_model_data]
+    
+    # Mock global variables
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]), \
+         patch("litellm.proxy.proxy_server.general_settings", {"infer_model_from_keys": False}), \
+         patch("litellm.proxy.proxy_server.user_model", None):
+        
+        # Call the model_info_v1 endpoint
+        result = await model_info_v1(
+            user_api_key_dict=mock_user_api_key_dict,
+            litellm_model_id=None
+        )
+        
+        # Verify the result structure
+        assert "data" in result
+        assert len(result["data"]) == 1
+        
+        model_info = result["data"][0]
+        litellm_params = model_info["litellm_params"]
+        
+        # Verify that sensitive OCI fields are masked
+        assert "****" in litellm_params["oci_key"], "oci_key should be masked"
+        assert "****" in litellm_params["oci_fingerprint"], "oci_fingerprint should be masked"
+        assert "****" in litellm_params["oci_tenancy"], "oci_tenancy should be masked"
+        assert "****" in litellm_params["oci_key_file"], "oci_key_file should be masked"
+        
+        # Verify that non-sensitive fields are NOT masked
+        assert litellm_params["model"] == "oci/xai.grok-4", "model field should not be masked"
+        assert litellm_params["oci_region"] == "us-phoenix-1", "oci_region should not be masked"
+        assert litellm_params["drop_params"] is True, "drop_params should not be masked"
+        
+        # Verify the model field specifically is not masked (this was the original issue)
+        assert "****" not in litellm_params["model"], "model field should never be masked"
+        assert litellm_params["model"].startswith("oci/"), "model should retain its full value"
+        
+        # Verify that actual secret values are not present in the response
+        result_str = str(result)
+        assert "ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00" not in result_str
+        assert "ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk" not in result_str
+        assert "/path/to/oci_api_key.pem" not in result_str
