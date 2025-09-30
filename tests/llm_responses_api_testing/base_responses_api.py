@@ -146,6 +146,8 @@ class BaseResponsesAPITest(ABC):
     @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
+        # Enable cost calculation for streaming usage
+        litellm.include_cost_in_streaming_usage = True
         base_completion_call_args = self.get_base_completion_call_args()
         collected_content_string = ""
         response_completed_event = None
@@ -207,6 +209,14 @@ class BaseResponsesAPITest(ABC):
             == response_completed_event.response.usage.input_tokens
             + response_completed_event.response.usage.output_tokens
         )
+
+        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+        
+        # Reset the setting
+        litellm.include_cost_in_streaming_usage = False
 
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.asyncio

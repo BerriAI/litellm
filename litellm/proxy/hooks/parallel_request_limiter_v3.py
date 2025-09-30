@@ -4,6 +4,7 @@ This is a rate limiter implementation based on a similar one by Envoy proxy.
 This is currently in development and not yet ready for production.
 """
 
+import binascii
 import os
 from datetime import datetime
 from math import floor
@@ -97,6 +98,9 @@ end
 return results
 """
 
+# Redis cluster slot count
+REDIS_CLUSTER_SLOTS = 16384
+REDIS_NODE_HASHTAG_NAME = "all_keys"
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
@@ -148,6 +152,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.token_increment_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
+
+    def _is_redis_cluster(self) -> bool:
+        """
+        Check if the dual cache is using Redis cluster.
+        
+        Returns:
+            bool: True if using Redis cluster, False otherwise.
+        """
+        from litellm.caching.redis_cluster_cache import RedisClusterCache
+        
+        return (
+            self.internal_usage_cache.dual_cache.redis_cache is not None
+            and isinstance(self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache)
+        )
 
     async def in_memory_cache_sliding_window(
         self,
@@ -291,26 +309,55 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         return RateLimitResponse(overall_code=overall_code, statuses=statuses)
+    
+    def keyslot_for_redis_cluster(self, key: str) -> int:
+        """
+        Compute the Redis Cluster slot for a given key.
+
+        Simple implementation of `HASH_SLOT = CRC16(key) mod 16384`
+
+        Read more about hash slots here: https://medium.com/@linz07m/how-hash-slots-power-data-distribution-in-redis-cluster-bc5b7e74ca7d
+
+        Args:
+            key (str): The Redis key.
+
+        Returns:
+            int: The slot number (0-16383).
+
+            
+        """
+        # Handle hash tags: use substring between { and }
+        start = key.find('{')
+        if start != -1:
+            end = key.find('}', start + 1)
+            if end != -1 and end != start + 1:
+                key = key[start + 1:end]
+
+        # Compute CRC16 and mod 16384
+        crc = binascii.crc_hqx(key.encode('utf-8'), 0)
+        return crc % REDIS_CLUSTER_SLOTS
 
     def _group_keys_by_hash_tag(self, keys: List[str]) -> Dict[str, List[str]]:
         """
         Group keys by their Redis hash tag to ensure cluster compatibility.
-        Keys with the same hash tag will be processed together.
+        
+        For Redis clusters, uses slot calculation to group keys that belong to the same slot.
+        For regular Redis, no grouping is needed - all keys can be processed together.
         """
         groups: Dict[str, List[str]] = {}
-        for key in keys:
-            # Extract hash tag from key like "{api_key:sk-123}:requests"
-            if "{" in key and "}" in key:
-                start = key.find("{")
-                end = key.find("}", start)
-                hash_tag = key[start : end + 1]
-            else:
-                # Fallback for keys without hash tags
-                hash_tag = "no_hash_tag"
-
-            if hash_tag not in groups:
-                groups[hash_tag] = []
-            groups[hash_tag].append(key)
+        
+        # Use slot calculation for Redis clusters only
+        if self._is_redis_cluster():
+            for key in keys:
+                slot = self.keyslot_for_redis_cluster(key)
+                slot_key = f"slot_{slot}"
+                
+                if slot_key not in groups:
+                    groups[slot_key] = []
+                groups[slot_key].append(key)
+        else:
+            # For regular Redis, no grouping needed - process all keys together
+            groups[REDIS_NODE_HASHTAG_NAME] = keys
 
         return groups
 

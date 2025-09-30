@@ -7,7 +7,6 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-from io import StringIO
 import ast
 import asyncio
 import base64
@@ -37,6 +36,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
 from inspect import iscoroutine
+from io import StringIO
 from os.path import abspath, dirname, join
 
 import aiohttp
@@ -232,6 +232,9 @@ from typing import (
 
 from openai import OpenAIError as OriginalError
 
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    update_response_metadata,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -1676,30 +1679,6 @@ def _is_streaming_request(
     #########################################################
     return False
 
-
-def update_response_metadata(
-    result: Any,
-    logging_obj: LiteLLMLoggingObject,
-    model: Optional[str],
-    kwargs: dict,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-) -> None:
-    """
-    Updates response metadata, adds the following:
-        - response._hidden_params
-        - response._hidden_params["litellm_overhead_time_ms"]
-        - response.response_time_ms
-    """
-    if result is None:
-        return
-
-    metadata = ResponseMetadata(result)
-    metadata.set_hidden_params(logging_obj=logging_obj, model=model, kwargs=kwargs)
-    metadata.set_timing_metrics(
-        start_time=start_time, end_time=end_time, logging_obj=logging_obj
-    )
-    metadata.apply()
 
 
 def _select_tokenizer(

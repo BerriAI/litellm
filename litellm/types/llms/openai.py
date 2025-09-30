@@ -1033,6 +1033,9 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     total_tokens: int
     """The total number of tokens used."""
 
+    cost: Optional[float] = None
+    """The cost of the request."""
+
     model_config = {"extra": "allow"}
 
 

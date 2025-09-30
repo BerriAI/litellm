@@ -215,7 +215,7 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
                 llm_router.aadapter_completion(**data, specific_deployment=True)
             )
         elif (
-            llm_router is not None and data["model"] in llm_router.get_model_ids()
+            llm_router is not None and llm_router.has_model_id(data["model"])
         ):  # model in router model list
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
