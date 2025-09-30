@@ -2576,3 +2576,135 @@ def test_request_metadata_not_provided():
 
     # requestMetadata should not be in the request
     assert "requestMetadata" not in request_data
+
+
+def test_claude_4_temperature_top_p_conflict():
+    """Test that Claude 4 models drop top_p when both temperature and top_p are set."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "Hello!"}]
+
+    # Test with Claude Sonnet 4.5
+    request_data = config.transform_request(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        optional_params={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_tokens": 100,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify temperature is present
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["temperature"] == 0.7
+    # Verify top_p is dropped
+    assert "topP" not in request_data["inferenceConfig"]
+
+    # Test with Claude Sonnet 4
+    request_data = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        optional_params={
+            "temperature": 0.5,
+            "top_p": 0.95,
+            "max_tokens": 50,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify temperature is present
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["temperature"] == 0.5
+    # Verify top_p is dropped
+    assert "topP" not in request_data["inferenceConfig"]
+
+    # Test with Claude Opus 4
+    request_data = config.transform_request(
+        model="anthropic.claude-opus-4-20250514-v1:0",
+        messages=messages,
+        optional_params={
+            "temperature": 0.8,
+            "top_p": 0.85,
+            "max_tokens": 200,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify temperature is present
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["temperature"] == 0.8
+    # Verify top_p is dropped
+    assert "topP" not in request_data["inferenceConfig"]
+
+
+def test_claude_4_only_temperature():
+    """Test that Claude 4 models work correctly with only temperature set."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "Hello!"}]
+
+    request_data = config.transform_request(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        optional_params={
+            "temperature": 0.7,
+            "max_tokens": 100,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify temperature is present
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["temperature"] == 0.7
+    # Verify top_p is not present
+    assert "topP" not in request_data["inferenceConfig"]
+
+
+def test_claude_4_only_top_p():
+    """Test that Claude 4 models work correctly with only top_p set."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "Hello!"}]
+
+    request_data = config.transform_request(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        optional_params={
+            "top_p": 0.9,
+            "max_tokens": 100,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify top_p is present
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["topP"] == 0.9
+    # Verify temperature is not present
+    assert "temperature" not in request_data["inferenceConfig"]
+
+
+def test_claude_3_temperature_top_p_both_allowed():
+    """Test that Claude 3 models can have both temperature and top_p set."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "Hello!"}]
+
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_tokens": 100,
+        },
+        litellm_params={},
+        headers={}
+    )
+
+    # Verify both temperature and top_p are present for Claude 3 models
+    assert "inferenceConfig" in request_data
+    assert request_data["inferenceConfig"]["temperature"] == 0.7
+    assert request_data["inferenceConfig"]["topP"] == 0.9

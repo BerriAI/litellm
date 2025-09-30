@@ -762,6 +762,45 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
+    def _is_claude_4_model(self, model: str) -> bool:
+        """
+        Check if the model is a Claude 4 series model.
+        Claude 4 models don't support both temperature and top_p simultaneously.
+        """
+        base_model = BedrockModelInfo.get_base_model(model)
+        claude_4_patterns = [
+            "anthropic.claude-sonnet-4-5",
+            "anthropic.claude-opus-4-1",
+            "anthropic.claude-opus-4",
+            "anthropic.claude-sonnet-4",
+        ]
+        return any(base_model.startswith(pattern) for pattern in claude_4_patterns)
+
+    def _handle_temperature_top_p_conflict(
+        self, model: str, inference_params: dict
+    ) -> None:
+        """
+        Handle the conflict where Claude 4 models cannot accept both temperature and top_p.
+        If both are present, drop top_p and log a warning.
+        """
+        if not self._is_claude_4_model(model):
+            return
+
+        has_temperature = "temperature" in inference_params
+        has_top_p = "topP" in inference_params or "top_p" in inference_params
+
+        if has_temperature and has_top_p:
+            # Drop top_p as temperature is more commonly used
+            if "topP" in inference_params:
+                inference_params.pop("topP")
+            if "top_p" in inference_params:
+                inference_params.pop("top_p")
+
+            verbose_logger.warning(
+                f"Bedrock Claude 4 model {model} does not support both 'temperature' and 'top_p' simultaneously. "
+                "Dropping 'top_p' parameter and keeping 'temperature'."
+            )
+
     def _prepare_request_params(
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict]:
@@ -791,6 +830,9 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
+
+        # Handle Claude 4 models that don't support both temperature and top_p
+        self._handle_temperature_top_p_conflict(model, inference_params)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
@@ -877,6 +919,16 @@ class AmazonConverseConfig(BaseConfig):
                     model="",
                     llm_provider="bedrock",
                 )
+
+        # Transform OpenAI params to Bedrock params
+        non_default_params = copy.deepcopy(optional_params)
+        optional_params_mapped: dict = {}
+        optional_params = self.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params_mapped,
+            model=model,
+            drop_params=False,
+        )
 
         # Prepare and separate parameters
         inference_params, additional_request_params, request_metadata = (
