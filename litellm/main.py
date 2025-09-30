@@ -149,6 +149,7 @@ from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
+from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -267,6 +268,7 @@ bytez_transformation = BytezChatConfig()
 heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
+lemonade_transformation = LemonadeChatConfig()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -3545,6 +3547,35 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
             pass
+        elif custom_llm_provider == "lemonade":
+            api_key = (
+                api_key
+                or litellm.lemonade_key
+                or get_secret_str("LEMONADE_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=lemonade_transformation,
+            )
+
+            pass
+
 
         elif custom_llm_provider == "ovhcloud" or model in litellm.ovhcloud_models:
             api_key = (
