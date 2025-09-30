@@ -3550,7 +3550,7 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "lemonade":
             api_key = (
                 api_key
-                or litellm.bytez_key
+                or litellm.lemonade_key
                 or get_secret_str("LEMONADE_API_KEY")
                 or litellm.api_key
             )
