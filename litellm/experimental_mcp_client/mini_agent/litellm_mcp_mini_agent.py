@@ -1,3 +1,5 @@
+"""Core mini-agent loop and Router integration helpers for LiteLLM."""
+
 from __future__ import annotations
 
 import asyncio

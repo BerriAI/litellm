@@ -1,3 +1,5 @@
+"""Mock research tools used by the mini-agent during local smoke tests."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Helper utilities for mimicking OpenAI responses during mini-agent smokes."""
+
 from __future__ import annotations
 
 import os

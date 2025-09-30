@@ -1,3 +1,5 @@
+"""HTTP-based MCP invoker that proxies tool calls to remote endpoints."""
+
 from __future__ import annotations
 import json
 import asyncio
