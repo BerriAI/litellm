@@ -204,6 +204,9 @@ class NomaGuardrail(CustomGuardrail):
         user_auth: UserAPIKeyAuth,
     ) -> Optional[str]:
         """Shared logic for processing user message checks"""
+        from datetime import datetime
+        
+        start_time = datetime.now()
         extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
 
         user_message = await self._extract_user_message(request_data)
@@ -217,6 +220,23 @@ class NomaGuardrail(CustomGuardrail):
             request_data=request_data,
             user_auth=user_auth,
             extra_data=extra_data,
+        )
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+
+        # Determine guardrail status based on response
+        guardrail_status = self._determine_guardrail_status(response_json)
+        
+        # Always log guardrail information for consistency
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider="noma",
+            guardrail_json_response=response_json,
+            request_data=request_data,
+            guardrail_status=guardrail_status,
+            start_time=start_time.timestamp(),
+            end_time=end_time.timestamp(),
+            duration=duration,
         )
 
         if self.monitor_mode:
@@ -248,6 +268,9 @@ class NomaGuardrail(CustomGuardrail):
         user_auth: UserAPIKeyAuth,
     ) -> Optional[str]:
         """Shared logic for processing LLM response checks"""
+        from datetime import datetime
+        
+        start_time = datetime.now()
         extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
 
         if not isinstance(response, litellm.ModelResponse):
@@ -271,6 +294,23 @@ class NomaGuardrail(CustomGuardrail):
             user_auth=user_auth,
             extra_data=extra_data,
         )
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+
+        # Determine guardrail status based on response
+        guardrail_status = self._determine_guardrail_status(response_json)
+        
+        # Always log guardrail information for consistency
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_provider="noma",
+            guardrail_json_response=response_json,
+            request_data=request_data,
+            guardrail_status=guardrail_status,
+            start_time=start_time.timestamp(),
+            end_time=end_time.timestamp(),
+            duration=duration,
+        )
 
         if self.monitor_mode:
             await self._handle_verdict_background(
@@ -293,6 +333,41 @@ class NomaGuardrail(CustomGuardrail):
 
         await self._check_verdict(ASSISTANT_ROLE, content, response_json)
         return content
+
+    def _determine_guardrail_status(self, response_json: dict) -> Literal["success", "failure", "blocked"]:
+        """
+        Determine the guardrail status based on NOMA API response.
+        
+        Args:
+            response_json: Response from NOMA API
+            
+        Returns:
+            "success": Content allowed through with no violations
+            "blocked": Content blocked due to policy violations
+            "failure": Technical error or API failure
+        """
+        try:
+            # Check if we got a valid response structure
+            if not isinstance(response_json, dict):
+                return "failure"
+            
+            # Get the verdict from the response
+            verdict = response_json.get("verdict", True)
+            
+            # If verdict is True, content is allowed
+            if verdict is True:
+                return "success"
+            
+            # If verdict is False, content is blocked/flagged
+            if verdict is False:
+                return "blocked"
+                
+            # If verdict is missing or invalid, treat as failure
+            return "failure"
+            
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error determining NOMA guardrail status: {str(e)}")
+            return "failure"
 
     def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
         """
@@ -539,8 +614,22 @@ class NomaGuardrail(CustomGuardrail):
         try:
             return await self._check_user_message(data, user_api_key_dict)
         except NomaBlockedMessage:
+            # Blocked requests were already logged in _process_user_message_check with "blocked" status
             raise
         except Exception as e:
+            # Log technical failures
+            from datetime import datetime
+            start_time = datetime.now()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider="noma",
+                guardrail_json_response=str(e),
+                request_data=data,
+                guardrail_status="failure",
+                start_time=start_time.timestamp(),
+                end_time=start_time.timestamp(),
+                duration=0.0,
+            )
+            
             verbose_proxy_logger.error(f"Noma pre-call hook failed: {str(e)}")
 
             if self.block_failures:
@@ -580,8 +669,22 @@ class NomaGuardrail(CustomGuardrail):
         try:
             return await self._check_user_message(data, user_api_key_dict)
         except NomaBlockedMessage:
+            # Blocked requests were already logged in _process_user_message_check with "blocked" status
             raise
         except Exception as e:
+            # Log technical failures
+            from datetime import datetime
+            start_time = datetime.now()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider="noma",
+                guardrail_json_response=str(e),
+                request_data=data,
+                guardrail_status="failure",
+                start_time=start_time.timestamp(),
+                end_time=start_time.timestamp(),
+                duration=0.0,
+            )
+            
             verbose_proxy_logger.error(f"Noma moderation hook failed: {str(e)}")
 
             if self.block_failures:
@@ -615,8 +718,22 @@ class NomaGuardrail(CustomGuardrail):
         try:
             return await self._check_llm_response(data, response, user_api_key_dict)
         except NomaBlockedMessage:
+            # Blocked requests were already logged in _process_llm_response_check with "blocked" status
             raise
         except Exception as e:
+            # Log technical failures
+            from datetime import datetime
+            start_time = datetime.now()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider="noma",
+                guardrail_json_response=str(e),
+                request_data=data,
+                guardrail_status="failure",
+                start_time=start_time.timestamp(),
+                end_time=start_time.timestamp(),
+                duration=0.0,
+            )
+            
             verbose_proxy_logger.error(f"Noma post-call hook failed: {str(e)}")
             if self.block_failures:
                 raise
