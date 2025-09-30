@@ -4497,16 +4497,17 @@ class Router:
         try:
             exception = kwargs.get("exception", None)
             exception_status = getattr(exception, "status_code", "")
-            _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
+            
+            # Cache litellm_params to avoid repeated dict lookups
+            litellm_params = kwargs.get("litellm_params", {})
+            _model_info = litellm_params.get("model_info", {})
 
             exception_headers = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown = kwargs.get("litellm_params", {}).get(
-                "cooldown_time", None
-            )
+            deployment_cooldown = litellm_params.get("cooldown_time", None)
 
             header_cooldown = None
             if exception_headers is not None:
@@ -5707,27 +5708,32 @@ class Router:
             configurable_clientside_auth_params = (
                 litellm_params.configurable_clientside_auth_params
             )
+            
+            # Cache nested dict access to avoid repeated temporary dict allocations
+            model_litellm_params = model.get("litellm_params", {})
+            model_info_dict = model.get("model_info", {})
+            
             # get model tpm
             _deployment_tpm: Optional[int] = None
             if _deployment_tpm is None:
                 _deployment_tpm = model.get("tpm", None)  # type: ignore
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)  # type: ignore
+                _deployment_tpm = model_litellm_params.get("tpm", None)  # type: ignore
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("model_info", {}).get("tpm", None)  # type: ignore
+                _deployment_tpm = model_info_dict.get("tpm", None)  # type: ignore
 
             # get model rpm
             _deployment_rpm: Optional[int] = None
             if _deployment_rpm is None:
                 _deployment_rpm = model.get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)  # type: ignore
+                _deployment_rpm = model_litellm_params.get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("model_info", {}).get("rpm", None)  # type: ignore
+                _deployment_rpm = model_info_dict.get("rpm", None)  # type: ignore
 
             # get model info
             try:
-                model_id = model.get("model_info", {}).get("id", None)
+                model_id = model_info_dict.get("id", None)
                 if model_id is not None:
                     model_info = self.get_deployment_model_info(
                         model_id=model_id, model_name=litellm_params.model
@@ -6574,19 +6580,19 @@ class Router:
             or {}
         )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
         for idx, deployment in enumerate(_returned_deployments):
+            # Cache nested dict access to avoid repeated temporary dict allocations
+            _litellm_params = deployment.get("litellm_params", {})
+            _model_info = deployment.get("model_info", {})
+            
             # see if we have the info for this model
             try:
-                base_model = deployment.get("model_info", {}).get("base_model", None)
+                base_model = _model_info.get("base_model", None)
                 if base_model is None:
-                    base_model = deployment.get("litellm_params", {}).get(
-                        "base_model", None
-                    )
+                    base_model = _litellm_params.get("base_model", None)
                 model_info = self.get_router_model_info(
                     deployment=deployment, received_model_name=model
                 )
-                model = base_model or deployment.get("litellm_params", {}).get(
-                    "model", None
-                )
+                model = base_model or _litellm_params.get("model", None)
 
                 if (
                     isinstance(model_info, dict)
@@ -6607,8 +6613,7 @@ class Router:
             except Exception as e:
                 verbose_router_logger.exception("An error occurs - {}".format(str(e)))
 
-            _litellm_params = deployment.get("litellm_params", {})
-            model_id = deployment.get("model_info", {}).get("id", "")
+            model_id = _model_info.get("id", "")
             ## RPM CHECK ##
             ### get local router cache ###
             current_request_cache_local = (
