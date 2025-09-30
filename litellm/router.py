@@ -409,6 +409,11 @@ class Router:
         )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
+        # Initialize model_group_alias early since it's used in set_model_list
+        self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
+            model_group_alias or {}
+        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
+
         # Initialize model ID to deployment index mapping for O(1) lookups
         self.model_id_to_deployment_index_map: Dict[str, int] = {}
         
@@ -494,9 +499,6 @@ class Router:
         self.previous_models: List = (
             []
         )  # list to store failed calls (passed in as metadata to next call)
-        self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
-            model_group_alias or {}
-        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -6291,45 +6293,41 @@ class Router:
 
         if team_id specified, returns matching team-specific models
         """
+        # Note: model_list and model_group_alias are always initialized in __init__
+        # so hasattr checks are unnecessary
+        returned_models: List[DeploymentTypedDict] = []
 
-        if hasattr(self, "model_list"):
-            returned_models: List[DeploymentTypedDict] = []
+        if model_name is not None:
+            returned_models.extend(
+                self._get_all_deployments(model_name=model_name, team_id=team_id)
+            )
 
-            if model_name is not None:
-                returned_models.extend(
-                    self._get_all_deployments(model_name=model_name, team_id=team_id)
+        returned_models.extend(
+            self.get_model_list_from_model_alias(model_name=model_name)
+        )
+
+        if len(returned_models) == 0:  # check if wildcard route
+            potential_wildcard_models = self.pattern_router.route(model_name) or []
+
+            ## check for team-specific wildcard models
+            if team_id is not None and team_id in self.team_pattern_routers:
+                potential_team_only_wildcard_models = (
+                    self.team_pattern_routers[team_id].route(model_name) or []
+                )
+                potential_wildcard_models.extend(
+                    potential_team_only_wildcard_models
                 )
 
-            if hasattr(self, "model_group_alias"):
-                returned_models.extend(
-                    self.get_model_list_from_model_alias(model_name=model_name)
-                )
+            if model_name is not None and potential_wildcard_models is not None:
+                for m in potential_wildcard_models:
+                    deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
+                    deployment_typed_dict["model_name"] = model_name
+                    returned_models.append(deployment_typed_dict)
 
-            if len(returned_models) == 0:  # check if wildcard route
-                potential_wildcard_models = self.pattern_router.route(model_name) or []
+        if model_name is None:
+            returned_models += self.model_list
 
-                ## check for team-specific wildcard models
-                if team_id is not None and team_id in self.team_pattern_routers:
-                    potential_team_only_wildcard_models = (
-                        self.team_pattern_routers[team_id].route(model_name) or []
-                    )
-                    potential_wildcard_models.extend(
-                        potential_team_only_wildcard_models
-                    )
-
-                if model_name is not None and potential_wildcard_models is not None:
-                    for m in potential_wildcard_models:
-                        deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
-                        deployment_typed_dict["model_name"] = model_name
-                        returned_models.append(deployment_typed_dict)
-
-            if model_name is None:
-                returned_models += self.model_list
-
-                return returned_models
-
-            return returned_models
-        return None
+        return returned_models
 
     def get_model_access_groups(
         self,
