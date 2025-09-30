@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse
 
 from litellm.proxy._types import *
@@ -30,9 +30,9 @@ async def google_generate_content(
     data = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
-    data["stream"] = False
-
     # call router
+    if llm_router is None:
+        raise HTTPException(status_code=500, detail="Router not initialized")
     response = await llm_router.agenerate_content(**data)
     return response
 
@@ -61,6 +61,8 @@ async def google_stream_generate_content(
     data["stream"] = True  # enforce streaming for this endpoint
 
     # call router
+    if llm_router is None:
+        raise HTTPException(status_code=500, detail="Router not initialized")
     response = await llm_router.agenerate_content(**data)
 
     # Check if response is an async iterator (streaming response)
