@@ -2082,7 +2082,6 @@ class CostBreakdown(TypedDict):
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
-LLMAPIStatus = Literal["success", "failure"]
 GuardrailStatus = Literal[
     "success",
     "guardrail_intervened", 
@@ -2092,7 +2091,7 @@ GuardrailStatus = Literal[
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
-    llm_api_status: LLMAPIStatus
+    llm_api_status: StandardLoggingPayloadStatus
     """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
     guardrail_status: GuardrailStatus
     """
