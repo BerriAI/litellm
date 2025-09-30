@@ -21,6 +21,8 @@ class SensitiveDataMasker:
             "access",
             "private",
             "certificate",
+            "fingerprint",
+            "tenancy",
         }
 
         self.visible_prefix = visible_prefix
