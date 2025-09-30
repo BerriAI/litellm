@@ -60,46 +60,45 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_model_info(self, model: str) -> ModelInfoBase:
-        if model.startswith("lemonade/"):
-            model = model.split("/", 1)[1]
-        api_base = get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000"
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None):
+        """
+        Get available models from Lemonade API.
+        
+        This method queries the Lemonade /models endpoint to retrieve the list of available models.
+        
+        Args:
+            api_key: Optional API key (Lemonade doesn't require authentication)
+            api_base: Optional API base URL (defaults to LEMONADE_API_BASE env var or http://localhost:8000)
+            
+        Returns:
+            List of model names prefixed with "lemonade/"
+        """
+        api_base, api_key = self._get_openai_compatible_provider_info(
+            api_base=api_base, api_key=api_key
+        )
+        
+        if api_base is None:
+            raise ValueError(
+                "LEMONADE_API_BASE is not set. Please set the environment variable to query Lemonade's /models endpoint."
+            )
 
-        # Getting the list of models from lemonade to verify the model exists
+        # Getting the list of models from lemonade
         try:
             response = litellm.module_level_client.get(
-                url=f"{api_base}/api/v1/models",
+                url=f"{api_base}/models",
             )
         except Exception as e:
-            raise Exception(
-                f"LemonadeError: Error getting model info for {model}. Set Lemonade API Base via `LEMONADE_API_BASE` environment variable. Error: {e}"
-            )
-
-        # Making sure the model exists in lemonade
-        model_found = False
-        model_list = response.json().get("data", [])
-        for model_iter in model_list:
-            if model_iter['id'] == model:
-                model_found = True
-                break
-
-        if not model_found:
             raise ValueError(
-                f"LemonadeError: Model {model} not found. Available models: {[m['id'] for m in model_list]}"
+                f"Failed to fetch models from Lemonade. Set Lemonade API Base via `LEMONADE_API_BASE` environment variable. Error: {e}"
             )
 
-        # Returning the model if it was found in lemonade. Currently there is no mechanism to report
-        # the models max input or output tokens so leaving those as None
-        return ModelInfoBase(
-            key=model,
-            litellm_provider="lemonade",
-            mode="chat",
-            input_cost_per_token=0.0,
-            output_cost_per_token=0.0,
-            max_input_tokens=None,
-            max_output_tokens=None,
-            max_tokens=None,
-        )
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to fetch models from Lemonade. Status code: {response.status_code}, Response: {response.text}"
+            )
+
+        model_list = response.json().get("data", [])
+        return ["lemonade/" + model["id"] for model in model_list]
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
