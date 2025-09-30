@@ -28,6 +28,7 @@ tiktoken = ">=0.7.0"
 importlib-metadata = ">=6.8.0"
 tokenizers = "*"
 click = "*"
+json-repair = {version = "^0.51.0", markers = "python_version >= '3.10'"}
 jinja2 = "^3.1.2"
 aiohttp = ">=3.10"
 pydantic = "^2.5.0"

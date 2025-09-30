@@ -26,9 +26,9 @@ except Exception:
         kwargs: Optional[Dict[str, Any]] = None
 
 PROMPTS = {
-    "simple": "List three programming languages",
+    "simple": "List three programming languages.",
     "medium": "Provide a fun fact about pandas and mention their habitat.",
-    "complex": "Summarize the benefits and trade-offs of unit testing versus integration testing in a paragraph.",
+    "complex": "Summarize the benefits and trade-offs of unit testing versus integration testing in a short paragraph.",
 }
 
 
@@ -39,7 +39,7 @@ def infer_provider(alias: str) -> str | None:
         return "azure_openai"
     if alias.startswith("gemini/"):
         return "gemini"
-    if ":" in alias:
+    if ":" in alias or alias.startswith("ollama/"):
         return "ollama"
     return None
 
@@ -47,17 +47,18 @@ def infer_provider(alias: str) -> str | None:
 def main() -> None:
     model_alias = (
         os.getenv("SCENARIO_PARALLEL_MODEL")
-        or os.getenv("LITELLM_DEFAULT_VISION_MODEL")
         or os.getenv("LITELLM_DEFAULT_MODEL")
-        or os.getenv("LITELLM_DEFAULT_LARGE_MODEL")
-        or "ollama/gemma3:12b"
+        or "ollama/glm4:latest"
     )
 
     provider = os.getenv("SCENARIO_PARALLEL_PROVIDER") or infer_provider(model_alias)
 
     if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
-        print("Skipping parallel-acompletions scenario (OPENAI_API_KEY not set)")
-        return
+        print(
+            "OPENAI_API_KEY not set; falling back to local Ollama model 'ollama/glm4:latest'."
+        )
+        model_alias = "ollama/glm4:latest"
+        provider = "ollama"
 
     params = {"model": model_alias}
     if provider:
@@ -70,29 +71,10 @@ def main() -> None:
     router = Router(model_list=[{"model_name": "scenario-parallel", "litellm_params": params}])
 
     messages_list = [
-        [{"role": "user", "content": "Describe this image: https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg"}],
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Describe both of these images."},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
-                        },
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/b/bd/Test.svg",
-                        },
-                    },
-                ],
-            }
-        ],
-        [{"role": "user", "content": f"Summarize this local diagram: {os.path.abspath('local/images/sample_chart.png')}"}],
-        [{"role": "user", "content": "Summarize the benefits of unit testing in a paragraph."}],
+        [{"role": "user", "content": PROMPTS["simple"]}],
+        [{"role": "user", "content": PROMPTS["medium"]}],
+        [{"role": "user", "content": PROMPTS["complex"]}],
+        [{"role": "user", "content": "Give two tips for onboarding a new engineer."}],
     ]
 
     requests = [
@@ -103,7 +85,7 @@ def main() -> None:
             "messages": messages_list[2],
             "kwargs": {"max_tokens": 128},
         },
-        RouterParallelRequest("scenario-parallel", messages_list[3], top_p=0.95),
+        RouterParallelRequest("scenario-parallel", messages_list[3], top_p=0.9),
     ]
 
     async def run_parallel():

@@ -1,7 +1,7 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety run-scenarios
+.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety run-scenarios run-stress-tests
 
 # Default target
 help:
@@ -15,7 +15,8 @@ help:
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
-	@echo "  make run-scenarios      - Run fork scenarios (mini-agent, codex-agent, parallel completions)"
+	@echo "  make run-scenarios      - Run live scenarios (mini-agent, router demos, chutes, code-agent)"
+	@echo "  make run-stress-tests   - Run live stress scenarios (throughput, bursts, codex, mini-agent)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-mypy          - Run MyPy type checking only"
 	@echo "  make lint-black         - Check Black formatting (matches CI)"
@@ -72,20 +73,17 @@ lint-mypy: install-dev
 lint-black: format-check
 
 run-scenarios:
-	@echo "Running mini-agent scenarios"
-	@. .venv/bin/activate && python scenarios/mini_agent_live.py
-	@if [ -n "$$OPENAI_API_KEY" ]; then \
-	  echo "Running parallel-acompletions scenario"; \
-	  . .venv/bin/activate && python scenarios/parallel_acompletions_demo.py; \
-	else \
-	  echo "Skipping parallel-acompletions scenario (OPENAI_API_KEY not set)"; \
-	fi
-	@if [ "$$LITELLM_ENABLE_CODEX_AGENT" = "1" ]; then \
-	  echo "Running codex-agent scenario"; \
-	  . .venv/bin/activate && python scenarios/codex_agent_router.py; \
-	else \
-	  echo "Skipping codex-agent scenario (LITELLM_ENABLE_CODEX_AGENT != 1)"; \
-	fi
+	@. .venv/bin/activate && python scenarios/run_all.py
+
+run-stress-tests:
+	@echo "Running throughput benchmark"
+	@. .venv/bin/activate && python stress_tests/parallel_throughput_benchmark.py
+	@echo "Running parallel burst test"
+	@. .venv/bin/activate && python stress_tests/parallel_acompletions_burst.py
+	@echo "Running codex-agent rate limit test"
+	@. .venv/bin/activate && python stress_tests/codex_agent_rate_limit_backoff.py
+	@echo "Running mini-agent concurrency test"
+	@. .venv/bin/activate && python stress_tests/mini_agent_concurrency.py
 
 check-circular-imports: install-dev
 	cd litellm && poetry run python ../tests/documentation_tests/test_circular_imports.py && cd ..

@@ -555,7 +555,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "dev", "proxy-dev"]
-markers = "python_version < \"3.14\" and platform_python_implementation != \"PyPy\""
+markers = "python_version < \"3.10\" and platform_python_implementation != \"PyPy\""
 files = [
     {file = "cffi-1.17.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:df8b1c11f177bc2313ec4b2d46baec87a5f3e71fc8b45dab2ee7cae86d9aba14"},
     {file = "cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:8f2cdc858323644ab277e9bb925ad72ae0e67f69e804f4898c070998d50b1a67"},
@@ -636,7 +636,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "dev", "proxy-dev"]
-markers = "platform_python_implementation != \"PyPy\" and python_version >= \"3.14\""
+markers = "python_version >= \"3.10\" and platform_python_implementation != \"PyPy\""
 files = [
     {file = "cffi-2.0.0-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44"},
     {file = "cffi-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49"},
@@ -2522,6 +2522,19 @@ files = [
 ]
 
 [[package]]
+name = "json-repair"
+version = "0.51.0"
+description = "A package to repair broken json strings"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+markers = "python_version >= \"3.10\""
+files = [
+    {file = "json_repair-0.51.0-py3-none-any.whl", hash = "sha256:871f7651ee82abf72efc50a80d3a9af0ade8abf5b4541b418eeeabe4e677e314"},
+    {file = "json_repair-0.51.0.tar.gz", hash = "sha256:487e00042d5bc5cc4897ea9c3cccd4f6641e926b732cc09f98691a832485098a"},
+]
+
+[[package]]
 name = "jsonschema"
 version = "4.23.0"
 description = "An implementation of JSON Schema validation for Python"
@@ -4360,7 +4373,7 @@ description = "C parser in Python"
 optional = false
 python-versions = ">=3.8"
 groups = ["main", "dev", "proxy-dev"]
-markers = "platform_python_implementation != \"PyPy\" and (python_version < \"3.14\" or implementation_name != \"PyPy\")"
+markers = "platform_python_implementation != \"PyPy\" and (implementation_name != \"PyPy\" or python_version < \"3.10\")"
 files = [
     {file = "pycparser-2.23-py3-none-any.whl", hash = "sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934"},
     {file = "pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2"},
@@ -6791,4 +6804,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "99b3795602d271368e61e649faa9d7f864a1524cc435dc0b604c0d44f7b094a8"
+content-hash = "2ac0cabe4b5b8ff90d6c95435d8e4ad8f8b2559b2d02aceec66ff32120f08fa6"

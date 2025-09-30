@@ -2,7 +2,7 @@
 
 These scripts exercise the fork’s three headline integrations (mini-agent,
 codex-agent, parallel `acompletion`). They are **live** checks, so run them
-manually once the necessary providers or local services are available.
+manually once the necessary providers or local services are available.π
 
 ## How to Run
 
@@ -81,9 +81,53 @@ make run-scenarios
   - Where supported, `response_format={"type":"json_object"}` to bias toward JSON
   - A fixed `seed` for providers that honor it (OpenAI/Azure) to reduce variance
 
+### `mini_agent_http_release.py`
+
+- Hits the mini-agent REST API at `/agent/run` using `MINI_AGENT_URL`.
+- Falls back to `LITELLM_DEFAULT_MODEL` if `MINI_AGENT_MODEL` is not provided.
+
+### `router_parallel_release.py`
+
+- Minimal fan-out using real credentials (`RELEASE_PARALLEL_API_KEY`).
+- Defaults to `LITELLM_DEFAULT_MODEL` if `RELEASE_PARALLEL_MODEL` is unset.
+
+### `router_batch_release.py`
+
+- Exercises `Router.abatch_completion` with real provider credentials.
+- Shares the same environment knobs as the parallel release script.
+
+### `image_compression_release.py`
+
+- Compresses the file pointed to by `RELEASE_IMAGE_PATH` using the helper in
+  `litellm.extras.images`.
+
+### `chutes_release.py`
+
+- Treats Chutes as an OpenAI-compatible provider via `CHUTES_API_BASE` and `CHUTES_API_KEY`.
+- Optionally override the model with `CHUTES_MODEL`; otherwise uses
+  `LITELLM_DEFAULT_MODEL`.
+
+### `code_agent_release.py`
+
+- Fires a deterministic `python_eval` tool call using the model dictated by
+  `CODE_AGENT_MODEL` or `LITELLM_DEFAULT_CODE_MODEL`.
+
 ## Notes on iteration and timeouts
 
 - If weaker models stop early or fail to complete a tool call:
   - Increase `SCENARIO_MINI_MAX_ITER` and/or `SCENARIO_MINI_MAX_SECONDS`
   - Switch to a stronger base model via `SCENARIO_MINI_TARGET_MODEL`
   - Ensure the tool schema is minimal and unambiguous
+
+## Stress tests
+
+Complementary high-load scenarios live in `stress_test/`:
+
+- `parallel_throughput_benchmark.py`
+- `parallel_acompletions_burst.py`
+- `codex_agent_rate_limit_backoff.py`
+- `mini_agent_concurrency.py`
+
+Run them with `make run-stress-tests`. Each script emits live metrics and
+respects the same environment variables described above. No mocking occurs, so
+ensure the relevant providers are reachable before executing the stress suite.

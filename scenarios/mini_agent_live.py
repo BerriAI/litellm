@@ -6,27 +6,10 @@ import json
 import os
 import sys
 import ast
-import importlib.util
-from pathlib import Path
-
-clean_json_string = None
-try:
-    _json_utils_path = (
-        Path(__file__).resolve().parents[1]
-        / "litellm-proxy-extras"
-        / "utils"
-        / "json_utils.py"
-    )
-    spec = importlib.util.spec_from_file_location("_clean_json_utils", _json_utils_path)
-    if spec and spec.loader:
-        _json_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_json_module)
-        clean_json_string = getattr(_json_module, "clean_json_string", None)
-except Exception:
-    clean_json_string = None
 
 from dotenv import find_dotenv, load_dotenv
 from litellm import Router
+from litellm.extras import clean_json_string
 
 load_dotenv(find_dotenv())
 
