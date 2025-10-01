@@ -3066,6 +3066,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "tags",
     "team_member_key_duration",
     "prompts",
+    "logging",
 ]
 
 
