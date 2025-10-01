@@ -39,9 +39,8 @@ from create_mock_standard_logging_payload import create_standard_logging_payload
 
 def test_tpm_rpm_updated():
     test_cache = DualCache()
-    model_list = []
     lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
@@ -110,7 +109,7 @@ def test_get_available_deployments():
         },
     ]
     lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
@@ -668,12 +667,10 @@ def test_return_potential_deployments():
     """
     Assert deployment at limit is filtered out
     """
-    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
     test_cache = DualCache()
-    model_list = []
     lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
+        router_cache=test_cache
     )
 
     args: Dict = {

@@ -719,6 +719,85 @@ class TestVertexAIPassThroughHandler:
         empty_response = {}
         assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(empty_response) is False
 
+    def test_vertex_passthrough_handler_predict_cost_tracking(self):
+        """
+        Test that vertex_passthrough_handler correctly tracks costs for /predict endpoint
+        """
+        import datetime
+        from unittest.mock import Mock, patch
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        # Create mock embedding response data
+        embedding_response_data = {
+            "predictions": [
+                {
+                    "embeddings": {
+                        "values": [0.1, 0.2, 0.3, 0.4, 0.5],
+                        "statistics": {
+                            "token_count": 10
+                        }
+                    }
+                }
+            ]
+        }
+
+        # Create mock httpx.Response
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = embedding_response_data
+        mock_httpx_response.status_code = 200
+
+        # Create mock logging object
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-123"
+        mock_logging_obj.model_call_details = {}
+
+        # Test URL with /predict endpoint
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/textembedding-gecko@001:predict"
+        
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        
+        with patch("litellm.completion_cost") as mock_completion_cost:
+            # Mock the completion cost calculation
+            mock_completion_cost.return_value = 0.0001
+            
+            # Call the handler
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False
+            )
+
+            # Verify cost tracking was implemented
+            assert result is not None
+            assert "result" in result
+            assert "kwargs" in result
+            
+            # Verify cost calculation was called
+            mock_completion_cost.assert_called_once()
+            
+            # Verify cost is set in kwargs
+            assert "response_cost" in result["kwargs"]
+            assert result["kwargs"]["response_cost"] == 0.0001
+            
+            # Verify cost is set in logging object
+            assert "response_cost" in mock_logging_obj.model_call_details
+            assert mock_logging_obj.model_call_details["response_cost"] == 0.0001
+            
+            # Verify model is set in kwargs
+            assert "model" in result["kwargs"]
+            assert result["kwargs"]["model"] == "textembedding-gecko@001"
+
 
 class TestVertexAIDiscoveryPassThroughHandler:
     """

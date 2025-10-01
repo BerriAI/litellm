@@ -103,3 +103,27 @@ class TestRouterIndexManagement:
         assert router.model_id_to_deployment_index_map["id-1"] == 0
         assert router.model_id_to_deployment_index_map["id-2"] == 1
         assert router.model_id_to_deployment_index_map["id-3"] == 2
+
+    def test_has_model_id(self, router):
+        """Test has_model_id function for O(1) membership check"""
+        # Setup: Add models to router
+        router.model_list = [
+            {"model": "test1", "model_info": {"id": "model-1"}}, 
+            {"model": "test2", "model_info": {"id": "model-2"}}, 
+            {"model": "test3", "model_info": {"id": "model-3"}}
+        ]
+        router.model_id_to_deployment_index_map = {"model-1": 0, "model-2": 1, "model-3": 2}
+
+        # Test: Check existing model IDs
+        assert router.has_model_id("model-1") == True
+        assert router.has_model_id("model-2") == True
+        assert router.has_model_id("model-3") == True
+
+        # Test: Check non-existing model IDs
+        assert router.has_model_id("non-existent") == False
+        assert router.has_model_id("") == False
+        assert router.has_model_id("model-4") == False
+
+        # Test: Empty router
+        empty_router = Router(model_list=[])
+        assert empty_router.has_model_id("any-id") == False

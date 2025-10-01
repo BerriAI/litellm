@@ -10,14 +10,12 @@
 
 import asyncio
 import json
-from litellm._uuid import uuid
 from datetime import datetime
 from typing import (
     Any,
     AsyncGenerator,
     Dict,
     List,
-    Literal,
     Optional,
     Tuple,
     Union,
@@ -29,6 +27,7 @@ import aiohttp
 import litellm  # noqa: E401
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -45,6 +44,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeResponseItem,
 )
 from litellm.types.utils import CallTypes as LitellmCallTypes
+from litellm.types.utils import GuardrailStatus
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -324,7 +324,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         start_time = datetime.now()
         analyze_results: Optional[Union[List[PresidioAnalyzeResponseItem], Dict]] = None
-        status: Literal["success", "failure"] = "success"
+        status: GuardrailStatus = "success"
         masked_entity_count: Dict[str, int] = {}
         exception_str: str = ""
         try:
@@ -356,7 +356,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
             return redacted_text["text"]
         except Exception as e:
-            status = "failure"
+            status = "guardrail_failed_to_respond"
             exception_str = str(e)
             raise e
         finally:
