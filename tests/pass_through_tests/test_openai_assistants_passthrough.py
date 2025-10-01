@@ -100,7 +100,11 @@ def test_openai_assistants_e2e_operations_stream():
 
 
 def test_azure_openai_assistants_e2e_operations_stream():
-    client = openai.OpenAI(base_url="http://0.0.0.0:4000/azure-config-passthrough", api_key="sk-1234")
+    client = openai.OpenAI(
+        base_url="http://0.0.0.0:4000/azure-config-passthrough", 
+        api_key="sk-1234",
+        api_version="2025-01-01-preview"
+    )
     assistant = client.beta.assistants.create(
         name="Math Tutor",
         instructions="You are a personal math tutor. Write and run code to answer math questions.",
