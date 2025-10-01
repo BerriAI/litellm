@@ -2511,6 +2511,24 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
     )  # Default to square if size not recognized
 
 
+def _process_kwargs_for_image_gen(special_params: dict, custom_llm_provider: Optional[str], passed_params: dict) -> None:
+    """Process kwargs for image generation, filtering provider-specific parameters."""
+    for k, v in special_params.items():
+        if k.startswith("aws_") and (
+            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+        ):  # allow dynamically setting boto3 init logic
+            continue
+        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
+            continue
+        elif (
+            k.startswith("vertex_")
+            and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "vertex_ai_beta"
+        ):  # allow dynamically setting vertex ai init logic
+            continue
+        passed_params[k] = v
+
+
 def _get_bedrock_image_config_class(model: Optional[str]):
     """Get the appropriate bedrock config class for image generation."""
     return (
@@ -2556,6 +2574,7 @@ def get_optional_params_image_gen(
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
+    _process_kwargs_for_image_gen(special_params, custom_llm_provider, passed_params)
 
     default_params = {
         "n": None,
@@ -2627,15 +2646,12 @@ def get_optional_params_image_gen(
         supported_params = provider_config.get_supported_openai_params(model=model or "")
         openai_params = list(supported_params)
 
-    # Combine additional_drop_params with parameters we dropped due to being unsupported
-    combined_drop_params = (additional_drop_params or []) + dropped_params
-
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
-        additional_drop_params=combined_drop_params,
+        additional_drop_params=additional_drop_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
