@@ -794,9 +794,16 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-        _requester_metadata = standard_logging_payload["metadata"].get(
+        _requester_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
             "requester_metadata"
         )
+        user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
+            "metadata"
+        ].get("user_api_key_auth_metadata")
+        combined_metadata: Dict[str, Any] = {
+            **(_requester_metadata if _requester_metadata else {}),
+            **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
+        }
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
@@ -828,8 +835,7 @@ class PrometheusLogger(CustomLogger):
             exception_status=None,
             exception_class=None,
             custom_metadata_labels=get_custom_labels_from_metadata(
-                metadata=standard_logging_payload["metadata"].get("requester_metadata")
-                or {}
+                metadata=combined_metadata
             ),
             route=standard_logging_payload["metadata"].get(
                 "user_api_key_request_route"

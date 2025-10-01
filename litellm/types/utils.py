@@ -123,12 +123,18 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    input_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
-    cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
-    cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_flex: Optional[
+        float
+    ]  # OpenAI flex service tier pricing
+    cache_read_input_token_cost_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -147,7 +153,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    output_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    output_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -1856,6 +1864,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_team_alias: Optional[str]
     user_api_key_end_user_id: Optional[str]
     user_api_key_request_route: Optional[str]
+    user_api_key_auth_metadata: Optional[Dict[str, str]]
 
 
 class StandardLoggingMCPToolCall(TypedDict, total=False):
@@ -2059,10 +2068,12 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
+
 class CachingDetails(TypedDict):
     """
     Track all caching related metrics, fields for a given request
     """
+
     cache_hit: Optional[bool]
     """
     Whether the request hit the cache
@@ -2072,12 +2083,16 @@ class CachingDetails(TypedDict):
     Duration for reading from cache
     """
 
+
 class CostBreakdown(TypedDict):
     """
     Detailed cost breakdown for a request
     """
+
     input_cost: float  # Cost of input/prompt tokens
-    output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    output_cost: (
+        float  # Cost of output/completion tokens (includes reasoning if applicable)
+    )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
 
@@ -2616,6 +2631,7 @@ class SpecialEnums(Enum):
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
+
     FLEX = "flex"
     PRIORITY = "priority"
 
@@ -2662,13 +2678,14 @@ CostResponseTypes = Union[
 class PriorityReservationSettings(BaseModel):
     """
     Settings for priority-based rate limiting reservation.
-    
+
     Defines what priority to assign to keys without explicit priority metadata.
     The priority_reservation mapping is configured separately via litellm.priority_reservation.
     """
+
     default_priority: float = Field(
         default=0.5,
-        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation."
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
 
     model_config = ConfigDict(protected_namespaces=())
