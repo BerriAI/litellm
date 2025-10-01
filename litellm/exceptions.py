@@ -353,49 +353,6 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         return _message
 
 
-class ParallelRequestLimitError(RateLimitError):  # type: ignore
-    def __init__(
-        self,
-        message: str,
-        llm_provider: Optional[str] = "litellm",
-        model: Optional[str] = "unknown",
-        headers: Optional[dict] = None,
-        response: Optional[httpx.Response] = None,
-        litellm_debug_info: Optional[str] = None,
-        max_retries: Optional[int] = None,
-        num_retries: Optional[int] = None,
-    ):
-        # Store headers for later access (similar to FastAPI HTTPException)
-        self.headers = headers or {}
-        
-        # Create a response with custom headers if provided
-        if response is None:
-            response_headers = headers
-            response = httpx.Response(
-                status_code=429,
-                headers=response_headers,
-                request=httpx.Request(
-                    method="POST",
-                    url="https://litellm.ai/parallel-request-limiter",
-                ),
-            )
-        
-        # Initialize parent with appropriate defaults for parallel request limiting
-        super().__init__(
-            message=message,
-            llm_provider=llm_provider or "litellm",
-            model=model or "unknown",
-            response=response,
-            litellm_debug_info=litellm_debug_info,
-            max_retries=max_retries,
-            num_retries=num_retries,
-        )
-        
-        # Update the message prefix to be more specific
-        self.message = "litellm.ParallelRequestLimitError: {}".format(message)
-        self.detail = message  # Store original detail for FastAPI compatibility
-
-
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):  # type: ignore
     def __init__(
@@ -791,7 +748,6 @@ LITELLM_EXCEPTION_TYPES = [
     Timeout,
     PermissionDeniedError,
     RateLimitError,
-    ParallelRequestLimitError,
     ContextWindowExceededError,
     RejectedRequestError,
     ContentPolicyViolationError,

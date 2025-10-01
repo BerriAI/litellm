@@ -151,9 +151,11 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     router as mcp_discoverable_endpoints_router,
 )
+
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -306,6 +308,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    vertex_ai_live_websocket_passthrough,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -411,6 +416,8 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     applications,
     status,
 )
@@ -684,6 +691,8 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
 )
+
+vertex_live_passthrough_vertex_base = VertexBase()
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
@@ -4936,11 +4945,47 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                 Vertex AI Live API WebSocket Pass-through
+
+######################################################################
+
+
+@app.websocket("/vertex_ai/live")
+async def vertex_ai_live_passthrough_endpoint(
+    websocket: WebSocket,
+    model: Optional[str] = fastapi.Query(
+        None,
+        description="Optional model name, used to determine Vertex region for global models.",
+    ),
+    vertex_project: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI project id used for the upstream connection.",
+    ),
+    vertex_location: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI region (for example, 'us-central1').",
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Vertex AI Live API WebSocket Pass-through Endpoint
+
+    This endpoint delegates to the WebSocket function defined in llm_passthrough_endpoints.py
+    """
+    return await vertex_ai_live_websocket_passthrough(
+        websocket=websocket,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+######################################################################
+
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-
 from litellm import _arealtime
 
 
