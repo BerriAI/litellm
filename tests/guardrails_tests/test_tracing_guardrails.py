@@ -15,8 +15,9 @@ from litellm.types.guardrails import GuardrailEventHooks
 from typing import Optional
 
 
-class TestCustomLogger(CustomLogger):
+class CustomLoggerForTesting(CustomLogger):
     def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.standard_logging_payload: Optional[StandardLoggingPayload] = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -28,7 +29,7 @@ async def test_standard_logging_payload_includes_guardrail_information():
     """
     Test that the standard logging payload includes the guardrail information when a guardrail is applied
     """
-    test_custom_logger = TestCustomLogger()
+    test_custom_logger = CustomLoggerForTesting()
     litellm.callbacks = [test_custom_logger]
     presidio_guard = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="presidio_guard",
@@ -178,3 +179,468 @@ async def test_langfuse_trace_includes_guardrail_information():
         assert "score" in output_item
         assert "start" in output_item
         assert "end" in output_item
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_status_blocked():
+    """
+    Test that Bedrock guardrail sets correct status fields when blocking content.
+    
+    This test verifies that when Bedrock guardrail blocks content:
+    1. The guardrail_information contains guardrail_status="blocked" 
+    2. The status_fields.guardrail_status is set to "guardrail_intervened"
+    3. The status_fields.llm_api_status remains "success" (mock LLM call succeeds)
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    litellm._turn_on_debug()
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Bedrock guardrail with mock AWS credentials
+    bedrock_guard = BedrockGuardrail(
+        guardrail_name="bedrock_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="test-id",
+        guardrailVersion="1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_region_name="us-east-1",
+    )
+    
+    # Mock Bedrock API response indicating content was blocked
+    # action="GUARDRAIL_INTERVENED" means the guardrail blocked the request
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Blocked"}],
+        "assessments": [{
+            "topicPolicy": {
+                "topics": [{"name": "harmful", "action": "BLOCKED"}]
+            }
+        }]
+    }
+    bedrock_guard.async_handler.post = AsyncMock(return_value=mock_response)
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "harmful content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to ensure guardrail logic executes
+    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+        # Call guardrail pre_call hook - this will raise an exception when content is blocked
+        try:
+            await bedrock_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        except Exception:
+            # Expected exception when guardrail blocks content
+            pass
+    
+    # Call litellm.acompletion to trigger logging callbacks
+    # This populates the standard_logging_payload in our custom logger
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Verify the standard logging payload was captured
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    
+    # Verify guardrail information fields
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    
+    # Verify the new typed status fields
+    # guardrail_status should be "guardrail_intervened" when content is blocked
+    # llm_api_status should be "success" since the mock LLM call itself succeeded
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "guardrail_intervened"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_status_success():
+    """
+    Test that Bedrock guardrail sets correct status fields when allowing content.
+    
+    This test verifies that when Bedrock guardrail allows content through:
+    1. The guardrail_information contains guardrail_status="success"
+    2. The status_fields.guardrail_status is set to "success" 
+    3. The status_fields.llm_api_status is "success"
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    
+    # Reset callbacks completely to avoid event loop conflicts
+    litellm.callbacks = []
+    await asyncio.sleep(0.1)  # Let previous callbacks finish
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Bedrock guardrail
+    bedrock_guard = BedrockGuardrail(
+        guardrail_name="bedrock_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="test-id",
+        guardrailVersion="1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_region_name="us-east-1",
+    )
+    
+    # Mock success response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [{"text": "Safe content"}],
+        "assessments": []
+    }
+    bedrock_guard.async_handler.post = AsyncMock(return_value=mock_response)
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "safe content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to return True
+    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+        await bedrock_guard.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=None,
+            data=request_data,
+            call_type="completion"
+        )
+    
+    # Call litellm.acompletion to trigger logging
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Check standard logging payload status fields
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "success"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    
+    # Check status fields
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "success"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_status_failure():
+    """
+    Test that Bedrock guardrail sets correct status fields when the API endpoint fails.
+    
+    This test verifies that when Bedrock guardrail API is down/fails:
+    1. The guardrail_information contains guardrail_status="failure"
+    2. The status_fields.guardrail_status is set to "guardrail_failed_to_respond"
+    3. The exception is still raised (maintaining existing behavior)
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    
+    # Reset callbacks completely to avoid event loop conflicts
+    litellm.callbacks = []
+    await asyncio.sleep(0.1)
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Bedrock guardrail
+    bedrock_guard = BedrockGuardrail(
+        guardrail_name="bedrock_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="test-id",
+        guardrailVersion="1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_region_name="us-east-1",
+    )
+    
+    # Mock network failure (endpoint down)
+    bedrock_guard.async_handler.post = AsyncMock(
+        side_effect=httpx.ConnectError("Connection failed")
+    )
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "test content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to return True
+    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+        # Call guardrail (will raise exception on network failure)
+        try:
+            await bedrock_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        except Exception:
+            # Expected exception when endpoint is down
+            pass
+    
+    # Call litellm.acompletion to trigger logging
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Check standard logging payload status fields
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    
+    # Check status fields
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_noma_guardrail_status_blocked():
+    """
+    Test that Noma guardrail sets correct status fields when blocking content.
+    
+    This test verifies that when Noma guardrail blocks content (verdict=False):
+    1. The guardrail_information contains guardrail_status="blocked"
+    2. The status_fields.guardrail_status is set to "guardrail_intervened"
+    3. The status_fields.llm_api_status remains "success"
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    
+    # Reset callbacks completely to avoid event loop conflicts
+    litellm.callbacks = []
+    await asyncio.sleep(0.1)  # Let previous callbacks finish
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Noma guardrail
+    noma_guard = NomaGuardrail(
+        guardrail_name="noma_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        api_key="test-key",
+        monitor_mode=False,
+    )
+    
+    # Mock blocked response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "verdict": False,
+        "originalResponse": {
+            "prompt": {
+                "topicDetector": {"harmful": {"result": True}}
+            }
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+    noma_guard.async_handler.post = AsyncMock(return_value=mock_response)
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "harmful content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to return True
+    with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
+        # Call guardrail (will raise exception on block)
+        try:
+            await noma_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        except Exception:
+            pass
+    
+    # Call litellm.acompletion to trigger logging
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Check standard logging payload status fields
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "noma"
+    
+    # Check status fields
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "guardrail_intervened"
+
+
+@pytest.mark.asyncio
+async def test_noma_guardrail_status_success():
+    """
+    Test that Noma guardrail sets correct status fields when allowing content.
+    
+    This test verifies that when Noma guardrail allows content (verdict=True):
+    1. The guardrail_information contains guardrail_status="success"
+    2. The status_fields.guardrail_status is set to "success"
+    3. The status_fields.llm_api_status is "success"
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    
+    # Reset callbacks completely to avoid event loop conflicts
+    litellm.callbacks = []
+    await asyncio.sleep(0.1)  # Let previous callbacks finish
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Noma guardrail
+    noma_guard = NomaGuardrail(
+        guardrail_name="noma_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        api_key="test-key",
+        monitor_mode=False,
+    )
+    
+    # Mock success response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "verdict": True,
+        "originalResponse": {"prompt": {}}
+    }
+    mock_response.raise_for_status = MagicMock()
+    noma_guard.async_handler.post = AsyncMock(return_value=mock_response)
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "safe content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to return True
+    with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
+        await noma_guard.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=None,
+            data=request_data,
+            call_type="completion"
+        )
+    
+    # Call litellm.acompletion to trigger logging
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Check standard logging payload status fields
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "success"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "noma"
+    
+    # Check status fields
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "success"
+
+
+def test_guardrail_status_fields_computation():
+    """
+    Test that status fields are computed correctly from guardrail information.
+    
+    This unit test verifies the _get_status_fields function correctly maps:
+    - guardrail_status="blocked" -> status_fields.guardrail_status="guardrail_intervened" (legacy)
+    - guardrail_status="guardrail_intervened" -> status_fields.guardrail_status="guardrail_intervened"
+    - guardrail_status="success" -> status_fields.guardrail_status="success"
+    - guardrail_status="failure" -> status_fields.guardrail_status="guardrail_failed_to_respond" (legacy)
+    - guardrail_status="guardrail_failed_to_respond" -> status_fields.guardrail_status="guardrail_failed_to_respond"
+    - no guardrail -> status_fields.guardrail_status="not_run"
+    """
+    from litellm.litellm_core_utils.litellm_logging import _get_status_fields
+    
+    # Test guardrail_intervened status (content was blocked by guardrail)
+    intervened_info = {"guardrail_status": "guardrail_intervened"}
+    status_fields_intervened = _get_status_fields(
+        status="success",
+        guardrail_information=intervened_info,
+        error_str=None
+    )
+    assert status_fields_intervened["llm_api_status"] == "success"
+    assert status_fields_intervened["guardrail_status"] == "guardrail_intervened"
+    
+    # Test legacy blocked status (for backward compatibility)
+    blocked_info = {"guardrail_status": "blocked"}
+    status_fields_blocked = _get_status_fields(
+        status="success",
+        guardrail_information=blocked_info,
+        error_str=None
+    )
+    assert status_fields_blocked["llm_api_status"] == "success"
+    assert status_fields_blocked["guardrail_status"] == "guardrail_intervened"
+    
+    # Test success status
+    success_info = {"guardrail_status": "success"}
+    status_fields_success = _get_status_fields(
+        status="success",
+        guardrail_information=success_info,
+        error_str=None
+    )
+    assert status_fields_success["llm_api_status"] == "success"
+    assert status_fields_success["guardrail_status"] == "success"
+    
+    # Test guardrail_failed_to_respond status
+    failed_info = {"guardrail_status": "guardrail_failed_to_respond"}
+    status_fields_failed = _get_status_fields(
+        status="failure",
+        guardrail_information=failed_info,
+        error_str=None
+    )
+    assert status_fields_failed["llm_api_status"] == "failure"
+    assert status_fields_failed["guardrail_status"] == "guardrail_failed_to_respond"
+    
+    # Test legacy failure status (for backward compatibility)
+    failure_info = {"guardrail_status": "failure"}
+    status_fields_failure = _get_status_fields(
+        status="failure",
+        guardrail_information=failure_info,
+        error_str=None
+    )
+    assert status_fields_failure["llm_api_status"] == "failure"
+    assert status_fields_failure["guardrail_status"] == "guardrail_failed_to_respond"
+    
+    # Test no guardrail run
+    no_guardrail = None
+    status_fields_no_guardrail = _get_status_fields(
+        status="success",
+        guardrail_information=no_guardrail,
+        error_str=None
+    )
+    assert status_fields_no_guardrail["llm_api_status"] == "success"
+    assert status_fields_no_guardrail["guardrail_status"] == "not_run"
