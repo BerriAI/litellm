@@ -361,11 +361,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
-        httpx_response = await self.async_handler.post(
-            url=prepared_request.url,
-            data=prepared_request.body,  # type: ignore
-            headers=prepared_request.headers,  # type: ignore
-        )
+        try:
+            httpx_response = await self.async_handler.post(
+                url=prepared_request.url,
+                data=prepared_request.body,  # type: ignore
+                headers=prepared_request.headers,  # type: ignore
+            )
+        except Exception as e:
+            # Endpoint down, timeout, or other HTTP/network errors
+            verbose_proxy_logger.error(
+                "Bedrock AI: failed to make guardrail request: %s", str(e)
+            )
+            # Add guardrail information with failure status
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response={"error": str(e)},
+                request_data=request_data or {},
+                guardrail_status="failure",
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
+            # Re-raise the exception to maintain existing behavior
+            raise
+        
         #########################################################
         # Add guardrail information to request trace
         #########################################################

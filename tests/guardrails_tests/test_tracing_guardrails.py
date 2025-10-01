@@ -344,6 +344,82 @@ async def test_bedrock_guardrail_status_success():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_guardrail_status_failure():
+    """
+    Test that Bedrock guardrail sets correct status fields when the API endpoint fails.
+    
+    This test verifies that when Bedrock guardrail API is down/fails:
+    1. The guardrail_information contains guardrail_status="failure"
+    2. The status_fields.guardrail_status is set to "guardrail_failed_to_respond"
+    3. The exception is still raised (maintaining existing behavior)
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+    from unittest.mock import AsyncMock, MagicMock, patch
+    import httpx
+    
+    # Reset callbacks completely to avoid event loop conflicts
+    litellm.callbacks = []
+    await asyncio.sleep(0.1)
+    
+    # Setup custom logger to capture standard logging payload
+    test_custom_logger = CustomLoggerForTesting()
+    litellm.callbacks = [test_custom_logger]
+    
+    # Create Bedrock guardrail
+    bedrock_guard = BedrockGuardrail(
+        guardrail_name="bedrock_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        guardrailIdentifier="test-id",
+        guardrailVersion="1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_region_name="us-east-1",
+    )
+    
+    # Mock network failure (endpoint down)
+    bedrock_guard.async_handler.post = AsyncMock(
+        side_effect=httpx.ConnectError("Connection failed")
+    )
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "test content"}],
+        "mock_response": "Hello",
+        "metadata": {}
+    }
+    
+    # Mock should_run_guardrail to return True
+    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+        # Call guardrail (will raise exception on network failure)
+        try:
+            await bedrock_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        except Exception:
+            # Expected exception when endpoint is down
+            pass
+    
+    # Call litellm.acompletion to trigger logging
+    response = await litellm.acompletion(**request_data)
+    await asyncio.sleep(1)
+    
+    # Check standard logging payload status fields
+    assert test_custom_logger.standard_logging_payload is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "failure"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
+    
+    # Check status fields
+    status_fields = test_custom_logger.standard_logging_payload.get("status_fields", {})
+    assert status_fields.get("llm_api_status") == "success"
+    assert status_fields.get("guardrail_status") == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
 async def test_noma_guardrail_status_blocked():
     """
     Test that Noma guardrail sets correct status fields when blocking content.
