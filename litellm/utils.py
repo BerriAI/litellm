@@ -2511,24 +2511,6 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
     )  # Default to square if size not recognized
 
 
-def _process_kwargs_for_image_gen(special_params: dict, custom_llm_provider: Optional[str], passed_params: dict) -> None:
-    """Process kwargs for image generation, filtering provider-specific parameters."""
-    for k, v in special_params.items():
-        if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
-        ):  # allow dynamically setting boto3 init logic
-            continue
-        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
-            continue
-        elif (
-            k.startswith("vertex_")
-            and custom_llm_provider != "vertex_ai"
-            and custom_llm_provider != "vertex_ai_beta"
-        ):  # allow dynamically setting vertex ai init logic
-            continue
-        passed_params[k] = v
-
-
 def _get_bedrock_image_config_class(model: Optional[str]):
     """Get the appropriate bedrock config class for image generation."""
     return (
@@ -2574,7 +2556,6 @@ def get_optional_params_image_gen(
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
-    _process_kwargs_for_image_gen(special_params, custom_llm_provider, passed_params)
 
     default_params = {
         "n": None,
