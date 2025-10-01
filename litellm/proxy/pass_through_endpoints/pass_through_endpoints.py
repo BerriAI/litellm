@@ -5,7 +5,7 @@ import json
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -17,10 +17,18 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
     status,
 )
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.websockets import WebSocketState
+from websockets.asyncio.client import connect
+from websockets.exceptions import (
+    ConnectionClosedError,
+    ConnectionClosedOK,
+    InvalidStatus,
+)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -985,11 +993,546 @@ def create_pass_through_route(
     return endpoint_func
 
 
+def create_websocket_passthrough_route(
+    endpoint: str,
+    target: str,
+    custom_headers: Optional[dict] = None,
+    _forward_headers: Optional[bool] = False,
+    dependencies: Optional[List] = None,
+    cost_per_request: Optional[float] = None,
+):
+    """
+    Create a WebSocket passthrough route function.
+
+    Args:
+        endpoint: The endpoint path (for logging purposes)
+        target: The target WebSocket URL (e.g., "wss://api.example.com/ws")
+        custom_headers: Custom headers to include in the WebSocket connection
+        _forward_headers: Whether to forward incoming headers
+        dependencies: FastAPI dependencies to inject
+
+    Returns:
+        A WebSocket passthrough function that can be registered with app.websocket()
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    async def websocket_endpoint_func(
+        websocket: WebSocket,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+        **kwargs,  # For additional query parameters
+    ):
+        """
+        WebSocket passthrough endpoint function.
+
+        This function handles the WebSocket connection by:
+        1. Accepting the incoming WebSocket connection
+        2. Establishing a connection to the target WebSocket
+        3. Forwarding messages bidirectionally
+        4. Handling connection cleanup
+        """
+        return await websocket_passthrough_request(
+            websocket=websocket,
+            target=target,
+            custom_headers=custom_headers or {},
+            user_api_key_dict=user_api_key_dict,
+            forward_headers=_forward_headers,
+            endpoint=endpoint,
+            cost_per_request=cost_per_request,
+            accept_websocket=True,  # Generic usage should accept the WebSocket
+        )
+
+    return websocket_endpoint_func
+
+
+async def websocket_passthrough_request(  # noqa: PLR0915
+    websocket: WebSocket,
+    target: str,
+    custom_headers: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    forward_headers: Optional[bool] = False,
+    endpoint: Optional[str] = None,
+    cost_per_request: Optional[float] = None,
+    accept_websocket: bool = True,
+):
+    """
+    WebSocket passthrough request handler.
+
+    Args:
+        websocket: The incoming WebSocket connection
+        target: The target WebSocket URL
+        custom_headers: Custom headers to include in the connection
+        user_api_key_dict: The user API key dictionary
+        forward_headers: Whether to forward incoming headers
+        endpoint: The endpoint path (for logging purposes)
+        cost_per_request: Optional field - cost per request to the target endpoint
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    # Initialize tracking variables
+    start_time = datetime.now()
+    websocket_messages: list[dict[str, Any]] = []
+    litellm_call_id = str(uuid.uuid4())
+
+    verbose_proxy_logger.info(
+        f"WebSocket passthrough ({endpoint}): Starting WebSocket connection to {target}"
+    )
+
+    # Only accept the WebSocket if requested (for generic usage)
+    if accept_websocket:
+        await websocket.accept()
+        verbose_proxy_logger.debug(
+            f"WebSocket passthrough ({endpoint}): WebSocket connection accepted"
+        )
+
+    # Prepare headers for the upstream connection
+    upstream_headers = custom_headers.copy()
+
+    if forward_headers:
+        # Forward relevant headers from the incoming request
+        incoming_headers = dict(websocket.headers)
+        for header_name, header_value in incoming_headers.items():
+            # Only forward certain headers to avoid conflicts
+            if header_name.lower() in [
+                "authorization",
+                "x-api-key",
+                "x-goog-user-project",
+            ]:
+                upstream_headers[header_name] = header_value
+
+    # Initialize logging object similar to HTTP passthrough
+    logging_obj = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "WebSocket connection"}],
+        stream=True,  # WebSockets are inherently streaming
+        call_type="pass_through_endpoint",
+        start_time=start_time,
+        litellm_call_id=litellm_call_id,
+        function_id="websocket_passthrough",
+    )
+
+    # Create passthrough logging payload
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=target,
+        request_body={},  # WebSocket doesn't have a traditional request body
+        request_method="WEBSOCKET",
+        cost_per_request=cost_per_request,
+    )
+
+    # Create a dummy request object for WebSocket connections to maintain compatibility
+    # with the existing _init_kwargs_for_pass_through_endpoint function
+    class DummyRequest:
+        def __init__(self, url: str, method: str = "WEBSOCKET", headers: Optional[dict] = None):
+            self.url = url
+            self.method = method
+            self.headers = headers or {}
+
+        def __str__(self):
+            return f"DummyRequest(url={self.url}, method={self.method})"
+
+    dummy_request = DummyRequest(
+        url=target,
+        method="WEBSOCKET",
+        headers=dict(websocket.headers) if hasattr(websocket, "headers") else {},
+    )
+
+    # Initialize kwargs for logging using the same pattern as HTTP passthrough
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        user_api_key_dict=user_api_key_dict,
+        _parsed_body={},  # WebSocket doesn't have a traditional request body
+        passthrough_logging_payload=passthrough_logging_payload,
+        litellm_call_id=litellm_call_id,
+        request=dummy_request,  # type: ignore
+        logging_obj=logging_obj,
+    )
+
+    # Update logging environment variables
+    logging_obj.update_environment_variables(
+        model="unknown",
+        user="unknown",
+        optional_params={},
+        litellm_params=dict(kwargs.get("litellm_params", {})),
+        call_type="pass_through_endpoint",
+    )
+    logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+
+    # Pre-call logging
+    logging_obj.pre_call(
+        input=[{"role": "user", "content": "WebSocket connection"}],
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": target,
+            "headers": upstream_headers,
+        },
+    )
+
+    ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+    websocket_data: dict[str, Any] = {}
+    websocket_data = await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        data=websocket_data,
+        call_type="pass_through_endpoint",
+    )
+
+    try:
+        verbose_proxy_logger.debug(
+            f"WebSocket passthrough ({endpoint}): Establishing upstream connection to {target}"
+        )
+        async with connect(
+            target,
+            additional_headers=upstream_headers,
+        ) as upstream_ws:
+            verbose_proxy_logger.info(
+                f"WebSocket passthrough ({endpoint}): Upstream connection established successfully"
+            )
+
+            async def forward_client_to_upstream() -> None:
+                """Forward messages from client to upstream WebSocket"""
+                try:
+                    while True:
+                        message = await websocket.receive()
+                        message_type = message.get("type")
+                        if message_type == "websocket.disconnect":
+                            await upstream_ws.close()
+                            break
+
+                        text_data = message.get("text")
+                        bytes_data = message.get("bytes")
+
+                        if text_data is not None:
+                            # Try to extract model from client setup message for Vertex AI Live
+                            if endpoint and "/vertex_ai/live" in endpoint:
+                                verbose_proxy_logger.debug(
+                                    f"WebSocket passthrough ({endpoint}): Processing client message for model extraction"
+                                )
+                                try:
+                                    client_message = json.loads(text_data)
+                                    if (
+                                        isinstance(client_message, dict)
+                                        and "setup" in client_message
+                                    ):
+                                        setup_data = client_message["setup"]
+                                        verbose_proxy_logger.debug(
+                                            f"WebSocket passthrough ({endpoint}): Found setup data in client message: {setup_data}"
+                                        )
+                                        if (
+                                            isinstance(setup_data, dict)
+                                            and "model" in setup_data
+                                        ):
+                                            extracted_model = (
+                                                _extract_model_from_vertex_ai_setup(
+                                                    setup_data
+                                                )
+                                            )
+                                            if extracted_model:
+                                                kwargs["model"] = extracted_model
+                                                kwargs[
+                                                    "custom_llm_provider"
+                                                ] = "vertex_ai-language-models"
+                                                # Update logging object with correct model
+                                                logging_obj.model = extracted_model
+                                                logging_obj.model_call_details[
+                                                    "model"
+                                                ] = extracted_model
+                                                logging_obj.model_call_details[
+                                                    "custom_llm_provider"
+                                                ] = "vertex_ai"
+                                                verbose_proxy_logger.info(
+                                                    f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from client setup message"
+                                                )
+                                            else:
+                                                verbose_proxy_logger.warning(
+                                                    f"WebSocket passthrough ({endpoint}): Failed to extract model from client setup data: {setup_data}"
+                                                )
+                                        else:
+                                            verbose_proxy_logger.debug(
+                                                f"WebSocket passthrough ({endpoint}): Setup data does not contain model field: {setup_data}"
+                                            )
+                                    else:
+                                        verbose_proxy_logger.debug(
+                                            f"WebSocket passthrough ({endpoint}): Client message does not contain setup data"
+                                        )
+                                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                                    verbose_proxy_logger.debug(
+                                        f"WebSocket passthrough ({endpoint}): Client message is not a valid setup message: {e}"
+                                    )
+                                    pass  # Not a JSON message or doesn't contain setup data
+
+                            await upstream_ws.send(text_data)
+                        elif bytes_data is not None:
+                            await upstream_ws.send(bytes_data)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        f"WebSocket passthrough ({endpoint}): error forwarding client message"
+                    )
+                    await upstream_ws.close()
+
+            async def forward_upstream_to_client() -> None:
+                """Forward messages from upstream to client WebSocket"""
+                try:
+                    # Wait for the first response from upstream
+                    raw_response = await upstream_ws.recv(decode=False)
+                    # Ensure raw_response is bytes before decoding
+                    if isinstance(raw_response, str):
+                        raw_response = raw_response.encode("ascii")
+                    setup_response = json.loads(raw_response.decode("ascii"))
+                    verbose_proxy_logger.debug(f"Setup response: {setup_response}")
+
+                    # Extract model and provider from setup response for Vertex AI Live
+                    if endpoint and "/vertex_ai/live" in endpoint:
+                        verbose_proxy_logger.debug(
+                            f"WebSocket passthrough ({endpoint}): Processing server setup response for model extraction"
+                        )
+                        extracted_model = _extract_model_from_vertex_ai_setup(
+                            setup_response
+                        )
+                        if extracted_model:
+                            kwargs["model"] = extracted_model
+                            kwargs["custom_llm_provider"] = "vertex_ai_language_models"
+                            # Update logging object with correct model
+                            logging_obj.model = extracted_model
+                            logging_obj.model_call_details["model"] = extracted_model
+                            logging_obj.model_call_details[
+                                "custom_llm_provider"
+                            ] = "vertex_ai_language_models"
+                            verbose_proxy_logger.info(
+                                f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
+                            )
+                        else:
+                            verbose_proxy_logger.warning(
+                                f"WebSocket passthrough ({endpoint}): Failed to extract model from server setup response: {setup_response}"
+                            )
+                    else:
+                        verbose_proxy_logger.debug(
+                            f"WebSocket passthrough ({endpoint}): Not a Vertex AI Live endpoint, skipping model extraction"
+                        )
+
+                    # Send the setup response to the client
+                    await websocket.send_text(json.dumps(setup_response))
+
+                    # Now continuously forward messages from upstream to client
+                    async for upstream_message in upstream_ws:
+                        if isinstance(upstream_message, bytes):
+                            await websocket.send_bytes(upstream_message)
+                            # Parse and collect for cost tracking
+                            try:
+                                message_data = json.loads(upstream_message.decode())
+                                websocket_messages.append(message_data)
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                pass
+                        else:
+                            await websocket.send_text(upstream_message)
+                            # Parse and collect for cost tracking
+                            try:
+                                message_data = json.loads(upstream_message)
+                                websocket_messages.append(message_data)
+                            except json.JSONDecodeError:
+                                pass
+
+                except (ConnectionClosedOK, ConnectionClosedError) as e:
+                    verbose_proxy_logger.debug(
+                        f"Upstream WebSocket connection closed: {e}"
+                    )
+                    pass
+                except asyncio.CancelledError:
+                    verbose_proxy_logger.debug(
+                        "asyncio.CancelledError in forward_upstream_to_client"
+                    )
+                    raise
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"Exception in forward_upstream_to_client: {e}"
+                    )
+                    verbose_proxy_logger.exception(
+                        f"WebSocket passthrough ({endpoint}): error forwarding upstream message"
+                    )
+                    raise
+
+            # Create tasks for bidirectional message forwarding
+            tasks = [
+                asyncio.create_task(forward_client_to_upstream()),
+                asyncio.create_task(forward_upstream_to_client()),
+            ]
+
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            # Cancel remaining tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            # Check for exceptions in completed tasks
+            for task in done:
+                exception = task.exception()
+                if exception is not None:
+                    raise exception
+
+            end_time = datetime.now()
+
+            # Update passthrough logging payload with response data
+            passthrough_logging_payload["response_body"] = websocket_messages  # type: ignore
+            passthrough_logging_payload["end_time"] = end_time  # type: ignore
+
+            # Remove logging_obj from kwargs to avoid duplicate keyword argument
+            success_kwargs = kwargs.copy()
+            success_kwargs.pop("logging_obj", None)
+
+            # # Add user authentication context for database logging
+            # if user_api_key_dict:
+            #     success_kwargs.setdefault('litellm_params', {})
+            #     success_kwargs['litellm_params'].update({
+            #         'proxy_server_request': {
+            #             'body': {
+            #                 'user': user_api_key_dict.user_id,
+            #                 'team_id': user_api_key_dict.team_id,
+            #                 'end_user_id': user_api_key_dict.end_user_id,
+            #             }
+            #         }
+            #     })
+            #     # Also add the user_api_key for direct access
+            #     success_kwargs['user_api_key'] = user_api_key_dict.api_key
+
+            # Create a dummy httpx.Response for WebSocket connections
+            class MockWebSocketResponse:
+                def __init__(self, target_url: str):
+                    self.status_code = 200
+                    self.text = "WebSocket connection successful"
+                    self.headers: dict[str, str] = {}
+                    self.request = MockWebSocketRequest(target_url)
+
+            class MockWebSocketRequest:
+                def __init__(self, target_url: str):
+                    self.method = "WEBSOCKET"
+                    self.url = target_url
+
+            mock_response = MockWebSocketResponse(target)
+
+            # Use the same success handler as HTTP passthrough endpoints
+            asyncio.create_task(
+                pass_through_endpoint_logging.pass_through_async_success_handler(
+                    httpx_response=mock_response,  # type: ignore
+                    response_body=websocket_messages,  # type: ignore
+                    url_route=endpoint or "",
+                    result="websocket_connection_successful",
+                    start_time=start_time,
+                    end_time=end_time,
+                    logging_obj=logging_obj,
+                    cache_hit=False,
+                    request_body={},
+                    **success_kwargs,
+                )
+            )
+
+            # Call the proxy logging success hook
+            if proxy_logging_obj:
+                await proxy_logging_obj.post_call_success_hook(
+                    data={},
+                    user_api_key_dict=user_api_key_dict,
+                    response={"status": "websocket_connection_successful"},  # type: ignore
+                )
+
+    except InvalidStatus as exc:
+        verbose_proxy_logger.exception(
+            f"WebSocket passthrough ({endpoint}): upstream rejected WebSocket connection"
+        )
+
+        # Prepare request payload for logging
+        request_payload = {}
+        if kwargs:
+            for key, value in kwargs.items():
+                request_payload[key] = value
+
+        # Log the connection failure using the same pattern as HTTP
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=exc,
+            request_data=request_payload,
+            traceback_str=traceback.format_exc(
+                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
+            ),
+        )
+
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(
+                code=exc.status_code if hasattr(exc, "status_code") else 1011,
+                reason="Upstream connection rejected",
+            )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"WebSocket passthrough ({endpoint}): unexpected error while proxying WebSocket"
+        )
+
+        # Prepare request payload for logging
+        request_payload = {}
+        if kwargs:
+            for key, value in kwargs.items():
+                request_payload[key] = value
+
+        # Log the unexpected error using the same pattern as HTTP
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=request_payload,
+            traceback_str=traceback.format_exc(
+                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG,
+            ),
+        )
+
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason="WebSocket passthrough error")
+    finally:
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close()
+
+
 def _is_streaming_response(response: httpx.Response) -> bool:
     _content_type = response.headers.get("content-type")
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
+
+
+def _extract_model_from_vertex_ai_setup(setup_response: dict) -> Optional[str]:
+    """
+    Extract the model name from Vertex AI Live setup response.
+
+    The setup response can contain a model field in two formats:
+    1. Direct: {"model": "projects/.../models/gemini-2.0-flash-live-preview-04-09"}
+    2. Nested: {"setup": {"model": "projects/.../models/gemini-2.0-flash-live-preview-04-09"}}
+
+    We extract just the model name: "gemini-2.0-flash-live-preview-04-09"
+    """
+    try:
+        # Handle both direct model field and nested setup.model field
+        model_path = None
+        if isinstance(setup_response, dict):
+            if "model" in setup_response:
+                model_path = setup_response["model"]
+            elif (
+                "setup" in setup_response
+                and isinstance(setup_response["setup"], dict)
+                and "model" in setup_response["setup"]
+            ):
+                model_path = setup_response["setup"]["model"]
+
+        if isinstance(model_path, str) and "/models/" in model_path:
+            # Extract the model name after the last "/models/"
+            model_name = model_path.split("/models/")[-1]
+            return model_name
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error extracting model from setup response: {e}")
+    return None
 
 
 class InitPassThroughEndpointHelpers:
