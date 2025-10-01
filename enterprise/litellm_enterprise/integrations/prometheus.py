@@ -21,6 +21,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.integrations.prometheus import *
+from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -2247,12 +2248,10 @@ def prometheus_label_factory(
 
     if enum_values.custom_metadata_labels is not None:
         for key, value in enum_values.custom_metadata_labels.items():
-            if key in supported_enum_labels:
-                filtered_labels[key] = value
-            else:
-                filtered_labels[key] = (
-                    "None"  # this happens for dynamically added metadata labels
-                )
+            # check sanitized key
+            sanitized_key = _sanitize_prometheus_label_name(key)
+            if sanitized_key in supported_enum_labels:
+                filtered_labels[sanitized_key] = value
 
     # Add custom tags if configured
     if enum_values.tags is not None:
