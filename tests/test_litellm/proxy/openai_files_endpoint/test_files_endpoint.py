@@ -89,7 +89,8 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
         files={"file": test_file},
         data={
             "purpose": "my-bad-purpose",
-            "target_model_names": ["azure-gpt-3-5-turbo", "gpt-3.5-turbo"],
+            # "target_model_names": ["azure-gpt-3-5-turbo", "gpt-3.5-turbo"],
+            "target_model_names": "gpt-3-5-turbo",
         },
         headers={"Authorization": "Bearer test-key"},
     )
