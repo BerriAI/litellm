@@ -182,6 +182,12 @@ def mock_request():
     class QueryParams:
         def __init__(self):
             self._dict = {}
+        
+        def __iter__(self):
+            return iter(self._dict)
+        
+        def items(self):
+            return self._dict.items()
 
     class MockRequest:
         def __init__(
@@ -291,7 +297,7 @@ async def test_pass_through_request_stream_param_override(
             "POST",
             httpx.URL("https://api.anthropic.com/v1/messages"),
             json=request_body,
-            params=None,
+            params={},
             headers={
                 "Authorization": "Bearer test-key"
             },
@@ -393,7 +399,7 @@ async def test_pass_through_request_stream_param_no_override(
             headers={
                 "Authorization": "Bearer test-key"
             },
-            params=None,
+            params={},
             json=request_body,
         )
         
