@@ -1091,7 +1091,7 @@ async def test_google_generate_content_with_openai():
     )
     
     # Use AsyncMock for proper async function mocking
-    with unittest.mock.patch("litellm.completion", new_callable=unittest.mock.MagicMock) as mock_completion:
+    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
         # Set the return value directly on the MagicMock
         mock_completion.return_value = mock_response
         
@@ -1100,7 +1100,7 @@ async def test_google_generate_content_with_openai():
             contents=[
                 {"role": "user", "parts": [{"text": "Hello, world!"}]}
             ],
-            systemInstruction="You are a helpful assistant.",
+                systemInstruction={"parts": [{"text": "You are a helpful assistant."}]},
             safetySettings=[
                 {
                     "category": "HARM_CATEGORY_HATE_SPEECH",
