@@ -731,6 +731,12 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    rpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
+    tpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
@@ -3054,6 +3060,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "rpm_limit_type",
+    "tpm_limit_type",
     "guardrails",
     "tags",
     "enforced_params",
