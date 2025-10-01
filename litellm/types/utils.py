@@ -2059,6 +2059,18 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
 
+class CachingDetails(TypedDict):
+    """
+    Track all caching related metrics, fields for a given request
+    """
+    cache_hit: Optional[bool]
+    """
+    Whether the request hit the cache
+    """
+    cache_duration_ms: Optional[float]
+    """
+    Duration for reading from cache
+    """
 
 class CostBreakdown(TypedDict):
     """
@@ -2416,6 +2428,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    LEMONADE = "lemonade"
 
 
 # Create a set of all provider values for quick lookup

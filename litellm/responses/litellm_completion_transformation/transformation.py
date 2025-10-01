@@ -851,8 +851,15 @@ class LiteLLMCompletionResponsesConfig:
                 output_tokens=0,
                 total_tokens=0,
             )
-        return ResponseAPIUsage(
+        
+        response_usage = ResponseAPIUsage(
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             total_tokens=usage.total_tokens,
         )
+        
+        # Preserve cost field if it exists (for streaming usage with cost calculation)
+        if hasattr(usage, "cost") and usage.cost is not None:
+            setattr(response_usage, "cost", usage.cost)
+        
+        return response_usage
