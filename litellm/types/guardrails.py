@@ -38,6 +38,7 @@ class SupportedGuardrailIntegrations(Enum):
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
     TOOL_PERMISSION = "tool_permission"
+    JAVELIN = "javelin"
 
 
 class Role(Enum):
@@ -390,6 +391,26 @@ class ToolPermissionGuardrailConfigModel(BaseModel):
     )
 
 
+class JavelinGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Javelin guardrail"""
+
+    guard_name: Optional[str] = Field(
+        default=None, description="Name of the Javelin guard to use"
+    )
+    api_version: Optional[str] = Field(
+        default="v1", description="API version for Javelin service"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+    application: Optional[str] = Field(
+        default=None, description="Application name for Javelin service"
+    )
+    config: Optional[Dict] = Field(
+        default=None, description="Additional configuration for the guardrail"
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -479,6 +500,7 @@ class LitellmParams(
     PillarGuardrailConfigModel,
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
+    JavelinGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")

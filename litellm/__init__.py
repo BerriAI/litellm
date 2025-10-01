@@ -250,6 +250,7 @@ wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
+lemonade_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -522,6 +523,7 @@ volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
 ovhcloud_embedding_models: Set = set()
+lemonade_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -742,6 +744,8 @@ def add_known_models():
             ovhcloud_models.add(key)
         elif value.get("litellm_provider") == "ovhcloud-embedding-models":
             ovhcloud_embedding_models.add(key)
+        elif value.get("litellm_provider") == "lemonade":
+            lemonade_models.add(key)
 
 
 add_known_models()
@@ -838,6 +842,7 @@ model_list = list(
     | volcengine_models
     | wandb_models
     | ovhcloud_models
+    | lemonade_models
 )
 
 model_list_set = set(model_list)
@@ -921,6 +926,7 @@ models_by_provider: dict = {
     "volcengine": volcengine_models,
     "wandb": wandb_models,
     "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
+    "lemonade": lemonade_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1270,6 +1276,7 @@ from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
 from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
+from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
@@ -1280,6 +1287,7 @@ from .exceptions import (
     ImageFetchError,
     NotFoundError,
     RateLimitError,
+    ParallelRequestLimitError,
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
