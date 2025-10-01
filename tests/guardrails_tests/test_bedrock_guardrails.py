@@ -1407,11 +1407,16 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
         "stopReason": "tool_use"
     }
         
-    data = {}  # request data not used by our condition
+    data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Hello"},
+        ],
+    } 
     mock_user_api_key_dict = UserAPIKeyAuth()
 
     return await guardrail.async_post_call_success_hook(
         data=data,
-        response=mock_bedrock_response,  # dict with "outputs"
+        response=mock_bedrock_response, 
         user_api_key_dict=mock_user_api_key_dict,
     )
