@@ -2592,23 +2592,31 @@ def get_optional_params_image_gen(
     )
     optional_params: Dict[str, Any] = {}
 
-    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    # Track parameters that were dropped due to being unsupported
+    dropped_params = []
+
     def _check_valid_arg(supported_params):
-        if len(non_default_params.keys()) > 0:
-            keys = list(non_default_params.keys())
-            for k in keys:
-                if (
-                    litellm.drop_params is True or drop_params is True
-                ) and k not in supported_params:  # drop the unsupported non-default values
-                    non_default_params.pop(k, None)
-                elif k not in supported_params:
+        nonlocal dropped_params
+        if drop_params is True or litellm.drop_params is True:
+            # Track which params will be dropped before removing them
+            dropped_params.extend([
+                param for param in non_default_params.keys() 
+                if param not in supported_params
+            ])
+            _remove_unsupported_params(non_default_params, supported_params)
+        else:
+            if len(non_default_params.keys()) > 0:
+                keys = list(non_default_params.keys())
+                unsupported_params = [k for k in keys if k not in supported_params]
+                if unsupported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting `{k}` is not supported by {custom_llm_provider}, {model}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Model {model}: The following params are not supported by {custom_llm_provider}: {unsupported_params}",
                     )
 
     if provider_config is not None:
         supported_params = provider_config.get_supported_openai_params(model=model or "")
+        _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -2638,11 +2646,15 @@ def get_optional_params_image_gen(
         supported_params = provider_config.get_supported_openai_params(model=model or "")
         openai_params = list(supported_params)
 
+    # Combine additional_drop_params with parameters we dropped due to being unsupported
+    combined_drop_params = (additional_drop_params or []) + dropped_params
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
+        additional_drop_params=combined_drop_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
