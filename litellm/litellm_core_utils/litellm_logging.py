@@ -4444,6 +4444,16 @@ def _get_status_fields(
     Returns:
         StandardLoggingPayloadStatusFields with llm_api_status and guardrail_status
     """
+    # Mapping for legacy guardrail status values to new GuardrailStatus values
+    GUARDRAIL_STATUS_MAP: Dict[str, GuardrailStatus] = {
+        "success": "success",
+        "blocked": "guardrail_intervened",  # legacy
+        "guardrail_intervened": "guardrail_intervened",  # direct
+        "failure": "guardrail_failed_to_respond",  # legacy
+        "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
+        "not_run": "not_run"
+    }
+    
     # Set LLM API status
     llm_api_status: StandardLoggingPayloadStatus = status
     
@@ -4453,7 +4463,8 @@ def _get_status_fields(
     #########################################################
     guardrail_status: GuardrailStatus = "not_run"
     if guardrail_information and isinstance(guardrail_information, dict):
-        guardrail_status = guardrail_information.get("guardrail_status") or "not_run"
+        raw_status = guardrail_information.get("guardrail_status", "not_run")
+        guardrail_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
 
     return StandardLoggingPayloadStatusFields(
         llm_api_status=llm_api_status,

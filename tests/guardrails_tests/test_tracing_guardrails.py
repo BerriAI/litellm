@@ -257,7 +257,7 @@ async def test_bedrock_guardrail_status_blocked():
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
     
     # Verify guardrail information fields
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "blocked"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
     
     # Verify the new typed status fields
@@ -410,7 +410,7 @@ async def test_bedrock_guardrail_status_failure():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "failure"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_failed_to_respond"
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "bedrock"
     
     # Check status fields
@@ -490,7 +490,7 @@ async def test_noma_guardrail_status_blocked():
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
     assert test_custom_logger.standard_logging_payload["guardrail_information"] is not None
-    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "blocked"
+    assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_status"] == "guardrail_intervened"
     assert test_custom_logger.standard_logging_payload["guardrail_information"]["guardrail_provider"] == "noma"
     
     # Check status fields
@@ -576,14 +576,26 @@ def test_guardrail_status_fields_computation():
     Test that status fields are computed correctly from guardrail information.
     
     This unit test verifies the _get_status_fields function correctly maps:
-    - guardrail_status="blocked" -> status_fields.guardrail_status="guardrail_intervened"
+    - guardrail_status="blocked" -> status_fields.guardrail_status="guardrail_intervened" (legacy)
+    - guardrail_status="guardrail_intervened" -> status_fields.guardrail_status="guardrail_intervened"
     - guardrail_status="success" -> status_fields.guardrail_status="success"
-    - guardrail_status="failure" -> status_fields.guardrail_status="guardrail_failed_to_respond"
+    - guardrail_status="failure" -> status_fields.guardrail_status="guardrail_failed_to_respond" (legacy)
+    - guardrail_status="guardrail_failed_to_respond" -> status_fields.guardrail_status="guardrail_failed_to_respond"
     - no guardrail -> status_fields.guardrail_status="not_run"
     """
     from litellm.litellm_core_utils.litellm_logging import _get_status_fields
     
-    # Test blocked status (content was blocked/modified by guardrail)
+    # Test guardrail_intervened status (content was blocked by guardrail)
+    intervened_info = {"guardrail_status": "guardrail_intervened"}
+    status_fields_intervened = _get_status_fields(
+        status="success",
+        guardrail_information=intervened_info,
+        error_str=None
+    )
+    assert status_fields_intervened["llm_api_status"] == "success"
+    assert status_fields_intervened["guardrail_status"] == "guardrail_intervened"
+    
+    # Test legacy blocked status (for backward compatibility)
     blocked_info = {"guardrail_status": "blocked"}
     status_fields_blocked = _get_status_fields(
         status="success",
@@ -603,7 +615,17 @@ def test_guardrail_status_fields_computation():
     assert status_fields_success["llm_api_status"] == "success"
     assert status_fields_success["guardrail_status"] == "success"
     
-    # Test failure status
+    # Test guardrail_failed_to_respond status
+    failed_info = {"guardrail_status": "guardrail_failed_to_respond"}
+    status_fields_failed = _get_status_fields(
+        status="failure",
+        guardrail_information=failed_info,
+        error_str=None
+    )
+    assert status_fields_failed["llm_api_status"] == "failure"
+    assert status_fields_failed["guardrail_status"] == "guardrail_failed_to_respond"
+    
+    # Test legacy failure status (for backward compatibility)
     failure_info = {"guardrail_status": "failure"}
     status_fields_failure = _get_status_fields(
         status="failure",

@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import EmbeddingResponse, ImageResponse
+from litellm.types.utils import EmbeddingResponse, GuardrailStatus, ImageResponse
 
 # Constants
 USER_ROLE: Final[Literal["user"]] = "user"
@@ -332,7 +332,7 @@ class NomaGuardrail(CustomGuardrail):
         await self._check_verdict(ASSISTANT_ROLE, content, response_json)
         return content
 
-    def _determine_guardrail_status(self, response_json: dict) -> Literal["success", "failure", "blocked"]:
+    def _determine_guardrail_status(self, response_json: dict) -> GuardrailStatus:
         """
         Determine the guardrail status based on NOMA API response.
         
@@ -341,13 +341,13 @@ class NomaGuardrail(CustomGuardrail):
             
         Returns:
             "success": Content allowed through with no violations
-            "blocked": Content blocked due to policy violations
-            "failure": Technical error or API failure
+            "guardrail_intervened": Content blocked due to policy violations
+            "guardrail_failed_to_respond": Technical error or API failure
         """
         try:
             # Check if we got a valid response structure
             if not isinstance(response_json, dict):
-                return "failure"
+                return "guardrail_failed_to_respond"
             
             # Get the verdict from the response
             verdict = response_json.get("verdict", True)
@@ -358,14 +358,14 @@ class NomaGuardrail(CustomGuardrail):
             
             # If verdict is False, content is blocked/flagged
             if verdict is False:
-                return "blocked"
+                return "guardrail_intervened"
                 
             # If verdict is missing or invalid, treat as failure
-            return "failure"
+            return "guardrail_failed_to_respond"
             
         except Exception as e:
             verbose_proxy_logger.error(f"Error determining NOMA guardrail status: {str(e)}")
-            return "failure"
+            return "guardrail_failed_to_respond"
 
     def _should_only_sensitive_data_failed(self, classification_obj: dict) -> bool:
         """
@@ -622,7 +622,7 @@ class NomaGuardrail(CustomGuardrail):
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
                 request_data=data,
-                guardrail_status="failure",
+                guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
@@ -677,7 +677,7 @@ class NomaGuardrail(CustomGuardrail):
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
                 request_data=data,
-                guardrail_status="failure",
+                guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
@@ -726,7 +726,7 @@ class NomaGuardrail(CustomGuardrail):
                 guardrail_provider="noma",
                 guardrail_json_response=str(e),
                 request_data=data,
-                guardrail_status="failure",
+                guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=start_time.timestamp(),
                 duration=0.0,
