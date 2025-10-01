@@ -2511,6 +2511,47 @@ def _map_openai_size_to_vertex_ai_aspect_ratio(size: Optional[str]) -> str:
     )  # Default to square if size not recognized
 
 
+def _process_kwargs_for_image_gen(special_params: dict, custom_llm_provider: Optional[str], passed_params: dict) -> None:
+    """Process kwargs for image generation, filtering provider-specific parameters."""
+    for k, v in special_params.items():
+        if k.startswith("aws_") and (
+            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
+        ):  # allow dynamically setting boto3 init logic
+            continue
+        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
+            continue
+        elif (
+            k.startswith("vertex_")
+            and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "vertex_ai_beta"
+        ):  # allow dynamically setting vertex ai init logic
+            continue
+        passed_params[k] = v
+
+
+def _get_bedrock_image_config_class(model: Optional[str]):
+    """Get the appropriate bedrock config class for image generation."""
+    return (
+        litellm.AmazonStability3Config
+        if litellm.AmazonStability3Config._is_stability_3_model(model=model)
+        else (
+            litellm.AmazonNovaCanvasConfig
+            if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
+            else litellm.AmazonStabilityConfig
+        )
+    )
+
+
+def _handle_vertex_ai_image_params(n: Optional[int], size: Optional[str]) -> Dict[str, Any]:
+    """Handle vertex AI specific parameter mapping."""
+    optional_params = {}
+    if n is not None:
+        optional_params["sampleCount"] = int(n)
+    if size is not None:
+        optional_params["aspectRatio"] = _map_openai_size_to_vertex_ai_aspect_ratio(size)
+    return optional_params
+
+
 def get_optional_params_image_gen(
     model: Optional[str] = None,
     n: Optional[int] = None,
@@ -2533,20 +2574,7 @@ def get_optional_params_image_gen(
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params = passed_params.pop("kwargs")
-    for k, v in special_params.items():
-        if k.startswith("aws_") and (
-            custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
-        ):  # allow dynamically setting boto3 init logic
-            continue
-        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
-            continue
-        elif (
-            k.startswith("vertex_")
-            and custom_llm_provider != "vertex_ai"
-            and custom_llm_provider != "vertex_ai_beta"
-        ):  # allow dynamically setting vertex ai init logic
-            continue
-        passed_params[k] = v
+    _process_kwargs_for_image_gen(special_params, custom_llm_provider, passed_params)
 
     default_params = {
         "n": None,
@@ -2584,9 +2612,7 @@ def get_optional_params_image_gen(
 
     dropped_params = []
     if provider_config is not None:
-        supported_params = provider_config.get_supported_openai_params(
-            model=model or ""
-        )
+        supported_params = provider_config.get_supported_openai_params(model=model or "")
         dropped_params = _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
@@ -2601,16 +2627,7 @@ def get_optional_params_image_gen(
     ):
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
-        # use stability3 config class if model is a stability3 model
-        config_class = (
-            litellm.AmazonStability3Config
-            if litellm.AmazonStability3Config._is_stability_3_model(model=model)
-            else (
-                litellm.AmazonNovaCanvasConfig
-                if litellm.AmazonNovaCanvasConfig._is_nova_model(model=model)
-                else litellm.AmazonStabilityConfig
-            )
-        )
+        config_class = _get_bedrock_image_config_class(model)
         supported_params = config_class.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
         optional_params = config_class.map_openai_params(
@@ -2618,24 +2635,12 @@ def get_optional_params_image_gen(
         )
     elif custom_llm_provider == "vertex_ai":
         supported_params = ["n", "size"]
-        """
-        All params here: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
-        """
         _check_valid_arg(supported_params=supported_params)
-        if n is not None:
-            optional_params["sampleCount"] = int(n)
-
-        # Map OpenAI size parameter to Vertex AI aspectRatio
-        if size is not None:
-            optional_params["aspectRatio"] = _map_openai_size_to_vertex_ai_aspect_ratio(
-                size
-            )
+        optional_params.update(_handle_vertex_ai_image_params(n, size))
 
     openai_params: list[str] = list(default_params.keys())
     if provider_config is not None:
-        supported_params = provider_config.get_supported_openai_params(
-            model=model or ""
-        )
+        supported_params = provider_config.get_supported_openai_params(model=model or "")
         openai_params = list(supported_params)
 
     # Combine additional_drop_params with parameters dropped by _check_valid_arg
