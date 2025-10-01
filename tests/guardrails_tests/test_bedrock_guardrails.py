@@ -1384,7 +1384,7 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
         guardrailVersion="DRAFT"
     )
     
-    # Mock Bedrock API response with PII masking
+    # Mock Bedrock API with no output text
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
     mock_bedrock_response.json.return_value = {
@@ -1420,3 +1420,5 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
         response=mock_bedrock_response, 
         user_api_key_dict=mock_user_api_key_dict,
     )
+    # If no error is raised, then the test passes
+    print("✅ No output text in response test passed")
