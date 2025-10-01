@@ -734,7 +734,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
-        from litellm.types.utils import ModelResponse, ModelResponseStream
+        from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
         verbose_proxy_logger.debug("inside generator")
         try:
@@ -758,6 +758,87 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                     response_str = litellm.get_response_string(response_obj=chunk)
                     str_so_far += response_str
+
+                # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
+                # Handle both dict SSE events and pre-formatted string SSE lines
+                if getattr(litellm, "include_cost_in_streaming_usage", False) is True:
+                    try:
+                        def _inject_cost_into_usage_dict(obj: dict) -> Optional[dict]:
+                            if (
+                                obj.get("type") == "message_delta"
+                                and isinstance(obj.get("usage"), dict)
+                            ):
+                                _usage = obj["usage"]
+                                prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
+                                completion_tokens = int(_usage.get("output_tokens", 0) or 0)
+                                total_tokens = int(
+                                    _usage.get("total_tokens", prompt_tokens + completion_tokens)
+                                    or (prompt_tokens + completion_tokens)
+                                )
+
+                                _mr = ModelResponse(
+                                    usage=Usage(
+                                        prompt_tokens=prompt_tokens,
+                                        completion_tokens=completion_tokens,
+                                        total_tokens=total_tokens,
+                                    )
+                                )
+                                model_name = request_data.get("model", "")
+                                try:
+                                    cost_val = litellm.completion_cost(
+                                        completion_response=_mr,
+                                        model=model_name,
+                                    )
+                                except Exception:
+                                    cost_val = None
+                                if cost_val is not None:
+                                    obj.setdefault("usage", {})["cost"] = cost_val
+                                    return obj
+                            return None
+
+                        def _inject_cost_into_sse_frame_str(frame_str: str) -> Optional[str]:
+                            # frame_str may contain multiple lines like 'event: ...\ndata: {...}\n\n'
+                            # We only modify the JSON in the 'data:' line
+                            try:
+                                # Split preserving lines
+                                lines = frame_str.split("\n")
+                                for idx, ln in enumerate(lines):
+                                    stripped_ln = ln.strip()
+                                    if stripped_ln.startswith("data:"):
+                                        json_part = stripped_ln.split("data:", 1)[1].strip()
+                                        if json_part and json_part != "[DONE]":
+                                            obj = json.loads(json_part)
+                                            maybe_modified = _inject_cost_into_usage_dict(obj)
+                                            if maybe_modified is not None:
+                                                # Replace just this line with updated JSON using safe_dumps
+                                                lines[idx] = f"data: {safe_dumps(maybe_modified)}"
+                                                return "\n".join(lines)
+                                return None
+                            except Exception:
+                                return None
+
+                        if isinstance(chunk, dict):
+                            maybe_modified = _inject_cost_into_usage_dict(chunk)
+                            if maybe_modified is not None:
+                                chunk = maybe_modified
+                        elif isinstance(chunk, (bytes, bytearray)):
+                            # Decode to str, inject, and rebuild as bytes
+                            try:
+                                s = chunk.decode("utf-8", errors="ignore")
+                                maybe_mod = _inject_cost_into_sse_frame_str(s)
+                                if maybe_mod is not None:
+                                    chunk = (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                            except Exception:
+                                pass
+                        elif isinstance(chunk, str):
+                            # Try to parse SSE frame and inject cost into the data line
+                            maybe_mod = _inject_cost_into_sse_frame_str(chunk)
+                            if maybe_mod is not None:
+                                # Ensure trailing frame separator
+                                chunk = maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
+                    except Exception:
+                        # Never break streaming on optional cost injection
+                        pass
 
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
