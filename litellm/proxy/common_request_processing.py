@@ -379,6 +379,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
         is_streaming_request: Optional[bool] = False,
+        contents: Optional[list] = None,  # Add contents parameter
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -416,6 +417,10 @@ class ProxyBaseLLMRequestProcessing:
                 ),
             )
         )
+
+        # Pass contents if provided
+        if contents:
+            self.data["contents"] = contents
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
