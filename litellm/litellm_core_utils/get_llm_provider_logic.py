@@ -792,6 +792,8 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.IOIntelligenceChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "lemonade":
         (
             api_base,
