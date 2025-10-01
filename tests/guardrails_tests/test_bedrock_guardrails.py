@@ -1366,3 +1366,52 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
             
         except Exception as e:
             pytest.fail(f"Should not raise exception when disable_exception_on_block=True in streaming, but got: {e}")
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
+    """Test that async_post_call_success_hook skips when there's no output text"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import ModelResponseStream
+    import litellm
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    # Create guardrail instance
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT"
+    )
+    
+    # Mock Bedrock API response with PII masking
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+                            "name": "top_song",
+                            "input": {
+                                "sign": "WZPZ"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        "stopReason": "tool_use"
+    }
+        
+    data = {}  # request data not used by our condition
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    return await guardrail.async_post_call_success_hook(
+        data=data,
+        response=mock_bedrock_response,  # dict with "outputs"
+        user_api_key_dict=mock_user_api_key_dict,
+    )
