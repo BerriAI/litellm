@@ -90,10 +90,10 @@ def _get_user_in_team(
 def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     """
     Helper function to calculate the next rotation time for a key based on the rotation interval.
-    
+
     Args:
         rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
-        
+
     Returns:
         datetime: The calculated next rotation time in UTC
     """
@@ -102,21 +102,25 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     return now + timedelta(seconds=interval_seconds)
 
 
-def _set_key_rotation_fields(data: dict, auto_rotate: bool, rotation_interval: Optional[str]) -> None:
+def _set_key_rotation_fields(
+    data: dict, auto_rotate: bool, rotation_interval: Optional[str]
+) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
-    
+
     Args:
         data: Dictionary to update with rotation fields
         auto_rotate: Whether auto rotation is enabled
         rotation_interval: The rotation interval string (required if auto_rotate is True)
     """
     if auto_rotate and rotation_interval:
-        data.update({
-            "auto_rotate": auto_rotate,
-            "rotation_interval": rotation_interval,
-            "key_rotation_at": _calculate_key_rotation_time(rotation_interval)
-        })
+        data.update(
+            {
+                "auto_rotate": auto_rotate,
+                "rotation_interval": rotation_interval,
+                "key_rotation_at": _calculate_key_rotation_time(rotation_interval),
+            }
+        )
 
 
 def _is_allowed_to_make_key_request(
@@ -542,6 +546,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 value=getattr(data, field),
             )
 
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+            delattr(data, field)
+
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
@@ -620,6 +633,46 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     return response
 
 
+async def _check_team_key_limits(
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: GenerateKeyRequest,
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Check if the team key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
+    """
+    # get all team keys
+    # calculate allocated tpm/rpm limit
+    # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": team_table.team_id},
+    )
+    if keys is not None and len(keys) > 0:
+        allocated_tpm = sum(key.tpm_limit for key in keys if key.tpm_limit is not None)
+        allocated_rpm = sum(key.rpm_limit for key in keys if key.rpm_limit is not None)
+    else:
+        allocated_tpm = 0
+        allocated_rpm = 0
+    if (
+        data.tpm_limit is not None
+        and team_table.tpm_limit is not None
+        and data.tpm_limit + allocated_tpm > team_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated TPM limit={allocated_tpm} + Key TPM limit={data.tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+        )
+    if (
+        data.rpm_limit is not None
+        and team_table.rpm_limit is not None
+        and data.rpm_limit + allocated_rpm > team_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated RPM limit={allocated_rpm} + Key RPM limit={data.rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+        )
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -696,11 +749,18 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
         )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
 
         verbose_proxy_logger.debug("entered /key/generate")
 
@@ -729,7 +789,6 @@ async def generate_key_fn(
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
                 )
-                team_table = None
 
         key_generation_check(
             team_table=team_table,
@@ -738,12 +797,21 @@ async def generate_key_fn(
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
+        if team_table is not None:
+            await _check_team_key_limits(
+                team_table=team_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
         return await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+    except HTTPException as e:
+        raise e
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -1198,9 +1266,9 @@ async def update_key_fn(
 
         # Handle rotation fields if auto_rotate is being enabled
         _set_key_rotation_fields(
-            non_default_values, 
-            non_default_values.get("auto_rotate", False), 
-            non_default_values.get("rotation_interval")
+            non_default_values,
+            non_default_values.get("auto_rotate", False),
+            non_default_values.get("rotation_interval"),
         )
 
         _data = {**non_default_values, "token": key}
@@ -1602,8 +1670,6 @@ def _check_model_access_group(
     return True
 
 
-
-
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1766,12 +1832,12 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
-        
+
         # Add rotation fields if auto_rotate is enabled
         _set_key_rotation_fields(
             data=key_data,
             auto_rotate=auto_rotate or False,
-            rotation_interval=rotation_interval
+            rotation_interval=rotation_interval,
         )
 
         if (
