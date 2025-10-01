@@ -368,6 +368,8 @@ def get_llm_provider(  # noqa: PLR0915
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("lemonade/"):
+            custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
             custom_llm_provider = "heroku"
         # cometapi models
@@ -379,6 +381,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "compactifai"
         elif model.startswith("ovhcloud/"):
             custom_llm_provider = "ovhcloud"
+        elif model.startswith("lemonade/"):
+            custom_llm_provider = "lemonade"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -788,6 +792,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.IOIntelligenceChatConfig()._get_openai_compatible_provider_info(
+    elif custom_llm_provider == "lemonade":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LemonadeChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 

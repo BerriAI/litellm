@@ -6,12 +6,14 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+import json
 import os
 from typing import Optional, cast
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from starlette.websockets import WebSocketState
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -19,7 +21,9 @@ from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    user_api_key_auth,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     get_form_data,
@@ -28,6 +32,8 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
+    create_websocket_passthrough_route,
+    websocket_passthrough_request,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.secret_managers.main import get_secret_str
@@ -143,7 +149,7 @@ async def llm_passthrough_factory_proxy_route(
             _request_body = await request.json()
         else:
             _request_body = await get_form_data(request)
-        
+
         if _request_body.get("stream"):
             is_streaming_request = True
 
@@ -686,7 +692,8 @@ async def bedrock_proxy_route(
     # Add or update query parameters
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
-    credentials: Credentials = BedrockConverseLLM().get_credentials()
+    bedrock_llm = BedrockConverseLLM()
+    credentials: Credentials = bedrock_llm.get_credentials()  # type: ignore
     sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
@@ -1240,3 +1247,187 @@ class BaseOpenAIPassThroughHandler:
             )
 
         return joined_path_str
+
+
+async def vertex_ai_live_websocket_passthrough(
+    websocket: WebSocket,
+    model: Optional[str] = None,
+    vertex_project: Optional[str] = None,
+    vertex_location: Optional[str] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+):
+    """
+    Vertex AI Live API WebSocket Pass-through Function
+
+    This function provides WebSocket passthrough functionality for Vertex AI Live API,
+    allowing real-time communication with Google's Live API service.
+
+    Note: This function should be registered in proxy_server.py using:
+    app.websocket("/vertex_ai/live")(vertex_ai_live_websocket_passthrough)
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    _ = user_api_key_dict  # passthrough route already authenticated; avoid lint warnings
+
+    await websocket.accept()
+
+    incoming_headers = dict(websocket.headers)
+    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+    if vertex_credentials_config is None:
+        # Attempt to load defaults from environment/config if not already initialised
+        passthrough_endpoint_router.set_default_vertex_config()
+        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+        )
+
+    resolved_project = vertex_project
+    resolved_location: Optional[str] = vertex_location
+    credentials_value: Optional[str] = None
+
+    if vertex_credentials_config is not None:
+        resolved_project = resolved_project or vertex_credentials_config.vertex_project
+        temp_location = (
+            resolved_location or vertex_credentials_config.vertex_location
+        )
+        # Ensure resolved_location is a string
+        if isinstance(temp_location, dict):
+            resolved_location = str(temp_location)
+        elif temp_location is not None:
+            resolved_location = str(temp_location)
+        else:
+            resolved_location = None
+        credentials_value = str(vertex_credentials_config.vertex_credentials) if vertex_credentials_config.vertex_credentials is not None else None
+
+    try:
+        resolved_location = resolved_location or (
+            vertex_llm_base.get_default_vertex_location()
+        )
+        if model:
+            resolved_location = vertex_llm_base.get_vertex_region(
+                vertex_region=resolved_location,
+                model=model,
+            )
+
+        (
+            access_token,
+            resolved_project,
+        ) = await vertex_llm_base._ensure_access_token_async(
+            credentials=credentials_value,
+            project_id=resolved_project,
+            custom_llm_provider="vertex_ai_beta",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Failed to prepare Vertex AI credentials for live passthrough"
+        )
+        # Log the authentication failure using proxy_logging_obj
+        if proxy_logging_obj and user_api_key_dict:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data={},
+            )
+        if websocket.client_state != WebSocketState.DISCONNECTED:
+            await websocket.close(code=1011, reason="Vertex AI authentication failed")
+        return
+
+    host_location = resolved_location or vertex_llm_base.get_default_vertex_location()
+    host = (
+        "aiplatform.googleapis.com"
+        if host_location == "global"
+        else f"{host_location}-aiplatform.googleapis.com"
+    )
+    service_url = (
+        f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+    upstream_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    if resolved_project:
+        upstream_headers["x-goog-user-project"] = resolved_project
+
+    # Forward any custom x-goog-* headers provided by the caller if we haven't overridden them
+    for header_name, header_value in incoming_headers.items():
+        lower_header = header_name.lower()
+        if lower_header.startswith("x-goog-") and header_name not in upstream_headers:
+            upstream_headers[header_name] = header_value
+
+    # Use the new WebSocket passthrough pattern
+    if user_api_key_dict is None:
+        raise ValueError("user_api_key_dict is required for WebSocket passthrough")
+    
+    return await websocket_passthrough_request(
+        websocket=websocket,
+        target=service_url,
+        custom_headers=upstream_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint="/vertex_ai/live",
+        accept_websocket=False,
+    )
+
+
+def create_vertex_ai_live_websocket_endpoint():
+    """
+    Create a Vertex AI Live WebSocket endpoint using the new passthrough pattern.
+
+    This demonstrates how to use the create_websocket_passthrough_route function
+    for a provider-specific WebSocket endpoint.
+    """
+    # This would be used like:
+    # endpoint_func = create_vertex_ai_live_websocket_endpoint()
+    # app.websocket("/vertex_ai/live")(endpoint_func)
+
+    # For now, we'll keep the existing implementation since it has
+    # provider-specific logic for Vertex AI credentials and headers
+    return vertex_ai_live_websocket_passthrough
+
+
+def create_generic_websocket_passthrough_endpoint(
+    provider: str,
+    target_url: str,
+    custom_headers: Optional[dict] = None,
+    forward_headers: bool = False,
+    cost_per_request: Optional[float] = None,
+):
+    """
+    Create a generic WebSocket passthrough endpoint for any provider.
+
+    This demonstrates the new WebSocket passthrough pattern that's similar to
+    the HTTP create_pass_through_route function.
+
+    Args:
+        provider: The provider name (e.g., "anthropic", "cohere")
+        target_url: The target WebSocket URL
+        custom_headers: Custom headers to include
+        forward_headers: Whether to forward incoming headers
+
+    Returns:
+        A WebSocket endpoint function that can be registered with app.websocket()
+
+    Example usage:
+        # Create a WebSocket endpoint for Anthropic
+        anthropic_ws_func = create_generic_websocket_passthrough_endpoint(
+            provider="anthropic",
+            target_url="wss://api.anthropic.com/v1/ws",
+            custom_headers={"x-api-key": "your-api-key"},
+            forward_headers=True
+        )
+
+        # Register it in proxy_server.py
+        app.websocket("/anthropic/ws")(anthropic_ws_func)
+    """
+    return create_websocket_passthrough_route(
+        endpoint=f"/{provider}/ws",
+        target=target_url,
+        custom_headers=custom_headers,
+        _forward_headers=forward_headers,
+        cost_per_request=cost_per_request,
+    )
