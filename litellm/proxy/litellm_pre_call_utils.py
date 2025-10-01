@@ -636,9 +636,11 @@ class LiteLLMProxyRequestSetup:
                 + LiteLLM_ManagementEndpoint_MetadataFields
             ):
                 added_metadata[k] = v
-        data[_metadata_variable_name].setdefault(
-            "user_api_key_auth_metadata", {}
-        ).update(added_metadata)
+        if data[_metadata_variable_name].get("user_api_key_auth_metadata") is None:
+            data[_metadata_variable_name]["user_api_key_auth_metadata"] = {}
+        data[_metadata_variable_name]["user_api_key_auth_metadata"].update(
+            added_metadata
+        )
         return data
 
     @staticmethod
