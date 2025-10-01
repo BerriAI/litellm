@@ -2646,12 +2646,15 @@ def get_optional_params_image_gen(
         supported_params = provider_config.get_supported_openai_params(model=model or "")
         openai_params = list(supported_params)
 
+    # Combine additional_drop_params with parameters we dropped due to being unsupported
+    combined_drop_params = (additional_drop_params or []) + dropped_params
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
-        additional_drop_params=additional_drop_params,
+        additional_drop_params=combined_drop_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
