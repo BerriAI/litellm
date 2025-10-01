@@ -181,10 +181,10 @@ Typed status fields for easy filtering and analytics.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `llm_api_status` | `LLMAPIStatus` | Status of the LLM API call: `"success"` if completed successfully, `"failure"` if errored |
+| `llm_api_status` | `StandardLoggingPayloadStatus` | Status of the LLM API call: `"success"` if completed successfully, `"failure"` if errored |
 | `guardrail_status` | `GuardrailStatus` | Status of guardrail execution (see below) |
 
-### LLMAPIStatus
+### StandardLoggingPayloadStatus
 
 A literal type with two possible values:
 - `"success"` - The LLM API request completed successfully
