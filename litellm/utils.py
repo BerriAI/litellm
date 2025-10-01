@@ -2566,6 +2566,7 @@ def get_optional_params_image_gen(
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     def _check_valid_arg(supported_params):
+        dropped_params = []
         if len(non_default_params.keys()) > 0:
             keys = list(non_default_params.keys())
             for k in keys:
@@ -2573,33 +2574,26 @@ def get_optional_params_image_gen(
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
+                    dropped_params.append(k)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
                         message=f"Setting `{k}` is not supported by {custom_llm_provider}, {model}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
-            return non_default_params
+        return dropped_params
 
+    dropped_params = []
     if provider_config is not None:
         supported_params = provider_config.get_supported_openai_params(
             model=model or ""
         )
-        _check_valid_arg(supported_params=supported_params)
+        dropped_params = _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model or "",
             drop_params=drop_params if drop_params is not None else False,
         )
-        # When provider config is used and drop_params is enabled, 
-        # remove dropped params from passed_params to prevent them from being added to extra_body
-        if drop_params is True or litellm.drop_params is True:
-            # Filter passed_params to only include supported parameters
-            filtered_passed_params = {}
-            for k, v in passed_params.items():
-                if k in supported_params or k in ["model", "custom_llm_provider", "provider_config", "drop_params", "additional_drop_params"]:
-                    filtered_passed_params[k] = v
-            passed_params = filtered_passed_params
     elif (
         custom_llm_provider == "openai"
         or custom_llm_provider == "azure"
@@ -2644,12 +2638,15 @@ def get_optional_params_image_gen(
         )
         openai_params = list(supported_params)
 
+    # Combine additional_drop_params with parameters dropped by _check_valid_arg
+    combined_drop_params = (additional_drop_params or []) + dropped_params
+
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider or "",
         openai_params=openai_params,
-        additional_drop_params=additional_drop_params,
+        additional_drop_params=combined_drop_params,
     )
     # remove keys with None or empty dict/list values to avoid sending empty payloads
     optional_params = {
