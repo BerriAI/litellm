@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Type, Union, get_args
+from typing import Any, Dict, List, Optional, Type, Union, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
