@@ -4755,11 +4755,11 @@ class Router:
         unhealthy_deployments = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
+        # Convert to set for O(1) lookup instead of O(n)
+        unhealthy_deployments_set = set(unhealthy_deployments)
         healthy_deployments: list = []
         for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments:
-                continue
-            else:
+            if deployment["model_info"]["id"] not in unhealthy_deployments_set:
                 healthy_deployments.append(deployment)
         return healthy_deployments, _all_deployments
 
