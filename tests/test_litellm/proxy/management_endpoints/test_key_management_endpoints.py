@@ -1234,3 +1234,81 @@ async def test_update_key_fn_auto_rotate_disable():
     
     # Verify auto_rotate is set to False
     assert result["auto_rotate"] is False
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_update_another_users_key(monkeypatch):
+    """
+    Test that a non-admin user cannot update another user's key.
+    
+    This test ensures that the permission validation in update_key_fn 
+    prevents users from updating keys that belong to other users.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    # Mock dependencies
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_llm_router = MagicMock()
+    
+    # Mock existing key that belongs to a different user
+    existing_key = LiteLLM_VerificationToken(
+        token="hashed_token_123",
+        key_alias="other-user-key",
+        models=["gpt-3.5-turbo"],
+        user_id="other-user-id",  # Different user than the one making the request
+        team_id=None,
+        metadata={}
+    )
+    
+    # Mock database query to return the existing key
+    mock_prisma_client.get_data = AsyncMock(return_value=existing_key)
+    
+    # Apply monkeypatch
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    
+    # Create mock request and user auth for a different user
+    mock_request = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,  # Not a proxy admin
+        api_key="sk-requesting-user-key",
+        user_id="requesting-user-id"  # Different from the key owner
+    )
+    
+    # Create update request
+    update_request = UpdateKeyRequest(
+        key="hashed_token_123",
+        tags=["special-tag"]
+    )
+    
+    # Test that ProxyException is raised when non-admin user tries to update another user's key
+    from litellm.proxy._types import ProxyException
+    
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=mock_request,
+            data=update_request,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+    
+    # Verify the correct error is raised
+    assert exc_info.value.code == "403"
+    assert "User can only create keys for themselves" in str(exc_info.value.message)
+    
+    # Verify the database was queried to get the existing key
+    mock_prisma_client.get_data.assert_called_once_with(
+        token="hashed_token_123", 
+        table_name="key", 
+        query_type="find_unique"
+    )
