@@ -2031,6 +2031,13 @@ class GuardrailMode(TypedDict, total=False):
     default: Optional[str]
 
 
+GuardrailStatus = Literal[
+    "success",
+    "guardrail_intervened", 
+    "guardrail_failed_to_respond",
+    "not_run"
+]
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
@@ -2039,7 +2046,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure", "blocked"]
+    guardrail_status: GuardrailStatus
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
@@ -2082,6 +2089,20 @@ class CostBreakdown(TypedDict):
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
+class StandardLoggingPayloadStatusFields(TypedDict, total=False):
+    """Status fields for easy filtering and analytics"""
+    llm_api_status: StandardLoggingPayloadStatus
+    """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
+    guardrail_status: GuardrailStatus
+    """
+    Status of guardrail execution:
+    - 'success': Guardrail ran and allowed content through
+    - 'guardrail_intervened': Guardrail blocked or modified content
+    - 'guardrail_failed_to_respond': Guardrail had technical failure
+    - 'not_run': No guardrail was run
+    """
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
@@ -2093,6 +2114,7 @@ class StandardLoggingPayload(TypedDict):
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
