@@ -294,6 +294,9 @@ class MCPRequestHandler:
     ) -> List[str]:
         """
         Get list of allowed MCP servers for the given user/key based on permissions
+
+        Returns:
+            List[str]: List of allowed MCP servers by server id
         """
         from typing import List
 
@@ -331,10 +334,29 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
+    def is_tool_allowed(
+        allowed_mcp_servers: List[str],
+        server_name: str,
+    ) -> bool:
+        """
+        Check if the tool is allowed for the given user/key based on permissions
+        """
+        if len(allowed_mcp_servers) == 0:
+            return True
+        elif server_name in allowed_mcp_servers:
+            return True
+        return False
+
+    @staticmethod
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []
@@ -347,12 +369,12 @@ class MCPRequestHandler:
             return []
 
         try:
-            key_object_permission = (
-                await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                    where={
-                        "object_permission_id": user_api_key_auth.object_permission_id
-                    },
-                )
+            key_object_permission = await get_object_permission(
+                object_permission_id=user_api_key_auth.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
             if key_object_permission is None:
                 return []
@@ -386,7 +408,12 @@ class MCPRequestHandler:
         first we check if the team has a object_permission_id attached
             - if it does then we look up the object_permission for the team
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []
@@ -399,10 +426,12 @@ class MCPRequestHandler:
             return []
 
         try:
-            team_obj: Optional[LiteLLM_TeamTable] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": user_api_key_auth.team_id},
-                )
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
             if team_obj is None:
                 verbose_logger.debug("team_obj is None")
@@ -534,7 +563,12 @@ class MCPRequestHandler:
     async def _get_mcp_access_groups_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []
@@ -546,15 +580,21 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        key_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_auth.object_permission_id},
+        try:
+            key_object_permission = await get_object_permission(
+                object_permission_id=user_api_key_auth.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-        )
-        if key_object_permission is None:
-            return []
+            if key_object_permission is None:
+                return []
 
-        return key_object_permission.mcp_access_groups or []
+            return key_object_permission.mcp_access_groups or []
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get MCP access groups for key: {str(e)}")
+            return []
 
     @staticmethod
     async def _get_mcp_access_groups_for_team(
@@ -563,7 +603,12 @@ class MCPRequestHandler:
         """
         Get MCP access groups for the team
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
 
         if user_api_key_auth is None:
             return []
@@ -575,20 +620,28 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
+        try:
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
-        )
-        if team_obj is None:
-            verbose_logger.debug("team_obj is None")
-            return []
+            if team_obj is None:
+                verbose_logger.debug("team_obj is None")
+                return []
 
-        object_permissions = team_obj.object_permission
-        if object_permissions is None:
-            return []
+            object_permissions = team_obj.object_permission
+            if object_permissions is None:
+                return []
 
-        return object_permissions.mcp_access_groups or []
+            return object_permissions.mcp_access_groups or []
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get MCP access groups for team: {str(e)}"
+            )
+            return []
 
     @staticmethod
     def get_mcp_access_groups_from_headers(headers: Headers) -> Optional[List[str]]:

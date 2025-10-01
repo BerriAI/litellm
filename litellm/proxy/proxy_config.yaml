@@ -26,19 +26,28 @@ model_list:
   - model_name: vertex_ai/*
     litellm_params:
       model: vertex_ai/*
+  - model_name: "grok-4"
+    model_info:
+      mode: completion
+    litellm_params:
+      model: oci/xai.grok-4
+      oci_key: ocid1.api_key.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
+      oci_region: us-phoenix-1
+      oci_user: ocid1.user.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
+      oci_fingerprint: aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00
+      oci_tenancy: ocid1.tenancy.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
+      oci_key_file: /path/to/oci_api_key.pem
+      oci_compartment_id: ocid1.compartment.oc1..aaaaaaaa7kbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbkbk
+      drop_params: True
 
 
 guardrails:
-  - guardrail_name: lakera
+  - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: lakera_v2
-      mode: pre_call
-      api_key: os.environ/LAKERA_API_KEY
-      default_on: false
-      project_id: project-9770817088
-      breakdown: true
-      payload: true
-      dev_info: true
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
 
 litellm_settings:
   callbacks: ["datadog"]
