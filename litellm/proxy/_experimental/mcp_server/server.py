@@ -560,6 +560,25 @@ if MCP_AVAILABLE:
             name
         )
 
+        ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
+        allowed_mcp_server_ids = await MCPRequestHandler.get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+        )
+
+        allowed_mcp_servers = global_mcp_server_manager.get_mcp_server_names_from_ids(
+            allowed_mcp_server_ids
+        )
+
+        if not MCPRequestHandler.is_tool_allowed(
+            allowed_mcp_servers=allowed_mcp_servers,
+            server_name=server_name_from_prefix,
+        ):
+
+            raise HTTPException(
+                status_code=403,
+                detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+            )
+
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = (
             _get_standard_logging_mcp_tool_call(
                 name=original_tool_name,  # Use original name for logging
