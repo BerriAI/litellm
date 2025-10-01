@@ -247,3 +247,94 @@ def test_anthropic_count_tokens_route_accessible_to_internal_users():
     
     # Also test that the regular messages route still works
     assert RouteChecks.is_llm_api_route("/v1/messages") is True
+
+
+def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
+    """
+    Test that virtual keys with llm_api_routes permission can access registered pass-through endpoints.
+    
+    This tests the scenario where a pass-through endpoint is registered from the DB
+    (e.g., /azure-assistant) and a virtual key with llm_api_routes permission should be able to access
+    both the exact path and subpaths (e.g., /azure-assistant/openai/assistants).
+    """
+    from unittest.mock import patch
+
+    # Mock the registered pass-through routes
+    mock_registered_routes = {
+        "test-uuid-1:exact:/azure-assistant": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/azure-assistant",
+            "type": "exact",
+        },
+        "test-uuid-2:subpath:/custom-endpoint": {
+            "endpoint_id": "test-uuid-2",
+            "path": "/custom-endpoint",
+            "type": "subpath",
+        },
+    }
+    
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+        mock_registered_routes,
+    ):
+        # Create a virtual key with llm_api_routes permission
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["llm_api_routes"],
+        )
+        
+        # Test exact match for registered pass-through endpoint
+        result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/azure-assistant",
+            valid_token=valid_token,
+        )
+        assert result1 is True
+        
+        # Test subpath for registered pass-through endpoint with subpath type
+        result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/custom-endpoint/openai/assistants",
+            valid_token=valid_token,
+        )
+        assert result2 is True
+        
+        # Test exact match for subpath type
+        result3 = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/custom-endpoint",
+            valid_token=valid_token,
+        )
+        assert result3 is True
+
+
+def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
+    """
+    Test that virtual keys without llm_api_routes permission cannot access registered pass-through endpoints.
+    """
+    from unittest.mock import patch
+
+    # Mock the registered pass-through routes
+    mock_registered_routes = {
+        "test-uuid-1:exact:/azure-assistant": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/azure-assistant",
+            "type": "exact",
+        },
+    }
+    
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+        mock_registered_routes,
+    ):
+        # Create a virtual key without llm_api_routes permission
+        valid_token = UserAPIKeyAuth(
+            user_id="test_user",
+            allowed_routes=["info_routes"],
+        )
+        
+        # Test that access is denied
+        with pytest.raises(Exception) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/azure-assistant",
+                valid_token=valid_token,
+            )
+        
+        assert "Virtual key is not allowed to call this route" in str(exc_info.value)

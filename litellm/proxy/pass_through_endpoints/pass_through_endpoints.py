@@ -1418,7 +1418,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
 
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(
-                code=exc.status_code if hasattr(exc, "status_code") else 1011,
+                code=getattr(exc, "status_code", 1011),
                 reason="Upstream connection rejected",
             )
     except Exception as e:
@@ -1602,6 +1602,37 @@ class InitPassThroughEndpointHelpers:
         for key in keys_to_remove:
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
+
+    @staticmethod
+    def is_registered_pass_through_route(route: str) -> bool:
+        """
+        Check if route is a registered pass-through endpoint from DB
+
+        Uses the in-memory registry to avoid additional DB queries
+        Optimized for minimal latency
+
+        Args:
+            route: The route to check
+
+        Returns:
+            bool: True if route is a registered pass-through endpoint, False otherwise
+        """
+        # Fast path: check if any registered route key contains this path
+        # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
+        # Extract unique paths from keys for quick checking
+        for key in _registered_pass_through_routes.keys():
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
+                route_type = parts[1]
+                registered_path = parts[2]
+                
+                if route_type == "exact" and route == registered_path:
+                    return True
+                elif route_type == "subpath":
+                    if route == registered_path or route.startswith(registered_path + "/"):
+                        return True
+
+        return False
 
 
 async def initialize_pass_through_endpoints(
