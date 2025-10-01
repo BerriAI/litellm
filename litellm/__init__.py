@@ -1301,7 +1301,6 @@ from .exceptions import (
     ImageFetchError,
     NotFoundError,
     RateLimitError,
-    ParallelRequestLimitError,
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
