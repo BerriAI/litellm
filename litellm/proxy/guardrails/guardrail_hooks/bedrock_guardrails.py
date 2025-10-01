@@ -437,13 +437,28 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _get_bedrock_guardrail_response_status(
         self, response: httpx.Response
-    ) -> Literal["success", "failure"]:
+    ) -> Literal["success", "failure", "blocked"]:
         """
         Get the status of the bedrock guardrail response.
+        
+        Returns:
+            "success": Content allowed through with no violations
+            "blocked": Content blocked due to policy violations
+            "failure": Technical error or API failure
         """
         if response.status_code == 200:
             if self._check_bedrock_response_for_exception(response):
                 return "failure"
+            
+            # Check if the guardrail would block content
+            try:
+                _json_response = response.json()
+                bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
+                if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
+                    return "blocked"
+            except Exception:
+                pass
+            
             return "success"
         return "failure"
 

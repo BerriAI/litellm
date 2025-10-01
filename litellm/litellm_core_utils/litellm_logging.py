@@ -4579,7 +4579,6 @@ def get_standard_logging_object_payload(
             start_time=start_time,
             response_id=id,
         )
-
         _request_body = proxy_server_request.get("body", {})
         end_user_id = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
             "user", None
@@ -4625,13 +4624,6 @@ def get_standard_logging_object_payload(
         ) and kwargs.get("stream") is True:
             stream = True
 
-        # Determine status fields based on current status and guardrail information
-        status_fields = _get_status_fields(
-            status=status,
-            guardrail_information=metadata.get("standard_logging_guardrail_information", None),
-            error_str=error_str
-        )
-
         payload: StandardLoggingPayload = StandardLoggingPayload(
             id=str(id),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
@@ -4642,7 +4634,11 @@ def get_standard_logging_object_payload(
             cache_hit=cache_hit,
             stream=stream,
             status=status,
-            status_fields=status_fields,
+            status_fields=_get_status_fields(
+                status=status,
+                guardrail_information=metadata.get("standard_logging_guardrail_information", None),
+                error_str=error_str
+            ),
             custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
