@@ -1480,8 +1480,15 @@ async def info_key_fn_v2(
                 detail={"message": "Malformed request. No keys passed in."},
             )
 
+        ## security check - remove any empty strings
+        security_checked_keys = []
+        if data.keys:
+            for key in data.keys:
+                if key:
+                    security_checked_keys.append(key)
+
         key_info = await prisma_client.get_data(
-            token=data.keys, table_name="key", query_type="find_all"
+            token=security_checked_keys, table_name="key", query_type="find_all"
         )
         if key_info is None:
             raise HTTPException(

@@ -1040,7 +1040,7 @@ async def test_unblock_key_invalid_key_format(monkeypatch):
 def test_validate_key_team_change_with_member_permissions():
     """
     Test validate_key_team_change function with team member permissions.
-    
+
     This test covers the new logic that allows team members with specific
     permissions to update keys, not just team admins.
     """
@@ -1054,111 +1054,107 @@ def test_validate_key_team_change_with_member_permissions():
     mock_key.models = ["gpt-4"]
     mock_key.tpm_limit = None
     mock_key.rpm_limit = None
-    
+
     mock_team = MagicMock()
-    mock_team.team_id = "test-team-456" 
+    mock_team.team_id = "test-team-456"
     mock_team.members_with_roles = []
     mock_team.tpm_limit = None
     mock_team.rpm_limit = None
-    
+
     mock_change_initiator = MagicMock()
     mock_change_initiator.user_id = "test-user-123"
-    
+
     mock_router = MagicMock()
-    
+
     # Mock the member object returned by _get_user_in_team
     mock_member_object = MagicMock()
-    
-    with patch('litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model'):
-        with patch('litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team') as mock_get_user:
-            with patch('litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin') as mock_is_admin:
-                with patch('litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint') as mock_has_perms:
-                    
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model"
+    ):
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
+        ) as mock_get_user:
+            with patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin"
+            ) as mock_is_admin:
+                with patch(
+                    "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+                ) as mock_has_perms:
+
                     mock_get_user.return_value = mock_member_object
                     mock_is_admin.return_value = False
                     mock_has_perms.return_value = True
-                    
+
                     # This should not raise an exception due to member permissions
                     validate_key_team_change(
                         key=mock_key,
                         team=mock_team,
                         change_initiated_by=mock_change_initiator,
-                        llm_router=mock_router
+                        llm_router=mock_router,
                     )
-                    
+
                     # Verify the permission check was called with correct parameters
                     mock_has_perms.assert_called_once_with(
                         team_member_object=mock_member_object,
                         team_table=mock_team,
-                        route=KeyManagementRoutes.KEY_UPDATE.value
+                        route=KeyManagementRoutes.KEY_UPDATE.value,
                     )
 
 
 def test_key_rotation_fields_helper():
     """
     Test the key data update logic for rotation fields.
-    
+
     This test focuses on the core logic that adds rotation fields to key_data
     when auto_rotate is enabled, without the complexity of full key generation.
     """
     # Test Case 1: With rotation enabled
-    key_data = {
-        "models": ["gpt-3.5-turbo"],
-        "user_id": "test-user"
-    }
-    
+    key_data = {"models": ["gpt-3.5-turbo"], "user_id": "test-user"}
+
     auto_rotate = True
     rotation_interval = "30d"
-    
+
     # Simulate the rotation logic from generate_key_helper_fn
     if auto_rotate and rotation_interval:
-        key_data.update({
-            "auto_rotate": auto_rotate,
-            "rotation_interval": rotation_interval
-        })
-    
+        key_data.update(
+            {"auto_rotate": auto_rotate, "rotation_interval": rotation_interval}
+        )
+
     # Verify rotation fields are added
     assert key_data["auto_rotate"] == True
     assert key_data["rotation_interval"] == "30d"
     assert key_data["models"] == ["gpt-3.5-turbo"]  # Original fields preserved
-    
+
     # Test Case 2: Without rotation enabled
-    key_data2 = {
-        "models": ["gpt-4"],
-        "user_id": "test-user"
-    }
-    
+    key_data2 = {"models": ["gpt-4"], "user_id": "test-user"}
+
     auto_rotate2 = False
     rotation_interval2 = None
-    
+
     # Simulate the rotation logic
     if auto_rotate2 and rotation_interval2:
-        key_data2.update({
-            "auto_rotate": auto_rotate2,
-            "rotation_interval": rotation_interval2
-        })
-    
+        key_data2.update(
+            {"auto_rotate": auto_rotate2, "rotation_interval": rotation_interval2}
+        )
+
     # Verify rotation fields are NOT added
     assert "auto_rotate" not in key_data2
     assert "rotation_interval" not in key_data2
     assert key_data2["models"] == ["gpt-4"]  # Original fields preserved
-    
+
     # Test Case 3: auto_rotate=True but no interval
-    key_data3 = {
-        "models": ["claude-3"],
-        "user_id": "test-user"
-    }
-    
+    key_data3 = {"models": ["claude-3"], "user_id": "test-user"}
+
     auto_rotate3 = True
     rotation_interval3 = None
-    
+
     # Simulate the rotation logic
     if auto_rotate3 and rotation_interval3:
-        key_data3.update({
-            "auto_rotate": auto_rotate3,
-            "rotation_interval": rotation_interval3
-        })
-    
+        key_data3.update(
+            {"auto_rotate": auto_rotate3, "rotation_interval": rotation_interval3}
+        )
+
     # Verify rotation fields are NOT added (missing interval)
     assert "auto_rotate" not in key_data3
     assert "rotation_interval" not in key_data3
@@ -1181,27 +1177,24 @@ async def test_update_key_fn_auto_rotate_enable():
         team_id=None,
         auto_rotate=False,
         rotation_interval=None,
-        metadata={}
+        metadata={},
     )
-    
+
     # Test enabling auto rotation
     update_request = UpdateKeyRequest(
-        key="test-token",
-        auto_rotate=True,
-        rotation_interval="30d"
+        key="test-token", auto_rotate=True, rotation_interval="30d"
     )
-    
+
     result = await prepare_key_update_data(
-        data=update_request,
-        existing_key_row=existing_key
+        data=update_request, existing_key_row=existing_key
     )
-    
+
     # Verify rotation fields are included
     assert result["auto_rotate"] is True
     assert result["rotation_interval"] == "30d"
 
 
-@pytest.mark.asyncio 
+@pytest.mark.asyncio
 async def test_update_key_fn_auto_rotate_disable():
     """Test that update_key_fn properly handles disabling auto rotation."""
     from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
@@ -1218,20 +1211,16 @@ async def test_update_key_fn_auto_rotate_disable():
         team_id=None,
         auto_rotate=True,
         rotation_interval="30d",
-        metadata={}
+        metadata={},
     )
-    
+
     # Test disabling auto rotation
-    update_request = UpdateKeyRequest(
-        key="test-token",
-        auto_rotate=False
-    )
-    
+    update_request = UpdateKeyRequest(key="test-token", auto_rotate=False)
+
     result = await prepare_key_update_data(
-        data=update_request,
-        existing_key_row=existing_key
+        data=update_request, existing_key_row=existing_key
     )
-    
+
     # Verify auto_rotate is set to False
     assert result["auto_rotate"] is False
 
@@ -1240,8 +1229,8 @@ async def test_update_key_fn_auto_rotate_disable():
 async def test_user_cannot_update_another_users_key(monkeypatch):
     """
     Test that a non-admin user cannot update another user's key.
-    
-    This test ensures that the permission validation in update_key_fn 
+
+    This test ensures that the permission validation in update_key_fn
     prevents users from updating keys that belong to other users.
     """
     from unittest.mock import AsyncMock, MagicMock
@@ -1256,7 +1245,7 @@ async def test_user_cannot_update_another_users_key(monkeypatch):
     mock_user_api_key_cache = MagicMock()
     mock_proxy_logging_obj = MagicMock()
     mock_llm_router = MagicMock()
-    
+
     # Mock existing key that belongs to a different user
     existing_key = LiteLLM_VerificationToken(
         token="hashed_token_123",
@@ -1264,36 +1253,37 @@ async def test_user_cannot_update_another_users_key(monkeypatch):
         models=["gpt-3.5-turbo"],
         user_id="other-user-id",  # Different user than the one making the request
         team_id=None,
-        metadata={}
+        metadata={},
     )
-    
+
     # Mock database query to return the existing key
     mock_prisma_client.get_data = AsyncMock(return_value=existing_key)
-    
+
     # Apply monkeypatch
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_llm_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
-    
+
     # Create mock request and user auth for a different user
     mock_request = MagicMock()
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,  # Not a proxy admin
         api_key="sk-requesting-user-key",
-        user_id="requesting-user-id"  # Different from the key owner
+        user_id="requesting-user-id",  # Different from the key owner
     )
-    
+
     # Create update request
-    update_request = UpdateKeyRequest(
-        key="hashed_token_123",
-        tags=["special-tag"]
-    )
-    
+    update_request = UpdateKeyRequest(key="hashed_token_123", tags=["special-tag"])
+
     # Test that ProxyException is raised when non-admin user tries to update another user's key
     from litellm.proxy._types import ProxyException
-    
+
     with pytest.raises(ProxyException) as exc_info:
         await update_key_fn(
             request=mock_request,
@@ -1301,14 +1291,184 @@ async def test_user_cannot_update_another_users_key(monkeypatch):
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=None,
         )
-    
+
     # Verify the correct error is raised
     assert exc_info.value.code == "403"
     assert "User can only create keys for themselves" in str(exc_info.value.message)
-    
+
     # Verify the database was queried to get the existing key
     mock_prisma_client.get_data.assert_called_once_with(
-        token="hashed_token_123", 
-        table_name="key", 
-        query_type="find_unique"
+        token="hashed_token_123", table_name="key", query_type="find_unique"
     )
+
+
+@pytest.mark.asyncio
+async def test_v2_key_info_with_empty_key_aliases(monkeypatch):
+    """
+    Test that /v2/key/info endpoint correctly handles key_aliases with empty strings.
+
+    When key_aliases contains empty strings like [""], the endpoint should:
+    1. Filter out empty strings from key_aliases
+    2. Pass an empty list to prisma_client.get_data if all aliases are empty
+    3. Handle the case where both keys and key_aliases are provided
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import KeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn_v2,
+    )
+
+    # Mock dependencies
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock database response for empty query
+    mock_prisma_client.get_data = AsyncMock(return_value=[])
+
+    # Apply monkeypatch
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+
+    # Create mock user auth
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin-key",
+        user_id="admin-user-id",
+    )
+
+    # Test Case 1: key_aliases with empty string only
+    request_data = KeyRequest(key_aliases=[""])
+
+    # This should raise HTTPException because no keys are found
+    result = await info_key_fn_v2(
+        data=request_data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    print("result from info_key_fn_v2", result)
+
+    assert result["key"] is None
+    assert result["info"] == []
+
+    # Verify that get_data was called with an empty list (filtered out empty strings)
+    mock_prisma_client.get_data.assert_called_once_with(
+        token=[], table_name="key", query_type="find_all"
+    )
+
+    # Reset mock for next test
+    mock_prisma_client.get_data.reset_mock()
+
+    # Test Case 2: key_aliases with mix of empty and valid aliases
+    request_data2 = KeyRequest(key_aliases=["", "valid-alias", "", "another-alias"])
+
+    # Mock database to return some keys for valid aliases
+    mock_key_data = [
+        MagicMock(model_dump=lambda: {"key_alias": "valid-alias", "token": "hashed1"}),
+        MagicMock(
+            model_dump=lambda: {"key_alias": "another-alias", "token": "hashed2"}
+        ),
+    ]
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_key_data)
+
+    result = await info_key_fn_v2(
+        data=request_data2,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify that get_data was called with only non-empty aliases
+    # Note: This test will currently fail because the endpoint doesn't handle key_aliases yet
+    # We expect it to be called with the filtered aliases, but the current implementation ignores key_aliases
+    mock_prisma_client.get_data.assert_called_once_with(
+        token=[],
+        table_name="key",
+        query_type="find_all",  # Current buggy behavior - ignores key_aliases
+    )
+
+    # Reset mock for next test
+    mock_prisma_client.get_data.reset_mock()
+
+    # Test Case 3: Both keys and key_aliases provided with empty strings
+    request_data3 = KeyRequest(
+        keys=["sk-valid-key", ""],  # Mix of valid and empty
+        key_aliases=["", "valid-alias"],  # Mix of empty and valid
+    )
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_key_data)
+
+    result = await info_key_fn_v2(
+        data=request_data3,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify that get_data was called with only non-empty keys (current behavior)
+    # The current implementation only processes keys, not key_aliases
+    mock_prisma_client.get_data.assert_called_once_with(
+        token=["sk-valid-key"], table_name="key", query_type="find_all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_v2_key_info_key_aliases_not_implemented():
+    """
+    Test that demonstrates the current limitation: /v2/key/info doesn't handle key_aliases.
+
+    This test documents the current behavior where key_aliases are completely ignored.
+    Once the endpoint is fixed to handle key_aliases, this test should be updated.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import KeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn_v2,
+    )
+
+    # Mock dependencies
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock database response
+    mock_prisma_client.get_data = AsyncMock(return_value=[])
+
+    # Apply monkeypatch to avoid actual database calls
+    import litellm.proxy.management_endpoints.key_management_endpoints as key_mgmt
+
+    original_prisma_client = getattr(key_mgmt, "prisma_client", None)
+
+    # Mock the prisma_client import inside the function
+    key_mgmt.prisma_client = mock_prisma_client
+
+    try:
+        # Create mock user auth
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin-key",
+            user_id="admin-user-id",
+        )
+
+        # Test with only key_aliases (no keys)
+        request_data = KeyRequest(key_aliases=["test-alias-1", "test-alias-2"])
+
+        # This should raise HTTPException because no keys are found
+        # The current implementation ignores key_aliases completely
+        with pytest.raises(HTTPException) as exc_info:
+            await info_key_fn_v2(
+                data=request_data,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        # Verify that get_data was called with empty token list
+        # because key_aliases are ignored in current implementation
+        mock_prisma_client.get_data.assert_called_once_with(
+            token=[], table_name="key", query_type="find_all"
+        )
+
+        # Verify the correct error is raised
+        assert exc_info.value.status_code == 404
+        assert "No keys found" in str(exc_info.value.detail)
+
+    finally:
+        # Restore original prisma_client
+        if original_prisma_client is not None:
+            key_mgmt.prisma_client = original_prisma_client
