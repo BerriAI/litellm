@@ -7259,19 +7259,13 @@ class Router:
         Returns:
             List of healthy deployments
         """
-        # filter out the deployments currently cooling down
-        deployments_to_remove = []
         verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
-        # Find deployments in model_list whose model_id is cooling down
-        for deployment in healthy_deployments:
-            deployment_id = deployment["model_info"]["id"]
-            if deployment_id in cooldown_deployments:
-                deployments_to_remove.append(deployment)
-
-        # remove unhealthy deployments from healthy deployments
-        for deployment in deployments_to_remove:
-            healthy_deployments.remove(deployment)
-        return healthy_deployments
+        # Convert to set for O(1) lookup and use list comprehension for O(n) filtering
+        cooldown_set = set(cooldown_deployments)
+        return [
+            deployment for deployment in healthy_deployments
+            if deployment["model_info"]["id"] not in cooldown_set
+        ]
 
     def _track_deployment_metrics(
         self, deployment, parent_otel_span: Optional[Span], response=None
