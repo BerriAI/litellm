@@ -2614,7 +2614,7 @@ class ProxyConfig:
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
         self,
         callback: str,
-        event_types: list[Literal["success", "failure"]],
+        event_types: List[Literal["success", "failure"]],
         existing_callbacks: list,
     ) -> None:
         """
