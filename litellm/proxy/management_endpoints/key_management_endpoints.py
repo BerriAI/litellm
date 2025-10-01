@@ -90,10 +90,10 @@ def _get_user_in_team(
 def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     """
     Helper function to calculate the next rotation time for a key based on the rotation interval.
-    
+
     Args:
         rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
-        
+
     Returns:
         datetime: The calculated next rotation time in UTC
     """
@@ -102,28 +102,34 @@ def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     return now + timedelta(seconds=interval_seconds)
 
 
-def _set_key_rotation_fields(data: dict, auto_rotate: bool, rotation_interval: Optional[str]) -> None:
+def _set_key_rotation_fields(
+    data: dict, auto_rotate: bool, rotation_interval: Optional[str]
+) -> None:
     """
     Helper function to set rotation fields in key data if auto_rotate is enabled.
-    
+
     Args:
         data: Dictionary to update with rotation fields
         auto_rotate: Whether auto rotation is enabled
         rotation_interval: The rotation interval string (required if auto_rotate is True)
     """
     if auto_rotate and rotation_interval:
-        data.update({
-            "auto_rotate": auto_rotate,
-            "rotation_interval": rotation_interval,
-            "key_rotation_at": _calculate_key_rotation_time(rotation_interval)
-        })
+        data.update(
+            {
+                "auto_rotate": auto_rotate,
+                "rotation_interval": rotation_interval,
+                "key_rotation_at": _calculate_key_rotation_time(rotation_interval),
+            }
+        )
 
 
 def _is_allowed_to_make_key_request(
-    user_api_key_dict: UserAPIKeyAuth, user_id: Optional[str], team_id: Optional[str]
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    team_id: Optional[str],
 ) -> bool:
     """
-    Assert user only creates keys for themselves
+    Assert user only creates/updates keys for themselves
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/7336
     """
@@ -332,6 +338,7 @@ def common_key_access_checks(
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     llm_router: Optional[Router],
     premium_user: bool,
+    user_id: Optional[str] = None,
 ) -> Literal[True]:
     """
     Check if user is allowed to make a key request, for this key
@@ -339,7 +346,7 @@ def common_key_access_checks(
     try:
         _is_allowed_to_make_key_request(
             user_api_key_dict=user_api_key_dict,
-            user_id=data.user_id,
+            user_id=user_id or data.user_id,
             team_id=data.team_id,
         )
     except AssertionError as e:
@@ -1136,13 +1143,6 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        common_key_access_checks(
-            user_api_key_dict=user_api_key_dict,
-            data=data,
-            llm_router=llm_router,
-            premium_user=premium_user,
-        )
-
         existing_key_row = await prisma_client.get_data(
             token=data.key, table_name="key", query_type="find_unique"
         )
@@ -1152,6 +1152,14 @@ async def update_key_fn(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            user_id=existing_key_row.user_id,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
         # check if user has permission to update key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -1198,9 +1206,9 @@ async def update_key_fn(
 
         # Handle rotation fields if auto_rotate is being enabled
         _set_key_rotation_fields(
-            non_default_values, 
-            non_default_values.get("auto_rotate", False), 
-            non_default_values.get("rotation_interval")
+            non_default_values,
+            non_default_values.get("auto_rotate", False),
+            non_default_values.get("rotation_interval"),
         )
 
         _data = {**non_default_values, "token": key}
@@ -1602,8 +1610,6 @@ def _check_model_access_group(
     return True
 
 
-
-
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1766,12 +1772,12 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
-        
+
         # Add rotation fields if auto_rotate is enabled
         _set_key_rotation_fields(
             data=key_data,
             auto_rotate=auto_rotate or False,
-            rotation_interval=rotation_interval
+            rotation_interval=rotation_interval,
         )
 
         if (
