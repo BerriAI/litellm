@@ -24,98 +24,80 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 @pytest.mark.asyncio
 class TestMCPRequestHandler:
     @pytest.mark.parametrize(
-        "user_api_key_auth,object_permission_id,prisma_client_available,db_result,expected_result",
+        "key_servers,team_servers,expected_result,scenario",
         [
-            # Test case 1: user_api_key_auth is None
-            (None, None, True, None, []),
-            # Test case 2: object_permission_id is None
-            (UserAPIKeyAuth(), None, True, None, []),
-            # Test case 3: prisma_client is None
+            # Test case 1: No key servers, no team servers
+            ([], [], [], "no_permissions"),
+            # Test case 2: Key has servers, no team servers
+            (["server1", "server2"], [], ["server1", "server2"], "key_only"),
+            # Test case 3: No key servers, team has servers (inherit from team)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                False,
-                None,
                 [],
+                ["team_server1", "team_server2"],
+                ["team_server1", "team_server2"],
+                "inherit_from_team",
             ),
-            # Test case 4: Database query returns None
-            (UserAPIKeyAuth(object_permission_id="test-id"), "test-id", True, None, []),
-            # Test case 5: Database query returns object with mcp_servers
+            # Test case 4: Key and team both have servers (intersection)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=["server1", "server2"]),
                 ["server1", "server2"],
+                ["server1", "team_server"],
+                ["server1"],
+                "intersection",
             ),
-            # Test case 6: Database query returns object with None mcp_servers
+            # Test case 5: Key and team have no overlap (empty result)
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=None),
+                ["server1", "server2"],
+                ["team_server1", "team_server2"],
                 [],
+                "no_overlap",
             ),
-            # Test case 7: Database query returns object with empty mcp_servers
+            # Test case 6: Key and team have complete overlap
             (
-                UserAPIKeyAuth(object_permission_id="test-id"),
-                "test-id",
-                True,
-                MagicMock(mcp_servers=[]),
-                [],
+                ["server1", "server2"],
+                ["server1", "server2"],
+                ["server1", "server2"],
+                "complete_overlap",
             ),
         ],
     )
-    async def test_get_allowed_mcp_servers_for_key(
+    async def test_get_allowed_mcp_servers(
         self,
-        user_api_key_auth,
-        object_permission_id,
-        prisma_client_available,
-        db_result,
+        key_servers,
+        team_servers,
         expected_result,
+        scenario,
     ):
-        """Test _get_allowed_mcp_servers_for_key with various scenarios"""
+        """Test get_allowed_mcp_servers with various key/team permission scenarios"""
 
-        # Setup user_api_key_auth object_permission_id if provided
-        if user_api_key_auth and object_permission_id:
-            user_api_key_auth.object_permission_id = object_permission_id
+        # Create a mock user
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+        )
 
-            # Mock prisma_client
-        mock_prisma_client = MagicMock() if prisma_client_available else None
-        mock_find_unique = None
+        # Mock the helper methods instead of database calls
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key_servers:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team_servers:
+                # Set up return values
+                mock_key_servers.return_value = key_servers
+                mock_team_servers.return_value = team_servers
 
-        if mock_prisma_client:
-            # Mock the database query
-            mock_find_unique = AsyncMock(return_value=db_result)
-            mock_prisma_client.db.litellm_objectpermissiontable.find_unique = (
-                mock_find_unique
-            )
-
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            # Call the method
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
-                user_api_key_auth
-            )
-
-            # Assert the result (order-independent comparison)
-            assert sorted(result) == sorted(expected_result)
-
-            # Verify database call was made correctly when expected
-            if (
-                user_api_key_auth
-                and user_api_key_auth.object_permission_id
-                and prisma_client_available
-                and mock_find_unique
-            ):
-                mock_find_unique.assert_called_once_with(
-                    where={
-                        "object_permission_id": user_api_key_auth.object_permission_id
-                    }
+                # Call the method
+                result = await MCPRequestHandler.get_allowed_mcp_servers(
+                    user_api_key_auth=mock_user_auth
                 )
-            elif mock_find_unique:
-                # If prisma_client exists but conditions aren't met, no call should be made
-                if not user_api_key_auth or not user_api_key_auth.object_permission_id:
-                    mock_find_unique.assert_not_called()
+
+                # Assert the result (order-independent comparison)
+                assert sorted(result) == sorted(expected_result)
+
+                # Verify helper methods were called
+                mock_key_servers.assert_called_once_with(mock_user_auth)
+                mock_team_servers.assert_called_once_with(mock_user_auth)
 
     @pytest.mark.parametrize(
         "team_servers,key_servers,expected_servers,scenario",
