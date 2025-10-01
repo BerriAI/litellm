@@ -11,7 +11,7 @@ uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
 boto3==1.34.34 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
-nodejs-bin==18.20.5 # required by prisma for migrations, prevents runtime download
+nodejs-bin==18.4.0a4 # required by prisma for migrations, prevents runtime download
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
