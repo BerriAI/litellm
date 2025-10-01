@@ -55,6 +55,9 @@ class PassThroughEndpointLogging:
         # Gemini
         self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent"]
 
+        # Vertex AI Live API WebSocket
+        self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+
     async def _handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
@@ -169,7 +172,9 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = cohere_passthrough_logging_handler_result["result"]
             kwargs = cohere_passthrough_logging_handler_result["kwargs"]
-        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(url_route):
+        elif self.is_openai_route(url_route) and self._is_supported_openai_endpoint(
+            url_route
+        ):
             from .llm_provider_handlers.openai_passthrough_logging_handler import (
                 OpenAIPassthroughLoggingHandler,
             )
@@ -188,7 +193,34 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
-        return_dict["standard_logging_response_object"] = standard_logging_response_object
+
+        elif self.is_vertex_ai_live_route(url_route):
+            from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
+                VertexAILivePassthroughLoggingHandler,
+            )
+            vertex_ai_live_handler = VertexAILivePassthroughLoggingHandler()
+
+            # For WebSocket responses, response_body should be a list of messages
+            websocket_messages: list[dict[str, Any]] = response_body if isinstance(response_body, list) else []
+
+            vertex_ai_live_handler_result = (
+                vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
+                    websocket_messages=websocket_messages,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    start_time=start_time,
+                    end_time=end_time,
+                    request_body=request_body,
+                    **kwargs,
+                )
+            )
+
+            standard_logging_response_object = vertex_ai_live_handler_result["result"]
+            kwargs = vertex_ai_live_handler_result["kwargs"]
+        return_dict[
+            "standard_logging_response_object"
+        ] = standard_logging_response_object
+
         return_dict["kwargs"] = kwargs
         return return_dict
 
@@ -297,6 +329,15 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
+    def is_vertex_ai_live_route(self, url_route: str):
+        """Check if the URL route is a Vertex AI Live API WebSocket route."""
+        if not url_route:
+            return False
+        for route in self.TRACKED_VERTEX_AI_LIVE_ROUTES:
+            if route in url_route:
+                return True
+        return False
+
     def is_openai_route(self, url_route: str):
         """Check if the URL route is an OpenAI API route."""
         if not url_route:
@@ -321,7 +362,9 @@ class PassThroughEndpointLogging:
 
         return (
             OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
-            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
+                url_route
+            )
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
         )
 
