@@ -364,9 +364,12 @@ async def test_100_concurrent_priority_requests():
 @pytest.mark.asyncio
 async def test_concurrent_pre_call_hooks_stress():
     """
-    Stress test: 50 concurrent pre-call hooks with priority enforcement.
+    Stress test: 50 concurrent pre-call hooks with saturation-aware priority enforcement.
 
-    This tests the actual rate limiting logic under concurrent load.
+    Tests priority-based rate limiting in strict mode (>80% saturation).
+    Mocks high saturation to force strict mode where priorities are enforced.
+    Premium users (80% allocation) should have >90% success rate.
+    Standard users (20% allocation) should have ~70% success rate with 30% random limiting.
     """
     # Set up environment for premium feature
     os.environ["LITELLM_LICENSE"] = "test-license-key"
@@ -398,10 +401,39 @@ async def test_concurrent_pre_call_hooks_stress():
     successful_requests = []
     rate_limited_requests = []
 
+    # Mock saturation check to return high saturation (forces strict mode)
+    async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False):
+        """Mock cache to simulate high saturation."""
+        # Return high usage to trigger strict mode (>80% saturation)
+        if ":requests" in key or ":tokens" in key:
+            return 1800  # 1800/2000 = 90% saturation
+        return None
+
     async def mock_should_rate_limit(descriptors, parent_otel_span=None):
-        """Mock rate limiter that allows premium users, limits some standard users."""
+        """Mock rate limiter that handles saturation-aware descriptors."""
         descriptor = descriptors[0]
-        priority = descriptor["value"].split(":")[-1]
+        descriptor_key = descriptor["key"]
+        descriptor_value = descriptor["value"]
+        
+        # Handle model-wide tracking (for both generous and strict mode tracking)
+        if descriptor_key == "model_saturation_check":
+            # Always allow model-wide tracking (doesn't enforce in our mock)
+            return {
+                "overall_code": "OK",
+                "statuses": [
+                    {
+                        "code": "OK",
+                        "descriptor_key": descriptor_value,
+                        "rate_limit_type": "tokens_per_unit",
+                        "limit_remaining": 10000,
+                    }
+                ],
+            }
+        
+        # Handle priority-specific enforcement in strict mode
+        if descriptor_key == "priority_model":
+            # Extract priority from value like "pre-call-stress-model:premium"
+            priority = descriptor_value.split(":")[-1]
 
         if priority == "premium":
             # Allow all premium requests
@@ -410,7 +442,7 @@ async def test_concurrent_pre_call_hooks_stress():
                 "statuses": [
                     {
                         "code": "OK",
-                        "descriptor_key": descriptor["value"],
+                            "descriptor_key": descriptor_value,
                         "rate_limit_type": "tokens_per_unit",
                         "limit_remaining": 1000,
                     }
@@ -426,7 +458,7 @@ async def test_concurrent_pre_call_hooks_stress():
                     "statuses": [
                         {
                             "code": "OVER_LIMIT",
-                            "descriptor_key": descriptor["value"],
+                                "descriptor_key": descriptor_value,
                             "rate_limit_type": "tokens_per_unit",
                             "limit_remaining": 0,
                         }
@@ -438,9 +470,22 @@ async def test_concurrent_pre_call_hooks_stress():
                     "statuses": [
                         {
                             "code": "OK",
-                            "descriptor_key": descriptor["value"],
+                                "descriptor_key": descriptor_value,
                             "rate_limit_type": "tokens_per_unit",
                             "limit_remaining": 100,
+                            }
+                        ],
+                    }
+        
+        # Default: allow
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "descriptor_key": descriptor_value,
+                    "rate_limit_type": "tokens_per_unit",
+                    "limit_remaining": 1000,
                         }
                     ],
                 }
@@ -466,6 +511,8 @@ async def test_concurrent_pre_call_hooks_stress():
 
         with patch.object(
             handler.v3_limiter, "should_rate_limit", side_effect=mock_should_rate_limit
+        ), patch.object(
+            handler.internal_usage_cache, "async_get_cache", side_effect=mock_get_cache
         ):
             try:
                 result = await handler.async_pre_call_hook(
@@ -909,7 +956,7 @@ async def test_fake_calls_case_4_over_allocated_with_normalization():
     """
     Test Case 4: Over-Allocated Priority reservations with Normalization
     
-    System: 100 RPM capacity
+    System: 100 RPM capacity  
     Key A: priority_reservation=0.60 (60% requested)
     Key B: priority_reservation=0.80 (80% requested)
     Total: 140% (over-allocated, should normalize to 43%/57%)
