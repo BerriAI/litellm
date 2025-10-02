@@ -59,6 +59,10 @@ class ProxyExtrasDBManager:
         database_url = os.getenv("DATABASE_URL")
 
         try:
+            # Set environment to use cached Prisma binaries
+            prisma_env = os.environ.copy()
+            prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
+
             # 1. Generate migration SQL file by comparing empty state to current db state
             logger.info("Generating baseline migration...")
             migration_file = init_dir / "migration.sql"
@@ -75,6 +79,7 @@ class ProxyExtrasDBManager:
                 stdout=open(migration_file, "w"),
                 check=True,
                 timeout=30,
+                env=prisma_env,
             )
 
             # 3. Mark the migration as applied since it represents current state
@@ -89,6 +94,7 @@ class ProxyExtrasDBManager:
                 ],
                 check=True,
                 timeout=30,
+                env=prisma_env,
             )
 
             return True
@@ -113,21 +119,27 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _roll_back_migration(migration_name: str):
         """Mark a specific migration as rolled back"""
+        prisma_env = os.environ.copy()
+        prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
         subprocess.run(
             ["prisma", "migrate", "resolve", "--rolled-back", migration_name],
             timeout=60,
             check=True,
             capture_output=True,
+            env=prisma_env,
         )
 
     @staticmethod
     def _resolve_specific_migration(migration_name: str):
         """Mark a specific migration as applied"""
+        prisma_env = os.environ.copy()
+        prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
         subprocess.run(
             ["prisma", "migrate", "resolve", "--applied", migration_name],
             timeout=60,
             check=True,
             capture_output=True,
+            env=prisma_env,
         )
 
     @staticmethod
@@ -154,6 +166,10 @@ class ProxyExtrasDBManager:
             raise e
         diff_sql_path = diff_dir / "migration.sql"
 
+        # Set environment to use cached Prisma binaries
+        prisma_env = os.environ.copy()
+        prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
+
         # 1. Generate migration SQL for the diff between DB and schema
         try:
             logger.info("Generating migration diff between DB and schema.prisma...")
@@ -172,6 +188,7 @@ class ProxyExtrasDBManager:
                     check=True,
                     timeout=60,
                     stdout=f,
+                    env=prisma_env,
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
@@ -201,6 +218,7 @@ class ProxyExtrasDBManager:
                 check=True,
                 capture_output=True,
                 text=True,
+                env=prisma_env,
             )
             logger.info(f"prisma db execute stdout: {result.stdout}")
             logger.info("✅ Migration diff applied successfully")
@@ -221,6 +239,7 @@ class ProxyExtrasDBManager:
                     check=True,
                     capture_output=True,
                     text=True,
+                    env=prisma_env,
                 )
                 logger.debug(f"Resolved migration: {migration_name}")
             except subprocess.CalledProcessError as e:
@@ -253,6 +272,11 @@ class ProxyExtrasDBManager:
                 if use_migrate:
                     logger.info("Running prisma migrate deploy")
                     try:
+                        # Set environment to use cached Prisma binaries
+                        # Prevents runtime npm install attempts
+                        prisma_env = os.environ.copy()
+                        prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
+
                         # Set migrations directory for Prisma
                         result = subprocess.run(
                             ["prisma", "migrate", "deploy"],
@@ -260,6 +284,7 @@ class ProxyExtrasDBManager:
                             check=True,
                             capture_output=True,
                             text=True,
+                            env=prisma_env,
                         )
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
 
@@ -290,6 +315,7 @@ class ProxyExtrasDBManager:
                                     check=True,
                                     capture_output=True,
                                     text=True,
+                                    env=prisma_env,
                                 )
                                 logger.info(
                                     f"✅ Migration {failed_migration} marked as rolled back... retrying"
@@ -334,11 +360,16 @@ class ProxyExtrasDBManager:
                                 )
                                 logger.info("✅ Migration resolved.")
                 else:
+                    # Set environment to use cached Prisma binaries
+                    prisma_env = os.environ.copy()
+                    prisma_env["PRISMA_SKIP_POSTINSTALL_GENERATE"] = "1"
+
                     # Use prisma db push with increased timeout
                     subprocess.run(
                         ["prisma", "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
+                        env=prisma_env,
                     )
                     return True
             except subprocess.TimeoutExpired:

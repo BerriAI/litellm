@@ -64,8 +64,6 @@ RUN pip uninstall jwt -y && \
 # --- Prisma Handling for Non-Root User ---
 # Pre-download Prisma binaries during build to avoid runtime downloads
 # This eliminates the need for outbound traffic to registry.npmjs.org and binaries.prisma.sh at runtime
-ENV PRISMA_BINARY_CACHE_DIR=/app/.prisma-binaries
-ENV NPM_CONFIG_CACHE=/.npm
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
 # Install prisma and make entrypoints executable
@@ -73,12 +71,9 @@ RUN pip install --no-cache-dir prisma && \
     chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh
 
-# Pre-fetch Prisma CLI and binaries at build time
-# Running prisma commands forces download and caching of all binaries
-RUN mkdir -p ${PRISMA_BINARY_CACHE_DIR} && \
-    prisma --version && \
-    prisma generate && \
-    echo "Prisma CLI and binaries cached at build time"
+# Force Prisma to fully cache everything by running prisma generate at build time
+# This downloads and caches all Prisma binaries in the prisma package directory
+RUN prisma generate
 
 # Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
@@ -92,23 +87,23 @@ RUN mkdir -p /nonexistent /.npm && \
 RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
     # Set group ownership to 0 (root group) for OpenShift compatibility && \
-    chgrp -R 0 $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
+    chgrp -R 0 $PRISMA_PATH && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
     # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
-    chmod -R g=u $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
+    chmod -R g=u $PRISMA_PATH && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
     # Ensure directories are readable by group (binaries are read-only at runtime) && \
-    chmod -R g+rX $PRISMA_PATH ${PRISMA_BINARY_CACHE_DIR} && \
+    chmod -R g+rX $PRISMA_PATH && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user
 USER nobody
 
-# Set HOME for non-root user and ensure Prisma uses cached binaries
+# Set HOME for non-root user
 ENV HOME=/app
-ENV PRISMA_QUERY_ENGINE_BINARY=/app/.prisma-binaries/node_modules/@prisma/engines/query-engine-debian-openssl-3.0.x
-ENV PRISMA_SCHEMA_ENGINE_BINARY=/app/.prisma-binaries/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x
-ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
+# Tell Prisma CLI to skip npm install since binaries are already cached
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
+ENV PRISMA_HIDE_UPDATE_MESSAGE=1
 # Prisma binaries already generated and cached during build as root
 # --- End of Prisma Handling ---
 
