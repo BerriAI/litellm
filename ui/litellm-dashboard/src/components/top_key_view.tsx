@@ -8,6 +8,7 @@ import { Tooltip } from "antd"
 import { Button } from "@tremor/react"
 import { formatNumberWithCommas } from "../utils/dataUtils"
 import { TagUsage } from "./usage/types"
+import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline"
 
 interface TopKeyViewProps {
   topKeys: any[]
@@ -24,6 +25,19 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [keyData, setKeyData] = useState<any | undefined>(undefined)
   const [viewMode, setViewMode] = useState<"chart" | "table">("table")
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set())
+
+  const toggleTagsExpansion = (apiKey: string) => {
+    setExpandedTags(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(apiKey)) {
+        newSet.delete(apiKey)
+      } else {
+        newSet.add(apiKey)
+      }
+      return newSet
+    })
+  }
 
   const handleKeyClick = async (item: any) => {
     if (!accessToken) return
@@ -97,29 +111,49 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
     accessorKey: "tags",
     cell: (info: any) => {
       const tags = info.getValue() as TagUsage[] | undefined;
+      const apiKey = info.row.original.api_key;
+      const isExpanded = expandedTags.has(apiKey);
+      
       if (!tags || tags.length === 0) {
         return "-";
       }
       
+      const sortedTags = tags.sort((a, b) => b.usage - a.usage);
+      const displayTags = isExpanded ? sortedTags : sortedTags.slice(0, 2);
+      const hasMoreTags = tags.length > 2;
+      
       return (
         <div className="overflow-hidden">
-            {tags
-              .sort((a, b) => b.usage - a.usage)
-              .map((tag, index) => (
+          <div className="flex flex-wrap items-center gap-1">
+            {displayTags.map((tag, index) => (
               <Tooltip 
                 key={index} 
                 title={
                   <div>
-                    <div><span className="text-gray-300">TAG NAME:</span> {tag.tag}</div>
-                    <div><span className="text-gray-300">SPEND:</span> {tag.usage > 0 && tag.usage < 0.01 ? '<$0.01' : `$${formatNumberWithCommas(tag.usage, 2)}`}</div>
+                    <div><span className="text-gray-300">Tag Name:</span> {tag.tag}</div>
+                    <div><span className="text-gray-300">Spend:</span> {tag.usage > 0 && tag.usage < 0.01 ? '<$0.01' : `$${formatNumberWithCommas(tag.usage, 2)}`}</div>
                   </div>
                 }
               >
-                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs mr-1">
+                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
                   {tag.tag.slice(0, 7)}...
                 </span>
               </Tooltip>
             ))}
+            {hasMoreTags && (
+              <button
+                onClick={() => toggleTagsExpansion(apiKey)}
+                className="ml-1 p-1 hover:bg-gray-200 rounded-full transition-colors"
+                title={isExpanded ? "Show fewer tags" : "Show all tags"}
+              >
+                {isExpanded ? (
+                  <ChevronUpIcon className="h-3 w-3 text-gray-500" />
+                ) : (
+                  <ChevronDownIcon className="h-3 w-3 text-gray-500" />
+                )}
+              </button>
+            )}
+          </div>
         </div>
       );
     }
