@@ -13,6 +13,7 @@ import { fetchMCPAccessGroups } from "../networking"
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector"
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem"
 
 interface KeyEditViewProps {
   keyData: KeyResponse
@@ -222,9 +223,21 @@ export function KeyEditView({
         <NumericalInput min={0} />
       </Form.Item>
 
+      <RateLimitTypeFormItem
+        type="tpm"
+        name="tpm_limit_type"
+        showDetailedDescriptions={false}
+      />
+
       <Form.Item label="RPM Limit" name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
+
+      <RateLimitTypeFormItem
+        type="rpm"
+        name="rpm_limit_type"
+        showDetailedDescriptions={false}
+      />
 
       <Form.Item label="Max Parallel Requests" name="max_parallel_requests">
         <NumericalInput min={0} />
