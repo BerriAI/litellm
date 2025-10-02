@@ -16,7 +16,7 @@ https://docs.api.nvidia.com/nim/reference/
 | Provider Route on LiteLLM | `nvidia_nim/` |
 | Provider Doc | [Nvidia NIM Docs ↗](https://developer.nvidia.com/nim/) |
 | API Endpoint for Provider | https://integrate.api.nvidia.com/v1/ |
-| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/responses`, `/embeddings` |
+| Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/responses`, `/embeddings`, `/rerank` |
 
 ## API Key
 ```python
