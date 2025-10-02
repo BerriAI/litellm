@@ -175,8 +175,24 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   const getTopAPIKeys = () => {
+    console.log('debugTags',{spendData})
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     spendData.results.forEach((day) => {
+      const {breakdown} = day;
+      const {entities} = breakdown;
+      console.log('debugTags',{entities})
+      const tagDictionary  = Object.keys(entities).reduce((acc: { [key: string]: string[] }, entity) => {
+        const {api_key_breakdown} = entities[entity];
+        Object.keys(api_key_breakdown).forEach((key) => {
+          if (acc[key]) {
+            acc[key].push(entity);
+          } else {
+            acc[key] = [entity];
+          }
+        })
+        return acc;
+      },{})
+      console.log('debugTags',{tagDictionary})
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
@@ -193,9 +209,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             },
             metadata: {
               key_alias: metrics.metadata.key_alias,
-              team_id: metrics.metadata.team_id || null
+              team_id: metrics.metadata.team_id || null,
+              tags: tagDictionary[key] || []
             }
           };
+          console.log('debugTags',{keySpend})
         }
         keySpend[key].metrics.spend += metrics.metrics.spend;
         keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
@@ -218,6 +236,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       .map(([api_key, metrics]) => ({
         api_key,
         key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        tags: metrics.metadata.tags || "-",
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
