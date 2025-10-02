@@ -12,6 +12,7 @@ on:
   pull_request:
     branches:
       - main
+      - carto/main
       - dev
     paths:
       - "litellm/**"
