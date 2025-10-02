@@ -811,6 +811,46 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
                   <Form.Item
+                    label={
+                      <span>
+                        TPM Rate Limit Type {' '}
+                        <Tooltip title="Select 'guaranteed_throughput' to prevent overallocating TPM limit when the key belongs to a Team with specific TPM limits.">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tpm_limit_type"
+                    initialValue="default"
+                    className="mt-4"
+                  >
+                    <Select 
+                      defaultValue="default" 
+                      placeholder="Select rate limit type" 
+                      style={{ width: "100%" }}
+                      optionLabelProp="label"
+                      onChange={(value) => {
+                        form.setFieldValue('tpm_limit_type', value);
+                      }}
+                    >
+                      <Option value="default" label="Default">
+                        <div style={{ padding: '4px 0' }}>
+                          <div style={{ fontWeight: 500 }}>Default</div>
+                          <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                            Best effort throughput - no error if we're overallocating tpm (Team/Key Limits checked at runtim).
+                          </div>
+                        </div>
+                      </Option>
+                      <Option value="guaranteed_throughput" label="Guaranteed throughput">
+                        <div style={{ padding: '4px 0' }}>
+                          <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
+                          <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                            Guaranteed throughput - raise an error if we're overallocating tpm (also checks model-specific limits)
+                          </div>
+                        </div>
+                      </Option>
+                    </Select>
+                  </Form.Item>
+                  <Form.Item
                     className="mt-4"
                     label={
                       <span>
@@ -840,6 +880,46 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     ]}
                   >
                     <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        RPM Rate Limit Type {' '}
+                        <Tooltip title="Select 'guaranteed_throughput' to prevent overallocating RPM limit when the key belongs to a Team with specific RPM limits.">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="rpm_limit_type"
+                    initialValue="default"
+                    className="mt-4"
+                  >
+                    <Select 
+                      defaultValue="default" 
+                      placeholder="Select rate limit type" 
+                      style={{ width: "100%" }}
+                      optionLabelProp="label"
+                      onChange={(value) => {
+                        form.setFieldValue('rpm_limit_type', value);
+                      }}
+                    >
+                      <Option value="default" label="Default">
+                        <div style={{ padding: '4px 0' }}>
+                          <div style={{ fontWeight: 500 }}>Default</div>
+                          <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                            Best effort throughput - no error if we're overallocating rpm (Team/Key Limits checked at runtim).
+                          </div>
+                        </div>
+                      </Option>
+                      <Option value="guaranteed_throughput" label="Guaranteed throughput">
+                        <div style={{ padding: '4px 0' }}>
+                          <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
+                          <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                            Guaranteed throughput - raise an error if we're overallocating rpm (also checks model-specific limits)
+                          </div>
+                        </div>
+                      </Option>
+                    </Select>
                   </Form.Item>
                   <Form.Item 
                     label={
