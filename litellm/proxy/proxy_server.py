@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 import warnings
 from datetime import datetime, timedelta
 from typing import (
@@ -27,6 +26,7 @@ from typing import (
     get_type_hints,
 )
 
+from litellm._uuid import uuid
 from litellm.constants import (
     BASE_MCP_ROUTE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -41,6 +41,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -150,6 +151,10 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    router as mcp_discoverable_endpoints_router,
+)
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -306,6 +311,9 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     router as llm_passthrough_router,
 )
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    vertex_ai_live_websocket_passthrough,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
 )
@@ -411,6 +419,8 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
     applications,
     status,
 )
@@ -457,9 +467,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -637,11 +647,6 @@ async def proxy_startup_event(app: FastAPI):
         user_api_key_cache=user_api_key_cache,
     )
 
-    if use_background_health_checks:
-        asyncio.create_task(
-            _run_background_health_check()
-        )  # start the background health check coroutine.
-
     if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
         prompt_injection_detection_obj.update_environment(router=llm_router)
 
@@ -664,6 +669,12 @@ async def proxy_startup_event(app: FastAPI):
 
         await ProxyStartupEvent._update_default_team_member_budget()
 
+    # Start background health checks AFTER models are loaded and index is built
+    if use_background_health_checks:
+        asyncio.create_task(
+            _run_background_health_check()
+        )  # start the background health check coroutine.
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -683,6 +694,8 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
 )
+
+vertex_live_passthrough_vertex_base = VertexBase()
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
@@ -953,9 +966,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1286,9 +1299,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1854,6 +1867,24 @@ class ProxyConfig:
                     set_global_prompt_directory(value)
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
+                    )
+                elif key == "global_bitbucket_config":
+                    from litellm.integrations.bitbucket import (
+                        set_global_bitbucket_config,
+                    )
+
+                    set_global_bitbucket_config(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
+                    )
+                elif key == "global_gitlab_config":
+                    from litellm.integrations.gitlab import (
+                        set_global_gitlab_config,
+                    )
+
+                    set_global_gitlab_config(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global Gitlab Config on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
@@ -2589,6 +2620,31 @@ class ProxyConfig:
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    def _add_callback_from_db_to_in_memory_litellm_callbacks(
+        self,
+        callback: str,
+        event_types: List[Literal["success", "failure"]],
+        existing_callbacks: list,
+    ) -> None:
+        """
+        Helper method to add a single callback to litellm for specified event types.
+        
+        Args:
+            callback: The callback name to add
+            event_types: List of event types (e.g., ["success"], ["failure"], or ["success", "failure"])
+            existing_callbacks: The existing callback list to check against
+        """
+        if callback in litellm._known_custom_logger_compatible_callbacks:
+            for event_type in event_types:
+                _add_custom_logger_callback_to_specific_event(callback, event_type)
+        elif callback not in existing_callbacks:
+            if event_types == ["success"]:
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            elif event_types == ["failure"]:
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+            else:  # Both success and failure
+                litellm.logging_callback_manager.add_litellm_callback(callback)
+
     def _add_callbacks_from_db_config(self, config_data: dict) -> None:
         """
         Adds callbacks from DB config to litellm
@@ -2596,35 +2652,31 @@ class ProxyConfig:
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
+        callbacks = litellm_settings.get("callbacks", None)
 
         if success_callbacks is not None and isinstance(success_callbacks, list):
             for success_callback in success_callbacks:
-                if (
-                    success_callback
-                    in litellm._known_custom_logger_compatible_callbacks
-                ):
-                    _add_custom_logger_callback_to_specific_event(
-                        success_callback, "success"
-                    )
-                elif success_callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(
-                        success_callback
-                    )
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=success_callback,
+                    event_types=["success"],
+                    existing_callbacks=litellm.success_callback,
+                )
 
-        # Add failure callbacks from DB to litellm
         if failure_callbacks is not None and isinstance(failure_callbacks, list):
             for failure_callback in failure_callbacks:
-                if (
-                    failure_callback
-                    in litellm._known_custom_logger_compatible_callbacks
-                ):
-                    _add_custom_logger_callback_to_specific_event(
-                        failure_callback, "failure"
-                    )
-                elif failure_callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(
-                        failure_callback
-                    )
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=failure_callback,
+                    event_types=["failure"],
+                    existing_callbacks=litellm.failure_callback,
+                )
+
+        if callbacks is not None and isinstance(callbacks, list):
+            for callback in callbacks:
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=callback,
+                    event_types=["success", "failure"],
+                    existing_callbacks=litellm.callbacks,
+                )
 
     def _encrypt_env_variables(
         self, environment_variables: dict, new_encryption_key: Optional[str] = None
@@ -3101,10 +3153,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3334,9 +3386,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -3801,9 +3853,10 @@ class ProxyStartupEvent:
         cls, scheduler: AsyncIOScheduler
     ):
         """
-        Initialize the spend tracking background jobs
+        Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
         2. Prometheus Background Job
+        3. Key Rotation Background Job
 
         Args:
             scheduler: The scheduler to add the background jobs to
@@ -3827,6 +3880,41 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
+
+        ########################################################
+        # Key Rotation Background Job
+        ########################################################
+        from litellm.constants import (
+            LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+            LITELLM_KEY_ROTATION_ENABLED,
+        )
+        
+        key_rotation_enabled: Optional[bool] = str_to_bool(LITELLM_KEY_ROTATION_ENABLED)
+        verbose_proxy_logger.debug(f"key_rotation_enabled: {key_rotation_enabled}")
+        
+        if key_rotation_enabled is True:
+            try:
+                from litellm.proxy.common_utils.key_rotation_manager import (
+                    KeyRotationManager,
+                )
+
+                # Get prisma_client from global scope
+                global prisma_client
+                if prisma_client is not None:
+                    key_rotation_manager = KeyRotationManager(prisma_client)
+                    verbose_proxy_logger.debug(f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)")
+                    scheduler.add_job(
+                        key_rotation_manager.process_rotations,
+                        "interval",
+                        seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+                        id="key_rotation_job"
+                    )
+                else:
+                    verbose_proxy_logger.warning("Key rotation enabled but prisma_client not available")
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Failed to setup key rotation job: {e}")
+        else:
+            verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
 
     @classmethod
     async def _setup_prisma_client(
@@ -4891,11 +4979,47 @@ async def audio_transcriptions(
 
 ######################################################################
 
+#                 Vertex AI Live API WebSocket Pass-through
+
+######################################################################
+
+
+@app.websocket("/vertex_ai/live")
+async def vertex_ai_live_passthrough_endpoint(
+    websocket: WebSocket,
+    model: Optional[str] = fastapi.Query(
+        None,
+        description="Optional model name, used to determine Vertex region for global models.",
+    ),
+    vertex_project: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI project id used for the upstream connection.",
+    ),
+    vertex_location: Optional[str] = fastapi.Query(
+        None,
+        description="Override the Vertex AI region (for example, 'us-central1').",
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    Vertex AI Live API WebSocket Pass-through Endpoint
+
+    This endpoint delegates to the WebSocket function defined in llm_passthrough_endpoints.py
+    """
+    return await vertex_ai_live_websocket_passthrough(
+        websocket=websocket,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+######################################################################
+
 #                          /v1/realtime Endpoints
 
 ######################################################################
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-
 from litellm import _arealtime
 
 
@@ -5894,6 +6018,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             pass
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
+        load_credentials_from_list(deployment.get("litellm_params", {}))
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
@@ -6107,12 +6232,10 @@ def _add_team_models_to_all_models(
     team_models: Dict[str, Set[str]] = {}
 
     for team_object in team_db_objects_typed:
-
         if (
             len(team_object.models) == 0  # empty list = all model access
             or SpecialModelNames.all_proxy_models.value in team_object.models
         ):
-
             model_list = llm_router.get_model_list()
             if model_list is not None:
                 for model in model_list:
@@ -6263,7 +6386,6 @@ async def get_all_team_and_direct_access_models(
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None and model_id in direct_access_models:
-
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
@@ -8623,9 +8745,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
@@ -9468,5 +9590,76 @@ app.include_router(ui_discovery_endpoints_router)
 ########################################################
 # MCP Server
 ########################################################
+
+
+# Dynamic MCP server routes - handle /{mcp_server_name}/mcp
+@app.api_route(
+    "/{mcp_server_name}/mcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def dynamic_mcp_route(mcp_server_name: str, request: Request):
+    """Handle dynamic MCP server routes like /github_mcp/mcp"""
+    try:
+        # Validate that the MCP server exists
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        if mcp_server is None:
+            raise HTTPException(
+                status_code=404, detail=f"MCP server '{mcp_server_name}' not found"
+            )
+
+        # Create a new scope with the correct path format that the MCP handler expects
+        # Transform /{mcp_server_name}/mcp to /mcp/{mcp_server_name}
+        scope = dict(request.scope)
+        scope["path"] = f"/mcp/{mcp_server_name}"
+
+        # Import the MCP handler
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+
+        # Create a custom send function to capture the response
+        response_started = False
+        response_body = b""
+        response_status = 200
+        response_headers = []
+
+        async def custom_send(message):
+            nonlocal response_started, response_body, response_status, response_headers
+            if message["type"] == "http.response.start":
+                response_started = True
+                response_status = message["status"]
+                response_headers = message.get("headers", [])
+            elif message["type"] == "http.response.body":
+                response_body += message.get("body", b"")
+
+        # Call the existing MCP handler
+        await handle_streamable_http_mcp(
+            scope, receive=request.receive, send=custom_send
+        )
+
+        # Return the response
+        from starlette.responses import Response
+
+        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
+        return Response(
+            content=response_body,
+            status_code=response_status,
+            headers=headers_dict,
+            media_type=headers_dict.get("content-type", "application/json"),
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
+app.include_router(mcp_discoverable_endpoints_router)

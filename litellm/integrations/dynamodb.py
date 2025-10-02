@@ -3,7 +3,7 @@
 
 import os
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Any
 
 import litellm

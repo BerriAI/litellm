@@ -5,7 +5,7 @@ import os
 import random
 import traceback
 import types
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 

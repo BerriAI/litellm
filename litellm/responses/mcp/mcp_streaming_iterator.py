@@ -1,4 +1,4 @@
-import uuid
+from litellm._uuid import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -444,9 +444,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """Generate tool execution events and execute tools"""
         if not self.collected_response:
             return
-            
-        import uuid
-
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )

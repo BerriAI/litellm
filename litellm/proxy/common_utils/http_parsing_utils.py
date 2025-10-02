@@ -233,14 +233,16 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     """
     Read the request body and parse it as JSON.
     """
-    if request.headers.get("content-type") == "application/json":
-        return await _read_request_body(request)
-    elif (
-        request.headers.get("content-type") == "multipart/form-data"
-        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
-    ):
-        return await get_form_data(request)
-    else:
-        raise ValueError(
-            f"Unsupported content type: {request.headers.get('content-type')}"
-        )
+    if request.method == "POST":
+        if request.headers.get("content-type", "") == "application/json":
+            return await _read_request_body(request)
+        elif (
+            "multipart/form-data" in request.headers.get("content-type", "")
+            or "application/x-www-form-urlencoded" in request.headers.get("content-type", "")
+        ):
+            return await get_form_data(request)
+        else:
+            raise ValueError(
+                f"Unsupported content type: {request.headers.get('content-type')}"
+            )
+    return {}

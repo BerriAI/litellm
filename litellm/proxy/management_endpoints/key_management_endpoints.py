@@ -14,7 +14,6 @@ import copy
 import json
 import secrets
 import traceback
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional, Tuple, cast
 
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.caching import DualCache
 from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -85,6 +85,38 @@ def _get_user_in_team(
             return member
 
     return None
+
+
+def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
+    """
+    Helper function to calculate the next rotation time for a key based on the rotation interval.
+    
+    Args:
+        rotation_interval: String representing the rotation interval (e.g., '30d', '90d', '1h')
+        
+    Returns:
+        datetime: The calculated next rotation time in UTC
+    """
+    now = datetime.now(timezone.utc)
+    interval_seconds = duration_in_seconds(rotation_interval)
+    return now + timedelta(seconds=interval_seconds)
+
+
+def _set_key_rotation_fields(data: dict, auto_rotate: bool, rotation_interval: Optional[str]) -> None:
+    """
+    Helper function to set rotation fields in key data if auto_rotate is enabled.
+    
+    Args:
+        data: Dictionary to update with rotation fields
+        auto_rotate: Whether auto rotation is enabled
+        rotation_interval: The rotation interval string (required if auto_rotate is True)
+    """
+    if auto_rotate and rotation_interval:
+        data.update({
+            "auto_rotate": auto_rotate,
+            "rotation_interval": rotation_interval,
+            "key_rotation_at": _calculate_key_rotation_time(rotation_interval)
+        })
 
 
 def _is_allowed_to_make_key_request(
@@ -642,6 +674,9 @@ async def generate_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
+    - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
+
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -1068,6 +1103,8 @@ async def update_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
+    - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
@@ -1159,6 +1196,13 @@ async def update_key_fn(
             existing_key_token=existing_key_row.token,
         )
 
+        # Handle rotation fields if auto_rotate is being enabled
+        _set_key_rotation_fields(
+            non_default_values, 
+            non_default_values.get("auto_rotate", False), 
+            non_default_values.get("rotation_interval")
+        )
+
         _data = {**non_default_values, "token": key}
         response = await prisma_client.update_data(token=key, data=_data)
 
@@ -1232,13 +1276,11 @@ def validate_key_team_change(
             )
 
     # Check if the key's user_id is a member of the team
+    member_object = _get_user_in_team(
+        team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id
+    )
     if key.user_id is not None:
-        is_member = False
-        for member in team.members_with_roles:
-            if member.user_id == key.user_id:
-                is_member = True
-                break
-        if not is_member:
+        if not member_object:
             raise HTTPException(
                 status_code=403,
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
@@ -1265,10 +1307,17 @@ def validate_key_team_change(
         team_obj=team,
     ):
         return
+    # this teams member permissions allow updating a
+    elif TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_object=member_object,
+        team_table=cast(LiteLLM_TeamTableCachedObj, team),
+        route=KeyManagementRoutes.KEY_UPDATE.value,
+    ):
+        return
     else:
         raise HTTPException(
             status_code=403,
-            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}.",
+            detail=f"User={change_initiated_by.user_id} is not a Proxy Admin or Team Admin for team={team.team_id}. Please ask your Proxy Admin to allow this action under 'Member Permissions' for this team.",
         )
 
 
@@ -1553,6 +1602,8 @@ def _check_model_access_group(
     return True
 
 
+
+
 async def generate_key_helper_fn(  # noqa: PLR0915
     request_type: Literal[
         "user", "key"
@@ -1606,6 +1657,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         str
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
+    auto_rotate: Optional[bool] = None,
+    rotation_interval: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1713,6 +1766,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "allowed_routes": allowed_routes or [],
             "object_permission_id": object_permission_id,
         }
+        
+        # Add rotation fields if auto_rotate is enabled
+        _set_key_rotation_fields(
+            data=key_data,
+            auto_rotate=auto_rotate or False,
+            rotation_interval=rotation_interval
+        )
 
         if (
             get_secret("DISABLE_KEY_NAME", False) is True

@@ -21,15 +21,16 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
+    GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
 )
@@ -225,7 +226,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 }
             }
 
-    def _should_block_content(self, armor_response: dict) -> bool:
+    def _should_block_content(self, armor_response: dict, allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         sanitization_result = armor_response.get("sanitizationResult", {})
         filter_results = sanitization_result.get("filterResults", {})
@@ -233,7 +234,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # filterResults can be a dict (named keys) or a list (array of filter result dicts)
         filter_result_items = []
         if isinstance(filter_results, dict):
-            filter_result_items = [filter_results]
+            filter_result_items = list(filter_results.values())
         elif isinstance(filter_results, list):
             filter_result_items = filter_results
 
@@ -263,8 +264,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if sdp:
                 if sdp.get("inspectResult", {}).get("matchState") == "MATCH_FOUND":
                     return True
+                # Only block on deidentifyResult if sanitization is not allowed
                 if sdp.get("deidentifyResult", {}).get("matchState") == "MATCH_FOUND":
-                    return True
+                    if not allow_sanitization:
+                        return True
         # Fallback dict code removed; all cases handled above
         return False
 
@@ -278,7 +281,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # filterResults can be a dict (single filter) or a list (multiple filters)
         filters = (
-            [filter_results]
+            list(filter_results.values())
             if isinstance(filter_results, dict)
             else filter_results
             if isinstance(filter_results, list)
@@ -327,14 +330,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
-        guardrail_status: Literal["success", "failure", "blocked"] = metadata.get(
+        guardrail_status: GuardrailStatus = metadata.get(
             "_model_armor_status", "success"
         )  # type: ignore
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status=guardrail_status,  # type: ignore
+            guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -409,11 +412,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 #   fail_on_error=False) we still want the correct status reflected.
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response)
+                    if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
                     else "success"
                 )
             # Check if content should be blocked
-            if self._should_block_content(armor_response):
+            if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content):
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -494,12 +497,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 metadata["_model_armor_response"] = armor_response
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response)
+                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
                     else "success"
                 )
 
             # Check if content should be blocked
-            if self._should_block_content(armor_response):
+            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
                 raise HTTPException(
                     status_code=400,
                     detail={

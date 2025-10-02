@@ -102,7 +102,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=True
+    ):
         if server.name == "working_server":
             # Working server returns tools
             tool1 = MagicMock()
@@ -184,7 +186,9 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
 
-    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=True
+    ):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
 
@@ -448,3 +452,275 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     assert (
         called_servers[0].server_id == specific_server.server_id
     ), "Should have contacted the specific server alias, not the group."
+
+
+@pytest.mark.asyncio
+async def test_oauth2_headers_passed_to_mcp_client():
+    """Test that OAuth2 headers are properly passed through to the MCP client for OAuth2 servers like github_mcp"""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Clear the registry to avoid conflicts with other tests
+    global_mcp_server_manager.registry.clear()
+
+    # Create an OAuth2 MCP server similar to github_mcp configuration
+    oauth2_server = MCPServer(
+        server_id="github_mcp_server_id",
+        name="github_mcp",
+        alias="github_mcp",
+        transport=MCPTransport.http,
+        url="https://api.githubcopilot.com/mcp",
+        auth_type=MCPAuth.oauth2,
+        client_id="test_github_client_id",
+        client_secret="test_github_client_secret",
+        scopes=["public_repo", "user:email"],
+        authorization_url="https://github.com/login/oauth/authorize",
+        token_url="https://github.com/login/oauth/access_token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+
+    # Set up OAuth2 headers that would come from the client
+    oauth2_headers = {"Authorization": "Bearer github_oauth_token_12345"}
+
+    # Set auth context with OAuth2 headers
+    set_auth_context(user_api_key_auth=user_api_key_auth, oauth2_headers=oauth2_headers)
+
+    # This will capture the arguments passed to _create_mcp_client
+    captured_client_args = {}
+
+    def mock_create_mcp_client(server, mcp_auth_header=None, extra_headers=None):
+        # Capture the arguments for verification
+        captured_client_args.update(
+            {
+                "server": server,
+                "mcp_auth_header": mcp_auth_header,
+                "extra_headers": extra_headers,
+            }
+        )
+        # Return a mock client that doesn't actually connect
+        mock_client = MagicMock()
+        mock_client.disconnect = AsyncMock()
+        return mock_client
+
+    # Mock _fetch_tools_with_timeout to avoid actual network calls
+    async def mock_fetch_tools_with_timeout(client, server_name):
+        return []  # Return empty list of tools
+
+    with patch.object(
+        global_mcp_server_manager,
+        "_create_mcp_client",
+        side_effect=mock_create_mcp_client,
+    ) as mock_create_client, patch.object(
+        global_mcp_server_manager,
+        "_fetch_tools_with_timeout",
+        side_effect=mock_fetch_tools_with_timeout,
+    ), patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        AsyncMock(return_value=[oauth2_server.server_id]),
+    ):
+        # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
+        await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,  # Will use all allowed servers
+            oauth2_headers=oauth2_headers,
+        )
+
+    # Verify that _create_mcp_client was called
+    assert (
+        mock_create_client.call_count == 1
+    ), "Expected _create_mcp_client to be called once"
+
+    # Verify the server passed to _create_mcp_client is the OAuth2 server
+    assert captured_client_args["server"].server_id == oauth2_server.server_id
+    assert captured_client_args["server"].auth_type == MCPAuth.oauth2
+
+    # Most importantly: verify that OAuth2 headers were passed as extra_headers
+    assert (
+        captured_client_args["extra_headers"] is not None
+    ), "Expected extra_headers to be passed for OAuth2 server"
+    assert (
+        captured_client_args["extra_headers"] == oauth2_headers
+    ), f"Expected OAuth2 headers to be passed as extra_headers, got {captured_client_args['extra_headers']}"
+
+    # Verify the Authorization header specifically
+    assert "Authorization" in captured_client_args["extra_headers"]
+    assert (
+        captured_client_args["extra_headers"]["Authorization"]
+        == "Bearer github_oauth_token_12345"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_tools_single_server_unprefixed_names():
+    """When only one MCP server is allowed, list tools should return unprefixed names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # One allowed server
+    server = MagicMock()
+    server.server_id = "server1"
+    server.name = "Zapier MCP"
+    server.alias = "zapier"
+
+    # Mock manager: allow just one server and return a tool based on add_prefix flag
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        server if server_id == "server1" else None
+    )
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=False
+    ):
+        tool = MagicMock()
+        tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should be unprefixed since only one server is allowed
+    assert len(tools) == 1
+    assert tools[0].name == "toolA"
+
+
+@pytest.mark.asyncio
+async def test_list_tools_multiple_servers_prefixed_names():
+    """When multiple MCP servers are allowed, list tools should return prefixed names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # Two allowed servers
+    server1 = MagicMock()
+    server1.server_id = "server1"
+    server1.name = "Zapier MCP"
+    server1.alias = "zapier"
+
+    server2 = MagicMock()
+    server2.server_id = "server2"
+    server2.name = "Jira MCP"
+    server2.alias = "jira"
+
+    # Mock manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(
+        return_value=["server1", "server2"]
+    )
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        server1 if server_id == "server1" else server2
+    )
+
+    async def mock_get_tools_from_server(
+        server, mcp_auth_header=None, extra_headers=None, add_prefix=True
+    ):
+        tool = MagicMock()
+        # When multiple servers, add_prefix should be True -> prefixed names
+        tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    # Should be prefixed since multiple servers are allowed
+    names = sorted([t.name for t in tools])
+    assert names == ["jira-toolA", "zapier-toolA"]
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_user_unauthorized_access():
+    """Test that a user cannot call a tool from a server they don't have access to"""
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    # Create a mock user without access to the server
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-basic",
+        object_permission_id="key-permission-123",
+    )
+
+    # Mock global_mcp_server_manager.get_mcp_server_names_from_ids to return
+    # a list that doesn't include "restricted_server" (the server the user is trying to access)
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_names_from_ids"
+    ) as mock_get_server_names:
+        # User has access to "allowed_server" but not "restricted_server"
+        mock_get_server_names.return_value = ["allowed_server", "another_server"]
+
+        # Try to call a tool from "restricted_server" - should raise HTTPException with 403 status
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="restricted_server-send_email",
+                arguments={
+                    "to": "test@example.com",
+                    "subject": "Test",
+                    "body": "Test",
+                },
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+            )
+
+        # Verify the exception details
+        assert exc_info.value.status_code == 403
+        assert "User not allowed to call this tool" in exc_info.value.detail

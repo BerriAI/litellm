@@ -36,11 +36,11 @@ from dataclasses import dataclass, field
 from functools import lru_cache, wraps
 from importlib import resources
 from inspect import iscoroutine
+from io import StringIO
 from os.path import abspath, dirname, join
 
 import aiohttp
 import dotenv
-import fastuuid as uuid
 import httpx
 import openai
 import tiktoken
@@ -59,12 +59,7 @@ import litellm.litellm_core_utils.audio_utils.utils
 import litellm.litellm_core_utils.json_validation_rule
 import litellm.llms
 import litellm.llms.gemini
-# Import cached imports utilities
-from litellm.litellm_core_utils.cached_imports import (
-    get_coroutine_checker,
-    get_litellm_logging_class,
-    get_set_callbacks,
-)
+from litellm._uuid import uuid
 from litellm.caching._internal_lru_cache import lru_cache_wrapper
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
@@ -86,6 +81,13 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.base_vector_store import (
     BaseVectorStore,
+)
+
+# Import cached imports utilities
+from litellm.litellm_core_utils.cached_imports import (
+    get_coroutine_checker,
+    get_litellm_logging_class,
+    get_set_callbacks,
 )
 from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
@@ -228,9 +230,11 @@ from typing import (
     get_args,
 )
 
-
 from openai import OpenAIError as OriginalError
 
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+    update_response_metadata,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -724,17 +728,21 @@ def function_setup(  # noqa: PLR0915
                 messages = kwargs["messages"]
             ### PRE-CALL RULES ###
             if (
-                isinstance(messages, list)
+                Rules.has_pre_call_rules()
+                and isinstance(messages, list)
                 and len(messages) > 0
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
+
+                buffer = StringIO()
+                for m in messages:
+                    content = m.get("content", "")
+                    if content is not None and isinstance(content, str):
+                        buffer.write(content)
+
                 rules_obj.pre_call_rules(
-                    input="".join(
-                        m.get("content", "")
-                        for m in messages
-                        if "content" in m and isinstance(m["content"], str)
-                    ),
+                    input=buffer.getvalue(),
                     model=model,
                 )
         elif (
@@ -1671,30 +1679,6 @@ def _is_streaming_request(
     #########################################################
     return False
 
-
-def update_response_metadata(
-    result: Any,
-    logging_obj: LiteLLMLoggingObject,
-    model: Optional[str],
-    kwargs: dict,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime,
-) -> None:
-    """
-    Updates response metadata, adds the following:
-        - response._hidden_params
-        - response._hidden_params["litellm_overhead_time_ms"]
-        - response.response_time_ms
-    """
-    if result is None:
-        return
-
-    metadata = ResponseMetadata(result)
-    metadata.set_hidden_params(logging_obj=logging_obj, model=model, kwargs=kwargs)
-    metadata.set_timing_metrics(
-        start_time=start_time, end_time=end_time, logging_obj=logging_obj
-    )
-    metadata.apply()
 
 
 def _select_tokenizer(
@@ -3294,6 +3278,7 @@ def pre_process_optional_params(
             and custom_llm_provider != "openrouter"
             and custom_llm_provider != "vercel_ai_gateway"
             and custom_llm_provider != "nebius"
+            and custom_llm_provider != "wandb"
             and custom_llm_provider not in litellm.openai_compatible_providers
         ):
             if custom_llm_provider == "ollama":
@@ -4465,6 +4450,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+    # wandb
+    elif llm_provider == "wandb":
+        api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
     return api_key
 
 
@@ -4893,12 +4881,16 @@ def _get_model_info_helper(  # noqa: PLR0915
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),
                 input_cost_per_token=_input_cost_per_token,
+                input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
+                input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
                 cache_creation_input_token_cost=_model_info.get(
                     "cache_creation_input_token_cost", None
                 ),
                 cache_read_input_token_cost=_model_info.get(
                     "cache_read_input_token_cost", None
                 ),
+                cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
+                cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -4923,6 +4915,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_batches"
                 ),
                 output_cost_per_token=_output_cost_per_token,
+                output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
+                output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
                 output_cost_per_audio_token=_model_info.get(
                     "output_cost_per_audio_token", None
                 ),
@@ -5549,6 +5543,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "wandb":
+            if "WANDB_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("WANDB_API_KEY")
         elif custom_llm_provider == "dashscope":
             if "DASHSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5663,6 +5662,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif model in litellm.wandb_models:
+            if "WANDB_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("WANDB_API_KEY")
 
     def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
@@ -6427,6 +6431,8 @@ def get_valid_models(
     check_provider_endpoint: Optional[bool] = None,
     custom_llm_provider: Optional[str] = None,
     litellm_params: Optional[LiteLLM_Params] = None,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
 ) -> List[str]:
     """
     Returns a list of valid LLMs based on the set environment variables
@@ -6434,11 +6440,24 @@ def get_valid_models(
     Args:
         check_provider_endpoint: If True, will check the provider's endpoint for valid models.
         custom_llm_provider: If provided, will only check the provider's endpoint for valid models.
+        api_key: If provided, will use the API key to get valid models.
+        api_base: If provided, will use the API base to get valid models.
     Returns:
         A list of valid LLMs
     """
 
     try:
+        ################################
+        # init litellm_params 
+        #################################
+        if litellm_params is None:
+            litellm_params = LiteLLM_Params(model="")
+        if api_key is not None:
+            litellm_params.api_key = api_key
+        if api_base is not None:
+            litellm_params.api_base = api_base
+        #################################
+        
         check_provider_endpoint = (
             check_provider_endpoint or litellm.check_provider_endpoint
         )
@@ -7067,6 +7086,8 @@ class ProviderConfigManager:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.NEBIUS == provider:
             return litellm.NebiusConfig()
+        elif litellm.LlmProviders.WANDB == provider:
+            return litellm.WandbConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
@@ -7319,6 +7340,8 @@ class ProviderConfigManager:
             )
 
             return VLLMModelInfo()
+        elif LlmProviders.LEMONADE == provider:
+            return litellm.LemonadeChatConfig()
         return None
 
     @staticmethod
@@ -7524,6 +7547,12 @@ class ProviderConfigManager:
             )
 
             return RecraftImageEditConfig()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.image_edit import (
+                get_azure_ai_image_edit_config,
+            )
+
+            return get_azure_ai_image_edit_config(model)
         elif LlmProviders.LITELLM_PROXY == provider:
             from litellm.llms.litellm_proxy.image_edit.transformation import (
                 LiteLLMProxyImageEditConfig,

@@ -31,8 +31,10 @@ export enum Providers {
   OpenAI_Text = "OpenAI Text Completion",
   OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
   Openrouter = "Openrouter",            
+  Oracle = "Oracle Cloud Infrastructure (OCI)",
   Perplexity = "Perplexity",           
   Sambanova = "Sambanova",              
+  Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",            
   Triton = "Triton",                    
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
@@ -67,6 +69,8 @@ export const provider_map: Record<string, string> = {
     Perplexity: "perplexity",
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
+    Oracle: "oci",
+    Snowflake: "snowflake",
     FireworksAI: "fireworks_ai",
     GradientAI: "gradient_ai",
     Triton: "triton",
@@ -106,8 +110,10 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
     [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
     [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
+    [Providers.Oracle]: `${asset_logos_folder}oracle.svg`,
     [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
     [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
+    [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
@@ -166,6 +172,10 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "azure_ai/command-r-plus";
     } else if (selectedProvider == Providers.Azure) {
       return "azure/my-deployment";
+    } else if (selectedProvider == Providers.Oracle) {
+      return "oci/xai.grok-4";
+    } else if (selectedProvider == Providers.Snowflake) {
+      return "snowflake/mistral-7b";
     } else if (selectedProvider == Providers.Voyage) {
       return "voyage/";
     } else if (selectedProvider == Providers.JinaAI) {

@@ -5,7 +5,7 @@ Unit tests for prometheus metrics
 import pytest
 import aiohttp
 import asyncio
-import uuid
+from litellm._uuid import uuid
 import os
 import sys
 from openai import AsyncOpenAI

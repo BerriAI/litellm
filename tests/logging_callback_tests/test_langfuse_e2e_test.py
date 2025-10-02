@@ -119,7 +119,7 @@ class TestLangfuseLogging:
     @pytest.fixture
     async def mock_setup(self):
         """Common setup for Langfuse logging tests"""
-        import uuid
+        from litellm._uuid import uuid
         from unittest.mock import AsyncMock, patch
         import httpx
 
