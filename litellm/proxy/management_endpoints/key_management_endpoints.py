@@ -645,8 +645,8 @@ def check_team_key_model_specific_limits(
     if data.model_rpm_limit is None and data.model_tpm_limit is None:
         return
     # get total model specific tpm/rpm limit
-    model_specific_rpm_limit = {}
-    model_specific_tpm_limit = {}
+    model_specific_rpm_limit: Dict[str, int] = {}
+    model_specific_tpm_limit: Dict[str, int] = {}
 
     for key in keys:
         if key.metadata.get("model_rpm_limit", None) is not None:
