@@ -458,7 +458,7 @@ class LiteLLMAnthropicMessagesAdapter:
         Literal["text", "tool_use"],
         "ContentBlockContentBlockDict",
     ]:
-        import uuid
+        from litellm._uuid import uuid
 
         from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
 

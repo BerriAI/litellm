@@ -102,6 +102,33 @@ async def use_callback_in_llm_call(
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
+    elif callback == "bitbucket" or callback == "gitlab":
+        # Set up mock bitbucket configuration required for initialization
+        litellm.global_bitbucket_config = {
+            "workspace": "test-workspace",
+            "repository": "test-repo",
+            "access_token": "test-token",
+            "branch": "main"
+        }
+        litellm.global_gitlab_config = {
+            "project": "a/b/<repo_name>",
+            "access_token": "your-access-token",
+            "base_url": "gitlab url",
+            "prompts_path": "src/prompts", # folder to point to, defaults to root
+            "branch":"main"  # optional, defaults to main
+        }
+        # Mock BitBucket HTTP calls to prevent actual API requests
+        import httpx
+        from unittest.mock import MagicMock
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"values": []}
+        mock_response.text = ""
+        
+        patch.object(
+            litellm.module_level_client, "get", return_value=mock_response
+        ).start()
     elif callback == "prometheus":
         # pytest teardown - clear existing prometheus collectors
         collectors = list(REGISTRY._collector_to_names.keys())
@@ -175,7 +202,10 @@ async def use_callback_in_llm_call(
         if callback == "argilla":
             patch.stopall()
 
-        if callback == "argilla":
+        if callback == "bitbucket":
+            # Clean up bitbucket configuration and patches
+            if hasattr(litellm, 'global_bitbucket_config'):
+                delattr(litellm, 'global_bitbucket_config')
             patch.stopall()
 
 

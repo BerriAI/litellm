@@ -117,6 +117,16 @@ export default function ModelInfoView({
       let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
       console.log("modelInfoResponse, ", modelInfoResponse);
       let specificModelData = modelInfoResponse.data[0];
+      if (specificModelData && !specificModelData.litellm_model_name) {
+        specificModelData = {
+          ...specificModelData,
+          litellm_model_name:
+            specificModelData?.litellm_params?.litellm_model_name ??
+            specificModelData?.litellm_params?.model ??
+            specificModelData?.model_info?.key ??
+            null,
+        };
+      }
       setLocalModelData(specificModelData);
 
       // Check if cache control is enabled

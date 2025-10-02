@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
-import uuid
+from litellm._uuid import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
 

@@ -774,7 +774,7 @@ class CommonBatchFilesUtils:
         Returns:
             Unique job name (≤ 63 characters for Bedrock compatibility)
         """
-        import fastuuid as uuid
+        from litellm._uuid import uuid
         unique_id = str(uuid.uuid4())[:8]
         # Format: {prefix}-batch-{model}-{uuid}
         # Example: litellm-batch-claude-266c398e
@@ -802,7 +802,7 @@ class CommonBatchFilesUtils:
             Tuple of (bucket_name, object_key)
         """
         import time
-        import uuid
+        from litellm._uuid import uuid
 
         # Get bucket name
         bucket_name = (

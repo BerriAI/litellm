@@ -313,7 +313,9 @@ LITELLM_CHAT_PROVIDERS = [
     "morph",
     "lambda_ai",
     "vercel_ai_gateway",
+    "wandb",
     "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -448,6 +450,7 @@ openai_compatible_endpoints: List = [
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.inference.wandb.ai/v1",
 ]
 
 
@@ -492,6 +495,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "wandb",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -507,6 +511,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "wandb",
     ]
 )
 _openai_like_providers: List = [
@@ -757,6 +762,38 @@ nebius_embedding_models: set = set(
     ]
 )
 
+WANDB_MODELS: set = set(
+    [
+        # openai models
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+
+        # zai-org models
+        "zai-org/GLM-4.5",
+
+        # Qwen models
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Thinking-2507",
+
+        # moonshotai
+        "moonshotai/Kimi-K2-Instruct",
+
+        # meta models
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+
+        # deepseek-ai
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "deepseek-ai/DeepSeek-V3-0324",
+
+        # microsoft
+        "microsoft/Phi-4-mini-instruct",
+    ]
+)
+
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
     "anthropic",
@@ -776,8 +813,14 @@ BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
 ]
 
 BEDROCK_CONVERSE_MODELS = [
+    "qwen.qwen3-coder-480b-a35b-v1:0",
+    "qwen.qwen3-235b-a22b-2507-v1:0",
+    "qwen.qwen3-coder-30b-a3b-v1:0",
+    "qwen.qwen3-32b-v1:0",
+    "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -947,7 +990,12 @@ HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
+LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
+LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 
+# Key Rotation Constants
+LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400))  # 24 hours default
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 

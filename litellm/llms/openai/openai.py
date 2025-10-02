@@ -10,12 +10,16 @@ from typing import (
     List,
     Literal,
     Optional,
+    TYPE_CHECKING,
     Union,
     cast,
 )
 from urllib.parse import urlparse
 
 import httpx
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 import openai
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
@@ -355,6 +359,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        shared_session: Optional["ClientSession"] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
         if client is None:
@@ -379,7 +384,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=OpenAIChatCompletion._get_async_http_client(),
+                    http_client=OpenAIChatCompletion._get_async_http_client(
+                        shared_session=shared_session
+                    ),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -522,8 +529,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        shared_session: Optional["ClientSession"] = None,
     ):
-        super().completion()
+        super().completion(shared_session=shared_session)
         try:
             fake_stream: bool = False
             inference_params = optional_params.copy()
@@ -606,6 +614,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 organization=organization,
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
+                                shared_session=shared_session,
                             )
 
                     data = provider_config.transform_request(
@@ -771,6 +780,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         drop_params: Optional[bool] = None,
         stream_options: Optional[dict] = None,
         fake_stream: bool = False,
+        shared_session: Optional["ClientSession"] = None,
     ):
         response = None
         data = await provider_config.async_transform_request(
@@ -793,6 +803,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    shared_session=shared_session,
                 )
 
                 ## LOGGING

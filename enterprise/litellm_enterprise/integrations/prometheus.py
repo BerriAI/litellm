@@ -2262,9 +2262,12 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
         keys_parts = key.split(".")
         # Traverse through the dictionary using the parts
-        value = metadata
+        value: Any = metadata
         for part in keys_parts:
-            value = value.get(part, None)  # Get the value, return None if not found
+            if isinstance(value, dict):
+                value = value.get(part, None)  # Get the value, return None if not found
+            else:
+                value = None
             if value is None:
                 break
 
@@ -2328,7 +2331,6 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         "tag_Service_web_app_v1": "false",
     }
     """
-    import re
 
     from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name

@@ -14,7 +14,6 @@ from typing import (
     Union,
 )
 
-import fastuuid as uuid
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -22,6 +21,7 @@ from fastapi.responses import Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     STREAM_SSE_DATA_PREFIX,
@@ -379,6 +379,7 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: Optional[str] = None,
         version: Optional[str] = None,
         is_streaming_request: Optional[bool] = False,
+        contents: Optional[list] = None,  # Add contents parameter
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -416,6 +417,10 @@ class ProxyBaseLLMRequestProcessing:
                 ),
             )
         )
+
+        # Pass contents if provided
+        if contents:
+            self.data["contents"] = contents
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS

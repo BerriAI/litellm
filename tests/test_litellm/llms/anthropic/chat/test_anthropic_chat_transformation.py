@@ -183,7 +183,30 @@ def test_extract_response_content_with_citations():
     }
 
     _, citations, _, _, _ = config.extract_response_content(completion_response)
-    assert citations is not None
+    assert citations == [
+        [
+            {
+                "type": "char_location",
+                "cited_text": "The grass is green. ",
+                "document_index": 0,
+                "document_title": "My Document",
+                "start_char_index": 0,
+                "end_char_index": 20,
+                "supported_text": "the grass is green",
+            },
+        ],
+        [
+            {
+                "type": "char_location",
+                "cited_text": "The sky is blue.",
+                "document_index": 0,
+                "document_title": "My Document",
+                "start_char_index": 20,
+                "end_char_index": 36,
+                "supported_text": "the sky is blue",
+            },
+        ],
+    ]
 
 
 def test_map_tool_helper():
