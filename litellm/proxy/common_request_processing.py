@@ -891,12 +891,34 @@ class ProxyBaseLLMRequestProcessing:
                 or (prompt_tokens + completion_tokens)
             )
 
+            # Extract additional usage fields
+            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens")
+            cache_read_input_tokens = _usage.get("cache_read_input_tokens")
+            web_search_requests = _usage.get("web_search_requests")
+            completion_tokens_details = _usage.get("completion_tokens_details")
+            prompt_tokens_details = _usage.get("prompt_tokens_details")
+
+            # Build usage kwargs with only non-None values
+            usage_kwargs = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+            
+            # Add optional fields if they exist
+            if cache_creation_input_tokens is not None:
+                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
+            if cache_read_input_tokens is not None:
+                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
+            if web_search_requests is not None:
+                usage_kwargs["web_search_requests"] = web_search_requests
+            if completion_tokens_details is not None:
+                usage_kwargs["completion_tokens_details"] = completion_tokens_details
+            if prompt_tokens_details is not None:
+                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
+
             _mr = ModelResponse(
-                usage=Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                )
+                usage=Usage(**usage_kwargs)
             )
             
             try:
