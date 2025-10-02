@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - carto/main
       - dev
     paths:
       - "litellm/**"
