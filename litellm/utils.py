@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.cached_imports import (
     get_set_callbacks,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
     map_finish_reason,
     process_response_headers,
 )
@@ -7582,7 +7583,7 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    _metadata = cast(dict, litellm_params.get("metadata", {}) or {})
+    _metadata = cast(dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params)))
 
     end_user_id = cast(
         Optional[str],
