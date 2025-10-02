@@ -1877,6 +1877,15 @@ class ProxyConfig:
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
                     )
+                elif key == "global_gitlab_config":
+                    from litellm.integrations.gitlab import (
+                        set_global_gitlab_config,
+                    )
+
+                    set_global_gitlab_config(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global Gitlab Config on LiteLLM Proxy{reset_color_code}"
+                    )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,

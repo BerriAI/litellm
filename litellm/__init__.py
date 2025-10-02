@@ -152,6 +152,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vector_store_pre_call_hook",
     "dotprompt",
     "bitbucket",
+    "gitlab",
     "cloudzero",
     "posthog",
 ]
@@ -1358,3 +1359,11 @@ def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_bitbucket_config
     global_bitbucket_config = config
+
+### GLOBAL CONFIG ###
+global_gitlab_config: Optional[Dict[str, Any]] = None
+
+def set_global_gitlab_config(config: Dict[str, Any]) -> None:
+    """Set global BitBucket configuration for prompt management."""
+    global global_gitlab_config
+    global_gitlab_config = config
