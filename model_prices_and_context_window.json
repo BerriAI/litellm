@@ -1904,7 +1904,7 @@
         ]
     },
     "azure/gpt-5": {
-        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost": 1.3e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
