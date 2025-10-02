@@ -289,8 +289,8 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
 
 def get_model_group_from_litellm_kwargs(kwargs: dict) -> Optional[str]:
     _litellm_params = kwargs.get("litellm_params", None) or {}
-    _metadata = _litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)) or {}
-    _model_group = _metadata.get("model_group", None)
+    _metadata = _litellm_params.get(get_metadata_variable_name_from_litellm_params(_litellm_params)) or {}
+    _model_group = _metadata.get("model_group", None) or kwargs.get("model", None)
     if _model_group is not None:
         return _model_group
 
@@ -367,8 +367,8 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"] = [guardrail_name]
 
 
-def get_metadata_variable_name_from_kwargs(
-        kwargs: dict
+def get_metadata_variable_name_from_litellm_params(
+        litellm_params: dict
     ) -> Literal["metadata", "litellm_metadata"]:
         """
         Helper to return what the "metadata" field should be called in the request data
@@ -381,4 +381,4 @@ def get_metadata_variable_name_from_kwargs(
         - OpenAI then started using this field for their metadata
         - LiteLLM is now moving to using `litellm_metadata` for our metadata
         """
-        return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        return "litellm_metadata" if "litellm_metadata" in litellm_params else "metadata"
