@@ -163,17 +163,18 @@ A literal type with two possible values:
 
 ## StandardLoggingGuardrailInformation
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `guardrail_name` | `Optional[str]` | Guardrail name |
-| `guardrail_mode` | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode |
-| `guardrail_request` | `Optional[dict]` | Guardrail request |
-| `guardrail_response` | `Optional[Union[dict, str, List[dict]]]` | Guardrail response |
-| `guardrail_status` | `Literal["success", "failure", "blocked"]` | Guardrail execution status: `success` = no violations detected, `blocked` = content blocked/modified due to policy violations, `failure` = technical error or API failure |
-| `start_time` | `Optional[float]` | Start time of the guardrail |
-| `end_time` | `Optional[float]` | End time of the guardrail |
-| `duration` | `Optional[float]` | Duration of the guardrail in seconds |
-| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities |
+| Field                 | Type | Description                                                                                                                                                               |
+|-----------------------|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `guardrail_name`      | `Optional[str]` | Guardrail name                                                                                                                                                            |
+| `guardrail_provider`  | `Optional[str]` | Guardrail provider                                                                                                                                                        |
+| `guardrail_mode`      | `Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]` | Guardrail mode                                                                                                                                                            |
+| `guardrail_request`   | `Optional[dict]` | Guardrail request                                                                                                                                                         |
+| `guardrail_response`  | `Optional[Union[dict, str, List[dict]]]` | Guardrail response                                                                                                                                                        |
+| `guardrail_status`    | `Literal["success", "failure", "blocked"]` | Guardrail execution status: `success` = no violations detected, `blocked` = content blocked/modified due to policy violations, `failure` = technical error or API failure |
+| `start_time`          | `Optional[float]` | Start time of the guardrail                                                                                                                                               |
+| `end_time`            | `Optional[float]` | End time of the guardrail                                                                                                                                                 |
+| `duration`            | `Optional[float]` | Duration of the guardrail in seconds                                                                                                                                      |
+| `masked_entity_count` | `Optional[Dict[str, int]]` | Count of masked entities                                                                                                                                                  |
 
 ## StandardLoggingPayloadStatusFields
 
