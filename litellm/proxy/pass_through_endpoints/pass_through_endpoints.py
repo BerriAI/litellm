@@ -1254,7 +1254,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                             logging_obj.model_call_details[
                                 "custom_llm_provider"
                             ] = "vertex_ai_language_models"
-                            verbose_proxy_logger.info(
+                            verbose_proxy_logger.debug(
                                 f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
                             )
                         else:

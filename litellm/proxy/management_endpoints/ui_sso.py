@@ -1594,7 +1594,6 @@ class SSOAuthenticationHandler:
             master_key or "",
             algorithm="HS256",
         )
-        verbose_proxy_logger.info(f"user_id: {user_id}; jwt_token: {jwt_token}")
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")

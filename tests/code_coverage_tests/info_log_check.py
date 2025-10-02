@@ -126,8 +126,13 @@ class SensitiveLogDetector(ast.NodeVisitor):
             for value in arg.values:
                 if isinstance(value, ast.FormattedValue):
                     value_str = self._get_arg_string(value.value).lower()
-                    if any(pattern in value_str for pattern in 
-                          ['request', 'response', 'data', 'body', 'content', 'messages']):
+                    # Check for any sensitive data patterns in f-string interpolations
+                    sensitive_f_string_patterns = [
+                        'request', 'response', 'data', 'body', 'content', 'messages',
+                        'token', 'jwt', 'auth', 'api_key', 'apikey', 'credential',
+                        'secret', 'password', 'passwd'
+                    ]
+                    if any(pattern in value_str for pattern in sensitive_f_string_patterns):
                         return True
         
         # Check for .format() calls
@@ -137,10 +142,14 @@ class SensitiveLogDetector(ast.NodeVisitor):
                 base_str = self._get_arg_string(arg.func.value).lower()
                 if "{}" in base_str or "{" in base_str:
                     # Check format arguments for sensitive data
+                    sensitive_format_patterns = [
+                        'request', 'response', 'data', 'body', 'content',
+                        'token', 'jwt', 'auth', 'api_key', 'apikey', 'credential',
+                        'secret', 'password', 'passwd'
+                    ]
                     for format_arg in arg.args:
                         format_str = self._get_arg_string(format_arg).lower()
-                        if any(pattern in format_str for pattern in 
-                              ['request', 'response', 'data', 'body', 'content']):
+                        if any(pattern in format_str for pattern in sensitive_format_patterns):
                             return True
         
         return False
@@ -171,7 +180,9 @@ class SensitiveLogDetector(ast.NodeVisitor):
         """Get a human-readable reason for the violation"""
         arg_str = self._get_arg_string(arg).lower()
         
-        if 'request' in arg_str:
+        if any(pattern in arg_str for pattern in ['jwt', 'token', 'api_key', 'apikey', 'auth', 'credential', 'secret', 'password', 'passwd']):
+            return "Potentially logging authentication/secret data (JWT, token, API key, etc.)"
+        elif 'request' in arg_str:
             return "Potentially logging request data"
         elif 'response' in arg_str:
             return "Potentially logging response data"
@@ -179,8 +190,6 @@ class SensitiveLogDetector(ast.NodeVisitor):
             return "Potentially logging sensitive data/body/content"
         elif any(pattern in arg_str for pattern in ['messages', 'input', 'output']):
             return "Potentially logging message/input/output data"
-        elif any(pattern in arg_str for pattern in ['api_key', 'token', 'auth', 'credentials']):
-            return "Potentially logging authentication data"
         else:
             return "Potentially logging sensitive data"
     
