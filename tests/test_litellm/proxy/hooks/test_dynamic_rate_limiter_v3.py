@@ -581,7 +581,7 @@ async def test_concurrent_pre_call_hooks_stress():
     ), f"Premium success rate should be >= 90%, got {premium_success_rate:.2%}"
     assert (
         standard_success_rate >= 0.5
-    ), f"Standard success rate should be >= 50%, got {standard_success_rate:.2%}"
+    ), f"Standard success rate should be >= 50% (with 30% random limiting, allows for variance), got {standard_success_rate:.2%}"
     assert (
         premium_success_rate > standard_success_rate
     ), "Premium should have higher success rate than standard"
