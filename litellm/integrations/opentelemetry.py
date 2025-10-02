@@ -575,9 +575,16 @@ class OpenTelemetry(CustomLogger):
         if litellm.turn_off_message_logging or not self.message_logging:
             return
 
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata", {})
+        generation_name = metadata.get("generation_name")
+
+        raw_span_name = generation_name if generation_name else RAW_REQUEST_SPAN_NAME
+
+
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
         raw_span = otel_tracer.start_span(
-            name=RAW_REQUEST_SPAN_NAME,
+            name=raw_span_name,
             start_time=self._to_ns(start_time),
             context=trace.set_span_in_context(parent_span),
         )
@@ -1170,6 +1177,13 @@ class OpenTelemetry(CustomLogger):
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata", {})
+        generation_name = metadata.get("generation_name")
+
+        if generation_name:
+            return generation_name
+
         return LITELLM_REQUEST_SPAN_NAME
 
     def get_traceparent_from_header(self, headers):
