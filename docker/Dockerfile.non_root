@@ -104,8 +104,11 @@ RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__f
 # Switch to non-root user
 USER nobody
 
-# Set HOME for non-root user
+# Set HOME for non-root user and ensure Prisma uses cached binaries
 ENV HOME=/app
+ENV PRISMA_QUERY_ENGINE_BINARY=/app/.prisma-binaries/node_modules/@prisma/engines/query-engine-debian-openssl-3.0.x
+ENV PRISMA_SCHEMA_ENGINE_BINARY=/app/.prisma-binaries/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x
+ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
 # Prisma binaries already generated and cached during build as root
 # --- End of Prisma Handling ---
 
