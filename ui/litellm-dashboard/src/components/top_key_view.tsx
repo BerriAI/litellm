@@ -15,9 +15,10 @@ interface TopKeyViewProps {
   userRole: string | null
   teams: any[] | null
   premiumUser: boolean
+  showTags?: boolean
 }
 
-const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, userRole, teams, premiumUser }) => {
+const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, userRole, teams, premiumUser, showTags = false }) => {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [keyData, setKeyData] = useState<any | undefined>(undefined)
@@ -64,7 +65,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
   }, [isModalOpen])
 
   // Define columns for the table view
-  const columns = [
+  const baseColumns = [
     {
       header: "Key ID",
       accessorKey: "api_key",
@@ -88,17 +89,40 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
       accessorKey: "key_alias",
       cell: (info: any) => info.getValue() || "-",
     },
-    {
-      header: "Tags",
-      accessorKey: "tags",
-      cell: (info: any) => info.getValue() || "-",
-    },
-    {
-      header: "Spend (USD)",
-      accessorKey: "spend",
-      cell: (info: any) => `$${formatNumberWithCommas(info.getValue(), 2)}`,
-    },
   ]
+
+  const tagsColumn = {
+    header: "Tags",
+    accessorKey: "tags",
+    cell: (info: any) => {
+      const tags = info.getValue() as string[] | undefined;
+      if (!tags || tags.length === 0) {
+        return "-";
+      }
+      
+      return (
+        <div className="overflow-hidden">
+          {tags.map((tag, index) => (
+            <Tooltip key={index} title={tag}>
+              <span className="px-2 py-1 bg-gray-100 rounded-full text-xs mr-1">
+                {tag.slice(0, 7)}...
+              </span>
+            </Tooltip>
+          ))}
+        </div>
+      );
+    }
+  }
+
+  const spendColumn = {
+    header: "Spend (USD)",
+    accessorKey: "spend",
+    cell: (info: any) => `$${formatNumberWithCommas(info.getValue(), 2)}`,
+  }
+
+  const columns = showTags 
+    ? [...baseColumns, tagsColumn, spendColumn]
+    : [...baseColumns, spendColumn]
 
   const processedTopKeys = topKeys.map((k) => ({
     ...k,
