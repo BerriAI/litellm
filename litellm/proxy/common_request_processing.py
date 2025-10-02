@@ -702,6 +702,27 @@ class ProxyBaseLLMRequestProcessing:
         elif route_type == "aresponses":
             return "responses"
 
+    @staticmethod
+    def _map_route_type_to_call_type(route_type: str) -> str:
+        """
+        Maps route_type to call_type for guardrail hooks.
+        This ensures guardrails receive the correct call_type parameter.
+        """
+        route_to_call_type_map = {
+            "acompletion": "completion",
+            "aresponses": "responses",
+            "atext_completion": "text_completion",
+            "aimage_edit": "image_generation",
+            "aimage_generation": "image_generation",
+            "aembeddings": "embeddings",
+            "amoderation": "moderation",
+            "aaudio_transcription": "audio_transcription",
+            "arerank": "rerank",
+            "allm_passthrough_route": "pass_through_endpoint",
+            "amcp_call": "mcp_call",
+        }
+        return route_to_call_type_map.get(route_type, route_type)
+
     #########################################################
     # Proxy Level Streaming Data Generator
     #########################################################

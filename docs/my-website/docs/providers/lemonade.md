@@ -186,6 +186,3 @@ print("Available models:", [model['id'] for model in models.get('data', [])])
 ## Support
 
 For more information regarding Lemonade please go to to the [Lemonade website](https://lemonade-server.ai/) or [Lemonade repository](https://github.com/lemonade-sdk/lemonade).
-
-</TabItem>
-</Tabs>

@@ -25,7 +25,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from fastapi import HTTPException
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -844,7 +843,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
-            get_metadata_variable_name_from_litellm_params,
+            get_metadata_variable_name_from_kwargs,
             get_model_group_from_litellm_kwargs,
         )
         from litellm.types.caching import RedisPipelineIncrementOperation
@@ -862,7 +861,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             # Get metadata from kwargs
             litellm_metadata = kwargs["litellm_params"].get(
-                get_metadata_variable_name_from_litellm_params(kwargs["litellm_params"]), {}
+                get_metadata_variable_name_from_kwargs(kwargs), {}
             )
             if litellm_metadata is None:
                 return
