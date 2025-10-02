@@ -820,7 +820,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       </span>
                     }
                     name="tpm_limit_type"
-                    initialValue="default"
+                    initialValue={null}
                     className="mt-4"
                   >
                     <Select 
@@ -832,7 +832,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         form.setFieldValue('tpm_limit_type', value);
                       }}
                     >
-                      <Option value="default" label="Default">
+                      <Option value="best_effort_throughput" label="Default">
                         <div style={{ padding: '4px 0' }}>
                           <div style={{ fontWeight: 500 }}>Default</div>
                           <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
@@ -891,7 +891,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       </span>
                     }
                     name="rpm_limit_type"
-                    initialValue="default"
+                    initialValue={null}
                     className="mt-4"
                   >
                     <Select 
@@ -903,7 +903,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         form.setFieldValue('rpm_limit_type', value);
                       }}
                     >
-                      <Option value="default" label="Default">
+                      <Option value="best_effort_throughput" label="Default">
                         <div style={{ padding: '4px 0' }}>
                           <div style={{ fontWeight: 500 }}>Default</div>
                           <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
