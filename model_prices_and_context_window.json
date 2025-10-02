@@ -1205,13 +1205,13 @@
     },
     "azure/gpt-3.5-turbo-0125": {
         "deprecation_date": "2025-03-31",
-        "input_cost_per_token": 5e-07,
+        "input_cost_per_token": 5.5e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 16384,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 1.65e-06,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
@@ -1391,25 +1391,25 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo-2024-04-09": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
@@ -1559,7 +1559,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
         "litellm_provider": "azure",
@@ -1591,7 +1591,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
         "litellm_provider": "azure",
@@ -1936,7 +1936,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-2025-08-07": {
-        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost": 1.3e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2001,7 +2001,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-chat-latest": {
-        "cache_read_input_token_cost": 1.25e-07,
+        "cache_read_input_token_cost": 1.3e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2033,7 +2033,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-mini": {
-        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2065,7 +2065,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-mini-2025-08-07": {
-        "cache_read_input_token_cost": 2.5e-08,
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2097,7 +2097,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-nano": {
-        "cache_read_input_token_cost": 5e-09,
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2129,7 +2129,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-nano-2025-08-07": {
-        "cache_read_input_token_cost": 5e-09,
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -2559,7 +2559,7 @@
         "supports_vision": true
     },
     "azure/o4-mini": {
-        "cache_read_input_token_cost": 2.75e-07,
+        "cache_read_input_token_cost": 2.8e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -2588,7 +2588,7 @@
         "supports_vision": true
     },
     "azure/o4-mini-2025-04-16": {
-        "cache_read_input_token_cost": 2.75e-07,
+        "cache_read_input_token_cost": 2.8e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -14002,13 +14002,13 @@
         "supports_tool_choice": false
     },
     "meta.llama3-1-70b-instruct-v1:0": {
-        "input_cost_per_token": 9.9e-07,
+        "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 9.9e-07,
+        "output_cost_per_token": 7.2e-07,
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
@@ -14024,13 +14024,13 @@
         "supports_tool_choice": false
     },
     "meta.llama3-2-11b-instruct-v1:0": {
-        "input_cost_per_token": 3.5e-07,
+        "input_cost_per_token": 1.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 3.5e-07,
+        "output_cost_per_token": 1.6e-07,
         "supports_function_calling": true,
         "supports_tool_choice": false,
         "supports_vision": true
@@ -14058,13 +14058,13 @@
         "supports_tool_choice": false
     },
     "meta.llama3-2-90b-instruct-v1:0": {
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 2e-06,
+        "output_cost_per_token": 7.2e-07,
         "supports_function_calling": true,
         "supports_tool_choice": false,
         "supports_vision": true
@@ -14217,13 +14217,13 @@
         "supports_tool_choice": true
     },
     "mistral.mistral-large-2402-v1:0": {
-        "input_cost_per_token": 8e-06,
+        "input_cost_per_token": 4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 32000,
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "output_cost_per_token": 2.4e-05,
+        "output_cost_per_token": 1.2e-05,
         "supports_function_calling": true
     },
     "mistral.mistral-large-2407-v1:0": {
@@ -18292,7 +18292,7 @@
     },
     "text-embedding-004": {
         "input_cost_per_character": 2.5e-08,
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-embedding-models",
         "max_input_tokens": 2048,
         "max_tokens": 2048,
