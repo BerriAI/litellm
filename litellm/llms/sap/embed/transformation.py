@@ -47,7 +47,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         if _gen_ai_hub_import_error is not None:
             raise OptionalDependencyError(
                 "The gen-ai-hub package is required for this functionality. "
-                "Please install it with: pip install gen-ai-hub"
+                "Please install it with: pip install sap-ai-sdk-gen[all]"
             ) from _gen_ai_hub_import_error
 
     def get_error_class(self, error_message, status_code, headers):

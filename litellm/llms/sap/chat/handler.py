@@ -48,33 +48,10 @@ class OptionalDependencyError(ImportError):
     pass
 
 
-class KeepWaiting(Exception):
-    pass
-
-
 class GenAIHubOrchestrationError(Exception):
-    def __init__(
-        self,
-        status_code,
-        message,
-        request: Optional[httpx.Request] = None,
-        response: Optional[httpx.Response] = None,
-    ):
+    def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        if request is not None:
-            self.request = request
-        else:
-            self.request = httpx.Request(
-                method="POST",
-                url="https://docs.predibase.com/user-guide/inference/rest_api",
-            )
-        if response is not None:
-            self.response = response
-        else:
-            self.response = httpx.Response(
-                status_code=status_code, request=self.request
-            )
         super().__init__(self.message)
 
 
@@ -89,7 +66,7 @@ class GenAIHubOrchestration(BaseLLM):
         if _gen_ai_hub_import_error is not None:
             raise OptionalDependencyError(
                 "The gen-ai-hub package is required for this functionality. "
-                "Please install it with: pip install gen-ai-hub"
+                "Please install it with: pip install sap-ai-sdk-gen[all]"
             ) from _gen_ai_hub_import_error
 
     @property
