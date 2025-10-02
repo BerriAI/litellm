@@ -24,7 +24,7 @@ import {
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
-import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
+import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from './usage/types';
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -181,13 +181,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       const {breakdown} = day;
       const {entities} = breakdown;
       console.log('debugTags',{entities})
-      const tagDictionary  = Object.keys(entities).reduce((acc: { [key: string]: string[] }, entity) => {
+      const tagDictionary  = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
         const {api_key_breakdown} = entities[entity];
         Object.keys(api_key_breakdown).forEach((key) => {
+          const tagUsage = {tag:entity,usage:api_key_breakdown[key].metrics.spend};
           if (acc[key]) {
-            acc[key].push(entity);
+            acc[key].push(tagUsage);
           } else {
-            acc[key] = [entity];
+            acc[key] = [tagUsage];
           }
         })
         return acc;
