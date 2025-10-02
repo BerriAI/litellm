@@ -2,6 +2,7 @@ import json
 import os
 from typing import Any, Dict, List, Literal, Optional, Union
 
+import httpx
 import litellm
 from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
@@ -47,25 +48,21 @@ class PointGuardAIGuardrail(CustomGuardrail):
 
         # Validate required parameters
         if not api_base:
-            raise HTTPException(status_code=500, detail="Missing required parameter: api_base")
+            raise HTTPException(status_code=401, detail="Missing required parameter: api_base")
         if not api_key:
-            raise HTTPException(status_code=500, detail="Missing required parameter: api_key")
+            raise HTTPException(status_code=401, detail="Missing required parameter: api_key")
         if not api_email:
-            raise HTTPException(status_code=500, detail="Missing required parameter: api_email")
+            raise HTTPException(status_code=401, detail="Missing required parameter: api_email")
         if not org_code:
-            raise HTTPException(status_code=500, detail="Missing required parameter: org_code")
+            raise HTTPException(status_code=401, detail="Missing required parameter: org_code")
         if not policy_config_name:
-            raise HTTPException(status_code=500, detail="Missing required parameter: policy_config_name")
+            raise HTTPException(status_code=401, detail="Missing required parameter: policy_config_name")
 
         self.pointguardai_api_base = api_base or os.getenv("POINTGUARDAI_API_URL_BASE")
         self.pointguardai_org_code = org_code or os.getenv("POINTGUARDAI_ORG_CODE", None)
-        self.pointguardai_policy_config_name = policy_config_name or os.getenv(
-            "POINTGUARDAI_CONFIG_NAME", None
-        )
+        self.pointguardai_policy_config_name = policy_config_name or os.getenv("POINTGUARDAI_CONFIG_NAME", None)
         self.pointguardai_api_key = api_key or os.getenv("POINTGUARDAI_API_KEY", None)
-        self.pointguardai_api_email = api_email or os.getenv(
-            "POINTGUARDAI_API_EMAIL", None
-        )
+        self.pointguardai_api_email = api_email or os.getenv("POINTGUARDAI_API_EMAIL", None)
 
         # Set default API base if not provided
         if not self.pointguardai_api_base:
@@ -247,7 +244,11 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 "PointGuard AI response status: %s", response.status_code
             )
             verbose_proxy_logger.debug("PointGuard AI response: %s", response.text)
+            
+            # Raise HTTPStatusError for 4xx and 5xx responses
+            response.raise_for_status()
 
+            # If we reach here, response.status_code is 2xx (success)
             if response.status_code == 200:
                 try:
                     response_data = response.json()
@@ -362,17 +363,27 @@ class PointGuardAIGuardrail(CustomGuardrail):
                     
                     # Create detailed error message
                     if categories_list and categories_list != ["UNKNOWN"]:
-                        error_message = f"Content blocked by PointGuardAI as it violated following policies '{categories_str}'"
-                    else:
                         error_message = "Content blocked by PointGuardAI policy"
                     
                     verbose_proxy_logger.warning(
                         "PointGuardAI blocking request with violations: %s", violation_details
                     )
                     
+                    # Create PointGuard AI response in Aporia-like format
+                    pointguardai_response = {
+                        "action": "block",
+                        "revised_prompt": None,
+                        "revised_response": error_message,
+                        "explain_log": violation_details
+                    }
+                    
                     raise HTTPException(
-                        status_code=403,
-                        detail=error_message)
+                        status_code=400,
+                        detail={
+                            "error": "Violated PointGuardAI policy",
+                            "pointguardai_response": pointguardai_response,
+                        }
+                    )
 
                 # Check for modifications only if not blocked
                 elif input_modified or output_modified:
@@ -403,20 +414,77 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug("PointGuardAI: No blocking or modifications required")
                 return None
 
-            else:
-                verbose_proxy_logger.error(
-                    "PointGuardAI API request failed with status %s: %s",
-                    response.status_code,
-                    response.text,
-                )
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"PointGuardAI API request failed: {response.text}",
-                )
-
         except HTTPException:
             # Re-raise HTTP exceptions as-is
             raise
+        except httpx.HTTPStatusError as e:
+            # Handle HTTP status errors (4xx, 5xx responses)
+            status_code = e.response.status_code
+            response_text = e.response.text if hasattr(e.response, 'text') else str(e)
+            
+            verbose_proxy_logger.error(
+                "PointGuardAI API HTTP error %s: %s",
+                status_code,
+                response_text,
+            )
+            
+            # For authentication/authorization errors, preserve the original status code
+            if status_code == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"PointGuardAI authentication failed: Invalid API credentials",
+                )
+            elif status_code == 400:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"PointGuardAI bad request: Invalid configuration or parameters",
+                )
+            elif status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"PointGuardAI access denied: Insufficient permissions",
+                )
+            elif status_code == 404:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"PointGuardAI resource not found: Invalid endpoint or organization",
+                )
+            else:
+                # For other HTTP errors, keep the original status code
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=f"PointGuardAI API error ({status_code}): {response_text}",
+                )
+        except httpx.ConnectError as e:
+            # Handle connection errors (invalid URL, network issues)
+            verbose_proxy_logger.error(
+                "PointGuardAI connection error: %s",
+                str(e),
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"PointGuardAI service unavailable: Cannot connect to API endpoint. Please check the API URL configuration.",
+            )
+        except httpx.TimeoutException as e:
+            # Handle timeout errors
+            verbose_proxy_logger.error(
+                "PointGuardAI timeout error: %s",
+                str(e),
+            )
+            raise HTTPException(
+                status_code=504,
+                detail=f"PointGuardAI request timeout: API request took too long to complete",
+            )
+        except httpx.RequestError as e:
+            # Handle other request errors (DNS resolution, etc.)
+            verbose_proxy_logger.error(
+                "PointGuardAI request error: %s",
+                str(e),
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"PointGuardAI service unavailable: Network or DNS error. Please check the API URL configuration.",
+            )
         except Exception as e:
             verbose_proxy_logger.error(
                 "Unexpected error in PointGuardAI API request: %s",

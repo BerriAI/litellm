@@ -101,18 +101,20 @@ Expected response on violation:
   "error": {
     "message": {
       "error": "Violated PointGuardAI guardrail policy",
-      "guardrail_name": "pointguardai-input-guard",
       "pointguardai_response": {
-        "blocked": true,
-        "risk_score": 0.95,
-        "detected_risks": [
+        "action": "block",
+        "revised_prompt": null,
+        "revised_response": "Violated PointGuardAI policy",
+        "explain_log": [
           {
-            "type": "prompt_injection",
-            "confidence": 0.95,
-            "description": "Potential attempt to manipulate system behavior"
+            "severity": "HIGH",
+            "scanner": "scanner_name",
+            "inspector": "inspector_name",
+            "categories": ["POLICY_CATEGORY"],
+            "confidenceScore": 0.95,
+            "mode": "BLOCKING"
           }
-        ],
-        "recommendation": "Block this request due to high risk score"
+        ]
       }
     },
     "type": "None",
