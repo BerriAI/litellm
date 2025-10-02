@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
+    check_team_key_model_specific_limits,
     generate_key_helper_fn,
     prepare_key_update_data,
     validate_key_team_change,
@@ -1609,4 +1610,116 @@ async def test_check_team_key_limits_exact_boundary():
         team_table=team_table,
         data=data,
         prisma_client=mock_prisma_client,
+    )
+
+
+def test_check_team_key_model_specific_limits_no_limits():
+    """
+    Test check_team_key_model_specific_limits when no model-specific limits are set.
+    Should return without raising any exceptions.
+    """
+    # Create existing key with no model-specific limits
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user",
+        team_id="test-team-123",
+        metadata={},
+    )
+
+    keys = [existing_key]
+
+    # Create team table
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-123",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={},
+    )
+
+    # Create request with no model-specific limits
+    data = GenerateKeyRequest(
+        model_rpm_limit=None,
+        model_tpm_limit=None,
+    )
+
+    # Should not raise any exception
+    check_team_key_model_specific_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+
+
+def test_check_team_key_model_specific_limits_rpm_overallocation():
+    """
+    Test check_team_key_model_specific_limits when model-specific RPM would cause overallocation.
+    Should raise HTTPException with appropriate error message.
+    """
+    # Create existing keys with model-specific RPM limits
+    existing_key1 = LiteLLM_VerificationToken(
+        token="test-token-1",
+        user_id="test-user-1",
+        team_id="test-team-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 500,
+                "gpt-3.5-turbo": 300,
+            }
+        },
+    )
+
+    existing_key2 = LiteLLM_VerificationToken(
+        token="test-token-2",
+        user_id="test-user-2",
+        team_id="test-team-456",
+        metadata={
+            "model_rpm_limit": {
+                "gpt-4": 300,
+            }
+        },
+    )
+
+    keys = [existing_key1, existing_key2]
+
+    # Create team table with RPM limit
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id="test-team-456",
+        team_alias="test-team",
+        tpm_limit=10000,
+        rpm_limit=1000,  # Total team RPM limit
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={},
+    )
+
+    # Create request that would exceed model-specific RPM limits
+    # Existing gpt-4: 500 + 300 = 800, New: 300, Total: 1100 > 1000 (team limit)
+    data = GenerateKeyRequest(
+        model_rpm_limit={
+            "gpt-4": 300,  # This would cause overallocation
+        },
+        model_tpm_limit=None,
+    )
+
+    # Should raise HTTPException for model-specific RPM overallocation
+    with pytest.raises(HTTPException) as exc_info:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=team_table,
+            data=data,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "Allocated RPM limit=800 + Key RPM limit=300 is greater than team RPM limit=1000"
+        in str(exc_info.value.detail)
     )
