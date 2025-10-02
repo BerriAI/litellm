@@ -151,7 +151,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         f"({tpm_saturation:.1%})"
                     )
             
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"Model {model} overall saturation: {max_saturation:.1%}"
             )
             
@@ -440,7 +440,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             
             saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
             
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
                 f"Threshold={saturation_threshold:.1%}, Priority={key_priority}"
             )
