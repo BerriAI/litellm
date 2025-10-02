@@ -68,7 +68,8 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl 
 # Install semantic_router without dependencies
 RUN pip install semantic_router --no-deps
 
-# Generate prisma client
+# Generate prisma client with explicit binary target to avoid wolfi warning
+ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh
 RUN chmod +x docker/prod_entrypoint.sh
