@@ -89,6 +89,11 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
       cell: (info: any) => info.getValue() || "-",
     },
     {
+      header: "Tags",
+      accessorKey: "tags",
+      cell: (info: any) => info.getValue() || "-",
+    },
+    {
       header: "Spend (USD)",
       accessorKey: "spend",
       cell: (info: any) => `$${formatNumberWithCommas(info.getValue(), 2)}`,
