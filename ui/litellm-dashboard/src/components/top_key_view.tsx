@@ -7,6 +7,7 @@ import { DataTable } from "./view_logs/table"
 import { Tooltip } from "antd"
 import { Button } from "@tremor/react"
 import { formatNumberWithCommas } from "../utils/dataUtils"
+import { TagUsage } from "./usage/types"
 
 interface TopKeyViewProps {
   topKeys: any[]
@@ -95,20 +96,30 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
     header: "Tags",
     accessorKey: "tags",
     cell: (info: any) => {
-      const tags = info.getValue() as string[] | undefined;
+      const tags = info.getValue() as TagUsage[] | undefined;
       if (!tags || tags.length === 0) {
         return "-";
       }
       
       return (
         <div className="overflow-hidden">
-          {tags.map((tag, index) => (
-            <Tooltip key={index} title={tag}>
-              <span className="px-2 py-1 bg-gray-100 rounded-full text-xs mr-1">
-                {tag.slice(0, 7)}...
-              </span>
-            </Tooltip>
-          ))}
+            {tags
+              .sort((a, b) => b.usage - a.usage)
+              .map((tag, index) => (
+              <Tooltip 
+                key={index} 
+                title={
+                  <div>
+                    <div><span className="text-gray-300">TAG NAME:</span> {tag.tag}</div>
+                    <div><span className="text-gray-300">SPEND:</span> {tag.usage > 0 && tag.usage < 0.01 ? '<$0.01' : `$${formatNumberWithCommas(tag.usage, 2)}`}</div>
+                  </div>
+                }
+              >
+                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs mr-1">
+                  {tag.tag.slice(0, 7)}...
+                </span>
+              </Tooltip>
+            ))}
         </div>
       );
     }
