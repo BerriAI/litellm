@@ -345,7 +345,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return
 
         # Track model-wide usage for future saturation checks
-        # Use high multiplier so tracking doesn't block (priority limits do the enforcement)
+        # Why tracking_multiplier: v3_limiter.should_rate_limit() both increments AND checks limits.
+        # We need the increment (for saturation detection) but NOT the limit check (priority limits handle enforcement).
+        # Setting limit to 10x capacity ensures tracking never blocks while keeping accurate counters.
         tracking_multiplier = litellm.priority_reservation_settings.tracking_multiplier
         tracking_descriptor = self._create_model_tracking_descriptor(
             model=model,

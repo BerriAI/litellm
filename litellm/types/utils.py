@@ -2700,7 +2700,7 @@ class PriorityReservationSettings(BaseModel):
     
     tracking_multiplier: int = Field(
         default=10,
-        description="Multiplier for model-wide tracking limits in strict mode. High values (e.g., 10x) prevent tracking from blocking requests while allowing saturation detection."
+        description="Multiplier for model-wide tracking limits in strict mode. Set to 10x because v3_limiter.should_rate_limit() both increments counters AND enforces limits - we need the counter increment (for saturation checks) but not the enforcement (priority limits handle that). High multiplier ensures tracking never blocks."
     )
 
     model_config = ConfigDict(protected_namespaces=())
