@@ -25,7 +25,7 @@ When using async-invoke, you must provide:
 | Parameter | Description | Required |
 |-----------|-------------|----------|
 | `output_s3_uri` | S3 URI where the embedding results will be stored | ✅ Yes |
-| `inputType` | Type of input: `"text"`, `"image"`, `"video"`, or `"audio"` | ✅ Yes |
+| `input_type` | Type of input: `"text"`, `"image"`, `"video"`, or `"audio"` | ✅ Yes |
 | `aws_region_name` | AWS region for the request | ✅ Yes |
 
 ### Usage
@@ -40,7 +40,7 @@ response = embedding(
     model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
     input=["Hello world from LiteLLM async invoke!"],
     aws_region_name="us-east-1",
-    inputType="text",
+    input_type="text",
     output_s3_uri="s3://your-bucket/async-invoke-output/"
 )
 
@@ -55,7 +55,7 @@ response = embedding(
     model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
     input=["s3://your-bucket/video.mp4"],  # S3 URL for video
     aws_region_name="us-east-1",
-    inputType="video",
+    input_type="video",
     output_s3_uri="s3://your-bucket/async-invoke-output/"
 )
 
@@ -76,7 +76,7 @@ response = embedding(
     model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
     input=[img_base64],
     aws_region_name="us-east-1",
-    inputType="image",
+    input_type="image",
     output_s3_uri="s3://your-bucket/async-invoke-output/"
 )
 ```
@@ -92,7 +92,7 @@ response = embedding(
     model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
     input=["Hello world"],
     aws_region_name="us-east-1",
-    inputType="text",
+    input_type="text",
     output_s3_uri="s3://your-bucket/async-invoke-output/"
 )
 
@@ -142,7 +142,7 @@ if status:
 |-------|-------|----------|
 | `ValueError: output_s3_uri cannot be empty` | Missing S3 output URI | Provide a valid S3 URI |
 | `ValueError: Input type 'video' requires async_invoke route` | Using video/audio without async-invoke | Use `bedrock/async_invoke/` model prefix |
-| `ValueError: inputType is required` | Missing input type parameter | Specify `inputType` parameter |
+| `ValueError: input_type is required` | Missing input type parameter | Specify `input_type` parameter |
 
 #### Example Error Handling
 
@@ -152,7 +152,7 @@ try:
         model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
         input=["Hello world"],
         aws_region_name="us-east-1",
-        inputType="text",
+        input_type="text",
         output_s3_uri="s3://your-bucket/output/"  # Required for async-invoke
     )
     print("Job submitted successfully!")
