@@ -642,6 +642,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     userRole={userRole}
                     teams={null}
                     premiumUser={premiumUser}
+                    showTags={entityType === "tag"}
                   />
                 </Card>
               </Col>
