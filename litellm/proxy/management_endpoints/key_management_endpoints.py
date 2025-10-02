@@ -637,7 +637,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 def check_team_key_model_specific_limits(
     keys: List[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
-    data: GenerateKeyRequest,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
     """
     Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
@@ -716,7 +716,7 @@ def check_team_key_model_specific_limits(
 def check_team_key_rpm_tpm_limits(
     keys: List[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
-    data: GenerateKeyRequest,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
     """
     Check if the team key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
@@ -749,15 +749,23 @@ def check_team_key_rpm_tpm_limits(
 
 async def _check_team_key_limits(
     team_table: LiteLLM_TeamTableCachedObj,
-    data: GenerateKeyRequest,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
     prisma_client: PrismaClient,
 ) -> None:
     """
     Check if the team key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
+
+    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
     """
+    if (
+        data.tpm_limit_type != "guaranteed_throughput"
+        and data.rpm_limit_type != "guaranteed_throughput"
+    ):
+        return
     # get all team keys
     # calculate allocated tpm/rpm limit
     # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+
     keys = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"team_id": team_table.team_id},
     )
@@ -993,11 +1001,18 @@ async def generate_service_account_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
 
     """
+    from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
         prisma_client,
         user_api_key_cache,
         user_custom_key_generate,
     )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
@@ -1030,6 +1045,13 @@ async def generate_service_account_key_fn(
                 f"Error getting team object in `/key/generate`: {e}"
             )
             team_table = None
+
+    if team_table is not None:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=data,
+            prisma_client=prisma_client,
+        )
 
     key_generation_check(
         team_table=team_table,
@@ -1330,14 +1352,22 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
+        team_obj = await get_team_object(
+            team_id=cast(str, data.team_id),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+
+        if team_obj is not None:
+            await _check_team_key_limits(
+                team_table=team_obj,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
         # if team change - check if this is possible
         if is_different_team(data=data, existing_key_row=existing_key_row):
-            team_obj = await get_team_object(
-                team_id=cast(str, data.team_id),
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                check_db_only=True,
-            )
             if llm_router is None:
                 raise HTTPException(
                     status_code=400,
