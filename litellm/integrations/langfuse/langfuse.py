@@ -1,6 +1,5 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import copy
 import os
 import traceback
 from datetime import datetime
