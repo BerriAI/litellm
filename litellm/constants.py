@@ -315,6 +315,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -819,6 +820,7 @@ BEDROCK_CONVERSE_MODELS = [
     "deepseek.v3-v1:0",
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
