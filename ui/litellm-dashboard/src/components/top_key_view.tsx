@@ -162,7 +162,10 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, accessToken, userID, u
   const spendColumn = {
     header: "Spend (USD)",
     accessorKey: "spend",
-    cell: (info: any) => `$${formatNumberWithCommas(info.getValue(), 2)}`,
+    cell: (info: any) => {
+      const value = info.getValue();
+      return value > 0 && value < 0.01 ? '<$0.01' : `$${formatNumberWithCommas(value, 2)}`;
+    },
   }
 
   const columns = showTags 
