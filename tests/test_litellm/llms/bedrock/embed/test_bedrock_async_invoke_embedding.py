@@ -113,7 +113,7 @@ class TestBedrockAsyncInvokeEmbedding:
             input_data = "s3://test-bucket/test-file.mp4" if input_type == "video" else "s3://test-bucket/test-file.wav"
         
         inference_params = {
-            "inputType": input_type,
+            "inputType": input_type,  # This will be set by the parameter mapping
             "output_s3_uri": "s3://test-bucket/async-invoke-output/"
         }
         
@@ -153,7 +153,7 @@ class TestBedrockAsyncInvokeEmbedding:
                 aws_region_name="us-east-1",
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
                 api_key=test_api_key,
-                inputType="text",
+                input_type="text",  # New input_type parameter (maps to inputType)
                 output_s3_uri="s3://test-bucket/async-invoke-output/"
             )
 

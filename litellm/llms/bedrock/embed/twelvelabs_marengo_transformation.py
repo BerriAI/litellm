@@ -16,7 +16,6 @@ from litellm.types.llms.bedrock import (
     TwelveLabsS3OutputDataConfig,
 )
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
-from litellm.utils import get_base64_str
 
 
 class TwelveLabsMarengoEmbeddingConfig:
@@ -40,6 +39,7 @@ class TwelveLabsMarengoEmbeddingConfig:
             "lengthSec",
             "useFixedLengthSec",
             "minClipSec",
+            "input_type",
         ]
 
     def map_openai_params(
@@ -54,6 +54,9 @@ class TwelveLabsMarengoEmbeddingConfig:
                 optional_params["textTruncate"] = v
             elif k == "embeddingOption":
                 optional_params["embeddingOption"] = v
+            elif k == "input_type":
+                # Map input_type to inputType for Bedrock
+                optional_params["inputType"] = v
             elif k in ["startSec", "lengthSec", "useFixedLengthSec", "minClipSec"]:
                 optional_params[k] = v
         return optional_params
@@ -89,7 +92,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         if inference_params.get("inputType"):
             input_type = inference_params["inputType"]
         else:
-            raise ValueError("inputType is required")
+            raise ValueError("input_type is required")
 
         # Validate that async-invoke is used for video/audio
         if input_type in ["video", "audio"] and not async_invoke_route:
@@ -124,6 +127,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                     b64_str = input.split(",", 1)[1] if "," in input else input
                 else:
                     # Direct base64 string
+                    from litellm.utils import get_base64_str
                     b64_str = get_base64_str(input)
 
                 transformed_request["mediaSource"] = {"base64String": b64_str}
