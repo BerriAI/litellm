@@ -40,9 +40,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     def __init__(self, internal_usage_cache: DualCache):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
         self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache)
-        
-        # Saturation threshold: only enforce priority limits above this
-        self.saturation_threshold = 0.80  # 80%
 
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
@@ -349,10 +346,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         # Track model-wide usage for future saturation checks
         # Use high multiplier so tracking doesn't block (priority limits do the enforcement)
+        tracking_multiplier = litellm.priority_reservation_settings.tracking_multiplier
         tracking_descriptor = self._create_model_tracking_descriptor(
             model=model,
             model_group_info=model_group_info,
-            high_limit_multiplier=10,  # High limit for tracking-only
+            high_limit_multiplier=tracking_multiplier,
         )
         
         await self.v3_limiter.should_rate_limit(
@@ -440,15 +438,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         try:
             saturation = await self._check_model_saturation(model, model_group_info)
             
+            saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
+            
             verbose_proxy_logger.info(
                 f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "
-                f"Threshold={self.saturation_threshold:.1%}, Priority={key_priority}"
+                f"Threshold={saturation_threshold:.1%}, Priority={key_priority}"
             )
             
             data["litellm_model_saturation"] = saturation
             
             # Route to appropriate mode based on saturation
-            if saturation < self.saturation_threshold:
+            if saturation < saturation_threshold:
                 await self._handle_generous_mode(
                     model=model,
                     model_group_info=model_group_info,
