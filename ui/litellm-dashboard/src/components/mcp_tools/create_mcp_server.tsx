@@ -426,7 +426,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
           {/* Cost Configuration Section */}
           <div className="mt-6">
-            <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={false} />
+            <MCPServerCostConfig
+              value={costConfig}
+              onChange={setCostConfig}
+              tools={tools.filter((tool) => allowedTools.includes(tool.name))}
+              disabled={false}
+            />
           </div>
 
           <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
