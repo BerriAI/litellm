@@ -141,6 +141,14 @@ if MCP_AVAILABLE:
                     list_tools_result = await _get_tools_for_single_server(
                         server, server_auth_header
                     )
+                    
+                    # Filter tools based on allowed_tools configuration
+                    # Only filter if allowed_tools is explicitly configured (not None and not empty)
+                    if server.allowed_tools is not None and len(server.allowed_tools) > 0:
+                        list_tools_result = [
+                            tool for tool in list_tools_result 
+                            if tool.name in server.allowed_tools
+                        ]
                 except Exception as e:
                     verbose_logger.exception(
                         f"Error getting tools from {server.name}: {e}"
@@ -162,6 +170,15 @@ if MCP_AVAILABLE:
                         tools_result = await _get_tools_for_single_server(
                             server, server_auth_header
                         )
+                        
+                        # Filter tools based on allowed_tools configuration
+                        # Only filter if allowed_tools is explicitly configured (not None and not empty)
+                        if server.allowed_tools is not None and len(server.allowed_tools) > 0:
+                            tools_result = [
+                                tool for tool in tools_result 
+                                if tool.name in server.allowed_tools
+                            ]
+                        
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(
