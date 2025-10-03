@@ -65,7 +65,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIResponse,
 )
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (

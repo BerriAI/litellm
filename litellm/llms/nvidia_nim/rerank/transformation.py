@@ -10,7 +10,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
-    OptionalRerankParams,
     RerankBilledUnits,
     RerankResponse,
     RerankResponseMeta,
