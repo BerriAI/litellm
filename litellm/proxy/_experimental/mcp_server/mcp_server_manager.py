@@ -1197,6 +1197,11 @@ class MCPServerManager:
                     if server.mcp_access_groups is not None
                     else []
                 ),
+                allowed_tools=(
+                    server.allowed_tools
+                    if server.allowed_tools is not None
+                    else []
+                ),
                 mcp_info=server.mcp_info,
                 teams=cast(
                     List[Dict[str, str | None]],
