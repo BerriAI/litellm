@@ -269,7 +269,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
             metadata: {
               key_alias: metrics.metadata.key_alias,
               team_id: null,
-              tags: metrics.metadata.tags || [], // This gets key-level tags
             },
           }
         }
@@ -285,13 +284,10 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
       })
     })
 
-    console.log('debugTags',{keySpend,userSpendData})
-
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
         key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
-        tags: metrics.metadata.tags || [], // This will show key-level tags
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
