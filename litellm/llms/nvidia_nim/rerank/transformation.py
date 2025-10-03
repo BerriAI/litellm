@@ -9,7 +9,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import (
+    OptionalRerankParams,
+    RerankBilledUnits,
+    RerankResponse,
+    RerankResponseMeta,
+)
 
 
 class NvidiaNimQueryObject(TypedDict):
@@ -293,9 +298,23 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             
             results.append(result_item)
         
+        # Construct metadata with billed_units
+        # Nvidia NIM uses "usage" field with "total_tokens"
+        usage = raw_response_json.get("usage", {})
+        total_tokens = usage.get("total_tokens", 0)
+        
+        billed_units: RerankBilledUnits = {
+            "total_tokens": total_tokens if total_tokens > 0 else len(results)
+        }
+        
+        meta: RerankResponseMeta = {
+            "billed_units": billed_units
+        }
+        
         return RerankResponse(
             id=raw_response_json.get("id") or str(uuid.uuid4()),
             results=results,
+            meta=meta,
         )
 
     def get_error_class(
