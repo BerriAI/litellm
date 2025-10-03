@@ -113,7 +113,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
         """
-        optional_nvidia_nim_rerank_params = {
+        optional_nvidia_nim_rerank_params: Dict[str, Any] = {
             "query": query,
             "documents": documents,
         }
