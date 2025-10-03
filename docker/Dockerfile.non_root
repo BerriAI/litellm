@@ -112,10 +112,12 @@ USER nobody
 
 # Set HOME for non-root user
 ENV HOME=/app
+
+# Prisma configuration for runtime
+# PRISMA_BINARY_CACHE_DIR already set above - points to /app/.prisma/binaries
 # Tell Prisma CLI to skip npm install since binaries are already cached
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
 ENV PRISMA_HIDE_UPDATE_MESSAGE=1
-# Prisma binaries already generated and cached during build as root
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
