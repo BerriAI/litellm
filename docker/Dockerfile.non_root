@@ -64,6 +64,10 @@ RUN pip uninstall jwt -y && \
 # --- Prisma Handling for Non-Root User ---
 # Pre-download Prisma binaries during build to avoid runtime downloads
 # This eliminates the need for outbound traffic to registry.npmjs.org and binaries.prisma.sh at runtime
+
+# Set binary cache directory to a local path inside the container
+# This ensures all Prisma binaries (query engine, CLI, etc.) are downloaded at build time
+ENV PRISMA_BINARY_CACHE_DIR=/app/.prisma/binaries
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
 # Install prisma and make entrypoints executable
@@ -71,9 +75,16 @@ RUN pip install --no-cache-dir prisma && \
     chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh
 
-# Force Prisma to fully cache everything by running prisma generate at build time
-# This downloads and caches all Prisma binaries in the prisma package directory
+# Create the binary cache directory
+RUN mkdir -p /app/.prisma/binaries
+
+# Force Prisma to download and cache all binaries at build time
+# This includes query engine, migration engine, and CLI binaries
 RUN prisma generate
+
+# Pre-cache the Prisma CLI by running a simple command
+# This forces the Prisma Python CLI wrapper to download and cache itself
+RUN prisma --version
 
 # Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
