@@ -208,8 +208,8 @@ class OCIChatConfig(BaseConfig):
 
             if alias is False:
                 # Workaround for mypy issue
-                #if drop_params:
-                continue
+                if drop_params or litellm.drop_params:
+                    continue
                 raise Exception(f"param `{key}` is not supported on OCI")
 
             if alias is None:
