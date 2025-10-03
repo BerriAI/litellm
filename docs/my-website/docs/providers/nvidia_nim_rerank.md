@@ -19,12 +19,16 @@ Nvidia NIM rerank models help you:
 - Filter and rank large document sets efficiently
 
 **Supported Models:**
-- `nvidia/llama-3_2-nv-rerankqa-1b-v2`
+- `nvidia/llama-3_2-nv-rerankqa-1b-v2` (1B parameters)
+- `nvidia/nv-rerankqa-mistral-4b-v3` (4B parameters)
 - All Nvidia NIM rerank models on their platform
 
 ## Quick Start
 
 ### Basic Usage
+
+<Tabs>
+<TabItem value="llama-1b" label="LLaMa 1B Model">
 
 ```python
 import litellm
@@ -45,6 +49,32 @@ response = litellm.rerank(
 
 print(response)
 ```
+
+</TabItem>
+<TabItem value="mistral-4b" label="Mistral 4B Model">
+
+```python
+import litellm
+import os
+
+os.environ['NVIDIA_NIM_API_KEY'] = "nvapi-..."
+
+response = litellm.rerank(
+    model="nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3",
+    query="What is the GPU memory bandwidth of H100 SXM?",
+    documents=[
+        "The Hopper GPU is paired with the Grace CPU using NVIDIA's ultra-fast chip-to-chip interconnect, delivering 900GB/s of bandwidth.",
+        "A100 provides up to 20X higher performance over the prior generation.",
+        "Accelerated servers with H100 deliver 3 terabytes per second (TB/s) of memory bandwidth per GPU."
+    ],
+    top_n=3,
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
 
 **Response:**
 ```json
