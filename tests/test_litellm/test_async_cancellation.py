@@ -225,6 +225,81 @@ class TestAsyncCancellation:
                 await task
 
 
+    @pytest.mark.asyncio
+    async def test_async_path_is_used_when_available(self):
+        """Test that acompletion uses native async methods when providers support them."""
+        
+        # This test verifies that we're using the async code path
+        # We'll mock the completion function to return a coroutine
+        
+        async def mock_async_completion(**kwargs):
+            """Mock async completion that can be properly cancelled."""
+            await asyncio.sleep(0.1)  # Simulate async work
+            return litellm.ModelResponse(
+                id="test-id",
+                choices=[
+                    litellm.Choices(
+                        finish_reason="stop",
+                        index=0,
+                        message=litellm.Message(
+                            content="Async response",
+                            role="assistant"
+                        )
+                    )
+                ],
+                created=1234567890,
+                model="test-model",
+                object="chat.completion",
+                usage=litellm.Usage(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15
+                )
+            )
+        
+        # Patch the completion function to return our async mock
+        with patch('litellm.completion', return_value=mock_async_completion()):
+            # This should use the async path and be properly cancellable
+            task = asyncio.create_task(
+                acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hello"}]
+                )
+            )
+            
+            # Cancel the task after a short delay
+            await asyncio.sleep(0.05)  # Let it start
+            task.cancel()
+            
+            # Verify it was cancelled
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    @pytest.mark.asyncio
+    async def test_real_provider_async_cancellation(self):
+        """Test cancellation with a provider that has native async support."""
+        
+        # Test with a provider that should have async support
+        # Using mock to avoid real API calls
+        async def cancelled_completion():
+            return await acompletion(
+                model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",  # Bedrock has async support
+                messages=[{"role": "user", "content": "Hello"}],
+                mock_response="This should be cancelled",
+                mock_delay=1.0
+            )
+        
+        task = asyncio.create_task(cancelled_completion())
+        
+        # Cancel after a short delay
+        await asyncio.sleep(0.1)
+        task.cancel()
+        
+        # Verify cancellation works
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

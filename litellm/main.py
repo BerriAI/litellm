@@ -560,19 +560,29 @@ async def acompletion(
         await asyncio.sleep(mock_delay)
 
     try:
-        # Use a partial function to pass your keyword arguments
-        func = partial(completion, **completion_kwargs, **kwargs)
-
-        # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-
-        # Run in executor and handle cancellation properly
-        try:
-            init_response = await loop.run_in_executor(None, func_with_context)
-        except asyncio.CancelledError:
-            # Re-raise the CancelledError to propagate cancellation
-            raise
+        # First, try calling completion directly to see if it returns a coroutine (native async)
+        # This allows providers with async implementations to be properly cancellable
+        init_response = completion(**completion_kwargs, **kwargs)
+        
+        # If the provider returned a coroutine, await it directly (fully cancellable)
+        if asyncio.iscoroutine(init_response):
+            try:
+                init_response = await init_response
+            except asyncio.CancelledError:
+                # Re-raise the CancelledError to propagate cancellation
+                raise
+        # If it's not a coroutine, we need to handle it differently
+        elif not isinstance(init_response, (dict, ModelResponse, CustomStreamWrapper)):
+            # This shouldn't happen in normal cases, but fallback to executor if needed
+            func = partial(completion, **completion_kwargs, **kwargs)
+            ctx = contextvars.copy_context()
+            func_with_context = partial(ctx.run, func)
+            
+            try:
+                init_response = await loop.run_in_executor(None, func_with_context)
+            except asyncio.CancelledError:
+                # Re-raise the CancelledError to propagate cancellation
+                raise
             
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
