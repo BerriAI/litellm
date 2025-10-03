@@ -27,7 +27,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from fastapi import HTTPException
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
