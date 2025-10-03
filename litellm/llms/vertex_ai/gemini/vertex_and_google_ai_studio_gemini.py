@@ -318,10 +318,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         }
     
         return cleaned_config, retrieval_config
+    
+    def get_tool_value(
+        self,
+        tool: dict, 
+        tool_name: str
+    ) -> Optional[dict]:
+        """
+        Helper function to get tool value handling both camelCase and underscore_case variants
 
-    def _map_function(
+        Args:
+            tool (dict): The tool dictionary
+            tool_name (str): The base tool name (e.g. "codeExecution")
+
+        Returns:
+            Optional[dict]: The tool value if found, None otherwise
+        """
+        # Convert camelCase to underscore_case
+        underscore_name = "".join(
+            ["_" + c.lower() if c.isupper() else c for c in tool_name]
+        ).lstrip("_")
+        # Try both camelCase and underscore_case variants
+
+        if tool.get(tool_name) is not None:
+            return tool.get(tool_name)
+        elif tool.get(underscore_name) is not None:
+            return tool.get(underscore_name)
+        else:
+            return None
+
+    def _map_function( # noqa: PLR0915
         self, value: List[dict], optional_params: dict
-    ) -> List[Tools]:  # noqa: PLR0915
+    ) -> List[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
         
@@ -348,30 +376,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
-
-        def get_tool_value(tool: dict, tool_name: str) -> Optional[dict]:
-            """
-            Helper function to get tool value handling both camelCase and underscore_case variants
-
-            Args:
-                tool (dict): The tool dictionary
-                tool_name (str): The base tool name (e.g. "codeExecution")
-
-            Returns:
-                Optional[dict]: The tool value if found, None otherwise
-            """
-            # Convert camelCase to underscore_case
-            underscore_name = "".join(
-                ["_" + c.lower() if c.isupper() else c for c in tool_name]
-            ).lstrip("_")
-            # Try both camelCase and underscore_case variants
-
-            if tool.get(tool_name) is not None:
-                return tool.get(tool_name)
-            elif tool.get(underscore_name) is not None:
-                return tool.get(underscore_name)
-            else:
-                return None
 
         for tool in value:
             openai_function_object: Optional[
@@ -404,19 +408,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if tool_name and (
                 tool_name == "codeExecution" or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
-                code_execution = get_tool_value(tool, "codeExecution")
+                code_execution = self.get_tool_value(tool, "codeExecution")
             elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
-                googleSearch = get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
+                googleSearch = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
             elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value:
-                googleSearchRetrieval = get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
+                googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
             elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
-                enterpriseWebSearch = get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
+                enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
             elif tool_name and tool_name == VertexToolName.URL_CONTEXT.value:
-                urlContext = get_tool_value(tool, VertexToolName.URL_CONTEXT.value)
+                urlContext = self.get_tool_value(tool, VertexToolName.URL_CONTEXT.value)
             elif tool_name and (
                 tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
             ):
-                google_maps_value = get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
+                google_maps_value = self.get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
                 
                 # Extract and transform location configuration for toolConfig
                 if google_maps_value is not None:
