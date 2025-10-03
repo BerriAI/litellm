@@ -3715,7 +3715,7 @@ async def high_frequency_database_jobs_coordinator(
         )
 
 
-async def low_frequency_database_jobs_coordinator(
+async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
