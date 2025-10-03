@@ -469,7 +469,7 @@ class ProxyInitializationHelpers:
 @click.option(
     "--use_prisma_db_push",
     is_flag=True,
-    default=True,
+    default=False,
     help="Use prisma db push instead of prisma migrate for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
