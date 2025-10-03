@@ -248,7 +248,7 @@ class GitLabPromptManager(CustomPromptManagement):
             "access_token": "glpat_***",
             "tag": "v1.2.3",          # optional; takes precedence
             "branch": "main",         # default fallback
-            "prompts_path": "prompts/chat"  # <--- NEW
+            "prompts_path": "prompts/chat"
         }
     """
 
@@ -486,3 +486,138 @@ class GitLabPromptManager(CustomPromptManagement):
             prompt_label,
             prompt_version,
         )
+
+
+class GitLabPromptCache:
+    """
+    Cache all .prompt files from a GitLab repo into memory.
+
+    - Keys are the *repo file paths* (e.g. "prompts/chat/greet/hi.prompt")
+      mapped to JSON-like dicts containing content + metadata.
+    - Also exposes a by-ID view (ID == path relative to prompts_path without ".prompt",
+      e.g. "greet/hi").
+
+    Usage:
+
+        cfg = {
+            "project": "group/subgroup/repo",
+            "access_token": "glpat_***",
+            "prompts_path": "prompts/chat",  # optional, can be empty for repo root
+            # "branch": "main",              # default is "main"
+            # "tag": "v1.2.3",               # takes precedence over branch
+            # "base_url": "https://gitlab.com/api/v4"  # default
+        }
+
+        cache = GitLabPromptCache(cfg)
+        cache.load_all()  # fetch + parse all .prompt files
+
+        print(cache.list_files())  # repo file paths
+        print(cache.list_ids())    # template IDs relative to prompts_path
+
+        prompt_json = cache.get_by_file("prompts/chat/greet/hi.prompt")
+        prompt_json2 = cache.get_by_id("greet/hi")
+
+        # If GitLab content changes and you want to refresh:
+        cache.reload()  # re-scan and refresh all
+    """
+
+    def __init__(
+            self,
+            gitlab_config: Dict[str, Any],
+            *,
+            ref: Optional[str] = None,
+            gitlab_client: Optional[GitLabClient] = None,
+    ) -> None:
+        # Build a PromptManager (which internally builds TemplateManager + Client)
+        self.prompt_manager = GitLabPromptManager(
+            gitlab_config=gitlab_config,
+            prompt_id=None,
+            ref=ref,
+            gitlab_client=gitlab_client,
+        )
+        self.template_manager: GitLabTemplateManager = self.prompt_manager.prompt_manager
+
+        # In-memory stores
+        self._by_file: Dict[str, Dict[str, Any]] = {}
+        self._by_id: Dict[str, Dict[str, Any]] = {}
+
+    # -------------------------
+    # Public API
+    # -------------------------
+
+    def load_all(self, *, recursive: bool = True) -> Dict[str, Dict[str, Any]]:
+        """
+        Scan GitLab for all .prompt files under prompts_path, load and parse each,
+        and return the mapping of repo file path -> JSON-like dict.
+        """
+        ids = self.template_manager.list_templates(recursive=recursive)  # IDs relative to prompts_path
+        for pid in ids:
+            # Ensure template is loaded into TemplateManager
+            if pid not in self.template_manager.prompts:
+                self.template_manager._load_prompt_from_gitlab(pid)
+
+            tmpl = self.template_manager.get_template(pid)
+            if tmpl is None:
+                # If something raced/failed, try once more
+                self.template_manager._load_prompt_from_gitlab(pid)
+                tmpl = self.template_manager.get_template(pid)
+            if tmpl is None:
+                continue
+
+            file_path = self.template_manager._id_to_repo_path(pid)  # "prompts/chat/..../file.prompt"
+            entry = self._template_to_json(pid, tmpl)
+
+            self._by_file[file_path] = entry
+            self._by_id[pid] = entry
+
+        return self._by_id
+
+    def reload(self, *, recursive: bool = True) -> Dict[str, Dict[str, Any]]:
+        """Clear the cache and re-load from GitLab."""
+        self._by_file.clear()
+        self._by_id.clear()
+        return self.load_all(recursive=recursive)
+
+    def list_files(self) -> List[str]:
+        """Return the repo file paths currently cached."""
+        return list(self._by_file.keys())
+
+    def list_ids(self) -> List[str]:
+        """Return the template IDs (relative to prompts_path, without extension) currently cached."""
+        return list(self._by_id.keys())
+
+    def get_by_file(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get a cached prompt JSON by repo file path."""
+        return self._by_file.get(file_path)
+
+    def get_by_id(self, prompt_id: str) -> Optional[Dict[str, Any]]:
+        """Get a cached prompt JSON by prompt ID (relative to prompts_path)."""
+        return self._by_id.get(prompt_id)
+
+    # -------------------------
+    # Internals
+    # -------------------------
+
+    def _template_to_json(self, prompt_id: str, tmpl: GitLabPromptTemplate) -> Dict[str, Any]:
+        """
+        Normalize a GitLabPromptTemplate into a JSON-like dict that is easy to serialize.
+        """
+        # Safer copy of metadata (avoid accidental mutation)
+        md = dict(tmpl.metadata or {})
+
+        # Pull standard fields (also present in metadata sometimes)
+        model = tmpl.model
+        temperature = tmpl.temperature
+        max_tokens = tmpl.max_tokens
+        optional_params = dict(tmpl.optional_params or {})
+
+        return {
+            "id": prompt_id,                                       # e.g. "greet/hi"
+            "path": self.template_manager._id_to_repo_path(prompt_id),          # e.g. "prompts/chat/greet/hi.prompt"
+            "content": tmpl.content,                                # rendered content (without frontmatter)
+            "metadata": md,                                         # parsed frontmatter
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "optional_params": optional_params,
+        }

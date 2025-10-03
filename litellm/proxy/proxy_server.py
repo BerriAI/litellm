@@ -3028,6 +3028,7 @@ class ProxyConfig:
         await self._init_mcp_servers_in_db()
         await self._init_pass_through_endpoints_in_db()
         await self._init_prompts_in_db(prisma_client=prisma_client)
+        await self._init_unified_prompts()
         await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
     async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
@@ -3143,6 +3144,19 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - {}".format(
                     str(e)
                 )
+            )
+
+    async def _init_unified_prompts(self):
+        from litellm.proxy.prompts.prompt_registry import PROMPT_HUB
+
+        try:
+            prompts = PROMPT_HUB.load_all()
+            verbose_proxy_logger.debug(
+                f"found these prompts {list(prompts.keys())}"
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"litellm.proxy.proxy_server.py::ProxyConfig:_init_unified_prompts - {str(e)}"
             )
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
