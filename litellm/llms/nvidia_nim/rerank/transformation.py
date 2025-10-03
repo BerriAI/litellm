@@ -113,23 +113,19 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
         """
-        optional_params = dict(OptionalRerankParams(
-            query=query,
-            documents=documents,
-        ))
+        optional_nvidia_nim_rerank_params = {
+            "query": query,
+            "documents": documents,
+        }
         
         # Map Cohere's top_n to Nvidia's top_k
         if top_n is not None:
-            optional_params["top_k"] = top_n
+            optional_nvidia_nim_rerank_params["top_k"] = top_n
         
         # Pass through Nvidia-specific params from non_default_params
         if non_default_params:
-            # Add provider-specific params like 'truncate'
-            for key in ["truncate"]:
-                if key in non_default_params:
-                    optional_params[key] = non_default_params[key]
-        
-        return optional_params
+            optional_nvidia_nim_rerank_params.update(non_default_params)
+        return dict(optional_nvidia_nim_rerank_params)
 
     def validate_environment(
         self,
