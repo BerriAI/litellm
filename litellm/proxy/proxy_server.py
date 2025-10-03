@@ -532,7 +532,21 @@ def cleanup_router_config_variables():
 
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
+    global _scheduler_instance
+    
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    
+    # Shutdown APScheduler first (before disconnecting other resources)
+    if _scheduler_instance is not None:
+        try:
+            verbose_proxy_logger.info("Shutting down APScheduler...")
+            _scheduler_instance.shutdown(wait=False)  # Don't wait for running jobs
+            _scheduler_instance = None
+            verbose_proxy_logger.info("APScheduler shutdown complete")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error shutting down scheduler: {e}")
+    
+    # Then disconnect database (after scheduler is stopped)
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -1004,6 +1018,9 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
+### SCHEDULER INSTANCE ###
+_scheduler_instance = None  # Track APScheduler instance for proper shutdown
 
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
@@ -3861,6 +3878,8 @@ class ProxyStartupEvent:
         Args:
             scheduler: The scheduler to add the background jobs to
         """
+        global _scheduler_instance
+        _scheduler_instance = scheduler
         ########################################################
         # CloudZero Background Job
         ########################################################
