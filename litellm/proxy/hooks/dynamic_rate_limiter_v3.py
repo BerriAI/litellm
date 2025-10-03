@@ -257,7 +257,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             },
         )
 
-    async def _handle_generous_mode(
+    async def _enforce_model_wide_limit(
         self,
         model: str,
         model_group_info: ModelGroupInfo,
@@ -265,10 +265,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         key_priority: Optional[str],
     ) -> None:
         """
-        Handle rate limiting in generous mode (under saturation threshold).
+        Enforce model-wide rate limit (hard capacity limit).
         
-        In this mode, we enforce model-wide capacity but NOT priority-specific limits.
-        This allows lower-priority users to borrow unused capacity from higher-priority users.
+        This is ALWAYS enforced regardless of saturation level to prevent exceeding
+        the model's actual capacity (e.g., 100 RPM in config).
         
         Args:
             model: Model name
@@ -282,7 +282,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         descriptor = self._create_model_tracking_descriptor(
             model=model,
             model_group_info=model_group_info,
-            high_limit_multiplier=1,  # Enforce actual limits in generous mode
+            high_limit_multiplier=1,  # Enforce actual limits (no multiplier)
         )
         
         response = await self.v3_limiter.should_rate_limit(
@@ -308,7 +308,20 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         },
                     )
 
-    async def _handle_strict_mode(
+    def _should_check_priority_limits(self, saturation: float) -> bool:
+        """
+        Determine if priority-specific limits should be enforced based on saturation.
+        
+        Args:
+            saturation: Current saturation level (0.0 to 1.0+)
+            
+        Returns:
+            True if saturation >= threshold, False otherwise
+        """
+        saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
+        return saturation >= saturation_threshold
+
+    async def _enforce_priority_limits(
         self,
         model: str,
         model_group_info: ModelGroupInfo,
@@ -318,9 +331,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         data: dict,
     ) -> None:
         """
-        Handle rate limiting in strict mode (above saturation threshold).
+        Enforce priority-specific rate limits (only when saturated).
         
-        In this mode, we enforce priority-specific limits using normalized weights.
+        This is an ADDITIONAL constraint on top of model-wide limits, only enforced
+        when saturation >= threshold. Ensures fairness among different priority levels.
         
         Args:
             model: Model name
@@ -343,22 +357,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if not descriptors:
             verbose_proxy_logger.debug("No rate limit descriptors created, allowing request")
             return
-
-        # Track model-wide usage for future saturation checks
-        # Why tracking_multiplier: v3_limiter.should_rate_limit() both increments AND checks limits.
-        # We need the increment (for saturation detection) but NOT the limit check (priority limits handle enforcement).
-        # Setting limit to 10x capacity ensures tracking never blocks while keeping accurate counters.
-        tracking_multiplier = litellm.priority_reservation_settings.tracking_multiplier
-        tracking_descriptor = self._create_model_tracking_descriptor(
-            model=model,
-            model_group_info=model_group_info,
-            high_limit_multiplier=tracking_multiplier,
-        )
-        
-        await self.v3_limiter.should_rate_limit(
-            descriptors=[tracking_descriptor],
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-        )
         
         # Enforce priority-specific limits
         response = await self.v3_limiter.should_rate_limit(
@@ -409,9 +407,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """
         Saturation-aware pre-call hook for priority-based rate limiting.
         
-        This hook implements a two-mode rate limiting strategy:
-        - Generous mode (< 80% saturation): Enforces model capacity, allows priority borrowing
-        - Strict mode (>= 80% saturation): Enforces normalized priority-based limits
+        Flow:
+        1. ALWAYS enforce model-wide hard limit (e.g., 100 RPM from config)
+        2. Check current saturation level
+        3. If saturated (>= threshold): ALSO enforce priority-specific limits
+        
+        This ensures:
+        - Model capacity is never exceeded (prevents >100% saturation)
+        - When under-saturated: all priorities can use available capacity
+        - When saturated: fair allocation based on normalized priority weights
         
         Args:
             user_api_key_dict: User authentication and metadata
@@ -436,8 +440,16 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.debug(f"No model group info for {model}, allowing request")
             return None
 
-        # Check current saturation level
         try:
+            # STEP 1: ALWAYS enforce model-wide hard limit (prevents exceeding capacity)
+            await self._enforce_model_wide_limit(
+                model=model,
+                model_group_info=model_group_info,
+                user_api_key_dict=user_api_key_dict,
+                key_priority=key_priority,
+            )
+            
+            # STEP 2: Check current saturation level
             saturation = await self._check_model_saturation(model, model_group_info)
             
             saturation_threshold = litellm.priority_reservation_settings.saturation_threshold
@@ -449,16 +461,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             
             data["litellm_model_saturation"] = saturation
             
-            # Route to appropriate mode based on saturation
-            if saturation < saturation_threshold:
-                await self._handle_generous_mode(
-                    model=model,
-                    model_group_info=model_group_info,
-                    user_api_key_dict=user_api_key_dict,
-                    key_priority=key_priority,
-                )
-            else:
-                await self._handle_strict_mode(
+            # STEP 3: If saturated, ALSO enforce priority-specific limits
+            if self._should_check_priority_limits(saturation=saturation):
+                await self._enforce_priority_limits(
                     model=model,
                     model_group_info=model_group_info,
                     user_api_key_dict=user_api_key_dict,
