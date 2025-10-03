@@ -7208,6 +7208,8 @@ class ProviderConfigManager:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:
             return litellm.DeepinfraRerankConfig()
+        elif litellm.LlmProviders.NVIDIA_NIM == provider:
+            return litellm.NvidiaNimRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

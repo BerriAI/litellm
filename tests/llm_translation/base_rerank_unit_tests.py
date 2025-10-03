@@ -83,6 +83,14 @@ class BaseLLMRerankTest(ABC):
         """Must return the custom llm provider"""
         pass
 
+    def get_expected_cost(self) -> float:
+        """
+        Override this method to set the expected cost for the rerank call.
+        Default is None, which means the test will check cost > 0.
+        Return 0.0 for free models.
+        """
+        return None
+
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
@@ -105,7 +113,18 @@ class BaseLLMRerankTest(ABC):
             assert response.results is not None
 
             assert response._hidden_params["response_cost"] is not None
-            assert response._hidden_params["response_cost"] > 0
+            
+            # Check expected cost
+            expected_cost = self.get_expected_cost()
+            if expected_cost is not None:
+                # If expected cost is specified, check exact match or >= for 0
+                if expected_cost == 0.0:
+                    assert response._hidden_params["response_cost"] >= 0
+                else:
+                    assert response._hidden_params["response_cost"] == expected_cost
+            else:
+                # Default behavior: cost should be greater than 0
+                assert response._hidden_params["response_cost"] > 0
 
             assert_response_shape(
                 response=response, custom_llm_provider=custom_llm_provider.value

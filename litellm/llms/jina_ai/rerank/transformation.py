@@ -6,11 +6,11 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import URL, Response
 
+from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.types.rerank import (
@@ -45,15 +45,15 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         optional_params = {}
         supported_params = self.get_supported_cohere_rerank_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
-        return OptionalRerankParams(
+        return dict(OptionalRerankParams(
             **optional_params,
-        )
+        ))
 
     def get_complete_url(self, api_base: Optional[str], model: str) -> str:
         base_path = "/v1/rerank"
@@ -67,7 +67,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return cleaned_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: OptionalRerankParams, headers: Dict
+        self, model: str, optional_rerank_params: Dict, headers: Dict
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
