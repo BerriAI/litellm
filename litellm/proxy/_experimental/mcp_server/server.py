@@ -361,22 +361,66 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def _tool_name_matches(tool_name: str, filter_list: List[str]) -> bool:
+        """
+        Check if a tool name matches any name in the filter list.
+        
+        Checks both the full tool name and unprefixed version (without server prefix).
+        This allows users to configure simple tool names regardless of prefixing.
+        
+        Args:
+            tool_name: The tool name to check (may be prefixed like "server-tool_name")
+            filter_list: List of tool names to match against
+            
+        Returns:
+            True if the tool name (prefixed or unprefixed) is in the filter list
+        """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            get_server_name_prefix_tool_mcp,
+        )
+        
+        # Check if the full name is in the list
+        if tool_name in filter_list:
+            return True
+            
+        # Check if the unprefixed name is in the list
+        unprefixed_name, _ = get_server_name_prefix_tool_mcp(tool_name)
+        return unprefixed_name in filter_list
+
     def filter_tools_by_allowed_tools(
         tools: List[MCPTool],
         mcp_server: MCPServer,
     ) -> List[MCPTool]:
         """
-        Filter tools by allowed tools
+        Filter tools by allowed/disallowed tools configuration.
+        
+        If allowed_tools is set, only tools in that list are returned.
+        If disallowed_tools is set, tools in that list are excluded.
+        Tool names are matched with and without server prefixes for flexibility.
+        
+        Args:
+            tools: List of tools to filter
+            mcp_server: Server configuration with allowed_tools/disallowed_tools
+            
+        Returns:
+            Filtered list of tools
         """
         tools_to_return = tools
+        
+        # Filter by allowed_tools (whitelist)
         if mcp_server.allowed_tools:
             tools_to_return = [
-                tool for tool in tools if tool.name in mcp_server.allowed_tools
+                tool for tool in tools 
+                if _tool_name_matches(tool.name, mcp_server.allowed_tools)
             ]
+                    
+        # Filter by disallowed_tools (blacklist)
         if mcp_server.disallowed_tools:
             tools_to_return = [
-                tool for tool in tools if tool.name not in mcp_server.disallowed_tools
+                tool for tool in tools_to_return
+                if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
             ]
+            
         return tools_to_return
 
     async def _get_tools_from_mcp_servers(
@@ -453,9 +497,12 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=add_prefix,
                 )
-                all_tools.extend(filter_tools_by_allowed_tools(tools, server))
+                
+                filtered_tools = filter_tools_by_allowed_tools(tools, server)
+                all_tools.extend(filtered_tools)
+                
                 verbose_logger.debug(
-                    f"Successfully fetched {len(tools)} tools from server {server.name}"
+                    f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
             except Exception as e:
                 verbose_logger.exception(
