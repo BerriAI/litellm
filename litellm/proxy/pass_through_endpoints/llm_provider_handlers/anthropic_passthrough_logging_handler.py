@@ -20,7 +20,7 @@ from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
-    from ..types import EndpointType
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -228,6 +228,7 @@ class AnthropicPassthroughLoggingHandler:
             except (StopIteration, StopAsyncIteration):
                 break
         complete_streaming_response = litellm.stream_chunk_builder(
-            chunks=all_openai_chunks
+            chunks=all_openai_chunks,
+            logging_obj=litellm_logging_obj,
         )
         return complete_streaming_response
