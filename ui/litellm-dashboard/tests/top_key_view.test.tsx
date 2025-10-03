@@ -1,4 +1,3 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderWithProviders, screen, fireEvent } from './test-utils';
 import TopKeyView from '../src/components/top_key_view';
@@ -85,17 +84,48 @@ describe('TopKeyView', () => {
       expect(screen.getByText('staging...')).toBeInTheDocument();
     });
 
-    it('should display all expected tag pills', () => {
-      // Verify all tag pills are rendered
-      const expectedTags = [
-        'product...', 'high-vo...', 'api-cal...', // Production Key tags
-        'staging...', 'testing...', 'develop...', // Staging Key tags  
-        'dev...', 'experim...' // Development Key tags
-      ];
+    it('should display top 2 tags by default (sorted by spend)', () => {
+      // Only the top 2 tags by spend should be visible initially
+      // Production Key: high-volume (125.50), production (0.005) - sorted by spend
+      expect(screen.getByText('high-vo...')).toBeInTheDocument();
+      expect(screen.getByText('product...')).toBeInTheDocument();
       
-      expectedTags.forEach(tag => {
-        expect(screen.getByText(tag)).toBeInTheDocument();
-      });
+      // Staging Key: staging (45.75), development (12.25) - sorted by spend  
+      expect(screen.getByText('staging...')).toBeInTheDocument();
+      expect(screen.getByText('develop...')).toBeInTheDocument();
+      
+      // Development Key: dev (0.002), experimental (0.001) - sorted by spend
+      expect(screen.getByText('dev...')).toBeInTheDocument();
+      expect(screen.getByText('experim...')).toBeInTheDocument();
+      
+      // These should NOT be visible initially (3rd+ tags)
+      expect(screen.queryByText('api-cal...')).not.toBeInTheDocument();
+      expect(screen.queryByText('testing...')).not.toBeInTheDocument();
+    });
+
+    it('should show expand/collapse arrows for keys with more than 2 tags', () => {
+      // Production Key has 3 tags, so it should have an expand arrow
+      // Look for the chevron down icon (expand button)
+      const expandButtons = screen.getAllByRole('button');
+      const expandButton = expandButtons.find(button => 
+        button.getAttribute('title') === 'Show all tags'
+      );
+      expect(expandButton).toBeInTheDocument();
+    });
+
+    it('should show all tags when expanded', async () => {
+      // Find and click the expand button for Production Key (has 3 tags)
+      const expandButtons = screen.getAllByRole('button');
+      const expandButton = expandButtons.find(button => 
+        button.getAttribute('title') === 'Show all tags'
+      );
+      
+      if (expandButton) {
+        fireEvent.click(expandButton);
+        
+        // Now all tags should be visible
+        expect(screen.getByText('api-cal...')).toBeInTheDocument();
+      }
     });
 
     it('should show tooltip on hover with tag information', async () => {
@@ -121,9 +151,15 @@ describe('TopKeyView', () => {
     it('should handle micro spend amounts', () => {
       renderWithProviders(<TopKeyView {...mockProps} topKeys={mockKeysWithTags} showTags={true} />);
       
-      // Test that very small amounts are displayed
+      // Test that very small amounts are displayed (only the top 2 tags are visible by default)
+      // product... has usage: 0.005 (<$0.01)
       expect(screen.getByText('product...')).toBeInTheDocument();
-      expect(screen.getByText('api-cal...')).toBeInTheDocument();
+      
+      // dev... has usage: 0.002 (<$0.01) 
+      expect(screen.getByText('dev...')).toBeInTheDocument();
+      
+      // experimental... has usage: 0.001 (<$0.01)
+      expect(screen.getByText('experim...')).toBeInTheDocument();
     });
   });
 
