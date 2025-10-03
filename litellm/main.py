@@ -567,21 +567,10 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        # Create a task for the executor to allow proper cancellation handling
-        executor_task = asyncio.create_task(
-            loop.run_in_executor(None, func_with_context)
-        )
-        
+        # Run in executor and handle cancellation properly
         try:
-            init_response = await executor_task
+            init_response = await loop.run_in_executor(None, func_with_context)
         except asyncio.CancelledError:
-            # If the task was cancelled, we need to ensure proper cleanup
-            # The executor task should be cancelled as well
-            executor_task.cancel()
-            try:
-                await executor_task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling
             # Re-raise the CancelledError to propagate cancellation
             raise
             
