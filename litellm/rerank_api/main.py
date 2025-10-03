@@ -318,8 +318,7 @@ def rerank(  # noqa: PLR0915
             # Note: For rerank, the base URL is different from chat/embeddings
             # Rerank uses ai.api.nvidia.com instead of integrate.api.nvidia.com
             api_base = (
-                dynamic_api_base
-                or optional_params.api_base
+                optional_params.api_base
                 or get_secret("NVIDIA_NIM_API_BASE")  # type: ignore
                 or "https://ai.api.nvidia.com"  # Default for rerank
             )
