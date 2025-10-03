@@ -19,13 +19,17 @@ Nvidia NIM rerank models help you:
 - Filter and rank large document sets efficiently
 
 **Supported Models:**
-- `nvidia/llama-3_2-nv-rerankqa-1b-v2` (1B parameters)
-- `nvidia/nv-rerankqa-mistral-4b-v3` (4B parameters)
 - All Nvidia NIM rerank models on their platform
 
-## Quick Start
+:::tip
 
-### Basic Usage
+See the full list of LiteLLM supported Nvidia NIM rerank models on [Nvidia NIM](https://models.litellm.ai)
+
+:::
+
+## Usage
+
+### LiteLLM Python SDK
 
 <Tabs>
 <TabItem value="llama-1b" label="LLaMa 1B Model">
@@ -98,54 +102,6 @@ print(response)
 }
 ```
 
-## API Parameters
-
-### Required Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | string | The Nvidia NIM rerank model name with `nvidia_nim/` prefix |
-| `query` | string | The search query to rank documents against |
-| `documents` | array | List of documents to rank (1-1000 documents) |
-
-### Optional Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `top_n` | integer | All documents | Number of top-ranked documents to return |
-| `truncate` | string | `"END"` | How to truncate long inputs: `"NONE"` or `"END"` |
-
-### Nvidia-Specific Parameters
-
-**`truncate`**: Controls how text is truncated if it exceeds the model's context window
-- `"NONE"`: No truncation (request may fail if too long)
-- `"END"`: Truncate from the end of the text
-
-```python
-response = litellm.rerank(
-    model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
-    query="GPU performance",
-    documents=["High performance computing", "Fast GPU processing"],
-    top_n=2,
-    truncate="END",  # Nvidia-specific parameter
-)
-```
-
-## Model Name Format
-
-**Important:** Use underscores (`_`) instead of periods (`.`) in version numbers for the model name.
-
-✅ **Correct:**
-```python
-model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2"
-```
-
-❌ **Incorrect:**
-```python
-model="nvidia_nim/nvidia/llama-3.2-nv-rerankqa-1b-v2"  # Don't use periods
-```
-
-LiteLLM automatically converts underscores to periods when making API requests to Nvidia.
 
 ## Usage with LiteLLM Proxy
 
@@ -169,42 +125,6 @@ litellm --config /path/to/config.yaml
 
 ### 3. Make Rerank Requests
 
-<Tabs>
-<TabItem value="python" label="Python">
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",  # Your proxy key
-)
-
-# Note: OpenAI SDK doesn't have native rerank support
-# Use requests or httpx instead
-import requests
-
-response = requests.post(
-    "http://0.0.0.0:4000/rerank",
-    headers={"Authorization": "Bearer sk-1234"},
-    json={
-        "model": "nvidia-rerank",
-        "query": "What is the GPU memory bandwidth of H100?",
-        "documents": [
-            "H100 delivers 3TB/s memory bandwidth",
-            "A100 has 2TB/s memory bandwidth",
-            "V100 offers 900GB/s memory bandwidth"
-        ],
-        "top_n": 2
-    }
-)
-
-print(response.json())
-```
-
-</TabItem>
-<TabItem value="curl" label="Curl">
-
 ```bash
 curl -X POST http://0.0.0.0:4000/rerank \
   -H "Authorization: Bearer sk-1234" \
@@ -221,70 +141,36 @@ curl -X POST http://0.0.0.0:4000/rerank \
   }'
 ```
 
-</TabItem>
-</Tabs>
+## API Parameters
 
-## Advanced Usage
+### Required Parameters
 
-### Document Objects
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `model` | string | The Nvidia NIM rerank model name with `nvidia_nim/` prefix |
+| `query` | string | The search query to rank documents against |
+| `documents` | array | List of documents to rank (1-1000 documents) |
 
-You can pass documents as objects with a `text` field:
+### Optional Parameters
 
-```python
-response = litellm.rerank(
-    model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
-    query="Best GPU for AI",
-    documents=[
-        {"text": "H100 is optimized for AI workloads", "id": "doc1"},
-        {"text": "A100 provides excellent performance", "id": "doc2"},
-    ],
-    top_n=1,
-)
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `top_n` | integer | All documents | Number of top-ranked documents to return |
 
-### Handling Long Documents
+### Nvidia-Specific Parameters
 
-Use the `truncate` parameter to handle documents that exceed the model's context window:
+**`truncate`**: Controls how text is truncated if it exceeds the model's context window
+- `"NONE"`: No truncation (request may fail if too long)
+- `"END"`: Truncate from the end of the text
 
 ```python
 response = litellm.rerank(
     model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
-    query="Technical specifications",
-    documents=[very_long_document_1, very_long_document_2],
-    truncate="END",  # Automatically truncate from the end
+    query="GPU performance",
+    documents=["High performance computing", "Fast GPU processing"],
+    top_n=2,
+    truncate="END",  # Nvidia-specific parameter
 )
-```
-
-## Cost Tracking
-
-LiteLLM automatically tracks rerank API costs for Nvidia NIM models when configured with pricing information.
-
-```python
-response = litellm.rerank(
-    model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
-    query="AI performance",
-    documents=["doc1", "doc2", "doc3"],
-)
-
-# Access cost information
-print(f"Cost: ${response._hidden_params.get('response_cost', 0)}")
-```
-
-## Error Handling
-
-```python
-try:
-    response = litellm.rerank(
-        model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
-        query="test query",
-        documents=["doc1", "doc2"],
-    )
-except litellm.exceptions.APIConnectionError as e:
-    print(f"Connection error: {e}")
-except litellm.exceptions.RateLimitError as e:
-    print(f"Rate limit exceeded: {e}")
-except Exception as e:
-    print(f"Error: {e}")
 ```
 
 ## Authentication
