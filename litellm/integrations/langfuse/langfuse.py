@@ -194,6 +194,7 @@ class LangFuseLogger:
             metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
             optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
+            optional_params = self._sanitize_optional_params(optional_params)
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -205,13 +206,14 @@ class LangFuseLogger:
                 prompt["tools"] = tools
 
             # langfuse only accepts str, int, bool, float for logging
-            for param, value in optional_params.items():
-                if not isinstance(value, (str, int, bool, float)):
-                    try:
-                        optional_params[param] = str(value)
-                    except Exception:
-                        # if casting value to str fails don't block logging
-                        pass
+            if isinstance(optional_params, dict):
+                for param, value in optional_params.items():
+                    if not isinstance(value, (str, int, bool, float)):
+                        try:
+                            optional_params[param] = str(value)
+                        except Exception:
+                            # if casting value to str fails don't block logging
+                            pass
 
             input, output = self._get_langfuse_input_output_content(
                 kwargs=kwargs,
@@ -354,6 +356,105 @@ class LangFuseLogger:
 
         return Version(langfuse.version.__version__) >= Version("2.0.0")
 
+    @staticmethod
+    def _usage_object_to_dict(usage_obj: Any) -> Dict[str, Any]:
+        if usage_obj is None:
+            return {}
+        if isinstance(usage_obj, dict):
+            return usage_obj
+        if hasattr(usage_obj, "model_dump") and callable(getattr(usage_obj, "model_dump")):
+            try:
+                dumped = usage_obj.model_dump()
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+
+        usage_dict: Dict[str, Any] = {}
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+        ):
+            value = getattr(usage_obj, key, None)
+            if value is not None:
+                usage_dict[key] = value
+        return usage_dict
+
+    def _usage_to_langfuse_payload(
+        self,
+        usage_obj: Any,
+        *,
+        include_total_cost: bool = False,
+        total_cost: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        usage_dict = self._usage_object_to_dict(usage_obj)
+
+        if not usage_dict and not (include_total_cost and total_cost is not None):
+            return None
+
+        prompt_tokens = usage_dict.get("prompt_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = usage_dict.get("input_tokens")
+
+        completion_tokens = usage_dict.get("completion_tokens")
+        if completion_tokens is None:
+            completion_tokens = usage_dict.get("output_tokens")
+
+        total_tokens = usage_dict.get("total_tokens")
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+
+        payload: Dict[str, Any] = {}
+        if prompt_tokens is not None:
+            payload["prompt_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            payload["completion_tokens"] = completion_tokens
+        if total_tokens is not None:
+            payload["total_tokens"] = total_tokens
+        if include_total_cost and total_cost is not None:
+            payload["total_cost"] = total_cost
+
+        if not payload:
+            return None
+
+        return payload
+
+    @staticmethod
+    def _sanitize_optional_params(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+
+        if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
+            try:
+                return LangFuseLogger._sanitize_optional_params(value.model_dump())
+            except Exception:
+                return str(value)
+
+        if isinstance(value, dict):
+            sanitized: Dict[Any, Any] = {}
+            for key, item in value.items():
+                sanitized_key = (
+                    key if isinstance(key, (str, int, float, bool)) else str(key)
+                )
+                sanitized[sanitized_key] = LangFuseLogger._sanitize_optional_params(item)
+            return sanitized
+
+        if isinstance(value, (list, tuple)):
+            sanitized_items = [LangFuseLogger._sanitize_optional_params(item) for item in value]
+            return tuple(sanitized_items) if isinstance(value, tuple) else sanitized_items
+
+        if isinstance(value, set):
+            return [LangFuseLogger._sanitize_optional_params(item) for item in value]
+
+        return str(value)
+
     def _log_langfuse_v1(
         self,
         user_id,
@@ -381,6 +482,12 @@ class LangFuseLogger:
             )
         )
 
+        usage_payload = None
+        if response_obj is not None:
+            usage_payload = self._usage_to_langfuse_payload(
+                getattr(response_obj, "usage", None)
+            )
+
         trace.generation(
             CreateGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
@@ -390,10 +497,7 @@ class LangFuseLogger:
                 modelParameters=optional_params,
                 prompt=input,
                 completion=output,
-                usage={
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                },
+                usage=usage_payload,
                 metadata=metadata,
             )
         )
@@ -604,17 +708,51 @@ class LangFuseLogger:
                     generation_id = litellm.utils.get_logging_id(start_time, response_obj)
                 _usage_obj = getattr(response_obj, "usage", None)
 
-                if _usage_obj:
-                    usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
-                        "total_cost": cost if self._supports_costs() else None,
-                    }
-                    usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
-                                                        output=_usage_obj.completion_tokens,
-                                                        total=_usage_obj.total_tokens,
-                                                        cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
-                                                        cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
+                if _usage_obj is not None:
+                    usage = self._usage_to_langfuse_payload(
+                        _usage_obj,
+                        include_total_cost=self._supports_costs(),
+                        total_cost=cost,
+                    )
+
+                    usage_dict = self._usage_object_to_dict(_usage_obj)
+                    prompt_tokens = usage_dict.get("prompt_tokens")
+                    if prompt_tokens is None:
+                        prompt_tokens = usage_dict.get("input_tokens")
+
+                    completion_tokens = usage_dict.get("completion_tokens")
+                    if completion_tokens is None:
+                        completion_tokens = usage_dict.get("output_tokens")
+
+                    total_tokens = usage_dict.get("total_tokens")
+                    if (
+                        total_tokens is None
+                        and prompt_tokens is not None
+                        and completion_tokens is not None
+                    ):
+                        total_tokens = prompt_tokens + completion_tokens
+
+                    cache_creation_input_tokens = usage_dict.get(
+                        "cache_creation_input_tokens", 0
+                    )
+                    cache_read_input_tokens = usage_dict.get(
+                        "cache_read_input_tokens", 0
+                    )
+
+                    if (
+                        prompt_tokens is not None
+                        or completion_tokens is not None
+                        or total_tokens is not None
+                        or cache_creation_input_tokens
+                        or cache_read_input_tokens
+                    ):
+                        usage_details = LangfuseUsageDetails(
+                            input=prompt_tokens,
+                            output=completion_tokens,
+                            total=total_tokens,
+                            cache_creation_input_tokens=cache_creation_input_tokens,
+                            cache_read_input_tokens=cache_read_input_tokens,
+                        )
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
