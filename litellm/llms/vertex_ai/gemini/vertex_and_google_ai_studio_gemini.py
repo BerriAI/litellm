@@ -279,7 +279,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _extract_google_maps_retrieval_config(
         self, google_maps_config: dict
-    ) -> tuple[dict, Optional[dict]]:
+    ) -> Tuple[dict, Optional[dict]]:
         """
         Extract location configuration from googleMaps tool for Vertex AI toolConfig.
         
