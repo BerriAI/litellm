@@ -3939,9 +3939,12 @@ class ProxyStartupEvent:
         
         This prevents high-frequency tasks (10s) from being blocked by low-frequency tasks (60s+).
         """
-        global store_model_in_db, llm_router, db_writer_client, proxy_config
+        global store_model_in_db, llm_router, db_writer_client, proxy_config, _scheduler_instance
         
         scheduler = AsyncIOScheduler()
+        
+        # Assign to global variable immediately after creation for proper lifecycle management
+        _scheduler_instance = scheduler
         
         # Initialize the coordinator state tracker (shared by both coordinators)
         coordinator = DatabaseJobsCoordinator()
@@ -4056,8 +4059,6 @@ class ProxyStartupEvent:
         Args:
             scheduler: The scheduler to add the background jobs to
         """
-        global _scheduler_instance
-        _scheduler_instance = scheduler
         ########################################################
         # CloudZero Background Job
         ########################################################
