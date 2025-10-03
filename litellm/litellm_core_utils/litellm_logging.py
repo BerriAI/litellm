@@ -3669,6 +3669,25 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             bitbucket_logger = BitBucketPromptManager(bitbucket_config=bitbucket_config)
             _in_memory_loggers.append(bitbucket_logger)
             return bitbucket_logger  # type: ignore
+        elif logging_integration == "gitlab":
+            from litellm.integrations.gitlab.gitlab_prompt_manager import (
+                GitLabPromptManager,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GitLabPromptManager):
+                    return callback
+
+            # Get global BitBucket config
+            gitlab_config = getattr(litellm, "global_gitlab_config", None)
+            if gitlab_config is None:
+                raise ValueError(
+                    "Gitlab configuration not found. Please set litellm.global_gitlab_config first."
+                )
+
+            gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
+            _in_memory_loggers.append(gitlab_logger)
+            return gitlab_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(

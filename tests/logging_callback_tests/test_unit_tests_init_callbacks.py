@@ -102,13 +102,20 @@ async def use_callback_in_llm_call(
     elif callback == "openmeter":
         # it's currently handled in jank way, TODO: fix openmete and then actually run it's test
         return
-    elif callback == "bitbucket":
+    elif callback == "bitbucket" or callback == "gitlab":
         # Set up mock bitbucket configuration required for initialization
         litellm.global_bitbucket_config = {
             "workspace": "test-workspace",
             "repository": "test-repo",
             "access_token": "test-token",
             "branch": "main"
+        }
+        litellm.global_gitlab_config = {
+            "project": "a/b/<repo_name>",
+            "access_token": "your-access-token",
+            "base_url": "gitlab url",
+            "prompts_path": "src/prompts", # folder to point to, defaults to root
+            "branch":"main"  # optional, defaults to main
         }
         # Mock BitBucket HTTP calls to prevent actual API requests
         import httpx

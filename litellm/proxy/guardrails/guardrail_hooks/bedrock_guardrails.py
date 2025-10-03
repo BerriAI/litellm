@@ -727,6 +727,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             return
 
+        outputs: List[BedrockGuardrailOutput] = (
+            response.get("outputs", []) or []
+        )
+        if not any(output.get("text") for output in outputs):
+            verbose_proxy_logger.warning(
+                "Bedrock AI: not running guardrail. No output text in response"
+            )
+            return
+
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
         #########################################################

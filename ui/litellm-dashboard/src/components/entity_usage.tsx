@@ -24,7 +24,7 @@ import {
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
-import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
+import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata, TagUsage } from './usage/types';
 import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -175,8 +175,25 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   const getTopAPIKeys = () => {
+    console.log('debugTags',{spendData})
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     spendData.results.forEach((day) => {
+      const {breakdown} = day;
+      const {entities} = breakdown;
+      console.log('debugTags',{entities})
+      const tagDictionary  = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
+        const {api_key_breakdown} = entities[entity];
+        Object.keys(api_key_breakdown).forEach((key) => {
+          const tagUsage = {tag:entity,usage:api_key_breakdown[key].metrics.spend};
+          if (acc[key]) {
+            acc[key].push(tagUsage);
+          } else {
+            acc[key] = [tagUsage];
+          }
+        })
+        return acc;
+      },{})
+      console.log('debugTags',{tagDictionary})
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
         if (!keySpend[key]) {
           keySpend[key] = {
@@ -193,9 +210,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             },
             metadata: {
               key_alias: metrics.metadata.key_alias,
-              team_id: metrics.metadata.team_id || null
+              team_id: metrics.metadata.team_id || null,
+              tags: tagDictionary[key] || []
             }
           };
+          console.log('debugTags',{keySpend})
         }
         keySpend[key].metrics.spend += metrics.metrics.spend;
         keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
@@ -218,6 +237,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       .map(([api_key, metrics]) => ({
         api_key,
         key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+        tags: metrics.metadata.tags || "-",
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
@@ -623,6 +643,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     userRole={userRole}
                     teams={null}
                     premiumUser={premiumUser}
+                    showTags={entityType === "tag"}
                   />
                 </Card>
               </Col>
