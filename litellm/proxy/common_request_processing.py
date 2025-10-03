@@ -735,7 +735,6 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
-        from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
         verbose_proxy_logger.debug("inside generator")
         try:
