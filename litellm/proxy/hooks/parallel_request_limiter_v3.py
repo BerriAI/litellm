@@ -20,6 +20,8 @@ from typing import (
     cast,
 )
 
+from fastapi import HTTPException
+
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
