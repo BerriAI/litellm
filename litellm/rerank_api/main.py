@@ -309,7 +309,7 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
-        elif _custom_llm_provider == "nvidia_nim":
+        elif _custom_llm_provider == litellm.LlmProviders.NVIDIA_NIM:
             if dynamic_api_key is None:
                 raise ValueError(
                     "Nvidia NIM API key is required, please set 'NVIDIA_NIM_API_KEY' in your environment"
