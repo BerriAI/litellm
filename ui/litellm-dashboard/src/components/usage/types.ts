@@ -39,6 +39,7 @@ export interface KeyMetricWithMetadata {
 export interface KeyMetadata {
   key_alias: string | null
   team_id: string | null
+  tags?: {tag:string,usage:number}[]
 }
 
 export interface TopApiKeyData {
@@ -86,4 +87,9 @@ export interface EntityMetadata {
 export interface EntityMetricWithMetadata {
   metrics: SpendMetrics
   metadata: EntityMetadata
+}
+
+export interface TagUsage {
+  tag: string
+  usage: number
 }
