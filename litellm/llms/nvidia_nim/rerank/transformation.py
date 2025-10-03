@@ -4,6 +4,7 @@ import httpx
 from typing_extensions import Required, TypedDict
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -293,7 +294,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             results.append(result_item)
         
         return RerankResponse(
-            id=raw_response_json.get("id"),
+            id=raw_response_json.get("id") or str(uuid.uuid4()),
             results=results,
         )
 

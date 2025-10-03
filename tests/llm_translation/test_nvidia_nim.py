@@ -192,4 +192,3 @@ class TestNvidiaNim(BaseLLMRerankTest):
         return {
             "model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
         }
-)
