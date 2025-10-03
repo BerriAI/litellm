@@ -26,7 +26,7 @@ from litellm._uuid import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from fastapi import Request
+from fastapi import Request, HTTPException
 from fastapi.routing import APIRoute
 import httpx
 
@@ -42,6 +42,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import asyncio
 import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -236,7 +237,7 @@ async def test_new_user_response(prisma_client):
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, patch
 
     print("prisma client=", prisma_client)
 
@@ -4180,3 +4181,160 @@ def test_delete_nonexistent_key_returns_404(prisma_client):
         asyncio.run(test())
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_set_object_metadata_field_premium_check():
+    """
+    Unit test for _set_object_metadata_field function to ensure it handles premium fields correctly.
+    This is a more isolated test that doesn't depend on database or external services.
+    """
+    from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
+    from litellm.proxy._types import KeyRequestBase
+    
+    print("Testing _set_object_metadata_field premium check logic")
+    
+    # Test with mock premium check
+    with patch("litellm.proxy.management_endpoints.common_utils._premium_user_check") as mock_premium_check:
+        mock_premium_check.side_effect = HTTPException(
+            status_code=403, 
+            detail="This feature is only available for LiteLLM Enterprise users"
+        )
+        
+        object_data = KeyRequestBase()
+        
+        # Test 1: Non-premium field should not trigger premium check
+        _set_object_metadata_field(object_data, "non_premium_field", "test_value")
+        mock_premium_check.assert_not_called()
+        assert object_data.metadata["non_premium_field"] == "test_value"
+        print("✅ Non-premium fields work without premium check")
+        
+        # Test 2: Premium field with empty array should not trigger premium check
+        mock_premium_check.reset_mock()
+        _set_object_metadata_field(object_data, "guardrails", [])
+        mock_premium_check.assert_not_called()
+        assert object_data.metadata["guardrails"] == []
+        print("✅ Empty premium fields work without premium check")
+        
+        # Test 3: Premium field with None should not trigger premium check
+        mock_premium_check.reset_mock()
+        _set_object_metadata_field(object_data, "prompts", None)
+        mock_premium_check.assert_not_called()
+        assert object_data.metadata["prompts"] is None
+        print("✅ None premium fields work without premium check")
+        
+        # Test 4: Premium field with actual content should trigger premium check
+        mock_premium_check.reset_mock()
+        with pytest.raises(HTTPException) as exc_info:
+            _set_object_metadata_field(object_data, "guardrails", ["actual-guardrail"])
+        mock_premium_check.assert_called_once()
+        assert exc_info.value.status_code == 403
+        print("✅ Non-empty premium fields correctly trigger premium check")
+
+
+def test_prepare_metadata_fields_premium_check():
+    """
+    Unit test for prepare_metadata_fields function to ensure it handles premium fields correctly.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import prepare_metadata_fields
+    from litellm.proxy._types import UpdateKeyRequest
+    
+    print("Testing prepare_metadata_fields premium check logic")
+    
+    with patch("litellm.proxy.utils._premium_user_check") as mock_premium_check:
+        mock_premium_check.side_effect = HTTPException(
+            status_code=403, 
+            detail="This feature is only available for LiteLLM Enterprise users"
+        )
+        
+        # Test 1: Empty premium fields should not trigger premium check
+        data = UpdateKeyRequest(
+            key="test-key",
+            guardrails=[],  # Empty premium field
+            prompts=[],     # Empty premium field
+        )
+        non_default_values = {}
+        existing_metadata = {}
+        
+        result = prepare_metadata_fields(data, non_default_values, existing_metadata)
+        
+        mock_premium_check.assert_not_called()
+        assert result["metadata"]["guardrails"] == []
+        assert result["metadata"]["prompts"] == []
+        
+        # Test 2: Non-empty premium fields should trigger premium check
+        mock_premium_check.reset_mock()
+        data = UpdateKeyRequest(
+            key="test-key",
+            guardrails=["actual-guardrail"],  # Non-empty premium field
+        )
+        
+        result = prepare_metadata_fields(data, {}, {})
+        
+        mock_premium_check.assert_called_once()
+        assert "metadata" in result
+
+
+@pytest.mark.asyncio()
+async def test_key_update_non_premium_fields_work(prisma_client):
+    """
+    Test that non-enterprise users can freely update non-premium fields like key_alias, models, etc.
+    """
+    
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    
+    # Generate a key as admin
+    import uuid
+    unique_alias = f"test-basic-key-{str(uuid.uuid4())[:8]}"
+    request = GenerateKeyRequest(
+        key_alias=unique_alias,
+        models=["gpt-3.5-turbo"],
+        max_budget=10.0
+    )
+    key_response = await generate_key_fn(
+        data=request,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="1234",
+        ),
+    )
+    generated_key = key_response.key
+    
+    with patch("litellm.proxy.proxy_server.premium_user", False):
+        with patch("litellm.proxy.utils._premium_user_check") as mock_premium_check:
+            mock_premium_check.side_effect = HTTPException(
+                status_code=403,
+                detail="This feature is only available for LiteLLM Enterprise users"
+            )
+            
+            update_request = UpdateKeyRequest(
+                key=generated_key,
+                key_alias="updated-basic-key",
+                models=["gpt-3.5-turbo", "gpt-4"],
+                max_budget=20.0,
+                tpm_limit=1000,
+                rpm_limit=100,
+                metadata={"environment": "test", "owner": "developer"}
+            )
+            
+            _request = Request(scope={"type": "http"})
+            _request._url = URL(url="/update/key")
+            
+            await update_key_fn(
+                data=update_request,
+                request=_request,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            
+            result = await info_key_fn(
+                key=generated_key,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+            assert result["info"]["key_alias"] == "updated-basic-key"
+            assert "gpt-4" in result["info"]["models"]
+            assert result["info"]["max_budget"] == 20.0
+            assert result["info"]["metadata"]["environment"] == "test"
+            
+            mock_premium_check.assert_not_called()

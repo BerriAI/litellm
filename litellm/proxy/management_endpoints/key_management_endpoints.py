@@ -903,7 +903,9 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check()
+                # Only check for premium if field has actual content (not empty array or None)
+                if v is not None and (not isinstance(v, list) or len(v) > 0):
+                    _premium_user_check()
                 casted_metadata[k] = v
 
     except Exception as e:
