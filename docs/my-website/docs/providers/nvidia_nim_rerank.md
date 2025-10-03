@@ -212,6 +212,42 @@ The rerank endpoint uses a different base URL than chat/embeddings:
 
 LiteLLM automatically uses the correct endpoint for rerank requests.
 
+### Custom API Base URL
+
+You can override the default base URL in several ways:
+
+**Option 1: Environment Variable**
+
+```bash
+export NVIDIA_NIM_API_BASE="https://your-custom-endpoint.com"
+```
+
+**Option 2: Pass as parameter**
+
+```python
+response = litellm.rerank(
+    model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
+    query="test",
+    documents=["doc1"],
+    api_base="https://your-custom-endpoint.com",
+)
+```
+
+**Option 3: Full URL (including model path)**
+
+If you have the complete endpoint URL, you can pass it directly:
+
+```python
+response = litellm.rerank(
+    model="nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2",
+    query="test",
+    documents=["doc1"],
+    api_base="https://your-custom-endpoint.com/v1/retrieval/nvidia/llama-3_2-nv-rerankqa-1b-v2/reranking",
+)
+```
+
+LiteLLM will detect the full URL (by checking for `/retrieval/` in the path) and use it as-is.
+
 ### How do I get an API key?
 
 Get your Nvidia NIM API key from [Nvidia's website](https://developer.nvidia.com/nim/).
