@@ -1,5 +1,0 @@
-model_list:
-  - model_name: db-openai-endpoint
-    litellm_params:
-      model: openai/*
-      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
