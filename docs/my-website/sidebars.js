@@ -477,6 +477,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
+        "providers/lemonade",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
@@ -698,7 +699,8 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
-            "projects/HolmesGPT"
+            "projects/HolmesGPT",
+            "projects/Railtracks",
           ],
         },
         "extras/code_quality",

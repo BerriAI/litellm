@@ -83,11 +83,13 @@ from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
+    CachingDetails,
     CallTypes,
     CostBreakdown,
     CostResponseTypes,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
+    GuardrailStatus,
     ImageResponse,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
@@ -106,6 +108,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingPayloadStatus,
+    StandardLoggingPayloadStatusFields,
     StandardLoggingPromptManagementMetadata,
     StandardLoggingVectorStoreRequest,
     TextCompletionResponse,
@@ -347,6 +350,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: Optional[CostBreakdown] = None
+
+        # Init Caching related details
+        self.caching_details: Optional[CachingDetails] = None
 
         self.model_call_details: Dict[str, Any] = {
             "litellm_trace_id": litellm_trace_id,
@@ -3663,6 +3669,25 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             bitbucket_logger = BitBucketPromptManager(bitbucket_config=bitbucket_config)
             _in_memory_loggers.append(bitbucket_logger)
             return bitbucket_logger  # type: ignore
+        elif logging_integration == "gitlab":
+            from litellm.integrations.gitlab.gitlab_prompt_manager import (
+                GitLabPromptManager,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, GitLabPromptManager):
+                    return callback
+
+            # Get global BitBucket config
+            gitlab_config = getattr(litellm, "global_gitlab_config", None)
+            if gitlab_config is None:
+                raise ValueError(
+                    "Gitlab configuration not found. Please set litellm.global_gitlab_config first."
+                )
+
+            gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
+            _in_memory_loggers.append(gitlab_logger)
+            return gitlab_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(
@@ -4421,6 +4446,51 @@ class StandardLoggingPayloadSetup:
         return request_tags
 
 
+
+def _get_status_fields(
+    status: StandardLoggingPayloadStatus,
+    guardrail_information: Optional[dict],
+    error_str: Optional[str]
+) -> "StandardLoggingPayloadStatusFields":
+    """
+    Determine status fields based on request status and guardrail information.
+    
+    Args:
+        status: Overall request status ("success" or "failure")
+        guardrail_information: Guardrail information from metadata
+        error_str: Error string if any
+        
+    Returns:
+        StandardLoggingPayloadStatusFields with llm_api_status and guardrail_status
+    """
+    # Mapping for legacy guardrail status values to new GuardrailStatus values
+    GUARDRAIL_STATUS_MAP: Dict[str, GuardrailStatus] = {
+        "success": "success",
+        "blocked": "guardrail_intervened",  # legacy
+        "guardrail_intervened": "guardrail_intervened",  # direct
+        "failure": "guardrail_failed_to_respond",  # legacy
+        "guardrail_failed_to_respond": "guardrail_failed_to_respond",  # direct
+        "not_run": "not_run"
+    }
+    
+    # Set LLM API status
+    llm_api_status: StandardLoggingPayloadStatus = status
+    
+
+    #########################################################
+    # Map - guardrail_information.guardrail_status to guardrail_status
+    #########################################################
+    guardrail_status: GuardrailStatus = "not_run"
+    if guardrail_information and isinstance(guardrail_information, dict):
+        raw_status = guardrail_information.get("guardrail_status", "not_run")
+        guardrail_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
+
+    return StandardLoggingPayloadStatusFields(
+        llm_api_status=llm_api_status,
+        guardrail_status=guardrail_status
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -4530,7 +4600,6 @@ def get_standard_logging_object_payload(
             start_time=start_time,
             response_id=id,
         )
-
         _request_body = proxy_server_request.get("body", {})
         end_user_id = clean_metadata["user_api_key_end_user_id"] or _request_body.get(
             "user", None
@@ -4586,6 +4655,11 @@ def get_standard_logging_object_payload(
             cache_hit=cache_hit,
             stream=stream,
             status=status,
+            status_fields=_get_status_fields(
+                status=status,
+                guardrail_information=metadata.get("standard_logging_guardrail_information", None),
+                error_str=error_str
+            ),
             custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),
             saved_cache_cost=saved_cache_cost,
             startTime=start_time_float,
