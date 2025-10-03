@@ -3846,3 +3846,33 @@ def test_gemini_grounding_on_streaming():
             vertex_ai_grounding_metadata_shows_up = True
         print(chunk)
     assert vertex_ai_grounding_metadata_shows_up
+
+
+def test_gemini_google_maps_tool_simple():
+    """
+    Test googleMaps tool with just enableWidget parameter.
+    """
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+    tools = [{"googleMaps": {"enableWidget": True}}]
+    tools_with_location = [{"googleMaps": {"enableWidget": True, "latitude": 37.7749, "longitude": -122.4194, "languageCode": "en_US"}}]
+    try:
+        for tools in [tools, tools_with_location]:
+            response = completion(
+                model="vertex_ai/gemini-2.0-flash",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What restaurants are nearby?",
+                    }
+                ],
+                tools=tools,
+            )
+        print(f"Response: {response.model_dump_json(indent=4)}")
+        assert response.choices[0].message.content is not None
+    except litellm.RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
