@@ -567,7 +567,24 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        init_response = await loop.run_in_executor(None, func_with_context)
+        # Create a task for the executor to allow proper cancellation handling
+        executor_task = asyncio.create_task(
+            loop.run_in_executor(None, func_with_context)
+        )
+        
+        try:
+            init_response = await executor_task
+        except asyncio.CancelledError:
+            # If the task was cancelled, we need to ensure proper cleanup
+            # The executor task should be cancelled as well
+            executor_task.cancel()
+            try:
+                await executor_task
+            except asyncio.CancelledError:
+                pass  # Expected when cancelling
+            # Re-raise the CancelledError to propagate cancellation
+            raise
+            
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
         ):  ## CACHING SCENARIO
@@ -592,6 +609,9 @@ async def acompletion(
                 loop=loop
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
+    except asyncio.CancelledError:
+        # Ensure CancelledError is properly propagated without being caught by the general exception handler
+        raise
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
