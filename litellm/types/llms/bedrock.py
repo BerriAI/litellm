@@ -377,9 +377,14 @@ TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
 
+class TwelveLabsS3Location(TypedDict, total=False):
+    uri: str
+    bucketOwner: str
+
+
 class TwelveLabsMediaSource(TypedDict, total=False):
     base64String: str
-    s3Location: dict  # {"uri": str, "bucketOwner": str}
+    s3Location: TwelveLabsS3Location
 
 
 class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
@@ -399,6 +404,32 @@ class TwelveLabsMarengoEmbeddingResponse(TypedDict):
     embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
     startSec: float
     endSec: float
+
+
+class TwelveLabsS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class TwelveLabsOutputDataConfig(TypedDict):
+    s3OutputDataConfig: TwelveLabsS3OutputDataConfig
+
+
+class TwelveLabsAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: TwelveLabsMarengoEmbeddingRequest
+    outputDataConfig: TwelveLabsOutputDataConfig
+
+
+class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
+    invocationArn: str
+    modelArn: str
+    status: str  # "InProgress" | "Completed" | "Failed"
+    submitTime: str
+    lastModifiedTime: str
+    endTime: Optional[str]
+    outputDataConfig: TwelveLabsOutputDataConfig
+    clientRequestToken: Optional[str]
+    failureMessage: Optional[str]
 
 
 AmazonEmbeddingRequest = Union[
