@@ -8,7 +8,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankBilledUnits,
