@@ -356,14 +356,9 @@ class PointGuardAIGuardrail(CustomGuardrail):
                                 "confidenceScore": violation.get("confidenceScore", 0.0),
                                 "mode": violation.get("mode", "UNKNOWN")
                             })
-                    
-                    # Create human-readable categories list
-                    categories_list = list(all_categories) if all_categories else ["UNKNOWN"]
-                    categories_str = "', '".join(categories_list)
-                    
+                                        
                     # Create detailed error message
-                    if categories_list and categories_list != ["UNKNOWN"]:
-                        error_message = "Content blocked by PointGuardAI policy"
+                    error_message = "Content blocked by PointGuardAI policy"
                     
                     verbose_proxy_logger.warning(
                         "PointGuardAI blocking request with violations: %s", violation_details
@@ -432,22 +427,22 @@ class PointGuardAIGuardrail(CustomGuardrail):
             if status_code == 401:
                 raise HTTPException(
                     status_code=401,
-                    detail=f"PointGuardAI authentication failed: Invalid API credentials",
+                    detail="PointGuardAI authentication failed: Invalid API credentials",
                 )
             elif status_code == 400:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"PointGuardAI bad request: Invalid configuration or parameters",
+                    detail="PointGuardAI bad request: Invalid configuration or parameters",
                 )
             elif status_code == 403:
                 raise HTTPException(
                     status_code=403,
-                    detail=f"PointGuardAI access denied: Insufficient permissions",
+                    detail="PointGuardAI access denied: Insufficient permissions",
                 )
             elif status_code == 404:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"PointGuardAI resource not found: Invalid endpoint or organization",
+                    detail="PointGuardAI resource not found: Invalid endpoint or organization",
                 )
             else:
                 # For other HTTP errors, keep the original status code
@@ -463,7 +458,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             )
             raise HTTPException(
                 status_code=503,
-                detail=f"PointGuardAI service unavailable: Cannot connect to API endpoint. Please check the API URL configuration.",
+                detail="PointGuardAI service unavailable: Cannot connect to API endpoint. Please check the API URL configuration.",
             )
         except httpx.TimeoutException as e:
             # Handle timeout errors
@@ -473,7 +468,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             )
             raise HTTPException(
                 status_code=504,
-                detail=f"PointGuardAI request timeout: API request took too long to complete",
+                detail="PointGuardAI request timeout: API request took too long to complete",
             )
         except httpx.RequestError as e:
             # Handle other request errors (DNS resolution, etc.)
@@ -483,7 +478,7 @@ class PointGuardAIGuardrail(CustomGuardrail):
             )
             raise HTTPException(
                 status_code=503,
-                detail=f"PointGuardAI service unavailable: Network or DNS error. Please check the API URL configuration.",
+                detail="PointGuardAI service unavailable: Network or DNS error. Please check the API URL configuration.",
             )
         except Exception as e:
             verbose_proxy_logger.error(
