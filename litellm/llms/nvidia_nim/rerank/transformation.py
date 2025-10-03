@@ -14,6 +14,7 @@ from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
     RerankResponseMeta,
+    RerankResponseResult,
 )
 
 
@@ -112,19 +113,23 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
         """
-        optional_nvidia_nim_rerank_params = {
-            "query": query,
-            "documents": documents,
-        }
+        optional_params = dict(OptionalRerankParams(
+            query=query,
+            documents=documents,
+        ))
         
         # Map Cohere's top_n to Nvidia's top_k
         if top_n is not None:
-            optional_nvidia_nim_rerank_params["top_k"] = top_n
+            optional_params["top_k"] = top_n
         
         # Pass through Nvidia-specific params from non_default_params
         if non_default_params:
-            optional_nvidia_nim_rerank_params.update(non_default_params)
-        return dict(optional_nvidia_nim_rerank_params)
+            # Add provider-specific params like 'truncate'
+            for key in ["truncate"]:
+                if key in non_default_params:
+                    optional_params[key] = non_default_params[key]
+        
+        return optional_params
 
     def validate_environment(
         self,
@@ -276,22 +281,22 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         nvidia_response: NvidiaNimRerankResponse = raw_response_json
         
         # Transform Nvidia NIM response to LiteLLM format
-        results = []
+        results: List[RerankResponseResult] = []
         rankings = nvidia_response.get("rankings", [])
         
         # Get original documents from request if we need to include them
         original_passages: List[NvidiaNimPassageObject] = request_data.get("passages", [])
         
         for ranking in rankings:
-            result_item = {
+            result_item: RerankResponseResult = {
                 "index": ranking["index"],
                 "relevance_score": ranking["logit"],
             }
             
             # Include document if it was in the original request
-            index = ranking["index"]
+            index: int = ranking["index"]
             if index < len(original_passages):
-                result_item["document"] = {"text": original_passages[index]["text"]}
+                result_item["document"] = {"text": original_passages[index]["text"]}  # type: ignore
             
             results.append(result_item)
         
