@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
 
@@ -136,7 +136,7 @@ def rerank(  # noqa: PLR0915
             )
         )
 
-        optional_rerank_params: OptionalRerankParams = get_optional_rerank_params(
+        optional_rerank_params: Dict = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,

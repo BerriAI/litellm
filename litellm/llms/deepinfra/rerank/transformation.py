@@ -124,7 +124,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         # Convert OptionalRerankParams to dict as expected by parent class

@@ -17,7 +17,7 @@ class YourProviderRerankConfig(BaseRerankConfig):
             # ... other supported params
         ]
 
-    def transform_rerank_request(self, model: str, optional_rerank_params: OptionalRerankParams, headers: dict) -> dict:
+    def transform_rerank_request(self, model: str, optional_rerank_params: Dict, headers: dict) -> dict:
         # Transform request to RerankRequest spec
         return rerank_request.model_dump(exclude_none=True)
 
