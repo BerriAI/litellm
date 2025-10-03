@@ -50,6 +50,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
     - query is an object with 'text' field
     - documents are called 'passages' and have 'text' field
     """
+    DEFAULT_NIM_RERANK_API_BASE = "https://ai.api.nvidia.com"
 
     def __init__(self) -> None:
         pass
@@ -60,15 +61,17 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         
         Format: {api_base}/v1/retrieval/{model}/reranking
         
-        Note: Rerank uses ai.api.nvidia.com, not integrate.api.nvidia.com
+        If the user provides a full URL (e.g., {api_base}/v1/retrieval/{model}/reranking),
+        it will be used as-is.
         """
-        if api_base:
-            api_base = api_base.rstrip("/")
-            # Override if the default chat/embeddings base is provided
-            if "integrate.api.nvidia.com" in api_base:
-                api_base = "https://ai.api.nvidia.com"
-        else:
-            api_base = "https://ai.api.nvidia.com"
+        if not api_base:
+            api_base = self.DEFAULT_NIM_RERANK_API_BASE
+        
+        api_base = api_base.rstrip("/")
+        
+        # Check if user already provided the full URL with /retrieval/ path
+        if "/retrieval/" in api_base:
+            return api_base
         
         # Ensure we don't have duplicate /v1
         if api_base.endswith("/v1"):
