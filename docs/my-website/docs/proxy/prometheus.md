@@ -247,7 +247,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 }'
 ```
 </TabItem>
-<TabItem value="openai" label="on Key">
+<TabItem value="key" label="on Key">
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
@@ -260,7 +260,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
 }'
 ```
 </TabItem>
-<TabItem value="openai" label="on Team">
+<TabItem value="team" label="on Team">
 
 ```bash
 curl -L -X POST 'http://0.0.0.0:4000/team/new' \
