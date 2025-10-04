@@ -27,6 +27,7 @@ from litellm.caching import DualCache
 from litellm.constants import LENGTH_OF_LITELLM_GENERATED_KEY, UI_SESSION_TOKEN_TEAM_ID
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
+from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
@@ -549,6 +550,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 value=getattr(data, field),
             )
 
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+            delattr(data, field)
+
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
     data_json = handle_key_type(data, data_json)
@@ -627,6 +637,153 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     return response
 
 
+def check_team_key_model_specific_limits(
+    keys: List[LiteLLM_VerificationToken],
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the team key is allocating model specific limits. If so, raise an error if we're overallocating.
+    """
+    if data.model_rpm_limit is None and data.model_tpm_limit is None:
+        return
+    # get total model specific tpm/rpm limit
+    model_specific_rpm_limit: Dict[str, int] = {}
+    model_specific_tpm_limit: Dict[str, int] = {}
+
+    for key in keys:
+        if key.metadata.get("model_rpm_limit", None) is not None:
+            for model, rpm_limit in key.metadata.get("model_rpm_limit", {}).items():
+                model_specific_rpm_limit[model] = (
+                    model_specific_rpm_limit.get(model, 0) + rpm_limit
+                )
+        if key.metadata.get("model_tpm_limit", None) is not None:
+            for model, tpm_limit in key.metadata.get("model_tpm_limit", {}).items():
+                model_specific_tpm_limit[model] = (
+                    model_specific_tpm_limit.get(model, 0) + tpm_limit
+                )
+    if data.model_rpm_limit is not None:
+        for model, rpm_limit in data.model_rpm_limit.items():
+            if (
+                model_specific_rpm_limit.get(model, 0) + rpm_limit
+                > team_table.rpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+                )
+            elif team_table.metadata and team_table.metadata.get("model_rpm_limit"):
+                team_model_specific_rpm_limit_dict = team_table.metadata.get(
+                    "model_rpm_limit", {}
+                )
+                team_model_specific_rpm_limit = team_model_specific_rpm_limit_dict.get(
+                    model
+                )
+                if (
+                    model_specific_rpm_limit.get(model, 0) + rpm_limit
+                    > team_model_specific_rpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated RPM limit={model_specific_rpm_limit.get(model, 0)} + Key RPM limit={rpm_limit} is greater than team RPM limit={team_model_specific_rpm_limit.get(model, 0)}",
+                    )
+    if data.model_tpm_limit is not None:
+        for model, tpm_limit in data.model_tpm_limit.items():
+            if (
+                team_table.tpm_limit is not None
+                and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                > team_table.tpm_limit
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+                )
+            elif team_table.metadata and team_table.metadata.get("model_tpm_limit"):
+                team_model_specific_tpm_limit_dict = team_table.metadata.get(
+                    "model_tpm_limit", {}
+                )
+                team_model_specific_tpm_limit = team_model_specific_tpm_limit_dict.get(
+                    model
+                )
+                if (
+                    team_model_specific_tpm_limit
+                    and model_specific_tpm_limit.get(model, 0) + tpm_limit
+                    > team_model_specific_tpm_limit
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Allocated TPM limit={model_specific_tpm_limit.get(model, 0)} + Key TPM limit={tpm_limit} is greater than team TPM limit={team_model_specific_tpm_limit}",
+                    )
+
+
+def check_team_key_rpm_tpm_limits(
+    keys: List[LiteLLM_VerificationToken],
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+) -> None:
+    """
+    Check if the team key is allocating rpm/tpm limits. If so, raise an error if we're overallocating.
+    """
+    if keys is not None and len(keys) > 0:
+        allocated_tpm = sum(key.tpm_limit for key in keys if key.tpm_limit is not None)
+        allocated_rpm = sum(key.rpm_limit for key in keys if key.rpm_limit is not None)
+    else:
+        allocated_tpm = 0
+        allocated_rpm = 0
+    if (
+        data.tpm_limit is not None
+        and team_table.tpm_limit is not None
+        and data.tpm_limit + allocated_tpm > team_table.tpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated TPM limit={allocated_tpm} + Key TPM limit={data.tpm_limit} is greater than team TPM limit={team_table.tpm_limit}",
+        )
+    if (
+        data.rpm_limit is not None
+        and team_table.rpm_limit is not None
+        and data.rpm_limit + allocated_rpm > team_table.rpm_limit
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Allocated RPM limit={allocated_rpm} + Key RPM limit={data.rpm_limit} is greater than team RPM limit={team_table.rpm_limit}",
+        )
+
+
+async def _check_team_key_limits(
+    team_table: LiteLLM_TeamTableCachedObj,
+    data: Union[GenerateKeyRequest, UpdateKeyRequest],
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Check if the team key is allocating guaranteed throughput limits. If so, raise an error if we're overallocating.
+
+    Only runs check if tpm_limit_type or rpm_limit_type is "guaranteed_throughput"
+    """
+    if (
+        data.tpm_limit_type != "guaranteed_throughput"
+        and data.rpm_limit_type != "guaranteed_throughput"
+    ):
+        return
+    # get all team keys
+    # calculate allocated tpm/rpm limit
+    # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
+
+    keys = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": team_table.team_id},
+    )
+    check_team_key_model_specific_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+    check_team_key_rpm_tpm_limits(
+        keys=keys,
+        team_table=team_table,
+        data=data,
+    )
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -668,6 +825,8 @@ async def generate_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm). Defaults to "best_effort_throughput".
+    - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -703,11 +862,18 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
         )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
 
         verbose_proxy_logger.debug("entered /key/generate")
 
@@ -736,7 +902,6 @@ async def generate_key_fn(
                 verbose_proxy_logger.debug(
                     f"Error getting team object in `/key/generate`: {e}"
                 )
-                team_table = None
 
         key_generation_check(
             team_table=team_table,
@@ -745,12 +910,21 @@ async def generate_key_fn(
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
+        if team_table is not None:
+            await _check_team_key_limits(
+                team_table=team_table,
+                data=data,
+                prisma_client=prisma_client,
+            )
+
         return await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+    except HTTPException as e:
+        raise e
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -804,6 +978,8 @@ async def generate_service_account_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
     - blocked: Optional[bool] - Whether the key is blocked.
     - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
@@ -832,11 +1008,18 @@ async def generate_service_account_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
 
     """
+    from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
         prisma_client,
         user_api_key_cache,
         user_custom_key_generate,
     )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     await validate_team_id_used_in_service_account_request(
         team_id=data.team_id,
@@ -869,6 +1052,13 @@ async def generate_service_account_key_fn(
                 f"Error getting team object in `/key/generate`: {e}"
             )
             team_table = None
+
+    if team_table is not None:
+        await _check_team_key_limits(
+            team_table=team_table,
+            data=data,
+            prisma_client=prisma_client,
+        )
 
     key_generation_check(
         team_table=team_table,
@@ -1096,6 +1286,8 @@ async def update_key_fn(
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
+    - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
+    - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput" or "guaranteed_throughput"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.)
     - permissions: Optional[dict] - Key-specific permissions
@@ -1170,19 +1362,38 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        # if team change - check if this is possible
-        if is_different_team(data=data, existing_key_row=existing_key_row):
+        # Only check team limits if key has a team_id
+        team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+        if data.team_id is not None:
             team_obj = await get_team_object(
-                team_id=cast(str, data.team_id),
+                team_id=data.team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 check_db_only=True,
             )
+
+            if team_obj is not None:
+                await _check_team_key_limits(
+                    team_table=team_obj,
+                    data=data,
+                    prisma_client=prisma_client,
+                )
+
+        # if team change - check if this is possible
+        if is_different_team(data=data, existing_key_row=existing_key_row):
             if llm_router is None:
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                    },
+                )
+            # team_obj should be set since is_different_team() returns True only when data.team_id is not None
+            if team_obj is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Team object not found for team change validation"
                     },
                 )
             validate_key_team_change(

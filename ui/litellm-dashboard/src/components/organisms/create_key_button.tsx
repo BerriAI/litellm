@@ -35,6 +35,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import ModelAliasManager from "../common_components/ModelAliasManager"
 import NotificationsManager from "../molecules/notifications_manager"
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem"
 
 const { Option } = Select;
 
@@ -810,6 +811,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
+                  <RateLimitTypeFormItem
+                    type="tpm"
+                    name="tpm_limit_type"
+                    className="mt-4"
+                    initialValue={null}
+                    form={form}
+                    showDetailedDescriptions={true}
+                  />
                   <Form.Item
                     className="mt-4"
                     label={
@@ -841,6 +850,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
+                  <RateLimitTypeFormItem
+                    type="rpm"
+                    name="rpm_limit_type"
+                    className="mt-4"
+                    initialValue={null}
+                    form={form}
+                    showDetailedDescriptions={true}
+                  />
                   <Form.Item 
                     label={
                       <span>
