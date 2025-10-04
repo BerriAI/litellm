@@ -25,34 +25,34 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 
 import { message, Select, Spin, Typography, Tooltip, Input, Upload, Modal, Button } from "antd";
-import { makeOpenAIChatCompletionRequest } from "./chat_ui/llm_calls/chat_completion";
-import { makeOpenAIImageGenerationRequest } from "./chat_ui/llm_calls/image_generation";
-import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
-import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
-import { makeAnthropicMessagesRequest } from "./chat_ui/llm_calls/anthropic_messages";
-import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
-import { fetchAvailableMCPTools } from "./chat_ui/llm_calls/fetch_mcp_tools";
-import type { MCPTool } from "./chat_ui/llm_calls/fetch_mcp_tools";
-import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
+import { makeOpenAIChatCompletionRequest } from "./llm_calls/chat_completion";
+import { makeOpenAIImageGenerationRequest } from "./llm_calls/image_generation";
+import { makeOpenAIImageEditsRequest } from "./llm_calls/image_edits";
+import { makeOpenAIResponsesRequest } from "./llm_calls/responses_api";
+import { makeAnthropicMessagesRequest } from "./llm_calls/anthropic_messages";
+import { fetchAvailableModels, ModelGroup  } from "./llm_calls/fetch_models";
+import { fetchAvailableMCPTools } from "./llm_calls/fetch_mcp_tools";
+import type { MCPTool } from "./llm_calls/fetch_mcp_tools";
+import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import EndpointSelector from "./chat_ui/EndpointSelector";
-import TagSelector from "./tag_management/TagSelector";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import GuardrailSelector from "./guardrails/GuardrailSelector";
-import { determineEndpointType } from "./chat_ui/EndpointUtils";
-import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
-import { MessageType } from "./chat_ui/types";
-import ReasoningContent from "./chat_ui/ReasoningContent";
-import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
-import ResponsesImageUpload from "./chat_ui/ResponsesImageUpload";
-import ResponsesImageRenderer from "./chat_ui/ResponsesImageRenderer";
-import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./chat_ui/ResponsesImageUtils";
-import ChatImageUpload from "./chat_ui/ChatImageUpload";
-import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
-import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
-import SessionManagement from "./chat_ui/SessionManagement";
-import MCPEventsDisplay, { MCPEvent } from "./chat_ui/MCPEventsDisplay";
+import EndpointSelector from "./EndpointSelector";
+import TagSelector from "../tag_management/TagSelector";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import GuardrailSelector from "../guardrails/GuardrailSelector";
+import { determineEndpointType } from "./EndpointUtils";
+import { generateCodeSnippet } from "./CodeSnippets";
+import { MessageType } from "./types";
+import ReasoningContent from "./ReasoningContent";
+import ResponseMetrics, { TokenUsage } from "./ResponseMetrics";
+import ResponsesImageUpload from "./ResponsesImageUpload";
+import ResponsesImageRenderer from "./ResponsesImageRenderer";
+import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./ResponsesImageUtils";
+import ChatImageUpload from "./ChatImageUpload";
+import ChatImageRenderer from "./ChatImageRenderer";
+import { createChatMultimodalMessage, createChatDisplayMessage } from "./ChatImageUtils";
+import SessionManagement from "./SessionManagement";
+import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -73,7 +73,7 @@ import {
   FilePdfOutlined,
   ArrowUpOutlined
 } from "@ant-design/icons";
-import NotificationsManager from "./molecules/notifications_manager";
+import NotificationsManager from "../molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -282,13 +282,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
         );
   
         console.log("Fetched models:", uniqueModels);
-  
-        if (uniqueModels.length > 0) {
-          setModelInfo(uniqueModels);
-          if (!selectedModel) {
-            setSelectedModel(uniqueModels[0].model_group);
-          }
+
+        setModelInfo(uniqueModels);
+
+        // check for selection overlap or empty model list
+        const hasSelection = uniqueModels.some(m => m.model_group === selectedModel);
+        if (!uniqueModels.length) {
+          setSelectedModel(undefined);
+        } else if (!hasSelection) {
+          setSelectedModel(uniqueModels[0].model_group);
         }
+
       } catch (error) {
         console.error("Error fetching model info:", error);
       }
