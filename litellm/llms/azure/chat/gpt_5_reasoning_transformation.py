@@ -2,7 +2,7 @@
 
 from typing import List
 
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5ReasoningConfig
+from litellm.llms.openai.chat.gpt_5_reasoning_transformation import OpenAIGPT5ReasoningConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from .gpt_transformation import AzureOpenAIConfig

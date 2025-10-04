@@ -51,7 +51,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_5_transformation import OpenAIGPT5ReasoningConfig
+from .chat.gpt_5_reasoning_transformation import OpenAIGPT5ReasoningConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,

@@ -1202,7 +1202,7 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
-from .llms.openai.chat.gpt_5_transformation import (
+from .llms.openai.chat.gpt_5_reasoning_transformation import (
     OpenAIGPT5ReasoningConfig,
 )
 from .llms.openai.transcriptions.whisper_transformation import (
@@ -1256,7 +1256,7 @@ from .llms.azure.azure import (
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5ReasoningConfig
+from .llms.azure.chat.gpt_5_reasoning_transformation import AzureOpenAIGPT5ReasoningConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
