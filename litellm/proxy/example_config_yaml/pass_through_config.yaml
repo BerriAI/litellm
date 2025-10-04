@@ -32,3 +32,6 @@ general_settings:
       target: os.environ/AZURE_API_BASE
       headers:
         Authorization: os.environ/AZURE_API_KEY
+
+litellm_settings:
+  include_cost_in_streaming_usage: true
