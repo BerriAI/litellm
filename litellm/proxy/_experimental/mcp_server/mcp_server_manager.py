@@ -10,7 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Set, Union, cast
 
 from fastapi import HTTPException
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
@@ -285,12 +285,12 @@ class MCPServerManager:
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
 
-    def get_all_mcp_server_ids(self) -> List[str]:
+    def get_all_mcp_server_ids(self) -> Set[str]:
         """
         Get all MCP server IDs
         """
-        all_servers = self.get_registry().values()
-        return [server.server_id for server in all_servers]
+        all_servers = list(self.get_registry().values())
+        return {server.server_id for server in all_servers}
 
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
@@ -1187,7 +1187,7 @@ class MCPServerManager:
         valid_server_ids = self.get_all_mcp_server_ids()
         filtered_list_mcp_servers = []
         for server in list_mcp_servers:
-            if server.server_id not in valid_server_ids:
+            if server.server_id in valid_server_ids:
                 filtered_list_mcp_servers.append(server)
 
         # Map servers to their teams and return with health data
