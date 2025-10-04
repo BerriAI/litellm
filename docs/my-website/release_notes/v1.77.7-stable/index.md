@@ -19,6 +19,10 @@ authors:
     title: Fullstack Engineer
     url: https://www.linkedin.com/in/achintya-rajan/
     image_url: https://media.licdn.com/dms/image/v2/D5603AQGdkEeyJTdljw/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1716271140869?e=1762387200&v=beta&t=9gOoLPeqR2E5z3KSX61EUj3HVZXmgo87vhVuSHeffjc
+  - name: Sameer Kankute
+    title: Backend Engineer (LLM Translation)
+    url: https://www.linkedin.com/in/sameer-kankute/
+    image_url: https://media.licdn.com/dms/image/v2/D4D03AQHB_loQYd5gjg/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1719137160975?e=1762387200&v=beta&t=0jbuX-f4eSnDxBY3olI6meuYr-LMbObhFmFbRcKF5mY
 
 hide_table_of_contents: false
 ---
