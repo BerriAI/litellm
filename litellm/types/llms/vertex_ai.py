@@ -209,6 +209,16 @@ class GenerationConfig(TypedDict, total=False):
     thinkingConfig: GeminiThinkingConfig
 
 
+class VertexToolName(str, Enum):
+    """Enum for Vertex AI tool field names."""
+    GOOGLE_SEARCH = "googleSearch"
+    GOOGLE_SEARCH_RETRIEVAL = "googleSearchRetrieval"
+    ENTERPRISE_WEB_SEARCH = "enterpriseWebSearch"
+    URL_CONTEXT = "url_context"
+    CODE_EXECUTION = "code_execution"
+    GOOGLE_MAPS = "googleMaps"
+
+
 class Tools(TypedDict, total=False):
     function_declarations: List[FunctionDeclaration]
     googleSearch: dict
@@ -216,6 +226,7 @@ class Tools(TypedDict, total=False):
     enterpriseWebSearch: dict
     url_context: dict
     code_execution: dict
+    googleMaps: dict
     retrieval: Retrieval
 
 

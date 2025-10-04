@@ -2,11 +2,11 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format. 
 """
 
-from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import (
     BaseLLMException,
@@ -98,7 +98,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         # Start with the basic parameters
         optional_rerank_params = {}
         if query:
@@ -124,7 +124,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         # Convert OptionalRerankParams to dict as expected by parent class

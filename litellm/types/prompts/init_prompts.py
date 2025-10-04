@@ -10,6 +10,7 @@ class SupportedPromptIntegrations(str, Enum):
     LANGFUSE = "langfuse"
     CUSTOM = "custom"
     BITBUCKET = "bitbucket"
+    GITLAB = "gitlab"
 
 
 class PromptInfo(BaseModel):

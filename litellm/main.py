@@ -24,6 +24,7 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncIterator,
     Callable,
     Coroutine,
     Dict,
@@ -5169,6 +5170,21 @@ async def aadapter_completion(
         return translated_response
     except Exception as e:
         raise e
+
+async def aadapter_generate_content(
+    **kwargs,
+) -> Union[Dict[str, Any], AsyncIterator[bytes]]:
+    from litellm.google_genai.adapters.handler import (
+        GenerateContentToCompletionHandler,
+    )
+
+    coro = cast(
+        Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
+        GenerateContentToCompletionHandler.generate_content_handler(
+            **kwargs, _is_async=True
+        ),
+    )
+    return await coro
 
 
 def adapter_completion(

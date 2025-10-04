@@ -185,6 +185,7 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        max_requests_before_restart: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -264,6 +265,10 @@ class ProxyInitializationHelpers:
             "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
         }
+
+        # Optional: recycle workers after N requests to mitigate memory growth
+        if max_requests_before_restart is not None:
+            gunicorn_options["max_requests"] = max_requests_before_restart
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
@@ -486,6 +491,13 @@ class ProxyInitializationHelpers:
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
 )
+@click.option(
+    "--max_requests_before_restart",
+    default=None,
+    type=int,
+    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
+    envvar="MAX_REQUESTS_BEFORE_RESTART",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -524,6 +536,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    max_requests_before_restart,
 ):
     args = locals()
     if local:
@@ -813,6 +826,9 @@ def run_server(  # noqa: PLR0915
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
         )
+        # Optional: recycle uvicorn workers after N requests
+        if max_requests_before_restart is not None:
+            uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -837,6 +853,7 @@ def run_server(  # noqa: PLR0915
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                max_requests_before_restart=max_requests_before_restart,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(

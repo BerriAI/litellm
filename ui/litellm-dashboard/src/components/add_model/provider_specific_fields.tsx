@@ -507,6 +507,19 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
+  }],
+  [Providers.Snowflake]: [{
+    key: "api_key",
+    label: "Snowflake API Key / JWT Key for Authentication",
+    type: "password",
+    required: true
+  },
+  {
+    key: "api_base",
+    label: "Snowflake API Endpoint",
+    placeholder: "https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
+    tooltip: "Enter the full endpoint with path here. Example: https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
+    required: true
   }]
 };
 

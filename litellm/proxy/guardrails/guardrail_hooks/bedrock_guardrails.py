@@ -41,6 +41,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.types.utils import (
     Choices,
+    GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -361,11 +362,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.headers,
         )
 
-        httpx_response = await self.async_handler.post(
-            url=prepared_request.url,
-            data=prepared_request.body,  # type: ignore
-            headers=prepared_request.headers,  # type: ignore
-        )
+        try:
+            httpx_response = await self.async_handler.post(
+                url=prepared_request.url,
+                data=prepared_request.body,  # type: ignore
+                headers=prepared_request.headers,  # type: ignore
+            )
+        except Exception as e:
+            # Endpoint down, timeout, or other HTTP/network errors
+            verbose_proxy_logger.error(
+                "Bedrock AI: failed to make guardrail request: %s", str(e)
+            )
+            # Add guardrail information with failure status
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider=self.guardrail_provider,
+                guardrail_json_response={"error": str(e)},
+                request_data=request_data or {},
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time.timestamp(),
+                end_time=datetime.now().timestamp(),
+                duration=(datetime.now() - start_time).total_seconds(),
+            )
+            # Re-raise the exception to maintain existing behavior
+            raise
+        
         #########################################################
         # Add guardrail information to request trace
         #########################################################
@@ -437,15 +457,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _get_bedrock_guardrail_response_status(
         self, response: httpx.Response
-    ) -> Literal["success", "failure"]:
+    ) -> GuardrailStatus:
         """
         Get the status of the bedrock guardrail response.
+        
+        Returns:
+            "success": Content allowed through with no violations
+            "guardrail_intervened": Content blocked due to policy violations
+            "guardrail_failed_to_respond": Technical error or API failure
         """
         if response.status_code == 200:
             if self._check_bedrock_response_for_exception(response):
-                return "failure"
+                return "guardrail_failed_to_respond"
+            
+            # Check if the guardrail would block content
+            try:
+                _json_response = response.json()
+                bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
+                if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
+                    return "guardrail_intervened"
+            except Exception:
+                pass
+            
             return "success"
-        return "failure"
+        return "guardrail_failed_to_respond"
 
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
@@ -691,6 +726,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "Bedrock AI: not running guardrail. No messages in data"
             )
             return
+
+        # Check if the ModelResponse has text content in its choices
+        # to avoid sending empty content to Bedrock (e.g., during tool calls)
+        if isinstance(response, litellm.ModelResponse):
+            has_text_content = False
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(choice.message.content, str):
+                        has_text_content = True
+                        break
+            
+            if not has_text_content:
+                verbose_proxy_logger.warning(
+                    "Bedrock AI: not running guardrail. No output text in response"
+                )
+                return
 
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
