@@ -413,6 +413,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Check if any of the rate limit descriptors should be rate limited.
         Returns a RateLimitResponse with the overall code and status for each descriptor.
         Uses batch operations for Redis to improve performance.
+        
+        Args:
+            descriptors: List of rate limit descriptors to check
+            parent_otel_span: Optional OpenTelemetry span for tracing
+            read_only: If True, only check limits without incrementing counters
         """
 
         now = datetime.now().timestamp()
@@ -485,8 +490,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if rate_limit_response["overall_code"] == "OVER_LIMIT":
                 return rate_limit_response
 
-        ## IF under limit, check Redis
-        if self.batch_rate_limiter_script is not None:
+        ## IF under limit in-memory, check Redis
+        if read_only:
+            # READ-ONLY MODE: Just read current values without incrementing
+            cache_values = await self.internal_usage_cache.async_batch_get_cache(
+                keys=keys_to_fetch,
+                parent_otel_span=parent_otel_span,
+                local_only=False,  # Check Redis too
+            )
+            
+            # For keys that don't exist yet, set them to 0
+            if cache_values is None:
+                cache_values = []
+                for _ in keys_to_fetch:
+                    cache_values.append(str(now_int) if _.endswith(":window") else 0)
+        elif self.batch_rate_limiter_script is not None:
+            # NORMAL MODE: Increment counters in Redis
             # Group keys by hash tag for Redis cluster compatibility
             cache_values = await self._execute_redis_batch_rate_limiter_script(
                 keys_to_fetch=keys_to_fetch,
@@ -514,6 +533,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     local_only=True,
                 )
         else:
+            # NORMAL MODE: In-memory sliding window (no Redis)
             cache_values = await self.in_memory_cache_sliding_window(
                 keys=keys_to_fetch,
                 now_int=now_int,

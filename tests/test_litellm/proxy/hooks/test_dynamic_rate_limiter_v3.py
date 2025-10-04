@@ -1202,3 +1202,89 @@ async def test_fake_calls_case_5_default_value_priority_reservation():
     if total_successful > 0:
         key_a_share = successful_requests["key_a"] / total_successful
         print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~55-62%)")
+
+
+@pytest.mark.asyncio
+async def test_default_priority_shared_pool():
+    """
+    Test that keys without explicit priority share ONE default pool, not get individual allocations.
+    
+    With default_priority=0.25:
+    - Key A, B, C (no priority) should share ONE 25 RPM pool
+    - NOT get 25 RPM each (which would be 75 RPM total)
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"prod": 0.75}
+    litellm.priority_reservation_settings.default_priority = 0.25
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "test-default-pool"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create 3 users without explicit priority
+    user_a = UserAPIKeyAuth()
+    user_a.metadata = {}
+    user_a.user_id = "user_a"
+    
+    user_b = UserAPIKeyAuth()
+    user_b.metadata = {}
+    user_b.user_id = "user_b"
+    
+    user_c = UserAPIKeyAuth()
+    user_c.metadata = {}
+    user_c.user_id = "user_c"
+    
+    # Get descriptors for each
+    desc_a = handler._create_priority_based_descriptors(
+        model=model, user_api_key_dict=user_a, priority=None
+    )
+    desc_b = handler._create_priority_based_descriptors(
+        model=model, user_api_key_dict=user_b, priority=None
+    )
+    desc_c = handler._create_priority_based_descriptors(
+        model=model, user_api_key_dict=user_c, priority=None
+    )
+    
+    # All should use the SAME shared pool key
+    assert desc_a[0]["value"] == f"{model}:default_pool"
+    assert desc_b[0]["value"] == f"{model}:default_pool"
+    assert desc_c[0]["value"] == f"{model}:default_pool"
+    
+    # All should have same limit (25 RPM SHARED, not 25 RPM each)
+    assert desc_a[0]["rate_limit"]["requests_per_unit"] == 25
+    assert desc_b[0]["rate_limit"]["requests_per_unit"] == 25
+    assert desc_c[0]["rate_limit"]["requests_per_unit"] == 25
+    
+    # Verify explicit priority uses different pool
+    user_prod = UserAPIKeyAuth()
+    user_prod.metadata = {"priority": "prod"}
+    desc_prod = handler._create_priority_based_descriptors(
+        model=model, user_api_key_dict=user_prod, priority="prod"
+    )
+    
+    assert desc_prod[0]["value"] == f"{model}:prod"
+    assert desc_prod[0]["rate_limit"]["requests_per_unit"] == 75
+    assert desc_prod[0]["value"] != desc_a[0]["value"]  # Different pools
+    
+    print("✅ Default priority test passed:")
+    print(f"   - 3 keys without priority share ONE pool: {desc_a[0]['value']}")
+    print(f"   - Shared pool limit: {desc_a[0]['rate_limit']['requests_per_unit']} RPM")
+    print(f"   - Explicit priority 'prod' uses separate pool: {desc_prod[0]['value']}")
