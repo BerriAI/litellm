@@ -163,8 +163,8 @@ pip install litellm==1.77.7.rc.1
 #### Features
 
 - **Virtual Keys**
-    - Fix Session Token Cookie Infinite Logout Loop - [PR #15146](https://github.com/BerriAI/litellm/pull/15146)
     - Ensure LLM_API_KEYs can access pass through routes - [PR #15115](https://github.com/BerriAI/litellm/pull/15115)
+    - Support 'guaranteed_throughput' when setting limits on keys belonging to a team - [PR #15120](https://github.com/BerriAI/litellm/pull/15120)
     
 - **Models + Endpoints**
     - Ensure OCI secret fields not shared on /models and /v1/models endpoints - [PR #15085](https://github.com/BerriAI/litellm/pull/15085)
@@ -175,9 +175,34 @@ pip install litellm==1.77.7.rc.1
     - Ensure OTEL settings are saved in DB after set on UI - [PR #15118](https://github.com/BerriAI/litellm/pull/15118)
     - Top api key tags - [PR #15151](https://github.com/BerriAI/litellm/pull/15151), [PR #15156](https://github.com/BerriAI/litellm/pull/15156)
 
-#### Bugs
+- **MCP**
+    - show health status of MCP servers - [PR #15185](https://github.com/BerriAI/litellm/pull/15185)
+    - allow setting extra headers on the UI - [PR #15185](https://github.com/BerriAI/litellm/pull/15185)
+    - allow editing allowed tools on the UI - [PR #15185](https://github.com/BerriAI/litellm/pull/15185)
 
-- **Dashboard** - Fix LiteLLM model name fallback in dashboard overview - [PR #14998](https://github.com/BerriAI/litellm/pull/14998)
+### Bug Fixes
+
+- **Virtual Keys**
+    - (security) prevent user key from updating other user keys - [PR #15201](https://github.com/BerriAI/litellm/pull/15201)
+    - (security) don't return all keys with blank key alias on /v2/key/info - [PR #15201](https://github.com/BerriAI/litellm/pull/15201)
+    - Fix Session Token Cookie Infinite Logout Loop - [PR #15146](https://github.com/BerriAI/litellm/pull/15146)
+
+- **Models + Endpoints**
+    - Make UI theme settings publicly accessible for custom branding - [PR #15074](https://github.com/BerriAI/litellm/pull/15074)
+
+- **Teams**
+    - fix failed copy to clipboard for http ui - [PR #15195](https://github.com/BerriAI/litellm/pull/15195)
+
+- **Logs**
+    - fix logs page render logs on filter lookup - [PR #15195](https://github.com/BerriAI/litellm/pull/15195)
+    - fix lookup list of end users (migrate to more efficient /customers/list lookup) - [PR #15195](https://github.com/BerriAI/litellm/pull/15195)
+
+- **Test key**
+    - update selected model on key change - [PR #15197](https://github.com/BerriAI/litellm/pull/15197)
+
+- **Dashboard**
+    - Fix LiteLLM model name fallback in dashboard overview - [PR #14998](https://github.com/BerriAI/litellm/pull/14998)
+
 
 ---
 
@@ -190,6 +215,9 @@ pip install litellm==1.77.7.rc.1
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Handle non-serializable objects in Langfuse logging - [PR #15148](https://github.com/BerriAI/litellm/pull/15148)
     - Set usage_details.total in langfuse integration - [PR #15015](https://github.com/BerriAI/litellm/pull/15015)
+- **[Prometheus](../../docs/proxy/prometheus)**
+    - support custom metadata labels on key/team - [PR #15094](https://github.com/BerriAI/litellm/pull/15094)
+
 
 #### Guardrails
 
