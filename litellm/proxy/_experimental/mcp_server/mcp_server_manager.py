@@ -1193,7 +1193,7 @@ class MCPServerManager:
         ## mark invalid servers w/ reason for being invalid
         valid_server_ids = self.get_all_mcp_server_ids()
         for server in list_mcp_servers:
-            if server.server_id in valid_server_ids:
+            if server.server_id not in valid_server_ids:
                 server.status = "unhealthy"
                 ## try adding server to registry to get error
                 try:
