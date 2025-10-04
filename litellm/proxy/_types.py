@@ -731,6 +731,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
     budget_duration: Optional[str] = None
     allowed_cache_controls: Optional[list] = []
     config: Optional[dict] = {}
@@ -755,6 +756,12 @@ class KeyRequestBase(GenerateRequestBase):
     tags: Optional[List[str]] = None
     enforced_params: Optional[List[str]] = None
     allowed_routes: Optional[list] = []
+    rpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
+    tpm_limit_type: Optional[
+        Literal["guaranteed_throughput", "best_effort_throughput"]
+    ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -3058,6 +3065,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "rpm_limit_type",
+    "tpm_limit_type",
     "guardrails",
     "tags",
     "enforced_params",
@@ -3070,6 +3079,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "tags",
     "team_member_key_duration",
     "prompts",
+    "logging",
 ]
 
 
