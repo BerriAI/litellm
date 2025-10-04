@@ -22583,5 +22583,29 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "matterai/axon-base": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "matterai",
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "matterai/axon-code": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "matterai",
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     }
 }

@@ -40,7 +40,8 @@ export enum Providers {
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
   VolcEngine = "VolcEngine",           
   Voyage = "Voyage AI",                
-  xAI = "xAI",                      
+  xAI = "xAI",                  
+  MatterAI = "MatterAI",
 }
 
 export const provider_map: Record<string, string> = {
@@ -82,6 +83,7 @@ export const provider_map: Record<string, string> = {
     VolcEngine: "volcengine",
     DeepInfra: "deepinfra",
     Hosted_Vllm: "hosted_vllm",
+    MatterAI: "matterai",
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -124,7 +126,8 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
     [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
     [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
-    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
+    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
+    [Providers.MatterAI]: `${asset_logos_folder}matterai.svg`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {

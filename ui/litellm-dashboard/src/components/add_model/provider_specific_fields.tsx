@@ -520,6 +520,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     placeholder: "https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
     tooltip: "Enter the full endpoint with path here. Example: https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
     required: true
+  }],
+  [Providers.MatterAI]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
   }]
 };
 

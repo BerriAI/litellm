@@ -522,6 +522,7 @@ const sidebars = {
         "providers/oci",
         "providers/datarobot",
         "providers/ovhcloud",  
+        "providers/matterai",
       ],
     },
     {
