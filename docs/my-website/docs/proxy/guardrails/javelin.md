@@ -46,6 +46,17 @@ guardrails:
       api_base: os.environ/JAVELIN_API_BASE
       guardrail_name: "lang_detector"
       api_version: "v1"
+  - guardrail_name: "javelin-guard"
+    litellm_params:
+      guardrail: javelin
+      mode: "pre_call"
+      api_key: os.environ/JAVELIN_API_KEY
+      api_base: os.environ/JAVELIN_API_BASE
+      guard_name: "javelin_guard"
+      api_version: "v1"
+      metadata:
+        request_source: "litellm-proxy"
+      application: "litellm-test-app"
 ```
 
 #### Supported values for `mode`

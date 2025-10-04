@@ -102,10 +102,10 @@ class JavelinGuardrail(CustomGuardrail):
         exception_str = ""
 
         try:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Calling Javelin guard API with request: %s", request
-            )
             url = f"{self.api_base}/{self.api_version}/guardrail/{self.javelin_guard_name}/apply"
+            if self.javelin_guard_name == "javelin_guard":
+                # auto apply all enabled guardrails in app policy, overwrite url
+                url = f"{self.api_base}/{self.api_version}/guardrails/apply"
             verbose_proxy_logger.debug("Javelin Guardrail: Calling URL: %s", url)
             response = await self.async_handler.post(
                 url=url,
