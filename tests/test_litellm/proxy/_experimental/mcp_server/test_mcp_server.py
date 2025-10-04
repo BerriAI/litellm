@@ -88,10 +88,14 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     working_server = MagicMock()
     working_server.name = "working_server"
     working_server.alias = "working"
+    working_server.allowed_tools = None
+    working_server.disallowed_tools = None
 
     failing_server = MagicMock()
     failing_server.name = "failing_server"
     failing_server.alias = "failing"
+    failing_server.allowed_tools = None
+    failing_server.disallowed_tools = None
 
     # Mock global_mcp_server_manager
     mock_manager = MagicMock()
@@ -586,6 +590,8 @@ async def test_list_tools_single_server_unprefixed_names():
     server.server_id = "server1"
     server.name = "Zapier MCP"
     server.alias = "zapier"
+    server.allowed_tools = None
+    server.disallowed_tools = None
 
     # Mock manager: allow just one server and return a tool based on add_prefix flag
     mock_manager = MagicMock()
@@ -641,11 +647,15 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server1.server_id = "server1"
     server1.name = "Zapier MCP"
     server1.alias = "zapier"
+    server1.allowed_tools = None
+    server1.disallowed_tools = None
 
     server2 = MagicMock()
     server2.server_id = "server2"
     server2.name = "Jira MCP"
     server2.alias = "jira"
+    server2.allowed_tools = None
+    server2.disallowed_tools = None
 
     # Mock manager
     mock_manager = MagicMock()
