@@ -71,7 +71,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
               <div style={{ padding: '4px 0' }}>
                 <div style={{ fontWeight: 500 }}>Default</div>
                 <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                  Best effort throughput - no error if we're overallocating {limitTypeLower} (Team/Key Limits checked at runtime).
+                  Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits checked at runtime).
                 </div>
               </div>
             </Option>
@@ -79,7 +79,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
               <div style={{ padding: '4px 0' }}>
                 <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
                 <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                  Guaranteed throughput - raise an error if we're overallocating {limitTypeLower} (also checks model-specific limits)
+                  Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks model-specific limits)
                 </div>
               </div>
             </Option>
