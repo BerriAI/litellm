@@ -138,6 +138,7 @@ export interface MCPServer {
   created_by: string
   updated_at: string
   updated_by: string
+  extra_headers?: string[] | null
   status?: "healthy" | "unhealthy" | "unknown"
   last_health_check?: string | null
   health_check_error?: string | null
