@@ -623,6 +623,8 @@ class LiteLLMProxyRequestSetup:
 
         ignore any sensitive fields like logging, api_key, etc.
         """
+        if _metadata_variable_name not in data:
+            return data
         from litellm.proxy._types import (
             LiteLLM_ManagementEndpoint_MetadataFields,
             LiteLLM_ManagementEndpoint_MetadataFields_Premium,
