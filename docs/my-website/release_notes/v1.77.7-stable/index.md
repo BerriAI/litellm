@@ -1,5 +1,5 @@
 ---
-title: "v1.77.7-rc - Performance Optimizations & Claude Sonnet 4.5"
+title: "[Preview] v1.77.7-stable - Claude Sonnet 4.5"
 slug: "v1-77-7"
 date: 2025-10-04T10:00:00
 authors:
@@ -124,10 +124,7 @@ pip install litellm==1.77.7.rc.1
 - **General**
     - Fix: Authorization header to use correct "Bearer" capitalization - [PR #14764](https://github.com/BerriAI/litellm/pull/14764)
     - Bug fix: gpt-5-chat-latest has incorrect max_input_tokens value - [PR #15116](https://github.com/BerriAI/litellm/pull/15116)
-    - Fix missing HTTPException import - [PR #15111](https://github.com/BerriAI/litellm/pull/15111)
-    - Fix: model_group not always present in litellm_params, and metadata - [PR #15108](https://github.com/BerriAI/litellm/pull/15108)
     - Update request handling for original exceptions - [PR #15013](https://github.com/BerriAI/litellm/pull/15013)
-    - Remove invalid vertex -latest models - [PR #15043](https://github.com/BerriAI/litellm/pull/15043)
 
 #### New Provider Support
 
