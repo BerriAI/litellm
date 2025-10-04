@@ -3629,7 +3629,12 @@ class DatabaseJobsCoordinator:
     This prevents concurrent database access that can cause deadlocks.
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        proxy_budget_rescheduler_min_time: int,
+        proxy_budget_rescheduler_max_time: int,
+        proxy_batch_write_at: int,
+    ):
         self.last_run_times: Dict[str, Optional[datetime]] = {
             "update_spend": None,
             "reset_budget": None,
@@ -3637,6 +3642,18 @@ class DatabaseJobsCoordinator:
             "get_credentials": None,
             "spend_log_cleanup": None,
             "check_batch_cost": None,
+        }
+        
+        # Pre-calculate randomized intervals at initialization (only once)
+        # This ensures consistent behavior matching the original implementation
+        self.task_intervals = {
+            "update_spend": random.randint(
+                proxy_batch_write_at - 3, proxy_batch_write_at + 3
+            ),
+            "reset_budget": random.randint(
+                proxy_budget_rescheduler_min_time,
+                proxy_budget_rescheduler_max_time,
+            ),
         }
     
     def should_run(self, job_name: str, interval_seconds: int) -> bool:
@@ -3660,6 +3677,56 @@ class DatabaseJobsCoordinator:
     def mark_run(self, job_name: str):
         """Mark job as completed at current time"""
         self.last_run_times[job_name] = datetime.now()
+    
+    def set_last_run_time(self, job_name: str, run_time: Optional[datetime]):
+        """
+        Set the last run time for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            run_time: The datetime to set as last run time, or None to reset
+            
+        Raises:
+            ValueError: If job_name is not valid
+        """
+        if job_name not in self.last_run_times:
+            raise ValueError(
+                f"Invalid job name: {job_name}. "
+                f"Valid jobs: {list(self.last_run_times.keys())}"
+            )
+        self.last_run_times[job_name] = run_time
+    
+    def get_last_run_time(self, job_name: str) -> Optional[datetime]:
+        """
+        Get the last run time for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            
+        Returns:
+            Last run time or None if never run
+            
+        Raises:
+            ValueError: If job_name is not valid
+        """
+        if job_name not in self.last_run_times:
+            raise ValueError(
+                f"Invalid job name: {job_name}. "
+                f"Valid jobs: {list(self.last_run_times.keys())}"
+            )
+        return self.last_run_times[job_name]
+    
+    def get_task_interval(self, job_name: str) -> Optional[int]:
+        """
+        Get the pre-calculated interval for a specific job (for testing purposes)
+        
+        Args:
+            job_name: Name of the job
+            
+        Returns:
+            Pre-calculated interval in seconds, or None if not pre-calculated
+        """
+        return self.task_intervals.get(job_name)
 
 
 async def high_frequency_database_jobs_coordinator(
@@ -3728,11 +3795,11 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
     proxy_batch_polling_interval: int,
 ):
     """
-    Low-frequency database jobs coordinator - handles tasks that run less frequently (60s or more).
+    Low-frequency database jobs coordinator - handles tasks that run less frequently.
     
-    Runs every 60 seconds and executes:
-    - update_spend: Update spend logs (every ~60 seconds)
-    - reset_budget: Reset budget (every 3600-7200 seconds)
+    Runs every 10 seconds (fixed interval) and executes:
+    - update_spend: Update spend logs (uses pre-calculated interval ~60s)
+    - reset_budget: Reset budget (uses pre-calculated interval 3600-7200s)
     - spend_log_cleanup: Clean old logs (based on retention interval)
     - check_batch_cost: Check batch costs (based on polling interval)
     
@@ -3742,20 +3809,17 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
         prisma_client: Database client
         db_writer_client: Async HTTP handler for batch writes
         proxy_logging_obj: Logging object
-        coordinator: Job coordinator tracking last run times
+        coordinator: Job coordinator tracking last run times and pre-calculated intervals
         general_settings: General proxy settings
         llm_router: LLM router instance
-        proxy_budget_rescheduler_min_time: Min time for budget reset randomization
-        proxy_budget_rescheduler_max_time: Max time for budget reset randomization
-        proxy_batch_write_at: Base interval for batch writing
+        proxy_budget_rescheduler_min_time: Min time for budget reset randomization (used for initialization)
+        proxy_budget_rescheduler_max_time: Max time for budget reset randomization (used for initialization)
+        proxy_batch_write_at: Base interval for batch writing (used for initialization)
         proxy_batch_polling_interval: Interval for batch polling
     """
     try:
-        # 1. Update spend logs (runs every ~60 seconds with randomization)
-        batch_writing_interval = random.randint(
-            proxy_batch_write_at - 3, proxy_batch_write_at + 3
-        )
-        if coordinator.should_run("update_spend", batch_writing_interval):
+        # 1. Update spend logs (uses pre-calculated randomized interval from initialization)
+        if coordinator.should_run("update_spend", coordinator.task_intervals["update_spend"]):
             try:
                 await update_spend(prisma_client, db_writer_client, proxy_logging_obj)
                 coordinator.mark_run("update_spend")
@@ -3763,12 +3827,8 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
             except Exception as e:
                 verbose_proxy_logger.error(f"✗ Low-freq coordinator: update_spend failed - {e}")
         
-        # 2. Reset budget (runs at randomized interval to avoid worker collision)
-        budget_interval = random.randint(
-            proxy_budget_rescheduler_min_time, 
-            proxy_budget_rescheduler_max_time
-        )
-        if coordinator.should_run("reset_budget", budget_interval):
+        # 2. Reset budget (uses pre-calculated randomized interval from initialization)
+        if coordinator.should_run("reset_budget", coordinator.task_intervals["reset_budget"]):
             try:
                 if general_settings.get("disable_reset_budget", False) is False:
                     budget_reset_job = ResetBudgetJob(
@@ -3946,8 +4006,12 @@ class ProxyStartupEvent:
         # Assign to global variable immediately after creation for proper lifecycle management
         _scheduler_instance = scheduler
         
-        # Initialize the coordinator state tracker (shared by both coordinators)
-        coordinator = DatabaseJobsCoordinator()
+        # Initialize the coordinator state tracker with pre-calculated intervals (shared by both coordinators)
+        coordinator = DatabaseJobsCoordinator(
+            proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
+            proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
+            proxy_batch_write_at=proxy_batch_write_at,
+        )
         
         # Load all existing models on proxy startup if store_model_in_db is enabled
         store_model_in_db = (
@@ -3975,12 +4039,12 @@ class ProxyStartupEvent:
             ],
         )
         
-        # Add low-frequency coordinator job - runs every 60 seconds
+        # Add low-frequency coordinator job - runs every 10 seconds (fixed interval)
         # Handles: update_spend, reset_budget, spend_log_cleanup, check_batch_cost
         scheduler.add_job(
             low_frequency_database_jobs_coordinator,
             "interval",
-            seconds=60,
+            seconds=10,
             args=[
                 prisma_client,
                 db_writer_client,
