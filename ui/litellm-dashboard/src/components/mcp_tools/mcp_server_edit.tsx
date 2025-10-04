@@ -188,6 +188,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             <div className="mt-6">
               <MCPPermissionManagement
                 availableAccessGroups={availableAccessGroups}
+                mcpServer={mcpServer}
                 searchValue={searchValue}
                 setSearchValue={setSearchValue}
                 getAccessGroupOptions={getAccessGroupOptions}
