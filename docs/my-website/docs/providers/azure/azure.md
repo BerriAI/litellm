@@ -381,7 +381,7 @@ LiteLLM supports using Azure GPT-5 reasoning models in one of the two ways:
 2. Inferred Routing (If the azure deployment name contains `gpt-5` but not `gpt-5-chat`): `model = azure/gpt-5-mini`. In this scenario the model onboarded to litellm follows the format `model=azure/gpt-5-mini`.
 
 :::note
-**Important**: For GPT-5 chat models (e.g., `gpt-5-chat`), do **not** use the `gpt5_series/` prefix, as these are intelligence models, not reasoning models.
+For GPT-5 chat models (e.g., `gpt-5-chat`), do not use the `gpt5_series/` prefix, as these are not reasoning models.
 :::
 
 #### Explicit Routing
