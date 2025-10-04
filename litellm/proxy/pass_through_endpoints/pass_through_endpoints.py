@@ -84,7 +84,7 @@ async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optiona
 
     example header can be
 
-    {"Authorization": "bearer os.environ/COHERE_API_KEY"}
+    {"Authorization": "Bearer os.environ/COHERE_API_KEY"}
     """
     if custom_headers is None:
         return None
