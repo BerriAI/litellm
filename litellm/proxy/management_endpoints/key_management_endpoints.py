@@ -1344,6 +1344,17 @@ async def update_key_fn(
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        ## sanity check - prevent non-proxy admin user from updating key to belong to a different user
+        if (
+            data.user_id is not None
+            and data.user_id != existing_key_row.user_id
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User={data.user_id} is not allowed to update key={key} to belong to user={existing_key_row.user_id}",
+            )
+
         common_key_access_checks(
             user_api_key_dict=user_api_key_dict,
             data=data,
