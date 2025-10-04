@@ -9,13 +9,15 @@ interface GuardrailSelectorProps {
   value?: string[];
   className?: string;
   accessToken: string;
+  disabled?: boolean;
 }
 
 const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ 
   onChange, 
   value, 
   className, 
-  accessToken 
+  accessToken,
+  disabled
 }) => {
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,7 +53,8 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({
     <div>
       <Select
         mode="multiple"
-        placeholder="Select guardrails"
+        disabled={disabled}
+        placeholder={disabled ? "Setting guardrails is a premium feature." : "Select guardrails"}
         onChange={handleGuardrailChange}
         value={value}
         loading={loading}
