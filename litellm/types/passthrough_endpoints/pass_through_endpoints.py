@@ -6,7 +6,6 @@ from typing_extensions import TypedDict
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
-    GEMINI = "gemini"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GENERIC = "generic"
