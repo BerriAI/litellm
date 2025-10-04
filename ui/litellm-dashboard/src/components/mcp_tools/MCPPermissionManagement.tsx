@@ -1,11 +1,12 @@
-import React, { useState } from "react"
+import React, { useState, useEffect } from "react"
 import { Form, Select, Tooltip, Collapse } from "antd"
 import { InfoCircleOutlined } from "@ant-design/icons"
-
+import { MCPServer } from "./types"
 const { Panel } = Collapse
 
 interface MCPPermissionManagementProps {
   availableAccessGroups: string[]
+  mcpServer: MCPServer | null
   searchValue: string
   setSearchValue: (value: string) => void
   getAccessGroupOptions: () => Array<{
@@ -16,10 +17,24 @@ interface MCPPermissionManagementProps {
 
 const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   availableAccessGroups,
+  mcpServer,
   searchValue,
   setSearchValue,
   getAccessGroupOptions,
 }) => {
+  const form = Form.useFormInstance()
+
+  // Set initial values when mcpServer changes
+  useEffect(() => {
+    if (mcpServer) {
+      // Set extra_headers if they exist
+      if (mcpServer.extra_headers) {
+        form.setFieldValue('extra_headers', mcpServer.extra_headers)
+      }
+
+    }
+  }, [mcpServer, form])
+
   return (
     <Collapse
       className="bg-gray-50 border border-gray-200 rounded-lg"
@@ -75,13 +90,22 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <Tooltip title="Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
+                {mcpServer?.extra_headers && mcpServer.extra_headers.length > 0 && (
+                  <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                    {mcpServer.extra_headers.length} configured
+                  </span>
+                )}
               </span>
             }
             name="extra_headers"
           >
             <Select
               mode="tags"
-              placeholder="Enter header names (e.g., Authorization, X-Custom-Header)"
+              placeholder={
+                mcpServer?.extra_headers && mcpServer.extra_headers.length > 0
+                  ? `Currently: ${mcpServer.extra_headers.join(', ')}`
+                  : "Enter header names (e.g., Authorization, X-Custom-Header)"
+              }
               className="rounded-lg"
               size="large"
               tokenSeparators={[","]}

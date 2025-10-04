@@ -222,6 +222,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>{handleTransport(mcpServer.transport)}</div>
                   </div>
                   <div>
+                    <Text className="font-medium">Extra Headers</Text>
+                    <div>{mcpServer.extra_headers?.join(", ")}</div>
+                  </div>
+                  <div>
                     <Text className="font-medium">Auth Type</Text>
                     <div>{handleAuth(mcpServer.auth_type)}</div>
                   </div>

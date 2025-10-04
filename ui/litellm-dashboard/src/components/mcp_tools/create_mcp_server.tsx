@@ -388,6 +388,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <div className="mt-8">
             <MCPPermissionManagement
               availableAccessGroups={availableAccessGroups}
+              mcpServer={null}
               searchValue={searchValue}
               setSearchValue={setSearchValue}
               getAccessGroupOptions={getAccessGroupOptions}
