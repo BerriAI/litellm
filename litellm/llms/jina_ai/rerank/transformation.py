@@ -98,9 +98,26 @@ class JinaAIRerankConfig(BaseRerankConfig):
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
+        # Transform Jina AI's response format to match LiteLLM's expected format
+        # Jina AI returns: {"index": 0, "relevance_score": 0.72, "document": "hello"}
+        # LiteLLM expects: {"index": 0, "relevance_score": 0.72, "document": {"text": "hello"}}
+        transformed_results = []
+        for result in _results:
+            transformed_result = {
+                "index": result["index"],
+                "relevance_score": result["relevance_score"],
+            }
+            # Convert document from string to dict format if it exists
+            if "document" in result and isinstance(result["document"], str):
+                transformed_result["document"] = {"text": result["document"]}
+            elif "document" in result:
+                # If it's already a dict, keep it as is
+                transformed_result["document"] = result["document"]
+            transformed_results.append(transformed_result)
+
         return RerankResponse(
             id=_json_response.get("id") or str(uuid.uuid4()),
-            results=_results,  # type: ignore
+            results=transformed_results,  # type: ignore
             meta=rerank_meta,
         )  # Return response
 

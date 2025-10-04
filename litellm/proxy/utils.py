@@ -1395,9 +1395,12 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+        from litellm.types.guardrails import GuardrailEventHooks
 
-        for callback in litellm.callbacks:
-            try:
+        guardrail_callbacks: List[CustomGuardrail] = []
+        other_callbacks: List[CustomLogger] = []
+        try:
+            for callback in litellm.callbacks:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -1407,36 +1410,37 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
 
                 if _callback is not None:
+                    if isinstance(_callback, CustomGuardrail):
+                        guardrail_callbacks.append(_callback)
+                    else:
+                        other_callbacks.append(_callback)
                     ############## Handle Guardrails ########################################
                     #############################################################################
-                    if isinstance(callback, CustomGuardrail):
-                        # Main - V2 Guardrails implementation
-                        from litellm.types.guardrails import GuardrailEventHooks
 
-                        if (
-                            callback.should_run_guardrail(
-                                data=data, event_type=GuardrailEventHooks.post_call
-                            )
-                            is not True
-                        ):
-                            continue
+            for callback in guardrail_callbacks:
+                # Main - V2 Guardrails implementation
+                if (
+                    callback.should_run_guardrail(
+                        data=data, event_type=GuardrailEventHooks.post_call
+                    )
+                    is not True
+                ):
+                    continue
 
-                        await callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
-                        )
+                await callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
+                )
 
-                    ############ Handle CustomLogger ###############################
-                    #################################################################
-                    elif isinstance(_callback, CustomLogger):
-                        await _callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
-                        )
-            except Exception as e:
-                raise e
+            ############ Handle CustomLogger ###############################
+            #################################################################
+            for callback in other_callbacks:
+                await callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict, data=data, response=response
+                )
+        except Exception as e:
+            raise e
         return response
 
     async def async_post_call_streaming_hook(
@@ -3571,18 +3575,21 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     )
 
 
-def _premium_user_check():
+def _premium_user_check(feature: Optional[str] = None):
     """
     Raises an HTTPException if the user is not a premium user
     """
     from litellm.proxy.proxy_server import premium_user
 
+    if feature:
+        detail_msg = f"This feature is only available for LiteLLM Enterprise users: {feature}. {CommonProxyErrors.not_premium_user.value}"
+    else:
+        detail_msg = f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
+
     if not premium_user:
         raise HTTPException(
             status_code=403,
-            detail={
-                "error": f"This feature is only available for LiteLLM Enterprise users. {CommonProxyErrors.not_premium_user.value}"
-            },
+            detail={"error": detail_msg},
         )
 
 

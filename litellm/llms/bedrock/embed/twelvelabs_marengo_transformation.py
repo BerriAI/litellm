@@ -6,9 +6,10 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
 """
 
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 from litellm.types.llms.bedrock import (
+    TWELVELABS_EMBEDDING_INPUT_TYPES,
     TwelveLabsAsyncInvokeRequest,
     TwelveLabsMarengoEmbeddingRequest,
     TwelveLabsOutputDataConfig,
@@ -89,10 +90,11 @@ class TwelveLabsMarengoEmbeddingConfig:
         - Audio inputs (async-invoke only)
         - S3 URLs for all media types (async-invoke only)
         """
-        if inference_params.get("inputType"):
-            input_type = inference_params["inputType"]
-        else:
-            raise ValueError("input_type is required")
+        # Get input_type or default to "text"
+        input_type = cast(
+            TWELVELABS_EMBEDDING_INPUT_TYPES,
+            inference_params.get("inputType") or inference_params.get("input_type") or "text"
+        )
 
         # Validate that async-invoke is used for video/audio
         if input_type in ["video", "audio"] and not async_invoke_route:
@@ -136,6 +138,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         for k, v in inference_params.items():
             if k not in [
                 "inputType",
+                "input_type",  # Exclude both camelCase and snake_case
                 "inputText",
                 "mediaSource",
                 "bucketOwner",  # Don't include bucketOwner in the request

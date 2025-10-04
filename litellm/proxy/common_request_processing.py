@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.utils import ServerToolUse
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -897,24 +898,30 @@ class ProxyBaseLLMRequestProcessing:
             completion_tokens_details = _usage.get("completion_tokens_details")
             prompt_tokens_details = _usage.get("prompt_tokens_details")
 
-            # Build usage kwargs with only non-None values
-            usage_kwargs = {
+            
+            usage_kwargs: dict[str, Any] = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
             }
             
-            # Add optional fields if they exist
-            if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
-            if cache_read_input_tokens is not None:
-                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
-            if web_search_requests is not None:
-                usage_kwargs["web_search_requests"] = web_search_requests
+            # Add optional named parameters
             if completion_tokens_details is not None:
                 usage_kwargs["completion_tokens_details"] = completion_tokens_details
             if prompt_tokens_details is not None:
                 usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
+            
+            # Handle web_search_requests by wrapping in ServerToolUse
+            if web_search_requests is not None:
+                usage_kwargs["server_tool_use"] = ServerToolUse(
+                    web_search_requests=web_search_requests
+                )
+            
+            # Add cache-related fields to **params (handled by Usage.__init__)
+            if cache_creation_input_tokens is not None:
+                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
+            if cache_read_input_tokens is not None:
+                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
             _mr = ModelResponse(
                 usage=Usage(**usage_kwargs)
