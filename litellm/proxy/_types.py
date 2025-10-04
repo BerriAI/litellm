@@ -989,7 +989,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     allowed_tools: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     # Health check status
-    status: Optional[str] = Field(
+    status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
         description="Health status: 'healthy', 'unhealthy', 'unknown'",
     )
