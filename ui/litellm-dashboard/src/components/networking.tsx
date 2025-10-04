@@ -2514,10 +2514,10 @@ export const allTagNamesCall = async (accessToken: String) => {
 export const allEndUsersCall = async (accessToken: String) => {
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/all_end_users`
-      : `/global/all_end_users`;
+      ? `${proxyBaseUrl}/customer/list`
+      : `/customer/list`;
 
-    console.log("in global/all_end_users call", url);
+    console.log("in customer/list", url);
     const response = await fetch(`${url}`, {
       method: "GET",
       headers: {
