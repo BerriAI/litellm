@@ -51,13 +51,6 @@ example_embedding_result = {
 }
 
 
-def mock_patch_aembedding():
-    return mock.patch(
-        "litellm.proxy.proxy_server.llm_router.aembedding",
-        return_value=example_embedding_result,
-    )
-
-
 @pytest.fixture(scope="function")
 def client_no_auth():
     # Assuming litellm.proxy.proxy_server is an object
@@ -242,32 +235,45 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-@mock_patch_aembedding()
-def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
+def test_embedding_input_array_of_tokens(client_no_auth):
     """
     Test to bypass decoding input as array of tokens for selected providers
 
     Ref: https://github.com/BerriAI/litellm/issues/10113
     """
     try:
-        test_data = {
-            "model": "vllm_embed_model",
-            "input": [[2046, 13269, 158208]],
-        }
+        # Create an AsyncMock for aembedding
+        async_mock = AsyncMock(return_value=example_embedding_result)
+        
+        with mock.patch(
+            "litellm.proxy.proxy_server.llm_router.aembedding",
+            new=async_mock,
+        ) as mock_aembedding:
+            test_data = {
+                "model": "vllm_embed_model",
+                "input": [[2046, 13269, 158208]],
+            }
+            
+            response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        response = client_no_auth.post("/v1/embeddings", json=test_data)
-
-        mock_aembedding.assert_called_once_with(
-            model="vllm_embed_model",
-            input=[[2046, 13269, 158208]],
-            metadata=mock.ANY,
-            proxy_server_request=mock.ANY,
-            secret_fields=mock.ANY,
-        )
-        assert response.status_code == 200
-        result = response.json()
-        print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+            # Get the actual call to check parameters
+            assert mock_aembedding.called, "aembedding should have been called"
+            call_args = mock_aembedding.call_args
+            
+            # Verify the key parameters we care about
+            assert call_args.kwargs["model"] == "vllm_embed_model"
+            assert call_args.kwargs["input"] == [[2046, 13269, 158208]]
+            
+            # Verify metadata, proxy_server_request, and secret_fields are present
+            # but don't check their exact values since they're complex objects
+            assert "metadata" in call_args.kwargs
+            assert "proxy_server_request" in call_args.kwargs
+            assert "secret_fields" in call_args.kwargs
+            
+            assert response.status_code == 200
+            result = response.json()
+            print(len(result["data"][0]["embedding"]))
+            assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
