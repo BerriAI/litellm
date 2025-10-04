@@ -1,0 +1,139 @@
+import React, { useState } from "react"
+import { Form, Select, Tooltip, Collapse } from "antd"
+import { InfoCircleOutlined } from "@ant-design/icons"
+
+const { Panel } = Collapse
+
+interface MCPPermissionManagementProps {
+  availableAccessGroups: string[]
+  searchValue: string
+  setSearchValue: (value: string) => void
+  getAccessGroupOptions: () => Array<{
+    value: string
+    label: React.ReactNode
+  }>
+}
+
+const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
+  availableAccessGroups,
+  searchValue,
+  setSearchValue,
+  getAccessGroupOptions,
+}) => {
+  return (
+    <Collapse
+      className="bg-gray-50 border border-gray-200 rounded-lg"
+      expandIconPosition="end"
+      ghost={false}
+    >
+      <Panel
+        header={
+          <div className="flex items-center">
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <h3 className="text-lg font-semibold text-gray-900">Permission Management / Access Control</h3>
+            </div>
+            <p className="text-sm text-gray-600 ml-4">
+              Configure access permissions and security settings (Optional)
+            </p>
+          </div>
+        }
+        key="permissions"
+        className="border-0"
+      >
+        <div className="space-y-6 pt-4">
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                MCP Access Groups
+                <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            name="mcp_access_groups"
+            className="mb-4"
+          >
+            <Select
+              mode="tags"
+              showSearch
+              placeholder="Select existing groups or type to create new ones"
+              optionFilterProp="value"
+              filterOption={(input, option) => (option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
+              onSearch={(value) => setSearchValue(value)}
+              tokenSeparators={[","]}
+              options={getAccessGroupOptions()}
+              maxTagCount="responsive"
+              allowClear
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Extra Headers
+                <Tooltip title="Specify header names that should be forwarded from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            name="extra_headers"
+          >
+            <Select
+              mode="tags"
+              placeholder="Enter header names (e.g., Authorization, X-Custom-Header)"
+              className="rounded-lg"
+              size="large"
+              tokenSeparators={[","]}
+              allowClear
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Allowed Tools
+                <Tooltip title="Specify which tools are allowed to be called on this MCP server. Leave empty to allow all tools.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            name="allowed_tools"
+          >
+            <Select
+              mode="tags"
+              placeholder="Enter tool names (e.g., read_file, write_file)"
+              className="rounded-lg"
+              size="large"
+              tokenSeparators={[","]}
+              allowClear
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Disallowed Tools
+                <Tooltip title="Specify which tools are explicitly disallowed on this MCP server. These take precedence over allowed tools.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            name="disallowed_tools"
+          >
+            <Select
+              mode="tags"
+              placeholder="Enter tool names to disallow (e.g., delete_file, system_command)"
+              className="rounded-lg"
+              size="large"
+              tokenSeparators={[","]}
+              allowClear
+            />
+          </Form.Item>
+        </div>
+      </Panel>
+    </Collapse>
+  )
+}
+
+export default MCPPermissionManagement
