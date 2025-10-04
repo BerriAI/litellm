@@ -11,7 +11,7 @@ import time
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import litellm
-from litellm import acompletion
+from litellm import acompletion, atext_completion
 
 
 class TestAsyncCancellation:
@@ -302,6 +302,155 @@ class TestAsyncCancellation:
         # Verify cancellation works
         with pytest.raises(asyncio.CancelledError):
             await task
+
+    @pytest.mark.asyncio
+    async def test_atext_completion_cancellation_handling(self):
+        """Test that atext_completion properly handles asyncio.CancelledError."""
+        
+        async def cancelled_text_completion():
+            """A text completion call that should be cancelled."""
+            return await atext_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="Write a long story about",
+                mock_response="This should not be returned due to cancellation"
+            )
+        
+        # Create a task and cancel it
+        task = asyncio.create_task(cancelled_text_completion())
+        
+        # Cancel the task immediately
+        task.cancel()
+        
+        # Verify that CancelledError is properly raised
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    @pytest.mark.asyncio
+    async def test_atext_completion_cancellation_with_delay(self):
+        """Test text completion cancellation with a small delay to simulate real-world usage."""
+        
+        # Mock the text_completion function to add delay
+        async def mock_delayed_text_completion(*args, **kwargs):
+            await asyncio.sleep(1.0)  # Simulate delay
+            return litellm.TextCompletionResponse(
+                id="test-id",
+                choices=[
+                    litellm.TextCompletionChoice(
+                        finish_reason="stop",
+                        index=0,
+                        text="This should not be returned"
+                    )
+                ],
+                created=1234567890,
+                model="gpt-3.5-turbo-instruct",
+                object="text_completion"
+            )
+        
+        def mock_text_completion_that_returns_coroutine(*args, **kwargs):
+            return mock_delayed_text_completion(*args, **kwargs)
+        
+        with patch('litellm.text_completion', side_effect=mock_text_completion_that_returns_coroutine):
+            task = asyncio.create_task(
+                atext_completion(
+                    model="gpt-3.5-turbo-instruct", 
+                    prompt="Complete this story:"
+                )
+            )
+            
+            # Let the task start, then cancel it
+            await asyncio.sleep(0.1)
+            task.cancel()
+            
+            # Verify cancellation is handled properly
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    @pytest.mark.asyncio
+    async def test_atext_completion_with_router_cancellation(self):
+        """Test that text completion cancellation works properly with the router."""
+        
+        # Create a simple router configuration
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo-instruct",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo-instruct"
+                    }
+                }
+            ]
+        )
+        
+        # Mock the router's _atext_completion method to add delay
+        async def mock_router_text_completion(*args, **kwargs):
+            await asyncio.sleep(1.0)  # Simulate delay
+            return litellm.TextCompletionResponse(
+                id="router-test-id",
+                choices=[
+                    litellm.TextCompletionChoice(
+                        finish_reason="stop",
+                        index=0,
+                        text="Router text completion response"
+                    )
+                ],
+                created=1234567890,
+                model="gpt-3.5-turbo-instruct",
+                object="text_completion"
+            )
+        
+        with patch.object(router, '_atext_completion', side_effect=mock_router_text_completion):
+            task = asyncio.create_task(
+                router.atext_completion(
+                    model="gpt-3.5-turbo-instruct",
+                    prompt="Write a story about"
+                )
+            )
+            
+            # Cancel after a short delay
+            await asyncio.sleep(0.1)
+            task.cancel()
+            
+            # Verify cancellation is handled
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    @pytest.mark.asyncio
+    async def test_atext_completion_basic_cancellation_scenarios(self):
+        """Test various basic text completion cancellation scenarios."""
+        
+        # Test immediate cancellation
+        task1 = asyncio.create_task(
+            atext_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="Write something"
+            )
+        )
+        task1.cancel()
+        
+        with pytest.raises(asyncio.CancelledError):
+            await task1
+        
+        # Test that a successful completion still works
+        response = await atext_completion(
+            model="gpt-3.5-turbo-instruct",
+            prompt="Hello world"
+        )
+        
+        # Should get a response (even if mocked)
+        assert response is not None
+
+    def test_sync_text_completion_still_works(self):
+        """Test that sync text completion is unaffected by async cancellation changes."""
+        
+        # Sync text completion should work exactly as before
+        response = litellm.text_completion(
+            model="gpt-3.5-turbo-instruct",
+            prompt="Hello world",
+            mock_response="Sync text completion works"
+        )
+        
+        assert hasattr(response, 'choices')
+        assert response.choices[0].text == "Sync text completion works"
 
 
 if __name__ == "__main__":

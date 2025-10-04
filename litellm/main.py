@@ -4819,14 +4819,29 @@ async def atext_completion(
     kwargs["acompletion"] = True
     custom_llm_provider = None
     try:
-        # Use a partial function to pass your keyword arguments
-        func = partial(text_completion, *args, **kwargs)
-
-        # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-
-        init_response = await loop.run_in_executor(None, func_with_context)
+        # First, try calling text_completion directly to see if it returns a coroutine (native async)
+        # This allows providers with async implementations to be properly cancellable
+        init_response = text_completion(*args, **kwargs)
+        
+        # If the provider returned a coroutine, await it directly (fully cancellable)
+        if asyncio.iscoroutine(init_response):
+            try:
+                init_response = await init_response
+            except asyncio.CancelledError:
+                # Re-raise the CancelledError to propagate cancellation
+                raise
+        # If it's not a coroutine, we need to handle it differently
+        elif not isinstance(init_response, (dict, TextCompletionResponse, CustomStreamWrapper)):
+            # This shouldn't happen in normal cases, but fallback to executor if needed
+            func = partial(text_completion, *args, **kwargs)
+            ctx = contextvars.copy_context()
+            func_with_context = partial(ctx.run, func)
+            
+            try:
+                init_response = await loop.run_in_executor(None, func_with_context)
+            except asyncio.CancelledError:
+                # Re-raise the CancelledError to propagate cancellation
+                raise
         if isinstance(init_response, dict) or isinstance(
             init_response, TextCompletionResponse
         ):  ## CACHING SCENARIO
@@ -4869,6 +4884,9 @@ async def atext_completion(
                 custom_llm_provider=custom_llm_provider,
             )
             return text_completion_response
+    except asyncio.CancelledError:
+        # Ensure CancelledError is properly propagated without being caught by the general exception handler
+        raise
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
