@@ -76,7 +76,7 @@ export const callbackInfo: Record<string, CallbackInfo> = {
       supports_key_team_logging: true,
       dynamic_params: {
         "arize_api_key": "password",
-        "arize_space_key": "text",
+        "arize_space_id": "text",
       },
       description: "Arize Logging Integration"
     },

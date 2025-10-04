@@ -48,10 +48,8 @@ import {
   callback_map,
   callbackInfo,
   Callbacks,
-  reverse_callback_map,
 } from "./callback_info_helpers";
 import { parseErrorMessage } from "./shared/errorUtils";
-import Image from "next/image";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -109,8 +107,6 @@ const Settings: React.FC<SettingsPageProps> = ({
   );
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
-  const [testingConnection, setTestingConnection] = useState<boolean>(false);
-  const [connectionStatus, setConnectionStatus] = useState<'success' | 'error' | null>(null);
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
@@ -252,133 +248,6 @@ const Settings: React.FC<SettingsPageProps> = ({
       setSelectedCallbackParams(callbackObject.litellm_callback_params);
     } else {
       setSelectedCallbackParams([]);
-    }
-  };
-
-  const handleCallbackSelectChange = (value: string) => {
-    // Reset connection status when callback changes
-    setConnectionStatus(null);
-    
-    // Find callback by internal value - check if allCallbacks is array first
-    let selectedCallbackObject = null;
-    if (Array.isArray(allCallbacks) && allCallbacks.length > 0) {
-      selectedCallbackObject = allCallbacks.find(
-        cb => cb.litellm_callback_name === value
-      );
-    }
-    
-    if (selectedCallbackObject) {
-      handleSelectedCallbackChange(selectedCallbackObject);
-    } else {
-      // Fallback: use dynamic params from callbackInfo
-      const displayName = reverse_callback_map[value];
-      if (displayName && callbackInfo[displayName]?.dynamic_params) {
-        const dynamicParams = Object.keys(callbackInfo[displayName].dynamic_params);
-        setSelectedCallback(value);
-        setSelectedCallbackParams(dynamicParams);
-      } else {
-        // Final fallback: try to find in allCallbacks by index (for backward compatibility)
-        let legacyCallback = null;
-        if (Array.isArray(allCallbacks)) {
-          // The old system used array indices, check if value is a number
-          const numericValue = parseInt(value);
-          if (!isNaN(numericValue) && allCallbacks[numericValue]) {
-            legacyCallback = allCallbacks[numericValue];
-          }
-        }
-        
-        if (legacyCallback) {
-          handleSelectedCallbackChange(legacyCallback);
-        } else {
-          setSelectedCallback(value);
-          setSelectedCallbackParams([]);
-        }
-      }
-    }
-  };
-
-  const getFieldType = (paramName: string, callbackName: string): "text" | "password" => {
-    const displayName = reverse_callback_map[callbackName];
-    if (displayName && callbackInfo[displayName]?.dynamic_params) {
-      const paramType = callbackInfo[displayName].dynamic_params[paramName];
-      return paramType === "password" ? "password" : "text";
-    }
-    // Default heuristics for legacy callbacks
-    return paramName.toLowerCase().includes("key") || 
-           paramName.toLowerCase().includes("secret") || 
-           paramName.toLowerCase().includes("token") ? "password" : "text";
-  };
-
-  const getFieldLabel = (paramName: string): string => {
-    return paramName
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, l => l.toUpperCase());
-  };
-
-  const getFieldPlaceholder = (paramName: string, callbackName: string): string => {
-    const displayName = reverse_callback_map[callbackName];
-    
-    if (displayName === "Arize") {
-      if (paramName === "ARIZE_API_KEY" || paramName === "arize_api_key") return "Enter your Arize API Key...";
-      if (paramName === "ARIZE_SPACE_KEY" || paramName === "arize_space_id") return "Enter your Arize Space Key...";
-      if (paramName === "ARIZE_ENDPOINT" || paramName === "ARIZE_HTTP_ENDPOINT") return "Optional: Custom endpoint URL";
-    }
-    
-    return `Enter ${getFieldLabel(paramName)}...`;
-  };
-
-  const isRequiredField = (paramName: string, callbackName: string): boolean => {
-    const displayName = reverse_callback_map[callbackName];
-    
-    if (displayName === "Arize") {
-      return (paramName === "ARIZE_API_KEY" || paramName === "arize_api_key") || 
-             (paramName === "ARIZE_SPACE_KEY" || paramName === "arize_space_id");
-    }
-    
-    // Default: all fields are required except endpoints
-    return !paramName.toLowerCase().includes("endpoint") && 
-           !paramName.toLowerCase().includes("base") &&
-           !paramName.toLowerCase().includes("host");
-  };
-
-  const testCallbackConnection = async () => {
-    if (!selectedCallback || !accessToken) return;
-
-    setTestingConnection(true);
-    setConnectionStatus(null);
-
-    try {
-      const formValues = addForm.getFieldsValue();
-      
-      // Build query params for connection test
-      const params = new URLSearchParams();
-      selectedCallbackParams.forEach(param => {
-        const value = formValues[param];
-        if (value) {
-          // Convert backend param names to dynamic param names
-          let dynamicParamName = param.toLowerCase();
-          if (selectedCallback === "arize") {
-            if (param === "ARIZE_API_KEY" || param === "arize_api_key") dynamicParamName = "arize_api_key";
-            if (param === "ARIZE_SPACE_KEY" || param === "arize_space_id") dynamicParamName = "arize_space_id";
-          }
-          params.append(dynamicParamName, value);
-        }
-      });
-
-      const response = await serviceHealthCheck(accessToken, selectedCallback);
-      
-      if (response) {
-        setConnectionStatus('success');
-        NotificationsManager.success('Connection test successful!');
-      } else {
-        setConnectionStatus('error');
-        NotificationsManager.error('Connection test failed');
-      }
-    } catch (error) {
-      setConnectionStatus('error');
-      NotificationsManager.fromBackend(error);
-    } finally {
-      setTestingConnection(false);
     }
   };
 
@@ -777,7 +646,12 @@ const Settings: React.FC<SettingsPageProps> = ({
               rules={[{ required: true, message: "Please select a callback" }]}
             >
               <Select
-                onChange={handleCallbackSelectChange}
+                onChange={(value) => {
+                  const selectedCallback = allCallbacks[value];
+                  if (selectedCallback) {
+                    handleSelectedCallbackChange(selectedCallback);
+                  }
+                }}
               >
                 {Object.entries(Callbacks).map(
                   ([callbackEnum, callbackDisplayName]) => (
@@ -813,76 +687,21 @@ const Settings: React.FC<SettingsPageProps> = ({
             </FormItem>
 
             {selectedCallbackParams &&
-              selectedCallbackParams.map((param) => {
-                const fieldType = getFieldType(param, selectedCallback || "");
-                const isRequired = isRequiredField(param, selectedCallback || "");
-                const placeholder = getFieldPlaceholder(param, selectedCallback || "");
-                const label = getFieldLabel(param);
-                
-                return (
-                  <FormItem
-                    label={
-                      <span className="flex items-center space-x-2">
-                        <span>{label}</span>
-                        {!isRequired && (
-                          <span className="text-xs text-gray-500">(Optional)</span>
-                        )}
-                        {selectedCallback === "arize" && (param === "ARIZE_API_KEY" || param === "arize_api_key") && (
-                          <a
-                            href="https://docs.arize.com/arize/api-reference/authentication"
-                            target="_blank"
-                            className="text-blue-500 text-xs hover:underline"
-                          >
-                            Get API Key
-                          </a>
-                        )}
-                      </span>
-                    }
-                    name={param}
-                    key={param}
-                    rules={[
-                      {
-                        required: isRequired,
-                        message: `Please enter the value for ${label}`,
-                      },
-                    ]}
-                  >
-                    {fieldType === "password" ? (
-                      <Input.Password placeholder={placeholder} />
-                    ) : (
-                      <Input placeholder={placeholder} />
-                    )}
-                  </FormItem>
-                );
-              })}
-
-            {selectedCallback && selectedCallbackParams.length > 0 && (
-              <div className="flex items-center space-x-2 mb-4">
-                {connectionStatus === 'success' && (
-                  <span className="flex items-center text-green-600 text-sm">
-                    <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-                    Connection successful
-                  </span>
-                )}
-                {connectionStatus === 'error' && (
-                  <span className="flex items-center text-red-600 text-sm">
-                    <span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
-                    Connection failed
-                  </span>
-                )}
-                <Button2
-                  type="default"
-                  loading={testingConnection}
-                  onClick={testCallbackConnection}
-                  disabled={!selectedCallbackParams.some(param => {
-                    const value = addForm.getFieldValue(param);
-                    return isRequiredField(param, selectedCallback || "") ? value : true;
-                  })}
+              selectedCallbackParams.map((param) => (
+                <FormItem
+                  label={param}
+                  name={param}
+                  key={param}
+                  rules={[
+                    {
+                      required: true,
+                      message: "Please enter the value for " + param,
+                    },
+                  ]}
                 >
-                  {testingConnection ? 'Testing...' : 'Test Connection'}
-                </Button2>
-              </div>
-            )}
+                  <Input.Password />
+                </FormItem>
+              ))}
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
               <Button2 htmlType="submit">Save</Button2>

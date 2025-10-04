@@ -8,11 +8,9 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.arize import _utils
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
-from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -28,7 +26,7 @@ else:
     Span = Any
 
 
-class ArizeLogger(OpenTelemetry, AdditionalLoggingUtils):
+class ArizeLogger(OpenTelemetry):
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
         return
@@ -143,87 +141,3 @@ class ArizeLogger(OpenTelemetry, AdditionalLoggingUtils):
             )
         
         return dynamic_headers
-
-    async def async_health_check(self, standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = None) -> IntegrationHealthCheckStatus:
-        """
-        Check if Arize service is healthy by testing OTEL trace export
-        
-        Args:
-            standard_callback_dynamic_params: Dynamic parameters containing arize_api_key and arize_space_key/arize_space_id
-            
-        Returns:
-            IntegrationHealthCheckStatus with status and optional error message
-        """
-        try:
-            api_key = None
-            space_key = None
-            
-            if standard_callback_dynamic_params:
-                api_key = standard_callback_dynamic_params.get("arize_api_key")
-                space_key = (
-                    standard_callback_dynamic_params.get("arize_space_key") or 
-                    standard_callback_dynamic_params.get("arize_space_id")  # fallback for backwards compatibility
-                )
-            
-            if not api_key:
-                api_key = os.environ.get("ARIZE_API_KEY")
-            if not space_key:
-                space_key = os.environ.get("ARIZE_SPACE_KEY")
-            
-            if not api_key or not space_key:
-                return IntegrationHealthCheckStatus(
-                    status="unhealthy", 
-                    error_message="Arize credentials not configured. Please set arize_api_key and arize_space_key parameters or ARIZE_API_KEY and ARIZE_SPACE_KEY environment variables."
-                )
-            
-            # Get Arize configuration
-            arize_config = ArizeLogger.get_arize_config()
-            
-            # Validate configuration
-            if not arize_config.endpoint:
-                return IntegrationHealthCheckStatus(
-                    status="unhealthy",
-                    error_message="Arize endpoint not configured. Using default endpoint https://otlp.arize.com/v1"
-                )
-            
-            try:
-                test_headers = {
-                    "arize-space-id": space_key.strip(),
-                    "api_key": api_key.strip(),
-                }
-                
-                endpoint = arize_config.endpoint or "https://otlp.arize.com/v1"
-                
-                # For a basic health check, we just validate that the configuration is properly formed
-                # A full test would require actually sending a trace, which might be overkill for health checks
-                
-                return IntegrationHealthCheckStatus(
-                    status="healthy",
-                    error_message=None
-                )
-                
-            except Exception as config_error:
-                return IntegrationHealthCheckStatus(
-                    status="unhealthy",
-                    error_message=f"Arize configuration error: {str(config_error)}"
-                )
-            
-        except Exception as e:
-            return IntegrationHealthCheckStatus(
-                status="unhealthy", 
-                error_message=f"Arize health check failed: {str(e)}"
-            )
-
-    async def get_request_response_payload(
-        self,
-        request_id: str,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
-    ) -> Optional[dict]:
-        """
-        Get the request and response payload for a given request_id from Arize.
-        
-        Note: Arize is primarily for observability/tracing, not request/response storage.
-        This method returns None as Arize doesn't typically store raw payloads.
-        """
-        return None
