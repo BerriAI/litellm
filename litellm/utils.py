@@ -7499,6 +7499,10 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+            return VertexAIRealtimeConfig()
         return None
 
     @staticmethod

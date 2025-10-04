@@ -15,11 +15,13 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.vertex_ai.realtime.handler import VertexAIRealtime
 from litellm.types.realtime import RealtimeQueryParams
 from ..utils import client as wrapper_client
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
+vertex_ai_realtime = VertexAIRealtime()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
@@ -136,6 +138,28 @@ async def _arealtime(
             timeout=timeout,
             query_params=query_params,
         )
+    elif _custom_llm_provider == "vertex_ai":
+        # For Vertex AI, we need to extract project and location from headers or query params
+        vertex_project = headers.get("x-goog-user-project") or query_params.get("vertex_project") if query_params else None
+        vertex_location = headers.get("x-goog-vertex-location") or query_params.get("vertex_location") if query_params else None
+        
+        # Prepare query params for Vertex AI
+        vertex_query_params = {}
+        if vertex_project:
+            vertex_query_params["vertex_project"] = vertex_project
+        if vertex_location:
+            vertex_query_params["vertex_location"] = vertex_location
+            
+        await vertex_ai_realtime.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            client=None,
+            timeout=timeout,
+            query_params=vertex_query_params,
+        )
     else:
         raise ValueError(f"Unsupported model: {model}")
 
@@ -175,6 +199,10 @@ async def _realtime_health_check(
         url = openai_realtime._construct_url(
             api_base=api_base or "https://api.openai.com/", query_params={"model": model}
         )
+    elif custom_llm_provider == "vertex_ai":
+        # For Vertex AI, we need to get the URL from the realtime config
+        realtime_config = vertex_ai_realtime.get_realtime_config()
+        url = realtime_config.get_complete_url(api_base, model, api_key)
     else:
         raise ValueError(f"Unsupported model: {model}")
     async with websockets.connect(  # type: ignore
