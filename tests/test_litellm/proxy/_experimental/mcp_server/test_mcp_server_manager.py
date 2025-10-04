@@ -909,6 +909,72 @@ class TestMCPServerManager:
             assert "tool_1" in tool_names
             assert "tool_2" in tool_names
 
+    @pytest.mark.asyncio
+    async def test_get_all_mcp_servers_filters_invalid_server_ids(self):
+        """Test that get_all_mcp_servers_with_health_and_teams filters out servers with invalid server_ids"""
+        manager = MCPServerManager()
+        
+        # Mock get_allowed_mcp_servers to return some server IDs
+        manager.get_allowed_mcp_servers = AsyncMock(return_value=["valid-server-1", "invalid-server-1"])
+        
+        # Mock get_all_mcp_server_ids to return only valid server IDs
+        manager.get_all_mcp_server_ids = MagicMock(return_value=["valid-server-1", "another-valid-server"])
+        
+        # Mock config_mcp_servers to be empty for this test
+        manager.config_mcp_servers = {}
+        
+        # Create mock servers - one valid, one invalid
+        valid_server = LiteLLM_MCPServerTable(
+            server_id="valid-server-1",
+            server_name="Valid Server",
+            alias="valid",
+            description="A valid server",
+            url="http://valid.com",
+            transport=MCPTransport.http,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        
+        invalid_server = LiteLLM_MCPServerTable(
+            server_id="invalid-server-1", 
+            server_name="Invalid Server",
+            alias="invalid",
+            description="An invalid server",
+            url="http://invalid.com", 
+            transport=MCPTransport.http,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        
+        # Mock the database call to return both servers
+        with patch('litellm.proxy._experimental.mcp_server.db.get_mcp_servers') as mock_get_servers:
+            mock_get_servers.return_value = [valid_server, invalid_server]
+            
+            # Mock prisma_client to not be None
+            with patch('litellm.proxy.proxy_server.prisma_client', new=MagicMock()):
+                # Mock _user_has_admin_view to return False (non-admin user)
+                with patch('litellm.proxy.management_endpoints.common_utils._user_has_admin_view') as mock_admin_view:
+                    mock_admin_view.return_value = False
+                    
+                    # Create mock user auth
+                    user_auth = MagicMock()
+                    user_auth.user_id = "test-user"
+                    
+                    # Call the method
+                    result = await manager.get_all_mcp_servers_with_health_and_teams(
+                        user_api_key_auth=user_auth,
+                        include_health=False
+                    )
+                    
+                    # Verify that only the valid server is returned
+                    assert len(result) == 1
+                    assert result[0].server_id == "valid-server-1"
+                    assert result[0].server_name == "Valid Server"
+                    
+                    # Verify invalid server is not in results
+                    server_ids = [server.server_id for server in result]
+                    assert "invalid-server-1" not in server_ids
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

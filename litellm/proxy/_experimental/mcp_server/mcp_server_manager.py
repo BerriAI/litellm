@@ -285,6 +285,13 @@ class MCPServerManager:
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
 
+    def get_all_mcp_server_ids(self) -> List[str]:
+        """
+        Get all MCP server IDs
+        """
+        all_servers = self.get_registry().values()
+        return [server.server_id for server in all_servers]
+
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
@@ -1176,6 +1183,13 @@ class MCPServerManager:
                             }
                         )
 
+        ## filter out invalid servers
+        valid_server_ids = self.get_all_mcp_server_ids()
+        filtered_list_mcp_servers = []
+        for server in list_mcp_servers:
+            if server.server_id not in valid_server_ids:
+                filtered_list_mcp_servers.append(server)
+
         # Map servers to their teams and return with health data
         from typing import cast
 
@@ -1198,9 +1212,7 @@ class MCPServerManager:
                     else []
                 ),
                 allowed_tools=(
-                    server.allowed_tools
-                    if server.allowed_tools is not None
-                    else []
+                    server.allowed_tools if server.allowed_tools is not None else []
                 ),
                 mcp_info=server.mcp_info,
                 teams=cast(
@@ -1212,7 +1224,7 @@ class MCPServerManager:
                 args=getattr(server, "args", None) or [],
                 env=getattr(server, "env", None) or {},
             )
-            for server in list_mcp_servers
+            for server in filtered_list_mcp_servers
         ]
 
     async def reload_servers_from_database(self):
