@@ -4,6 +4,7 @@ import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "
 import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
+import MCPPermissionManagement from "./MCPPermissionManagement";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -114,7 +115,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       // Ensure access groups is always a string array
       const accessGroups = (values.mcp_access_groups || []).map((g: any) => typeof g === 'string' ? g : g.name || String(g));
 
-      // Prepare the payload with cost configuration
+      // Prepare the payload with cost configuration and permission fields
       const payload = {
         ...values,
         server_id: mcpServer.server_id,
@@ -125,6 +126,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         },
         mcp_access_groups: accessGroups,
         alias: values.alias,
+        // Include permission management fields
+        extra_headers: values.extra_headers || [],
+        allowed_tools: values.allowed_tools || [],
+        disallowed_tools: values.disallowed_tools || [],
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -179,34 +184,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
               </Select>
             </Form.Item>
 
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  MCP Access Groups
-                  <Tooltip title="Define access groups for this MCP server. Each group represents a set of permissions.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="mcp_access_groups"
-              getValueFromEvent={value => value}
-            >
-              <Select
-                mode="tags"
-                style={{ width: '100%' }}
-                showSearch
-                placeholder="Add or select access groups"
-                tokenSeparators={[',']}
-                optionFilterProp="value"
-                filterOption={(input, option) =>
-                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                }
-                onSearch={(value) => setSearchValue(value)}
-                options={getAccessGroupOptions()}
-                // Ensure value is always an array of strings
-                getPopupContainer={trigger => trigger.parentNode}
+            {/* Permission Management / Access Control Section */}
+            <div className="mt-6">
+              <MCPPermissionManagement
+                availableAccessGroups={availableAccessGroups}
+                searchValue={searchValue}
+                setSearchValue={setSearchValue}
+                getAccessGroupOptions={getAccessGroupOptions}
               />
-            </Form.Item>
+            </div>
 
             <div className="flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>
