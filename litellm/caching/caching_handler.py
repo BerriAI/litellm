@@ -58,10 +58,15 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.streaming_handler import (
+        CustomStreamWrapper as CustomStreamWrapperType,
+    )
 else:
     LiteLLMLoggingObj = Any
-    CustomStreamWrapper = Any
+    CustomStreamWrapperType = Any
+
+# Import CustomStreamWrapper at runtime for isinstance checks
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 
 from litellm.litellm_core_utils.core_helpers import (
