@@ -123,12 +123,18 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    input_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
-    cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
-    cache_read_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_flex: Optional[
+        float
+    ]  # OpenAI flex service tier pricing
+    cache_read_input_token_cost_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     input_cost_per_character: Optional[float]  # only for vertex ai models
     input_cost_per_audio_token: Optional[float]
     input_cost_per_token_above_128k_tokens: Optional[float]  # only for vertex ai models
@@ -147,7 +153,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_batches: Optional[float]
     output_cost_per_token: Required[float]
     output_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
-    output_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
+    output_cost_per_token_priority: Optional[
+        float
+    ]  # OpenAI priority service tier pricing
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -1417,6 +1425,9 @@ class EmbeddingResponse(OpenAIObject):
         model = model
         super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
 
+        if hidden_params:
+            self._hidden_params = hidden_params
+
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -2031,6 +2042,13 @@ class GuardrailMode(TypedDict, total=False):
     default: Optional[str]
 
 
+GuardrailStatus = Literal[
+    "success",
+    "guardrail_intervened", 
+    "guardrail_failed_to_respond",
+    "not_run"
+]
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
     guardrail_provider: Optional[str]
@@ -2039,7 +2057,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
-    guardrail_status: Literal["success", "failure", "blocked"]
+    guardrail_status: GuardrailStatus
     start_time: Optional[float]
     end_time: Optional[float]
     duration: Optional[float]
@@ -2082,6 +2100,20 @@ class CostBreakdown(TypedDict):
     tool_usage_cost: float  # Cost of usage of built-in tools
 
 
+class StandardLoggingPayloadStatusFields(TypedDict, total=False):
+    """Status fields for easy filtering and analytics"""
+    llm_api_status: StandardLoggingPayloadStatus
+    """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
+    guardrail_status: GuardrailStatus
+    """
+    Status of guardrail execution:
+    - 'success': Guardrail ran and allowed content through
+    - 'guardrail_intervened': Guardrail blocked or modified content
+    - 'guardrail_failed_to_respond': Guardrail had technical failure
+    - 'not_run': No guardrail was run
+    """
+
+
 class StandardLoggingPayload(TypedDict):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
@@ -2093,6 +2125,7 @@ class StandardLoggingPayload(TypedDict):
         StandardLoggingModelCostFailureDebugInformation
     ]
     status: StandardLoggingPayloadStatus
+    status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: Optional[str]
     total_tokens: int
     prompt_tokens: int
@@ -2428,6 +2461,7 @@ class LlmProviders(str, Enum):
     DOTPROMPT = "dotprompt"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    LEMONADE = "lemonade"
 
 
 # Create a set of all provider values for quick lookup
@@ -2615,6 +2649,7 @@ class SpecialEnums(Enum):
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
+
     FLEX = "flex"
     PRIORITY = "priority"
 
@@ -2661,13 +2696,24 @@ CostResponseTypes = Union[
 class PriorityReservationSettings(BaseModel):
     """
     Settings for priority-based rate limiting reservation.
-    
+
     Defines what priority to assign to keys without explicit priority metadata.
     The priority_reservation mapping is configured separately via litellm.priority_reservation.
     """
+
     default_priority: float = Field(
         default=0.5,
-        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation."
+        description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
+    )
+    
+    saturation_threshold: float = Field(
+        default=0.80,
+        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
+    )
+    
+    tracking_multiplier: int = Field(
+        default=10,
+        description="Multiplier for model-wide tracking limits in strict mode. Set to 10x because v3_limiter.should_rate_limit() both increments counters AND enforces limits - we need the counter increment (for saturation checks) but not the enforcement (priority limits handle that). High multiplier ensures tracking never blocks."
     )
 
     model_config = ConfigDict(protected_namespaces=())

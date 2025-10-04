@@ -6,6 +6,7 @@ import { createMCPServer } from "../networking"
 import { MCPServer, MCPServerCostInfo } from "./types"
 import MCPServerCostConfig from "./mcp_server_cost_config"
 import MCPConnectionStatus from "./mcp_connection_status"
+import MCPToolConfiguration from "./mcp_tool_configuration"
 import StdioConfiguration from "./StdioConfiguration"
 import { isAdminRole } from "@/utils/roles"
 import { validateMCPServerUrl, validateMCPServerName } from "./utils"
@@ -37,7 +38,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [formValues, setFormValues] = useState<Record<string, any>>({})
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false)
   const [tools, setTools] = useState<any[]>([])
-  const [transportType, setTransportType] = useState<string>("sse")
+  const [allowedTools, setAllowedTools] = useState<string[]>([])
+  const [transportType, setTransportType] = useState<string>("")
   const [searchValue, setSearchValue] = useState<string>("")
   const [urlWarning, setUrlWarning] = useState<string>("")
 
@@ -103,7 +105,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
-      // Prepare the payload with cost configuration
+      // Prepare the payload with cost configuration and allowed tools
       const payload = {
         ...formValues,
         ...stdioFields,
@@ -116,6 +118,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         },
         mcp_access_groups: accessGroups,
         alias: formValues.alias,
+        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
       }
 
       console.log(`Payload: ${JSON.stringify(payload)}`)
@@ -127,7 +130,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         form.resetFields()
         setCostConfig({})
         setTools([])
+        setAllowedTools([])
         setUrlWarning("")
+        setAliasManuallyEdited(false)
         setModalVisible(false)
         onCreateSuccess(response)
       }
@@ -143,7 +148,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     form.resetFields()
     setCostConfig({})
     setTools([])
+    setAllowedTools([])
     setUrlWarning("")
+    setAliasManuallyEdited(false)
     setModalVisible(false)
   }
 
@@ -176,7 +183,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }))
 
     // If search value doesn't match any existing group and is not empty, add "create new group" option
-    if (searchValue && !availableAccessGroups.some(group => group.toLowerCase().includes(searchValue.toLowerCase()))) {
+    if (
+      searchValue &&
+      !availableAccessGroups.some((group) => group.toLowerCase().includes(searchValue.toLowerCase()))
+    ) {
       existingOptions.push({
         value: searchValue,
         label: (
@@ -200,6 +210,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setFormValues((prev) => ({ ...prev, alias: normalized }))
     }
   }, [formValues.server_name])
+
+  // Clear formValues when modal closes to reset child components
+  React.useEffect(() => {
+    if (!isModalVisible) {
+      setFormValues({})
+    }
+  }, [isModalVisible])
 
   // rendering
   if (!isAdminRole(userRole)) {
@@ -297,7 +314,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[
                 {
                   required: false,
-                  message: "Please enter a server description",
+                  message: "Please enter a server description!!!!!!!!!",
                 },
               ]}
             >
@@ -341,11 +358,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                     onChange={(e) => checkUrlFormat(e.target.value, transportType)}
                   />
-                  {urlWarning && (
-                    <div className="mt-1 text-red-500 text-sm font-medium">
-                      {urlWarning}
-                    </div>
-                  )}
+                  {urlWarning && <div className="mt-1 text-red-500 text-sm font-medium">{urlWarning}</div>}
                 </div>
               </Form.Item>
             )}
@@ -386,9 +399,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 showSearch
                 placeholder="Select existing groups or type to create new ones"
                 optionFilterProp="value"
-                filterOption={(input, option) =>
-                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
-                }
+                filterOption={(input, option) => (option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
                 onSearch={(value) => setSearchValue(value)}
                 tokenSeparators={[","]}
                 options={getAccessGroupOptions()}
@@ -403,9 +414,24 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <MCPConnectionStatus accessToken={accessToken} formValues={formValues} onToolsLoaded={setTools} />
           </div>
 
+          {/* Tool Configuration Section */}
+          <div className="mt-6">
+            <MCPToolConfiguration
+              accessToken={accessToken}
+              formValues={formValues}
+              allowedTools={allowedTools}
+              onAllowedToolsChange={setAllowedTools}
+            />
+          </div>
+
           {/* Cost Configuration Section */}
           <div className="mt-6">
-            <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={false} />
+            <MCPServerCostConfig
+              value={costConfig}
+              onChange={setCostConfig}
+              tools={tools.filter((tool) => allowedTools.includes(tool.name))}
+              disabled={false}
+            />
           </div>
 
           <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
