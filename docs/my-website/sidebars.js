@@ -458,7 +458,14 @@ const sidebars = {
         "providers/deepgram",
         "providers/watsonx",
         "providers/predibase",
-        "providers/nvidia_nim",
+        {
+          type: "category",
+          label: "Nvidia NIM",
+          items: [
+            "providers/nvidia_nim",
+            "providers/nvidia_nim_rerank",
+          ]
+        },
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
         "providers/moonshot",
@@ -477,6 +484,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/clarifai",
         "providers/compactifai",
+        "providers/lemonade",
         "providers/vllm",
         "providers/llamafile",
         "providers/infinity",
@@ -698,7 +706,8 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
-            "projects/HolmesGPT"
+            "projects/HolmesGPT",
+            "projects/Railtracks",
           ],
         },
         "extras/code_quality",
