@@ -3575,7 +3575,7 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     )
 
 
-def _premium_user_check(feature:str=None):
+def _premium_user_check(feature: Optional[str] = None):
     """
     Raises an HTTPException if the user is not a premium user
     """
@@ -3589,9 +3589,7 @@ def _premium_user_check(feature:str=None):
     if not premium_user:
         raise HTTPException(
             status_code=403,
-            detail={
-                "error": detail_msg
-            },
+            detail={"error": detail_msg},
         )
 
 
