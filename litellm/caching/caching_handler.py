@@ -17,6 +17,7 @@ In each method it will call the appropriate method from caching.py
 import asyncio
 import datetime
 import inspect
+import time
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -57,10 +58,15 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.utils import CustomStreamWrapper
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 else:
     LiteLLMLoggingObj = Any
     CustomStreamWrapper = Any
+
+
+from litellm.litellm_core_utils.core_helpers import (
+_get_parent_otel_span_from_kwargs,
+)
 
 
 class CachingHandlerResponse(BaseModel):
@@ -133,32 +139,26 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
-        )
-        from litellm.utils import CustomStreamWrapper
-
-        kwargs = kwargs.copy()
-        args = args or ()
-        #########################################################
-        # Init cache timing metrics
-        #########################################################
-        cache_check_start_time = datetime.datetime.now()
-        cache_check_end_time = None
-        #########################################################
-
-
-        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-        kwargs["parent_otel_span"] = parent_otel_span
-        final_embedding_cached_response: Optional[EmbeddingResponse] = None
-        embedding_all_elements_cache_hit: bool = False
-        cached_result: Optional[Any] = None
+        
         if (
             (kwargs.get("caching", None) is None and litellm.cache is not None)
             or kwargs.get("caching", False) is True
         ) and (
             kwargs.get("cache", {}).get("no-cache", False) is not True
         ):  # allow users to control returning cached responses from the completion function
+            args = args or ()
+            final_embedding_cached_response: Optional[EmbeddingResponse] = None
+            embedding_all_elements_cache_hit: bool = False
+            cached_result: Optional[Any] = None
+            kwargs = kwargs.copy()
+            #########################################################
+            # Init cache timing metrics
+            #########################################################
+            cache_check_start_time = time.perf_counter()
+            cache_check_end_time: Optional[float] = None
+            #########################################################
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+            kwargs["parent_otel_span"] = parent_otel_span
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
@@ -168,7 +168,7 @@ class LLMCachingHandler:
                     kwargs=kwargs,
                     args=args,
                 )
-                cache_check_end_time = datetime.datetime.now()
+                cache_check_end_time = time.perf_counter()
 
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
@@ -180,7 +180,7 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
-                    cache_duration_ms = (cache_check_end_time - cache_check_start_time).total_seconds() * 1000
+                    cache_duration_ms = (cache_check_end_time - cache_check_start_time) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
