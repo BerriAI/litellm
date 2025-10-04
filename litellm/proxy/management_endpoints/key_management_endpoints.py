@@ -903,7 +903,7 @@ def prepare_metadata_fields(
             if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
                 from litellm.proxy.utils import _premium_user_check
 
-                _premium_user_check()
+                _premium_user_check(k)
                 casted_metadata[k] = v
 
     except Exception as e:

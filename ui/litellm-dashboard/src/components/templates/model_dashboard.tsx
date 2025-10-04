@@ -635,7 +635,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         let all_end_users_data = await allEndUsersCall(accessToken)
 
-        setAllEndUsers(all_end_users_data?.end_users)
+        setAllEndUsers(all_end_users_data?.map((u: any) => u.user_id))
 
         const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole)
 
