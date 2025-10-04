@@ -15,7 +15,7 @@ import json
 import secrets
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional, Tuple, cast, Set
+from typing import List, Literal, Optional, Tuple, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
