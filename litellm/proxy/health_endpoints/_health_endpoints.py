@@ -75,6 +75,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "braintrust",
             "datadog",
             "generic_api",
+            "arize",
         ],
         str,
     ] = fastapi.Query(description="Specify the service being hit."),
@@ -113,6 +114,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "langsmith",
             "datadog",
             "generic_api",
+            "arize",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -164,6 +166,19 @@ async def health_services_endpoint(  # noqa: PLR0915
             return {
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
+            }
+        elif service == "arize":
+            from litellm.integrations.arize.arize import ArizeLogger
+
+            arize_logger = ArizeLogger()
+            response = await arize_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Arize is healthy and ready to receive traces"
+                ),
             }
 
         if service == "webhook":

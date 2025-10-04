@@ -2368,6 +2368,17 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Lago Billing",
     )
 
+    arize: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="arize",
+        litellm_callback_params=[
+            "ARIZE_API_KEY",
+            "ARIZE_SPACE_KEY",
+            "ARIZE_ENDPOINT",
+            "ARIZE_HTTP_ENDPOINT",
+        ],
+        ui_callback_name="Arize",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
