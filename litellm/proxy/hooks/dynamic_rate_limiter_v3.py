@@ -86,6 +86,46 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         
         return weights
 
+    def _get_priority_allocation(
+        self,
+        model: str,
+        priority: Optional[str],
+        normalized_weights: Dict[str, float],
+    ) -> tuple[float, str]:
+        """
+        Get priority weight and pool key for a given priority.
+        
+        For explicit priorities: returns specific allocation and unique pool key
+        For default priority: returns default allocation and shared pool key
+        
+        Args:
+            model: Model name
+            priority: Priority level (None for default)
+            normalized_weights: Pre-computed normalized weights
+            
+        Returns:
+            tuple: (priority_weight, priority_key)
+        """
+        # Check if this key has an explicit priority in litellm.priority_reservation
+        has_explicit_priority = (
+            priority is not None 
+            and litellm.priority_reservation is not None 
+            and priority in litellm.priority_reservation
+        )
+        
+        if has_explicit_priority and priority is not None:
+            # Explicit priority: get its specific allocation
+            priority_weight = normalized_weights.get(priority, self._get_priority_weight(priority))
+            # Use unique key per priority level
+            priority_key = f"{model}:{priority}"
+        else:
+            # No explicit priority: share the default_priority pool with ALL other default keys
+            priority_weight = litellm.priority_reservation_settings.default_priority
+            # Use shared key for all default-priority requests
+            priority_key = f"{model}:default_pool"
+        
+        return priority_weight, priority_key
+
     async def _check_model_saturation(
         self,
         model: str,
@@ -176,7 +216,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Create rate limit descriptors with normalized priority weights.
         
         Uses normalized weights to handle over-allocation scenarios.
-        Only called when system is saturated.
+        
+        For explicit priorities: each priority gets its own pool (e.g., prod gets 75%)
+        For default priority: ALL keys without explicit priority share ONE pool (e.g., all share 25%)
         """
         descriptors: List[RateLimitDescriptor] = []
         
@@ -187,31 +229,24 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if model_group_info is None:
             return descriptors
 
-        # Get normalized priority weight (handles over-allocation)
+        # Get normalized priority weight and pool key
         normalized_weights = self._normalize_priority_weights()
-        priority_weight = normalized_weights.get(priority, None) if priority else None
-        if priority_weight is None:
-            # Fallback to non-normalized weight
-            priority_weight = self._get_priority_weight(priority)
-        
-        
-        # Create priority-specific rate limits
-        # Use model:priority as the key to separate different priority levels
-        priority_key = f"{model}:{priority or 'default'}"
+        priority_weight, priority_key = self._get_priority_allocation(
+            model=model,
+            priority=priority,
+            normalized_weights=normalized_weights,
+        )
         
         rate_limit_config: RateLimitDescriptorRateLimitObject = {}
         
-        # Apply normalized priority weight to model limits
+        # Apply priority weight to model limits
         if model_group_info.tpm is not None:
-            # Reserve portion of TPM based on normalized priority
             reserved_tpm = int(model_group_info.tpm * priority_weight)
             rate_limit_config["tokens_per_unit"] = reserved_tpm
             
         if model_group_info.rpm is not None:
-            # Reserve portion of RPM based on normalized priority  
             reserved_rpm = int(model_group_info.rpm * priority_weight)
             rate_limit_config["requests_per_unit"] = reserved_rpm
-            
 
         if rate_limit_config:
             rate_limit_config["window_size"] = self.v3_limiter.window_size
