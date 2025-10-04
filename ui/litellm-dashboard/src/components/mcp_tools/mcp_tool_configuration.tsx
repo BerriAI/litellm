@@ -78,6 +78,14 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             )}
           </div>
         </div>
+        
+        {/* Description */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <Text className="text-blue-800 text-sm">
+            <strong>Select which tools users can call:</strong> Only checked tools will be available for users to invoke. 
+            Unchecked tools will be blocked from execution.
+          </Text>
+        </div>
 
         {/* Loading state */}
         {isLoadingTools && (
@@ -124,7 +132,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200 flex-1">
                 <CheckCircleOutlined className="text-green-600" />
                 <Text className="text-green-700 font-medium">
-                  {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} selected
+                  {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user access
                 </Text>
               </div>
               <div className="flex gap-2 ml-3">
@@ -133,14 +141,14 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                   onClick={handleSelectAll}
                   className="px-3 py-1.5 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
                 >
-                  Select All
+                  Enable All
                 </button>
                 <button
                   type="button"
                   onClick={handleDeselectAll}
                   className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
                 >
-                  Deselect All
+                  Disable All
                 </button>
               </div>
             </div>
@@ -160,8 +168,23 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                   <div className="flex items-start gap-3">
                     <Checkbox checked={allowedTools.includes(tool.name)} onChange={() => handleToolToggle(tool.name)} />
                     <div className="flex-1">
-                      <Text className="font-medium text-gray-900">{tool.name}</Text>
+                      <div className="flex items-center gap-2">
+                        <Text className="font-medium text-gray-900">{tool.name}</Text>
+                        <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                          allowedTools.includes(tool.name)
+                            ? "bg-green-100 text-green-800"
+                            : "bg-red-100 text-red-800"
+                        }`}>
+                          {allowedTools.includes(tool.name) ? "Enabled" : "Disabled"}
+                        </span>
+                      </div>
                       {tool.description && <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>}
+                      <Text className="text-gray-400 text-xs block mt-1">
+                        {allowedTools.includes(tool.name) 
+                          ? "✓ Users can call this tool" 
+                          : "✗ Users cannot call this tool"
+                        }
+                      </Text>
                     </div>
                   </div>
                 </div>

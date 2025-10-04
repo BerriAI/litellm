@@ -72,7 +72,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Extra Headers
-                <Tooltip title="Specify header names that should be forwarded from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
+                <Tooltip title="Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
@@ -82,48 +82,6 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             <Select
               mode="tags"
               placeholder="Enter header names (e.g., Authorization, X-Custom-Header)"
-              className="rounded-lg"
-              size="large"
-              tokenSeparators={[","]}
-              allowClear
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={
-              <span className="text-sm font-medium text-gray-700 flex items-center">
-                Allowed Tools
-                <Tooltip title="Specify which tools are allowed to be called on this MCP server. Leave empty to allow all tools.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                </Tooltip>
-              </span>
-            }
-            name="allowed_tools"
-          >
-            <Select
-              mode="tags"
-              placeholder="Enter tool names (e.g., read_file, write_file)"
-              className="rounded-lg"
-              size="large"
-              tokenSeparators={[","]}
-              allowClear
-            />
-          </Form.Item>
-
-          <Form.Item
-            label={
-              <span className="text-sm font-medium text-gray-700 flex items-center">
-                Disallowed Tools
-                <Tooltip title="Specify which tools are explicitly disallowed on this MCP server. These take precedence over allowed tools.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                </Tooltip>
-              </span>
-            }
-            name="disallowed_tools"
-          >
-            <Select
-              mode="tags"
-              placeholder="Enter tool names to disallow (e.g., delete_file, system_command)"
               className="rounded-lg"
               size="large"
               tokenSeparators={[","]}
