@@ -7023,7 +7023,8 @@
         "cache_read_input_token_cost": 2.16e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": {
         "max_tokens": 163840,
