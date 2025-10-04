@@ -9,13 +9,6 @@ from .gpt_transformation import OpenAIGPTConfig
 
 class OpenAIGPT5ReasoningConfig(OpenAIGPTConfig):
     """Configuration for gpt-5 reasoning models including GPT-5-Codex variants.
-||||||| parent of 5a1a581389 (Set gpt5 configuration exclusively for the Reasoning model)
-class OpenAIGPT5Config(OpenAIGPTConfig):
-    """Configuration for gpt-5 models.
-=======
-class OpenAIGPT5ReasoningConfig(OpenAIGPTConfig):
-    """Configuration for gpt-5 reasoning models.
->>>>>>> 5a1a581389 (Set gpt5 configuration exclusively for the Reasoning model)
 
     Handles OpenAI API quirks for the gpt-5 reasoning series like:
 

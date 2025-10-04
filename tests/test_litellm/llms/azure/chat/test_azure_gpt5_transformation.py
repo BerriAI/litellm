@@ -15,6 +15,8 @@ def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5ReasoningCo
         model="gpt5_series/my-deployment"
     )
 
+def test_azure_gpt5_chat_does_not_support_reasoning_effort(config: AzureOpenAIGPT5ReasoningConfig):
+    assert "reasoning_effort" not in config.get_supported_openai_params(model="gpt-5-chat")
 
 def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5ReasoningConfig):
     params = config.map_openai_params(
@@ -38,6 +40,16 @@ def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5ReasoningConfig):
             api_version="2024-05-01-preview",
         )
 
+def test_azure_gpt5_chat_supports_temperature(config: AzureOpenAIGPT5ReasoningConfig):
+    # temperature is supported for chat models
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gpt-5-chat",
+        drop_params=False,
+        api_version="2024-05-01-preview",
+    )
+    assert params["temperature"] == 0.3
 
 def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5ReasoningConfig):
     request = config.transform_request(

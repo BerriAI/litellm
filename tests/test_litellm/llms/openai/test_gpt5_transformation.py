@@ -20,6 +20,10 @@ def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
 
 
+def test_gpt5_chat_does_not_support_reasoning_effort(config: OpenAIConfig):
+    assert "reasoning_effort" not in config.get_supported_openai_params(model="gpt-5-chat-latest")
+
+
 def test_gpt5_maps_max_tokens(config: OpenAIConfig):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 10},
@@ -50,6 +54,15 @@ def test_gpt5_temperature_error(config: OpenAIConfig):
             drop_params=False,
         )
 
+def test_gpt5_chat_supports_temperature(config: OpenAIConfig):
+    # temperature is supported for chat models
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="gpt-5-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.3
 
 def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
     assert "top_p" not in config.get_supported_openai_params(model="gpt-5")
