@@ -58,21 +58,16 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.litellm_core_utils.streaming_handler import (
-        CustomStreamWrapper as CustomStreamWrapperType,
-    )
 else:
     LiteLLMLoggingObj = Any
-    CustomStreamWrapperType = Any
 
-# Import CustomStreamWrapper at runtime for isinstance checks
+
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 
 from litellm.litellm_core_utils.core_helpers import (
 _get_parent_otel_span_from_kwargs,
 )
-
 
 
 class CachingHandlerResponse(BaseModel):
