@@ -34,6 +34,7 @@ general_settings:
   pass_through_endpoints:
     - path: "/azure-config-passthrough"
       target: os.environ/AZURE_API_BASE
+      include_subpath: true
       headers:
         Authorization: os.environ/AZURE_API_KEY
 
