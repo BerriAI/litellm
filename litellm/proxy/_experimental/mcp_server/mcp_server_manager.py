@@ -919,6 +919,14 @@ class MCPServerManager:
                 return server
         return None
 
+    def get_mcp_server_names_from_ids(self, server_ids: List[str]) -> List[str]:
+        server_names = []
+        registry = self.get_registry()
+        for server in registry.values():
+            if server.server_id in server_ids:
+                server_names.append(server.name)
+        return server_names
+
     def get_mcp_server_by_name(self, server_name: str) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server name
@@ -1187,6 +1195,11 @@ class MCPServerManager:
                 mcp_access_groups=(
                     server.mcp_access_groups
                     if server.mcp_access_groups is not None
+                    else []
+                ),
+                allowed_tools=(
+                    server.allowed_tools
+                    if server.allowed_tools is not None
                     else []
                 ),
                 mcp_info=server.mcp_info,
