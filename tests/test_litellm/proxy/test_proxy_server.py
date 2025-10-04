@@ -229,40 +229,60 @@ def test_embedding_input_array_of_tokens(client_no_auth):
 
     Ref: https://github.com/BerriAI/litellm/issues/10113
     """
-    try:
-        # Create an AsyncMock for aembedding
-        async_mock = AsyncMock(return_value=example_embedding_result)
+    # Create an AsyncMock for aembedding
+    async_mock = AsyncMock(return_value=example_embedding_result)
+    
+    # Mock proxy_logging_obj to prevent error handling interference
+    # pre_call_hook should return the data it receives
+    async def mock_pre_call_hook(*args, **kwargs):
+        # Return the data parameter - it's passed as kwargs["data"]
+        return kwargs.get("data", {})
+    
+    # during_call_hook should be a simple async mock that doesn't do anything
+    async def mock_during_call_hook(*args, **kwargs):
+        return None
+    
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+    mock_proxy_logging.during_call_hook = AsyncMock(side_effect=mock_during_call_hook)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging.update_request_status = AsyncMock()
+    
+    with mock.patch(
+        "litellm.proxy.proxy_server.llm_router.aembedding",
+        new=async_mock,
+    ) as mock_aembedding, mock.patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        mock_proxy_logging,
+    ), mock.patch(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    ):
+        test_data = {
+            "model": "vllm_embed_model",
+            "input": [[2046, 13269, 158208]],
+        }
         
-        with mock.patch(
-            "litellm.proxy.proxy_server.llm_router.aembedding",
-            new=async_mock,
-        ) as mock_aembedding:
-            test_data = {
-                "model": "vllm_embed_model",
-                "input": [[2046, 13269, 158208]],
-            }
-            
-            response = client_no_auth.post("/v1/embeddings", json=test_data)
+        response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-            # Get the actual call to check parameters
-            assert mock_aembedding.called, "aembedding should have been called"
-            call_args = mock_aembedding.call_args
-            
-            # Verify the key parameters we care about
-            assert call_args.kwargs["model"] == "vllm_embed_model"
-            assert call_args.kwargs["input"] == [[2046, 13269, 158208]]
-            
-            # Verify metadata, proxy_server_request, and secret_fields are present
-            # but don't check their exact values since they're complex objects
-            assert "metadata" in call_args.kwargs
-            assert "proxy_server_request" in call_args.kwargs
-            assert "secret_fields" in call_args.kwargs
-            
-            assert response.status_code == 200
-            result = response.json()
-            assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+        # Get the actual call to check parameters
+        assert mock_aembedding.called, "aembedding should have been called"
+        call_args = mock_aembedding.call_args
+        
+        # Verify the key parameters we care about
+        assert call_args.kwargs["model"] == "vllm_embed_model"
+        assert call_args.kwargs["input"] == [[2046, 13269, 158208]]
+        
+        # Verify metadata, proxy_server_request, and secret_fields are present
+        # but don't check their exact values since they're complex objects
+        assert "metadata" in call_args.kwargs
+        assert "proxy_server_request" in call_args.kwargs
+        assert "secret_fields" in call_args.kwargs
+        
+        assert response.status_code == 200
+        result = response.json()
+        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
 
 
 @pytest.mark.asyncio
