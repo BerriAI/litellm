@@ -53,7 +53,7 @@ pip install litellm==1.75.5.post2
 
 ### 54% RPS Improvement
 
-Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead, and p95 latency improved by 30% (2,700 → 1,900 ms). These gains come from eliminating a major O(n²) inefficiency in the router: data["model"] in llm_router.get_model_ids() was called multiple times per request on the hot path, where get_model_ids() performed an O(n) scan of self.model_list. Each request passed through route_request() → _completion() → _common_checks_available_deployment(), triggering multiple full scans to check model parameters against deployment IDs or groups. The fix introduced a constant-time index map, enabling O(1) lookups via has_model_id() and dramatically reducing per-request routing overhead. Tests were run with a database-only setup (no cache hits), delivering smoother, more scalable performance under heavy load.
+Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead. The improvement comes from fixing major O(n²) inefficiencies in the router, primarily caused by repeated use of in statements inside loops over large arrays. Tests were run with a database-only setup (no cache hits). As a result, p95 latency improved by 30% (2,700 → 1,900 ms), enhancing overall stability and scalability under heavy load.
 
 ---
 
