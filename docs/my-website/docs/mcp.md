@@ -1045,6 +1045,25 @@ curl --location 'http://localhost:4000/github_mcp/mcp' \
 
 ---
 
+## MCP Oauth
+
+LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
+
+
+This configuration is currently available on the config.yaml, with UI support coming soon.
+
+```yaml
+mcp_servers:
+  github_mcp:
+    url: "https://api.githubcopilot.com/mcp"
+    auth_type: oauth2
+    authorization_url: https://github.com/login/oauth/authorize
+    token_url: https://github.com/login/oauth/access_token
+    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
+    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
+    scopes: ["public_repo", "user:email"]
+```
+
 ## Using your MCP with client side credentials
 
 Use this if you want to pass a client side authentication token to LiteLLM to then pass to your MCP to auth to your MCP.

@@ -917,6 +917,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    allowed_tools: Optional[List[str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -985,6 +986,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     updated_by: Optional[str] = None
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     # Health check status
     status: Optional[str] = Field(
