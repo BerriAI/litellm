@@ -285,3 +285,90 @@ class TestGeminiPassthroughLoggingHandler:
         assert call_kwargs["response_cost"] is not None
         assert call_kwargs["model"] == "gemini-1.5-flash"
         assert call_kwargs["custom_llm_provider"] == "gemini"
+
+    @patch("litellm.completion_cost")
+    @patch("litellm.stream_chunk_builder")
+    def test_gemini_streaming_cost_calculation(self, mock_stream_chunk_builder, mock_completion_cost):
+        """Test that Gemini streaming passthrough correctly calculates cost with logging_obj"""
+        # Arrange
+        mock_completion_cost.return_value = 0.000025
+        mock_logging_obj = self._create_mock_logging_obj()
+        
+        # Mock the stream_chunk_builder to return a response with usage
+        from litellm.utils import ModelResponse, Usage
+        mock_response = ModelResponse()
+        mock_usage = Usage(prompt_tokens=5, completion_tokens=10, total_tokens=15)
+        mock_response.usage = mock_usage
+        mock_stream_chunk_builder.return_value = mock_response
+        
+        # Mock fragmented JSON chunks (as they come from the streaming response)
+        fragmented_chunks = [
+            '[{"candidates": [',
+            '{"content": {"parts": [{"text": "Hello"}], "role": "model"},',
+            '"finishReason": "STOP", "index": 0}],',
+            '"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10, "totalTokenCount": 15}',
+            '}]'
+        ]
+        
+        # Act
+        result = GeminiPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=fragmented_chunks,
+            litellm_logging_obj=mock_logging_obj,
+            model="gemini-1.5-flash",
+            url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"
+        )
+        
+        # Assert
+        assert result is not None
+        assert result == mock_response
+        
+        # Verify stream_chunk_builder was called with logging_obj for cost injection
+        mock_stream_chunk_builder.assert_called_once()
+        call_args = mock_stream_chunk_builder.call_args
+        
+        # Check that logging_obj was passed for cost injection
+        assert "logging_obj" in call_args.kwargs
+        assert call_args.kwargs["logging_obj"] == mock_logging_obj
+        
+        # Verify the chunks were properly reconstructed from fragmented JSON
+        # The first argument should be the chunks list
+        chunks_arg = call_args[0][0] if call_args[0] else call_args.kwargs.get("chunks", [])
+        assert len(chunks_arg) > 0  # Should have parsed chunks
+        
+    def test_gemini_streaming_json_parsing(self):
+        """Test that fragmented JSON chunks are correctly joined and parsed"""
+        # Arrange
+        # Mock fragmented JSON chunks that simulate how Gemini streaming response gets split
+        fragmented_chunks = [
+            '[{"candidates": [',
+            '{"content": {"parts": [{"text": "Test response"}], "role": "model"},',
+            '"finishReason": "STOP", "index": 0}],',
+            '"usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 7, "totalTokenCount": 10}',
+            '}]'
+        ]
+        
+        # Mock the gemini iterator's chunk_parser method
+        mock_iterator = MagicMock()
+        mock_iterator.chunk_parser.return_value = {"candidates": [{"content": {"parts": [{"text": "Test response"}]}}]}
+        
+        # Act
+        result = GeminiPassthroughLoggingHandler._parse_gemini_streaming_json(
+            all_chunks=fragmented_chunks,
+            gemini_iterator=mock_iterator
+        )
+        
+        # Assert
+        # The method should successfully join the fragmented JSON and return parsed chunks
+        assert isinstance(result, list)
+        assert len(result) == 1  # Should have one parsed chunk
+        
+        # Verify that the combined JSON is valid
+        combined_json = "".join(fragmented_chunks)
+        parsed_json = json.loads(combined_json)
+        assert isinstance(parsed_json, list)
+        assert len(parsed_json) == 1
+        assert "candidates" in parsed_json[0]
+        assert "usageMetadata" in parsed_json[0]
+        
+        # Verify the iterator's chunk_parser was called
+        mock_iterator.chunk_parser.assert_called_once()
