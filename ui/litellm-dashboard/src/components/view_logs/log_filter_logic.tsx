@@ -251,6 +251,15 @@ export function useLogFilterLogic({
     // Reset filters state
     setFilters(defaultFilters);
     
+    // Clear backend filtered logs to ensure fresh render
+    setBackendFilteredLogs({
+      data: [],
+      total: 0,
+      page: 1,
+      page_size: 50,
+      total_pages: 0
+    });
+    
     // Reset selections
     debouncedSearch(defaultFilters, 1);
   };
