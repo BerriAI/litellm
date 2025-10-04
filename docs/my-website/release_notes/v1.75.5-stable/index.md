@@ -51,6 +51,82 @@ pip install litellm==1.75.5.post2
 - **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
 
+### 54% RPS Improvement
+
+Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead, and p95 latency improved by 30% (2,700 → 1,900 ms). These gains come from eliminating a major O(n²) inefficiency in the router: data["model"] in llm_router.get_model_ids() was called multiple times per request on the hot path, where get_model_ids() performed an O(n) scan of self.model_list. Each request passed through route_request() → _completion() → _common_checks_available_deployment(), triggering multiple full scans to check model parameters against deployment IDs or groups. The fix introduced a constant-time index map, enabling O(1) lookups via has_model_id() and dramatically reducing per-request routing overhead. Tests were run with a database-only setup (no cache hits), delivering smoother, more scalable performance under heavy load.
+
+---
+
+### Test Setup
+
+All benchmarks were executed using Locust with 1,000 concurrent users and a ramp-up of 500. The environment was configured to stress the routing layer and eliminate caching as a variable.
+
+**System Specs**
+
+- **CPU:** 8 vCPUs
+- **Memory:** 32 GB RAM
+
+**Configuration (config.yaml)**
+
+```yaml
+model_list:
+  - model_name: db-openai-endpoint
+    litellm_params:
+      model: openai/*
+      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
+
+```
+
+**Load Script (no_cache_hits.py)**
+
+```python
+import os, uuid
+from locust import HttpUser, task, between, events
+
+overhead_durations = []
+
+@events.request.add_listener
+def on_request(**kwargs):
+    response = kwargs.get('response')
+    if response and hasattr(response, 'headers'):
+        overhead = response.headers.get('x-litellm-overhead-duration-ms')
+        if overhead:
+            try:
+                duration_ms = float(overhead)
+                overhead_durations.append(duration_ms)
+                events.request.fire(
+                    request_type="Custom",
+                    name="LiteLLM Overhead Duration (ms)",
+                    response_time=duration_ms,
+                    response_length=0,
+                )
+            except (ValueError, TypeError):
+                pass
+
+class MyUser(HttpUser):
+    wait_time = between(0.5, 1)
+
+    def on_start(self):
+        self.client.headers.update({'Authorization': 'Bearer sk-1234'})
+
+    @task
+    def litellm_completion(self):
+        payload = {
+            "model": "db-openai-endpoint",
+            "messages": [
+                {"role": "user", "content": f"{uuid.uuid4()} This is a test with no cache hits and a long context" * 150}
+            ],
+            "user": "my-new-end-user-1"
+        }
+        response = self.client.post("chat/completions", json=payload)
+        if response.status_code != 200:
+            with open("error.txt", "a") as log:
+                log.write(response.text + "\n")
+
+```
+
+---
+
 ### Risk of Upgrade
 
 If you build the proxy from the pip package, you should hold off on upgrading. This version makes `prisma migrate deploy` our default for managing the DB. This is safer, as it doesn't reset the DB, but it requires a manual `prisma generate` step. 
