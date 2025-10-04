@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
     LitellmUserRoles,
+    ProxyException,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth

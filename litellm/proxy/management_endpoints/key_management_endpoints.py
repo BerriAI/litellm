@@ -923,8 +923,7 @@ async def generate_key_fn(
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
-    except HTTPException as e:
-        raise e
+
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
