@@ -1141,6 +1141,7 @@ class MCPServerManager:
                                 if _server_config.mcp_info
                                 else None
                             ),
+                            "allowed_tools": _server_config.allowed_tools or [],
                             "mcp_info": _server_config.mcp_info,
                             "mcp_access_groups": _server_config.access_groups or [],
                             "extra_headers": _server_config.extra_headers or [],
