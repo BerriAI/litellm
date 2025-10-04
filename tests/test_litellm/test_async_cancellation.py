@@ -258,7 +258,11 @@ class TestAsyncCancellation:
             )
         
         # Patch the completion function to return our async mock
-        with patch('litellm.completion', return_value=mock_async_completion()):
+        # We need to patch it to return a coroutine when called
+        def mock_completion_that_returns_coroutine(**kwargs):
+            return mock_async_completion(**kwargs)
+        
+        with patch('litellm.completion', side_effect=mock_completion_that_returns_coroutine):
             # This should use the async path and be properly cancellable
             task = asyncio.create_task(
                 acompletion(
