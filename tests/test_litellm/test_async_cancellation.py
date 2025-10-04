@@ -452,6 +452,61 @@ class TestAsyncCancellation:
         assert hasattr(response, 'choices')
         assert response.choices[0].text == "Sync text completion works"
 
+    @pytest.mark.asyncio
+    async def test_openai_sdk_cancellation_propagation(self):
+        """Test that cancellation properly propagates through the OpenAI SDK to close HTTP connections."""
+        
+        # This test simulates the real scenario: OpenAI client -> LiteLLM -> GPU service
+        # We'll mock the OpenAI SDK call to verify that cancellation propagates
+        
+        openai_request_cancelled = False
+        
+        async def mock_openai_create_with_delay(*args, **kwargs):
+            nonlocal openai_request_cancelled
+            print(f"OpenAI SDK called with model: {kwargs.get('model', 'unknown')}")
+            try:
+                # Simulate a long-running HTTP request to GPU service (via OpenAI SDK)
+                await asyncio.sleep(2.0)  # Long delay to ensure cancellation happens
+                print("OpenAI SDK completed without cancellation")
+                # Return a mock response that looks like OpenAI's response
+                mock_response = MagicMock()
+                mock_response.parse.return_value = MagicMock()
+                mock_response.parse.return_value.model_dump.return_value = {
+                    "id": "test-id",
+                    "object": "chat.completion",
+                    "created": 1234567890,
+                    "model": "gpt-3.5-turbo",
+                    "choices": [{"message": {"role": "assistant", "content": "Hello"}}]
+                }
+                return mock_response
+            except asyncio.CancelledError:
+                print("OpenAI SDK request was cancelled!")
+                openai_request_cancelled = True
+                raise  # Re-raise to propagate cancellation
+        
+        # Mock the OpenAI SDK's chat.completions.with_raw_response.create method
+        with patch('openai.resources.chat.completions.AsyncCompletions.with_raw_response') as mock_with_raw_response:
+            mock_with_raw_response.create = AsyncMock(side_effect=mock_openai_create_with_delay)
+            
+            task = asyncio.create_task(
+                acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hello"}]
+                )
+            )
+            
+            # Let the request start, then cancel it
+            await asyncio.sleep(0.1)
+            task.cancel()
+            
+            # Verify the task was cancelled
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            
+            # Most importantly: verify that the OpenAI SDK request was also cancelled
+            # This means the HTTP connection to your GPU service would be closed
+            assert openai_request_cancelled, "OpenAI SDK request to downstream service should have been cancelled"
+
 
 if __name__ == "__main__":
     # Run the tests
