@@ -315,6 +315,7 @@ LITELLM_CHAT_PROVIDERS = [
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
+    "lemonade"
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -373,7 +374,7 @@ OPENAI_TRANSCRIPTION_PARAMS = [
     "timestamp_granularities",
 ]
 
-OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
+OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user", "input_type"]
 
 DEFAULT_EMBEDDING_PARAM_VALUES = {
     **{k: None for k in OPENAI_EMBEDDING_PARAMS},

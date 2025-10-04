@@ -50,6 +50,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     enabled: !!accessToken,
   }) as { data: MCPServer[]; isLoading: boolean; refetch: () => void; dataUpdatedAt: number }
 
+  // Log allowed_tools from fetched servers
+  React.useEffect(() => {
+    if (mcpServers) {
+      console.log("MCP Servers fetched:", mcpServers)
+      mcpServers.forEach((server) => {
+        console.log(`Server: ${server.server_name || server.server_id}`)
+        console.log(`  allowed_tools:`, server.allowed_tools)
+      })
+    }
+  }, [mcpServers])
+
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -60,7 +71,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([])
   const [isModalVisible, setModalVisible] = useState(false)
 
-  const isInternalUser = userRole === "Internal User";
+  const isInternalUser = userRole === "Internal User"
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -84,7 +95,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // Get unique MCP access groups from all servers
   const uniqueMcpAccessGroups = React.useMemo(() => {
     if (!mcpServers) return []
-    return Array.from(new Set(mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null)))
+    return Array.from(
+      new Set(
+        mcpServers.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+      ),
+    )
   }, [mcpServers])
 
   // Handle team filter change
@@ -171,7 +186,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }
 
   if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
+    console.log("Missing required authentication parameters", { accessToken, userRole, userID })
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>
   }
 

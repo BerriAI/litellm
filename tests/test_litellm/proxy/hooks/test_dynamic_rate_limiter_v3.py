@@ -364,9 +364,12 @@ async def test_100_concurrent_priority_requests():
 @pytest.mark.asyncio
 async def test_concurrent_pre_call_hooks_stress():
     """
-    Stress test: 50 concurrent pre-call hooks with priority enforcement.
+    Stress test: 50 concurrent pre-call hooks with saturation-aware priority enforcement.
 
-    This tests the actual rate limiting logic under concurrent load.
+    Tests priority-based rate limiting in strict mode (>80% saturation).
+    Mocks high saturation to force strict mode where priorities are enforced.
+    Premium users (80% allocation) should have >90% success rate.
+    Standard users (20% allocation) should have ~70% success rate with 30% random limiting.
     """
     # Set up environment for premium feature
     os.environ["LITELLM_LICENSE"] = "test-license-key"
@@ -398,10 +401,39 @@ async def test_concurrent_pre_call_hooks_stress():
     successful_requests = []
     rate_limited_requests = []
 
+    # Mock saturation check to return high saturation (forces strict mode)
+    async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False):
+        """Mock cache to simulate high saturation."""
+        # Return high usage to trigger strict mode (>80% saturation)
+        if ":requests" in key or ":tokens" in key:
+            return 1800  # 1800/2000 = 90% saturation
+        return None
+
     async def mock_should_rate_limit(descriptors, parent_otel_span=None):
-        """Mock rate limiter that allows premium users, limits some standard users."""
+        """Mock rate limiter that handles saturation-aware descriptors."""
         descriptor = descriptors[0]
-        priority = descriptor["value"].split(":")[-1]
+        descriptor_key = descriptor["key"]
+        descriptor_value = descriptor["value"]
+        
+        # Handle model-wide tracking (for both generous and strict mode tracking)
+        if descriptor_key == "model_saturation_check":
+            # Always allow model-wide tracking (doesn't enforce in our mock)
+            return {
+                "overall_code": "OK",
+                "statuses": [
+                    {
+                        "code": "OK",
+                        "descriptor_key": descriptor_value,
+                        "rate_limit_type": "tokens_per_unit",
+                        "limit_remaining": 10000,
+                    }
+                ],
+            }
+        
+        # Handle priority-specific enforcement in strict mode
+        if descriptor_key == "priority_model":
+            # Extract priority from value like "pre-call-stress-model:premium"
+            priority = descriptor_value.split(":")[-1]
 
         if priority == "premium":
             # Allow all premium requests
@@ -410,7 +442,7 @@ async def test_concurrent_pre_call_hooks_stress():
                 "statuses": [
                     {
                         "code": "OK",
-                        "descriptor_key": descriptor["value"],
+                            "descriptor_key": descriptor_value,
                         "rate_limit_type": "tokens_per_unit",
                         "limit_remaining": 1000,
                     }
@@ -426,7 +458,7 @@ async def test_concurrent_pre_call_hooks_stress():
                     "statuses": [
                         {
                             "code": "OVER_LIMIT",
-                            "descriptor_key": descriptor["value"],
+                                "descriptor_key": descriptor_value,
                             "rate_limit_type": "tokens_per_unit",
                             "limit_remaining": 0,
                         }
@@ -438,9 +470,22 @@ async def test_concurrent_pre_call_hooks_stress():
                     "statuses": [
                         {
                             "code": "OK",
-                            "descriptor_key": descriptor["value"],
+                                "descriptor_key": descriptor_value,
                             "rate_limit_type": "tokens_per_unit",
                             "limit_remaining": 100,
+                            }
+                        ],
+                    }
+        
+        # Default: allow
+        return {
+            "overall_code": "OK",
+            "statuses": [
+                {
+                    "code": "OK",
+                    "descriptor_key": descriptor_value,
+                    "rate_limit_type": "tokens_per_unit",
+                    "limit_remaining": 1000,
                         }
                     ],
                 }
@@ -466,6 +511,8 @@ async def test_concurrent_pre_call_hooks_stress():
 
         with patch.object(
             handler.v3_limiter, "should_rate_limit", side_effect=mock_should_rate_limit
+        ), patch.object(
+            handler.internal_usage_cache, "async_get_cache", side_effect=mock_get_cache
         ):
             try:
                 result = await handler.async_pre_call_hook(
@@ -534,7 +581,7 @@ async def test_concurrent_pre_call_hooks_stress():
     ), f"Premium success rate should be >= 90%, got {premium_success_rate:.2%}"
     assert (
         standard_success_rate >= 0.5
-    ), f"Standard success rate should be >= 50%, got {standard_success_rate:.2%}"
+    ), f"Standard success rate should be >= 50% (with 30% random limiting, allows for variance), got {standard_success_rate:.2%}"
     assert (
         premium_success_rate > standard_success_rate
     ), "Premium should have higher success rate than standard"
@@ -550,3 +597,608 @@ async def test_concurrent_pre_call_hooks_stress():
     )
     print(f"   - Total successful: {successful_count}/50 ({successful_count/50:.1%})")
     print(f"   - Priority system working: Premium > Standard success rates")
+
+# These tests make actual async_pre_call_hook calls to simulate real traffic
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_1_no_rate_limiting_at_capacity():
+    """
+    Test Case 1: No Rate Limiting When At Capacity
+    
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: priority_reservation=0.25 (25 RPM reserved)
+    Traffic A: 50 RPM
+    Traffic B: 50 RPM
+    Expected A: 50 RPM (no limiting, under reserved capacity)
+    Expected B: 50 RPM (no limiting, under reserved capacity)
+    
+    When traffic is under individual reservations, no rate limiting should occur.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    # Set up priority reservations
+    litellm.priority_reservation = {"key_a": 0.75, "key_b": 0.25}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "fake-call-test-1"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+    
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+    
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+    
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+            
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+                
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {"status": "rate_limited", "priority": priority_name, "error": str(e)}
+    
+    # Send 50 requests from each priority (within capacity)
+    tasks = []
+    
+    for i in range(50):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+    
+    for i in range(50):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+    
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+    total_rate_limited = rate_limited_requests["key_a"] + rate_limited_requests["key_b"]
+    
+    print(f"Test Case 1 - No Rate Limiting When At Capacity:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/50 successful (reserved 75 RPM)")
+    print(f"   - Key B: {successful_requests['key_b']}/50 successful (reserved 25 RPM)")
+    print(f"   - Total successful: {total_successful}/100")
+    print(f"   - Total rate limited: {total_rate_limited}/100")
+    
+    # Both keys should get all their requests since they're under capacity
+    assert successful_requests["key_a"] >= 45, f"Key A should get ≥45 requests, got {successful_requests['key_a']}"
+    assert successful_requests["key_b"] >= 45, f"Key B should get ≥45 requests, got {successful_requests['key_b']}"
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_2_priority_queue_during_saturation():
+    """
+    Test Case 2: Priority Queue Behavior During Saturation
+    
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: priority_reservation=0.25 (25 RPM reserved)
+    Traffic A: 200 RPM
+    Traffic B: 200 RPM
+    Expected A: 75 RPM (75% of capacity)
+    Expected B: 25 RPM (25% of capacity)
+    
+    When total traffic exceeds capacity, rate limiting enforces priority reservations.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"key_a": 0.75, "key_b": 0.25}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "fake-call-test-2"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+    
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+    
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+    
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+            
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+                
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {"status": "rate_limited", "priority": priority_name, "error": str(e)}
+    
+    # Send 200 requests from each priority (over capacity)
+    tasks = []
+    
+    for i in range(200):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+    
+    for i in range(200):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+    
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+    
+    key_a_success_rate = successful_requests["key_a"] / 200
+    key_b_success_rate = successful_requests["key_b"] / 200
+    
+    print(f"Test Case 2 - Priority Queue Behavior During Saturation:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B: {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
+    print(f"   - Total successful: {total_successful}/400")
+    
+    # Key A should get significantly more requests than Key B (75:25 ratio)
+    assert key_a_success_rate > key_b_success_rate, (
+        f"Key A should have higher success rate: {key_a_success_rate:.1%} vs {key_b_success_rate:.1%}"
+    )
+    
+    # Check ratio is approximately 3:1 (75:25)
+    if total_successful > 0:
+        key_a_share = successful_requests["key_a"] / total_successful
+        expected_key_a_share = 0.75
+        
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~75%)")
+        
+        # Allow tolerance for timing effects
+        assert abs(key_a_share - expected_key_a_share) < 0.2, (
+            f"Key A share should be ~75%, got {key_a_share:.1%}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_3_spillover_capacity_default_keys():
+    """
+    Test Case 3: Spillover Capacity for Default Keys
+    
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.75 (75 RPM reserved)
+    Key B: nothing set (default)
+    Key C: nothing set (default)
+    Key D: nothing set (default)
+    Traffic A: 150 RPM
+    Traffic B: 150 RPM
+    Traffic C: 150 RPM
+    Traffic D: 150 RPM
+    Expected A: 75 RPM (75% reserved)
+    Expected B: ~8.3 RPM (remaining 25 RPM / 3 default keys)
+    Expected C: ~8.3 RPM
+    Expected D: ~8.3 RPM
+    
+    Tests spillover behavior where default keys share remaining capacity.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"key_a": 0.75}
+    litellm.priority_reservation_settings.default_priority = 0.25
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "fake-call-test-3"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+    
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {}
+    key_b_user.user_id = "key_b_user"
+    
+    key_c_user = UserAPIKeyAuth()
+    key_c_user.metadata = {}
+    key_c_user.user_id = "key_c_user"
+    
+    key_d_user = UserAPIKeyAuth()
+    key_d_user.metadata = {}
+    key_d_user.user_id = "key_d_user"
+    
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    
+    async def make_request(user, key_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+            
+            if result is None:
+                successful_requests[key_name] += 1
+                return {"status": "success", "key": key_name}
+            else:
+                rate_limited_requests[key_name] += 1
+                return {"status": "rate_limited", "key": key_name}
+                
+        except Exception as e:
+            rate_limited_requests[key_name] += 1
+            return {"status": "rate_limited", "key": key_name, "error": str(e)}
+    
+    # Send 150 requests from each key (600 total, 6x over capacity)
+    tasks = []
+    
+    for i in range(150):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_c_user, "key_c", f"key_c_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_d_user, "key_d", f"key_d_{i}"))
+    
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    # Analyze results
+    total_successful = sum(successful_requests.values())
+    
+    print(f"Test Case 3 - Spillover Capacity for Default Keys:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A: {successful_requests['key_a']}/150 successful")
+    print(f"   - Key B: {successful_requests['key_b']}/150 successful (default)")
+    print(f"   - Key C: {successful_requests['key_c']}/150 successful (default)")
+    print(f"   - Key D: {successful_requests['key_d']}/150 successful (default)")
+    print(f"   - Total successful: {total_successful}/600")
+    
+    # Key A should get the most requests (75% of capacity)
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_a"] > successful_requests["key_c"], "Key A should get more than Key C"
+    assert successful_requests["key_a"] > successful_requests["key_d"], "Key A should get more than Key D"
+    
+    # Default keys should get similar amounts (spillover capacity)
+    avg_default = (successful_requests["key_b"] + successful_requests["key_c"] + successful_requests["key_d"]) / 3
+    print(f"   - Average default key success: {avg_default:.1f}")
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_4_over_allocated_with_normalization():
+    """
+    Test Case 4: Over-Allocated Priority reservations with Normalization
+    
+    System: 100 RPM capacity  
+    Key A: priority_reservation=0.60 (60% requested)
+    Key B: priority_reservation=0.80 (80% requested)
+    Total: 140% (over-allocated, should normalize to 43%/57%)
+    Traffic A: 200 RPM
+    Traffic B: 200 RPM
+    
+    With saturation-aware rate limiting:
+    - Initially, requests are allowed through in generous mode (under 80% saturation)
+    - Once saturated, strict priority-based limits kick in with normalized weights
+    - Due to concurrent burst, total successful may exceed 100 RPM in the test window
+    - This test verifies normalization works and total capacity is reasonably bounded
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"key_a": 0.60, "key_b": 0.80}
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "fake-call-test-4"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+    
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+    
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0}
+    
+    async def make_request(user, priority_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+            
+            if result is None:
+                successful_requests[priority_name] += 1
+                return {"status": "success", "priority": priority_name}
+            else:
+                rate_limited_requests[priority_name] += 1
+                return {"status": "rate_limited", "priority": priority_name}
+                
+        except Exception as e:
+            rate_limited_requests[priority_name] += 1
+            return {"status": "rate_limited", "priority": priority_name, "error": str(e)}
+    
+    # Send 200 requests from each key (400 total, 4x over capacity)
+    tasks = []
+    
+    for i in range(200):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+    
+    for i in range(200):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+    
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    # Analyze results
+    total_successful = successful_requests["key_a"] + successful_requests["key_b"]
+    
+    key_a_success_rate = successful_requests["key_a"] / 200
+    key_b_success_rate = successful_requests["key_b"] / 200
+    
+    print(f"Test Case 4 - Over-Allocated Priority Reservations with Normalization:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A (0.60): {successful_requests['key_a']}/200 successful ({key_a_success_rate:.1%})")
+    print(f"   - Key B (0.80): {successful_requests['key_b']}/200 successful ({key_b_success_rate:.1%})")
+    print(f"   - Total successful: {total_successful}/400")
+    
+    # With saturation-aware behavior:
+    # 1. Verify total capacity is reasonably bounded (not all 400 requests succeed)
+    assert total_successful < 300, (
+        f"Total requests should be bounded by saturation detection, got {total_successful}/400"
+    )
+    
+    # 2. Verify significant rate limiting occurred (at least 50% blocked)
+    assert total_successful < 200, (
+        f"At least 50% of requests should be rate limited, got {total_successful}/400 successful"
+    )
+    
+    # 3. Verify both keys got some requests through (normalization is working)
+    assert successful_requests["key_a"] > 0, "Key A should get some requests"
+    assert successful_requests["key_b"] > 0, "Key B should get some requests"
+    
+    print(f"   - Normalization test PASSED: Both priorities got requests, "
+          f"total bounded to {total_successful} (under 200)")
+
+
+@pytest.mark.asyncio
+async def test_fake_calls_case_5_default_value_priority_reservation():
+    """
+    Test Case 5: Default value for priority reservation
+    
+    System: 100 RPM capacity
+    Key A: priority_reservation=0.50 (50 RPM)
+    Key B: priority_reservation=0.20 (20 RPM)
+    Key C: priority_reservation=0.05 (5 RPM)
+    Key D: nothing set (uses default_priority=0.05, 5 RPM)
+    Traffic A: 150 RPM
+    Traffic B: 150 RPM
+    Traffic C: 150 RPM
+    Traffic D: 150 RPM
+    Expected A: 55 RPM (normalized)
+    Expected B: 25 RPM (normalized)
+    Expected C: 10 RPM (normalized)
+    Expected D: 10 RPM (normalized)
+    
+    Tests complex scenario with explicit priorities and default priority.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    
+    litellm.priority_reservation = {"key_a": 0.50, "key_b": 0.20, "key_c": 0.05}
+    litellm.priority_reservation_settings.default_priority = 0.05
+    
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    
+    model = "fake-call-test-5"
+    total_rpm = 100
+    
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    
+    # Create users
+    key_a_user = UserAPIKeyAuth()
+    key_a_user.metadata = {"priority": "key_a"}
+    key_a_user.user_id = "key_a_user"
+    
+    key_b_user = UserAPIKeyAuth()
+    key_b_user.metadata = {"priority": "key_b"}
+    key_b_user.user_id = "key_b_user"
+    
+    key_c_user = UserAPIKeyAuth()
+    key_c_user.metadata = {"priority": "key_c"}
+    key_c_user.user_id = "key_c_user"
+    
+    key_d_user = UserAPIKeyAuth()
+    key_d_user.metadata = {}
+    key_d_user.user_id = "key_d_user"
+    
+    # Track results
+    successful_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    rate_limited_requests = {"key_a": 0, "key_b": 0, "key_c": 0, "key_d": 0}
+    
+    async def make_request(user, key_name, request_id):
+        """Make a single request and track the result."""
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=dual_cache,
+                data={"model": model},
+                call_type="completion",
+            )
+            
+            if result is None:
+                successful_requests[key_name] += 1
+                return {"status": "success", "key": key_name}
+            else:
+                rate_limited_requests[key_name] += 1
+                return {"status": "rate_limited", "key": key_name}
+                
+        except Exception as e:
+            rate_limited_requests[key_name] += 1
+            return {"status": "rate_limited", "key": key_name, "error": str(e)}
+    
+    # Send 150 requests from each key (600 total, 6x over capacity)
+    tasks = []
+    
+    for i in range(150):
+        tasks.append(make_request(key_a_user, "key_a", f"key_a_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_b_user, "key_b", f"key_b_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_c_user, "key_c", f"key_c_{i}"))
+    
+    for i in range(150):
+        tasks.append(make_request(key_d_user, "key_d", f"key_d_{i}"))
+    
+    start_time = time.time()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    end_time = time.time()
+    
+    # Analyze results
+    total_successful = sum(successful_requests.values())
+    
+    print(f"Test Case 5 - Default value for priority reservation:")
+    print(f"   - Duration: {end_time - start_time:.2f}s")
+    print(f"   - Key A (0.50): {successful_requests['key_a']}/150 successful")
+    print(f"   - Key B (0.20): {successful_requests['key_b']}/150 successful")
+    print(f"   - Key C (0.05): {successful_requests['key_c']}/150 successful")
+    print(f"   - Key D (default 0.05): {successful_requests['key_d']}/150 successful")
+    print(f"   - Total successful: {total_successful}/600")
+    
+    # Verify priority ordering: A > B > C ≈ D
+    assert successful_requests["key_a"] > successful_requests["key_b"], "Key A should get more than Key B"
+    assert successful_requests["key_b"] > successful_requests["key_c"], "Key B should get more than Key C"
+    
+    # Key C and Key D should get similar amounts (both have 0.05 priority)
+    key_c_vs_d_ratio = successful_requests["key_c"] / max(successful_requests["key_d"], 1)
+    print(f"   - Key C vs Key D ratio: {key_c_vs_d_ratio:.2f} (expected ~1.0)")
+    
+    if total_successful > 0:
+        key_a_share = successful_requests["key_a"] / total_successful
+        print(f"   - Key A got {key_a_share:.1%} of successful requests (expected ~55-62%)")

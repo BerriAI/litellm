@@ -71,6 +71,16 @@ Use this Docker `CMD`. This will start the proxy with 1 Uvicorn Async Worker
 CMD ["--port", "4000", "--config", "./proxy_server_config.yaml"]
 ```
 
+> Optional: If you observe gradual memory growth under sustained load, consider recycling workers after a fixed number of requests to mitigate leaks. Set this via CLI or environment variable:
+
+```shell
+# CLI
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--max_requests_before_restart", "10000"]
+
+# or ENV (for deployment manifests / containers)
+export MAX_REQUESTS_BEFORE_RESTART=10000
+```
+
 
 ## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 

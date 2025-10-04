@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.cached_imports import (
     get_set_callbacks,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
     map_finish_reason,
     process_response_headers,
 )
@@ -2801,6 +2802,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             object = litellm.AmazonTitanV2Config()
         elif "cohere.embed-multilingual-v3" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
+        elif "twelvelabs" in model or "marengo" in model:
+            object = litellm.TwelveLabsMarengoEmbeddingConfig()
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
@@ -7205,6 +7208,8 @@ class ProviderConfigManager:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:
             return litellm.DeepinfraRerankConfig()
+        elif litellm.LlmProviders.NVIDIA_NIM == provider:
+            return litellm.NvidiaNimRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7317,6 +7322,8 @@ class ProviderConfigManager:
             )
 
             return VLLMModelInfo()
+        elif LlmProviders.LEMONADE == provider:
+            return litellm.LemonadeChatConfig()
         return None
 
     @staticmethod
@@ -7580,7 +7587,7 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    _metadata = cast(dict, litellm_params.get("metadata", {}) or {})
+    _metadata = cast(dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params)))
 
     end_user_id = cast(
         Optional[str],

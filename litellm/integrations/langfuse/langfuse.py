@@ -1,6 +1,5 @@
 #### What this does ####
 #    On success, logs events to Langfuse
-import copy
 import os
 import traceback
 from datetime import datetime
@@ -11,6 +10,7 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
@@ -222,7 +222,7 @@ class LangFuseLogger:
                 litellm_params.get("metadata", {}) or {}
             )  # if litellm_params['metadata'] == None
             metadata = self.add_metadata_from_header(litellm_params, metadata)
-            optional_params = copy.deepcopy(kwargs.get("optional_params", {}))
+            optional_params = safe_deep_copy(kwargs.get("optional_params", {}))
 
             prompt = {"messages": kwargs.get("messages")}
 
@@ -690,6 +690,7 @@ class LangFuseLogger:
                     }
                     usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
                                                         output=_usage_obj.completion_tokens,
+                                                        total=_usage_obj.total_tokens,
                                                         cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
                                                         cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
 

@@ -68,6 +68,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
     UsageMetadata,
+    VertexToolName,
 )
 from litellm.types.utils import (
     ChatCompletionAudioResponse,
@@ -276,41 +277,105 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def _map_function(self, value: List[dict]) -> List[Tools]:  # noqa: PLR0915
+    def _extract_google_maps_retrieval_config(
+        self, google_maps_config: dict
+    ) -> Tuple[dict, Optional[dict]]:
+        """
+        Extract location configuration from googleMaps tool for Vertex AI toolConfig.
+        
+        Supports two interface styles:
+        1. Nested (recommended): {"enableWidget": "...", "retrievalConfig": {"latitude": ..., "longitude": ...}}
+        2. Flat (backward compat): {"enableWidget": "...", "latitude": ..., "longitude": ...}
+        
+        Args:
+            google_maps_config: The googleMaps tool configuration from LiteLLM
+        
+        Returns:
+            Tuple of (cleaned_google_maps_config, retrieval_config):
+                - cleaned_google_maps_config: googleMaps config without location fields
+                - retrieval_config: Location config for toolConfig.retrievalConfig or None
+        """
+        retrieval_config = None
+        latitude = google_maps_config.get("latitude")
+        longitude = google_maps_config.get("longitude")
+        language_code = google_maps_config.get("languageCode")
+        
+        if latitude is not None and longitude is not None:
+            retrieval_config = {
+                "latLng": {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                }
+            }
+            if language_code is not None:
+                retrieval_config["languageCode"] = language_code
+        
+        # Remove location fields from tool definition
+        cleaned_config = {
+            k: v
+            for k, v in google_maps_config.items()
+            if k not in ["latitude", "longitude", "languageCode"]
+        }
+    
+        return cleaned_config, retrieval_config
+    
+    def get_tool_value(
+        self,
+        tool: dict, 
+        tool_name: str
+    ) -> Optional[dict]:
+        """
+        Helper function to get tool value handling both camelCase and underscore_case variants
+
+        Args:
+            tool (dict): The tool dictionary
+            tool_name (str): The base tool name (e.g. "codeExecution")
+
+        Returns:
+            Optional[dict]: The tool value if found, None otherwise
+        """
+        # Convert camelCase to underscore_case
+        underscore_name = "".join(
+            ["_" + c.lower() if c.isupper() else c for c in tool_name]
+        ).lstrip("_")
+        # Try both camelCase and underscore_case variants
+
+        if tool.get(tool_name) is not None:
+            return tool.get(tool_name)
+        elif tool.get(underscore_name) is not None:
+            return tool.get(underscore_name)
+        else:
+            return None
+
+    def _map_function( # noqa: PLR0915
+        self, value: List[dict], optional_params: dict
+    ) -> List[Tools]:
+        """
+        Map OpenAI-style tools/functions to Vertex AI format.
+        
+        Args:
+            value: List of tool definitions
+            optional_params: Request-scoped parameters to store retrieval config
+        
+        Returns:
+            List of mapped tools in Vertex AI format
+            
+        Side effects:
+            May add 'toolConfig' with 'retrievalConfig' to optional_params if
+            googleMaps tools contain location data
+        """
         gtool_func_declarations = []
         googleSearch: Optional[dict] = None
         googleSearchRetrieval: Optional[dict] = None
         enterpriseWebSearch: Optional[dict] = None
         urlContext: Optional[dict] = None
         code_execution: Optional[dict] = None
+        googleMaps: Optional[dict] = None
+        google_maps_retrieval_config: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
-
-        def get_tool_value(tool: dict, tool_name: str) -> Optional[dict]:
-            """
-            Helper function to get tool value handling both camelCase and underscore_case variants
-
-            Args:
-                tool (dict): The tool dictionary
-                tool_name (str): The base tool name (e.g. "codeExecution")
-
-            Returns:
-                Optional[dict]: The tool value if found, None otherwise
-            """
-            # Convert camelCase to underscore_case
-            underscore_name = "".join(
-                ["_" + c.lower() if c.isupper() else c for c in tool_name]
-            ).lstrip("_")
-            # Try both camelCase and underscore_case variants
-
-            if tool.get(tool_name) is not None:
-                return tool.get(tool_name)
-            elif tool.get(underscore_name) is not None:
-                return tool.get(underscore_name)
-            else:
-                return None
 
         for tool in value:
             openai_function_object: Optional[
@@ -341,17 +406,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             tool_name = list(tool.keys())[0] if len(tool.keys()) == 1 else None
             if tool_name and (
-                tool_name == "codeExecution" or tool_name == "code_execution"
+                tool_name == "codeExecution" or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
-                code_execution = get_tool_value(tool, "codeExecution")
-            elif tool_name and tool_name == "googleSearch":
-                googleSearch = get_tool_value(tool, "googleSearch")
-            elif tool_name and tool_name == "googleSearchRetrieval":
-                googleSearchRetrieval = get_tool_value(tool, "googleSearchRetrieval")
-            elif tool_name and tool_name == "enterpriseWebSearch":
-                enterpriseWebSearch = get_tool_value(tool, "enterpriseWebSearch")
-            elif tool_name and tool_name == "urlContext":
-                urlContext = get_tool_value(tool, "urlContext")
+                code_execution = self.get_tool_value(tool, "codeExecution")
+            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
+                googleSearch = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH.value)
+            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value:
+                googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
+            elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
+                enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
+            elif tool_name and tool_name == VertexToolName.URL_CONTEXT.value:
+                urlContext = self.get_tool_value(tool, VertexToolName.URL_CONTEXT.value)
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
+            ):
+                google_maps_value = self.get_tool_value(tool, VertexToolName.GOOGLE_MAPS.value)
+                
+                # Extract and transform location configuration for toolConfig
+                if google_maps_value is not None:
+                    googleMaps, google_maps_retrieval_config = self._extract_google_maps_retrieval_config(
+                        google_maps_config=google_maps_value
+                    )
             elif openai_function_object is not None:
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
@@ -377,15 +452,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             function_declarations=gtool_func_declarations,
         )
         if googleSearch is not None:
-            _tools["googleSearch"] = googleSearch
+            _tools[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
         if googleSearchRetrieval is not None:
-            _tools["googleSearchRetrieval"] = googleSearchRetrieval
+            _tools[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = googleSearchRetrieval
         if enterpriseWebSearch is not None:
-            _tools["enterpriseWebSearch"] = enterpriseWebSearch
+            _tools[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = enterpriseWebSearch
         if code_execution is not None:
-            _tools["code_execution"] = code_execution
+            _tools[VertexToolName.CODE_EXECUTION.value] = code_execution
         if urlContext is not None:
-            _tools["url_context"] = urlContext
+            _tools[VertexToolName.URL_CONTEXT.value] = urlContext
+        if googleMaps is not None:
+            _tools[VertexToolName.GOOGLE_MAPS.value] = googleMaps
+        
+        # Add retrieval config to toolConfig if googleMaps has location data
+        if google_maps_retrieval_config is not None:
+            if "toolConfig" not in optional_params:
+                optional_params["toolConfig"] = {}
+            optional_params["toolConfig"]["retrievalConfig"] = google_maps_retrieval_config
+        
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -606,8 +690,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 and isinstance(value, list)
                 and value
             ):
+                # Pass optional_params so _map_function can add toolConfig if needed
+                mapped_tools = self._map_function(
+                    value=value, optional_params=optional_params
+                )
                 optional_params = self._add_tools_to_optional_params(
-                    optional_params, self._map_function(value=value)
+                    optional_params, mapped_tools
                 )
             elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
