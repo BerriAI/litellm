@@ -990,6 +990,39 @@ class TestMCPServerManager:
                     server_ids = [server.server_id for server in result]
                     assert "invalid-server-1" not in server_ids
 
+    def test_add_db_mcp_server_to_registry(self):
+        """Test that add_db_mcp_server_to_registry adds a MCP server to the registry"""
+        manager = MCPServerManager()
+        server = LiteLLM_MCPServerTable(
+            **{
+                "server_id": "4c679a81-acd9-4954-9f84-30b739362498",
+                "server_name": "edc_mcp_server",
+                "alias": "edc_mcp_server",
+                "description": None,
+                "url": "fake_mcp_url",
+                "transport": "http",
+                "auth_type": "none",
+                "created_at": "2025-09-30T08:28:31.353000Z",
+                "created_by": "a1248959",
+                "updated_at": "2025-09-30T08:28:31.353000Z",
+                "updated_by": "a1248959",
+                "teams": [],
+                "mcp_access_groups": [],
+                "mcp_info": {
+                    "server_name": "edc_mcp_server",
+                    "mcp_server_cost_info": None,
+                },
+                "status": "unknown",
+                "last_health_check": None,
+                "health_check_error": None,
+                "command": None,
+                "args": [],
+                "env": {},
+            },
+        )
+        manager.add_update_server(server)
+        assert server.server_id in manager.get_registry()
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
