@@ -338,12 +338,12 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
 
 
 def test_twelvelabs_missing_input_type_error():
-    """Test that missing input_type parameter throws an error for TwelveLabs models but not others"""
+    """Test that missing input_type parameter defaults to 'text' for TwelveLabs models"""
     litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     
-    # Test TwelveLabs model - should throw error
+    # Test TwelveLabs model - should default to 'text' when input_type is missing
     twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
     twelvelabs_response = {
         "data": [{
@@ -359,20 +359,24 @@ def test_twelvelabs_missing_input_type_error():
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
 
-        # Test that missing input_type throws an error for TwelveLabs
-        with pytest.raises(Exception) as exc_info:
-            litellm.embedding(
-                model=twelvelabs_model,
-                input=test_input,
-                client=client,
-                aws_region_name="us-east-1",
-                aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
-                api_key=test_api_key
-                # No input_type parameter - should throw an error
-            )
+        # Test that missing input_type defaults to "text" for TwelveLabs
+        response = litellm.embedding(
+            model=twelvelabs_model,
+            input=test_input,
+            client=client,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key=test_api_key
+            # No input_type parameter - should default to "text"
+        )
         
-        # Verify the error message contains the expected text
-        assert "input_type is required" in str(exc_info.value)
+        # Verify the response is successful
+        assert isinstance(response, litellm.EmbeddingResponse)
+        
+        # Verify that the request contains inputType: "text" by default
+        request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+        assert "inputType" in request_body
+        assert request_body["inputType"] == "text"
     
     # Test Amazon Titan model - should NOT throw error (input_type not required)
     titan_model = "bedrock/amazon.titan-embed-text-v1"

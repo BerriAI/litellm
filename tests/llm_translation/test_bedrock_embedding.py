@@ -140,7 +140,8 @@ def test_e2e_bedrock_embedding_image_twelvelabs_marengo():
         response = litellm.embedding(
             model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
             input=[duck_img_base64],
-            aws_region_name="us-east-1"
+            aws_region_name="us-east-1",
+            input_type="image"
         )
         
         # Validate response structure
@@ -252,7 +253,7 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
         
         # Validate hidden params contain invocation ARN
         assert hasattr(response._hidden_params, '_invocation_arn'), "Hidden params should have _invocation_arn"
-        assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123", "Invocation ARN should be preserved"
+        assert response._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456", "Invocation ARN should be preserved"
         
         print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
     

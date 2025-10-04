@@ -86,7 +86,7 @@ class CohereRerankConfig(BaseRerankConfig):
             )
 
         default_headers = {
-            "Authorization": f"bearer {api_key}",
+            "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
         }

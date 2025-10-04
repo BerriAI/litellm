@@ -290,7 +290,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
-### PROMPTS ###
+### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
 prompt_name_config_map: Dict[str, PromptSpec] = {}
@@ -367,7 +367,7 @@ disable_add_prefix_to_prompt: bool = (
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION ######
+#### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, float]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()
@@ -497,6 +497,7 @@ azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
 galadriel_models: Set = set()
+nvidia_nim_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -691,6 +692,8 @@ def add_known_models():
             cerebras_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
             galadriel_models.add(key)
+        elif value.get("litellm_provider") == "nvidia_nim":
+            nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -818,6 +821,7 @@ model_list = list(
     | anyscale_models
     | cerebras_models
     | galadriel_models
+    | nvidia_nim_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -901,6 +905,7 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
+    "nvidia_nim": nvidia_nim_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
