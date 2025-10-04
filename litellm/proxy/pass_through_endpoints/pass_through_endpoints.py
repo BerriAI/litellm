@@ -301,6 +301,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             or ("rawPredict") in url
             or ("streamRawPredict") in url
         ):
+            # Check if it's Gemini (Google AI Studio) or Vertex AI
+            if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+                return EndpointType.GEMINI
             return EndpointType.VERTEX_AI
         elif parsed_url.hostname == "api.anthropic.com":
             return EndpointType.ANTHROPIC

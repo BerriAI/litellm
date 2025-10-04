@@ -129,26 +129,84 @@ class GeminiPassthroughLoggingHandler:
         }
 
     @staticmethod
+    def _parse_gemini_streaming_json(
+        all_chunks: List[str],
+        gemini_iterator: GeminiModelResponseIterator,
+    ) -> List[Any]:
+        """
+        Parse Gemini streaming chunks from fragmented JSON strings.
+        
+        Gemini's streaming format sends a single JSON array that may be split across
+        multiple lines. This method:
+        1. Joins all fragmented string chunks into complete JSON
+        2. Parses the JSON array/object
+        3. Transforms each item using Gemini's chunk_parser
+        
+        Args:
+            all_chunks: Raw string chunks from the streaming response
+            gemini_iterator: GeminiModelResponseIterator instance for parsing
+            
+        Returns:
+            List of parsed chunks in OpenAI format, or empty list if parsing fails
+        """
+        parsed_chunks = []
+        
+        verbose_proxy_logger.debug(f"Gemini streaming: Processing {len(all_chunks)} raw chunks")
+        
+        # Gemini streaming response is a single JSON array that may be split across lines
+        # Join all chunks back together to reconstruct the complete JSON
+        combined_chunk = "".join(all_chunks)
+        
+        # Parse the combined JSON string
+        try:
+            dict_chunk = json.loads(combined_chunk)
+            verbose_proxy_logger.debug(f"Parsed JSON object: {type(dict_chunk)}")
+            
+            # Gemini returns an array of response objects
+            if isinstance(dict_chunk, list):
+                for item in dict_chunk:
+                    try:
+                        # Call chunk_parser directly with the dict, not _common_chunk_parsing_logic
+                        parsed_chunk = gemini_iterator.chunk_parser(chunk=item)
+                        if parsed_chunk is not None:
+                            parsed_chunks.append(parsed_chunk)
+                    except Exception as e:
+                        verbose_proxy_logger.error(f"Error parsing Gemini chunk item: {e}", exc_info=True)
+                        continue
+            else:
+                # Single object response
+                parsed_chunk = gemini_iterator.chunk_parser(chunk=dict_chunk)
+                if parsed_chunk is not None:
+                    parsed_chunks.append(parsed_chunk)
+                    
+        except json.JSONDecodeError as e:
+            verbose_proxy_logger.error(f"Failed to parse Gemini streaming response as JSON: {e}")
+            return []
+        
+        verbose_proxy_logger.debug(f"Total parsed chunks: {len(parsed_chunks)}")
+        return parsed_chunks
+
+    @staticmethod
     def _build_complete_streaming_response(
         all_chunks: List[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         url_route: str,
     ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
-        parsed_chunks = []
-        if "generateContent" in url_route or "streamGenerateContent" in url_route:
-            gemini_iterator: Any = GeminiModelResponseIterator(
-                streaming_response=None,
-                sync_stream=False,
-                logging_obj=litellm_logging_obj,
-            )
-            chunk_parsing_logic: Any = gemini_iterator._common_chunk_parsing_logic
-            parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
-        else:
+        if "generateContent" not in url_route and "streamGenerateContent" not in url_route:
             return None
-
-        if len(parsed_chunks) == 0:
-            return None
+            
+        gemini_iterator: Any = GeminiModelResponseIterator(
+            streaming_response=None,
+            sync_stream=False,
+            logging_obj=litellm_logging_obj,
+        )
+        
+        # Parse the streaming chunks
+        parsed_chunks = GeminiPassthroughLoggingHandler._parse_gemini_streaming_json(
+            all_chunks=all_chunks,
+            gemini_iterator=gemini_iterator,
+        )
 
         all_openai_chunks = []
         for parsed_chunk in parsed_chunks:
@@ -156,7 +214,10 @@ class GeminiPassthroughLoggingHandler:
                 continue
             all_openai_chunks.append(parsed_chunk)
 
-        complete_streaming_response = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+        complete_streaming_response = litellm.stream_chunk_builder(
+            chunks=all_openai_chunks,
+            logging_obj=litellm_logging_obj,
+        )
 
         return complete_streaming_response
 
@@ -185,7 +246,7 @@ class GeminiPassthroughLoggingHandler:
         response_cost = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
-            custom_llm_provider="gemini",
+            custom_llm_provider=custom_llm_provider,
         )
 
         kwargs["response_cost"] = response_cost
