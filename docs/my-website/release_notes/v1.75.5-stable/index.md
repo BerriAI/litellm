@@ -68,62 +68,11 @@ All benchmarks were executed using Locust with 1,000 concurrent users and a ramp
 
 **Configuration (config.yaml)**
 
-```yaml
-model_list:
-  - model_name: db-openai-endpoint
-    litellm_params:
-      model: openai/*
-      api_base: https://exampleopenaiendpoint-production-0ee2.up.railway.app/
-
-```
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
 
 **Load Script (no_cache_hits.py)**
 
-```python
-import os, uuid
-from locust import HttpUser, task, between, events
-
-overhead_durations = []
-
-@events.request.add_listener
-def on_request(**kwargs):
-    response = kwargs.get('response')
-    if response and hasattr(response, 'headers'):
-        overhead = response.headers.get('x-litellm-overhead-duration-ms')
-        if overhead:
-            try:
-                duration_ms = float(overhead)
-                overhead_durations.append(duration_ms)
-                events.request.fire(
-                    request_type="Custom",
-                    name="LiteLLM Overhead Duration (ms)",
-                    response_time=duration_ms,
-                    response_length=0,
-                )
-            except (ValueError, TypeError):
-                pass
-
-class MyUser(HttpUser):
-    wait_time = between(0.5, 1)
-
-    def on_start(self):
-        self.client.headers.update({'Authorization': 'Bearer sk-1234'})
-
-    @task
-    def litellm_completion(self):
-        payload = {
-            "model": "db-openai-endpoint",
-            "messages": [
-                {"role": "user", "content": f"{uuid.uuid4()} This is a test with no cache hits and a long context" * 150}
-            ],
-            "user": "my-new-end-user-1"
-        }
-        response = self.client.post("chat/completions", json=payload)
-        if response.status_code != 200:
-            with open("error.txt", "a") as log:
-                log.write(response.text + "\n")
-
-```
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
 
 ---
 
