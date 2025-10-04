@@ -54,6 +54,7 @@ pip install litellm==1.77.7.rc.1
 
 ## Key Highlights
 
+- **Dynamic Rate Limiter v3** - Automatically maximizes throughput when capacity is available (< 80% saturation) by allowing lower-priority requests to use unused capacity, then switches to fair priority-based allocation under high load (≥ 80%) to prevent blocking
 - **Major Performance Improvements** - Router optimization reducing P99 latency by 62.5%, cache improvements from O(n*log(n)) to O(log(n))
 - **Claude Sonnet 4.5** - Support for Anthropic's new Claude Sonnet 4.5 model family with 200K+ context and tiered pricing
 - **MCP Gateway Enhancements** - Fine-grained tool control, server permissions, and forwardable headers
@@ -85,14 +86,9 @@ pip install litellm==1.77.7.rc.1
     - Add cost tracking for /v1/messages in streaming response - [PR #15102](https://github.com/BerriAI/litellm/pull/15102)
     - Add /v1/messages/count_tokens to Anthropic routes for non-admin user access - [PR #15034](https://github.com/BerriAI/litellm/pull/15034)
 - **[Gemini](../../docs/providers/gemini)**
-    - Add full support for native Gemini API translation - [PR #15029](https://github.com/BerriAI/litellm/pull/15029)
-    - Add Gemini generateContent passthrough cost tracking - [PR #15014](https://github.com/BerriAI/litellm/pull/15014)
-    - Add streamGenerateContent cost tracking in passthrough - [PR #15199](https://github.com/BerriAI/litellm/pull/15199)
     - Ignore type param for gemini tools - [PR #15022](https://github.com/BerriAI/litellm/pull/15022)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Add LiteLLM Overhead metric for VertexAI - [PR #15040](https://github.com/BerriAI/litellm/pull/15040)
-    - Add cost tracking for Vertex AI Passthrough `/predict` endpoint - [PR #15019](https://github.com/BerriAI/litellm/pull/15019)
-    - Add cost tracking for Vertex AI Live API WebSocket Passthrough - [PR #14956](https://github.com/BerriAI/litellm/pull/14956)
     - Support googlemap grounding in vertex ai - [PR #15179](https://github.com/BerriAI/litellm/pull/15179)
 - **[Azure](../../docs/providers/azure)**
     - Add azure_ai grok-4 model family - [PR #15137](https://github.com/BerriAI/litellm/pull/15137)
@@ -140,9 +136,21 @@ pip install litellm==1.77.7.rc.1
 - **[Responses API](../../docs/response_api)**
     - Return Cost for Responses API Streaming requests - [PR #15053](https://github.com/BerriAI/litellm/pull/15053)
 
+- **[/generateContent](../../docs/providers/gemini)**
+    - Add full support for native Gemini API translation - [PR #15029](https://github.com/BerriAI/litellm/pull/15029)
+
+- **Passthrough Gemini Routes**
+    - Add Gemini generateContent passthrough cost tracking - [PR #15014](https://github.com/BerriAI/litellm/pull/15014)
+    - Add streamGenerateContent cost tracking in passthrough - [PR #15199](https://github.com/BerriAI/litellm/pull/15199)
+
+- **Passthrough Vertex AI Routes**
+    - Add cost tracking for Vertex AI Passthrough `/predict` endpoint - [PR #15019](https://github.com/BerriAI/litellm/pull/15019)
+    - Add cost tracking for Vertex AI Live API WebSocket Passthrough - [PR #14956](https://github.com/BerriAI/litellm/pull/14956)
+
 - **General**
     - Preserve Whitespace Characters in Model Response Streams - [PR #15160](https://github.com/BerriAI/litellm/pull/15160)
     - Add provider name to payload specification - [PR #15130](https://github.com/BerriAI/litellm/pull/15130)
+    - Ensure query params are forwarded from origin url to downstream request - [PR #15087](https://github.com/BerriAI/litellm/pull/15087)
 
 ---
 
@@ -166,7 +174,6 @@ pip install litellm==1.77.7.rc.1
 #### Bugs
 
 - **Dashboard** - Fix LiteLLM model name fallback in dashboard overview - [PR #14998](https://github.com/BerriAI/litellm/pull/14998)
-- **Passthrough API** - Ensure query params are forwarded from origin url to downstream request - [PR #15087](https://github.com/BerriAI/litellm/pull/15087)
 
 ---
 
@@ -204,8 +211,6 @@ pip install litellm==1.77.7.rc.1
     - Dynamic Rate Limiter v3 - fixes for detecting saturation + fixes for post saturation behavior - [PR #15192](https://github.com/BerriAI/litellm/pull/15192)
 - **Teams** 
     - Add model specific tpm/rpm limits to teams on LiteLLM - [PR #15044](https://github.com/BerriAI/litellm/pull/15044)
-- **Configuration** 
-    - Add max requests env var - [PR #15007](https://github.com/BerriAI/litellm/pull/15007)
 
 ---
 
@@ -233,6 +238,8 @@ pip install litellm==1.77.7.rc.1
 - **Cache Optimizations**
     - Reduce complexity of InMemoryCache.evict_cache from O(n*log(n)) to O(log(n)) - [PR #15000](https://github.com/BerriAI/litellm/pull/15000)
     - Avoiding expensive operations when cache isn't available - [PR #15182](https://github.com/BerriAI/litellm/pull/15182)
+- **Worker Management**
+    - Add proxy CLI option to recycle workers after N requests - [PR #15007](https://github.com/BerriAI/litellm/pull/15007)
 - **Metrics & Monitoring**
     - LiteLLM Overhead metric tracking - Add support for tracking litellm overhead on cache hits - [PR #15045](https://github.com/BerriAI/litellm/pull/15045)
 
