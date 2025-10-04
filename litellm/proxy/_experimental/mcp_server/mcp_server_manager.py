@@ -1132,25 +1132,22 @@ class MCPServerManager:
             if _server_id in allowed_server_ids:
                 list_mcp_servers.append(
                     LiteLLM_MCPServerTable(
-                        server_id=_server_id,
-                        server_name=_server_config.name,
-                        alias=_server_config.alias,
-                        url=_server_config.url,
-                        transport=_server_config.transport,
-                        auth_type=_server_config.auth_type,
-                        created_at=datetime.datetime.now(),
-                        updated_at=datetime.datetime.now(),
-                        description=(
-                            _server_config.mcp_info.get("description")
-                            if _server_config.mcp_info
-                            else None
-                        ),
-                        mcp_info=_server_config.mcp_info,
-                        mcp_access_groups=_server_config.access_groups or [],
-                        # Stdio-specific fields
-                        command=getattr(_server_config, "command", None),
-                        args=getattr(_server_config, "args", None) or [],
-                        env=getattr(_server_config, "env", None) or {},
+                        **{
+                            **_server_config.model_dump(),
+                            "created_at": datetime.datetime.now(),
+                            "updated_at": datetime.datetime.now(),
+                            "description": (
+                                _server_config.mcp_info.get("description")
+                                if _server_config.mcp_info
+                                else None
+                            ),
+                            "mcp_info": _server_config.mcp_info,
+                            "mcp_access_groups": _server_config.access_groups or [],
+                            "extra_headers": _server_config.extra_headers or [],
+                            "command": getattr(_server_config, "command", None),
+                            "args": getattr(_server_config, "args", None) or [],
+                            "env": getattr(_server_config, "env", None) or {},
+                        }
                     )
                 )
 
