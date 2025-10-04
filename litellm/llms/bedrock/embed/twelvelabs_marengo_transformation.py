@@ -89,10 +89,8 @@ class TwelveLabsMarengoEmbeddingConfig:
         - Audio inputs (async-invoke only)
         - S3 URLs for all media types (async-invoke only)
         """
-        if inference_params.get("inputType"):
-            input_type = inference_params["inputType"]
-        else:
-            raise ValueError("input_type is required")
+        # Get input_type or default to "text"
+        input_type = inference_params.get("inputType") or inference_params.get("input_type") or "text"
 
         # Validate that async-invoke is used for video/audio
         if input_type in ["video", "audio"] and not async_invoke_route:
@@ -136,6 +134,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         for k, v in inference_params.items():
             if k not in [
                 "inputType",
+                "input_type",  # Exclude both camelCase and snake_case
                 "inputText",
                 "mediaSource",
                 "bucketOwner",  # Don't include bucketOwner in the request
