@@ -44,6 +44,7 @@ response = completion(
     oci_user=<your_oci_user>,
     oci_fingerprint=<your_oci_fingerprint>,
     oci_tenancy=<your_oci_tenancy>,
+    oci_serving_mode="ON_DEMAND",  # Optional, default is "ON_DEMAND". Other option is "DEDICATED"
     # Provide either the private key string OR the path to the key file:
     # Option 1: pass the private key as a string
     oci_key=<string_with_content_of_oci_key>,
@@ -71,6 +72,7 @@ response = completion(
     oci_user=<your_oci_user>,
     oci_fingerprint=<your_oci_fingerprint>,
     oci_tenancy=<your_oci_tenancy>,
+    oci_serving_mode="ON_DEMAND",  # Optional, default is "ON_DEMAND". Other option is "DEDICATED"
     # Provide either the private key string OR the path to the key file:
     # Option 1: pass the private key as a string
     oci_key=<string_with_content_of_oci_key>,
