@@ -75,8 +75,8 @@ pip install litellm==1.77.7.rc.1
 | Anthropic | `claude-sonnet-4-5-20250929` | 200K | $3.00 | $15.00 | Chat, reasoning, vision, function calling, prompt caching |
 | Bedrock | `eu.anthropic.claude-sonnet-4-5-20250929-v1:0` | 200K | $3.00 | $15.00 | Chat, reasoning, vision, function calling, prompt caching |
 | Azure AI | `azure_ai/grok-4` | 131K | $5.50 | $27.50 | Chat, reasoning, function calling, web search |
-| Azure AI | `azure_ai/grok-4-fast-reasoning` | 131K | $5.80 | $2,900.00 | Chat, reasoning, function calling, web search |
-| Azure AI | `azure_ai/grok-4-fast-non-reasoning` | 131K | $5.00 | $2,500.00 | Chat, function calling, web search |
+| Azure AI | `azure_ai/grok-4-fast-reasoning` | 131K | $0.43 | $1.73 | Chat, reasoning, function calling, web search |
+| Azure AI | `azure_ai/grok-4-fast-non-reasoning` | 131K | $0.43 | $1.73 | Chat, function calling, web search |
 | Azure AI | `azure_ai/grok-code-fast-1` | 131K | $3.50 | $17.50 | Chat, function calling, web search |
 | Groq | `groq/moonshotai/kimi-k2-instruct-0905` | Context varies | Pricing varies | Pricing varies | Chat, function calling |
 | Ollama | Ollama Cloud models | Varies | Free | Free | Self-hosted models via Ollama Cloud |
