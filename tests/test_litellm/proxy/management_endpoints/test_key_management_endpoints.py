@@ -850,17 +850,24 @@ async def test_generate_service_account_key_endpoint_validation():
     )
 
     # Test case 1: Missing team_id
-    with pytest.raises(HTTPException) as exc_info:
-        await generate_service_account_key_fn(
-            data=GenerateKeyRequest(team_id=None),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
-            ),
-            litellm_changed_by=None,
-        )
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        # Mock prisma_client to be not None so we can reach team_id validation
+        mock_prisma_instance = AsyncMock()
+        mock_prisma.return_value = mock_prisma_instance
 
-    assert exc_info.value.status_code == 400
-    assert "team_id is required for service account keys" in str(exc_info.value.detail)
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_service_account_key_fn(
+                data=GenerateKeyRequest(team_id=None),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"
+                ),
+                litellm_changed_by=None,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "team_id is required for service account keys" in str(
+            exc_info.value.detail
+        )
 
     # Test case 2: Team doesn't exist in database
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
@@ -1257,6 +1264,8 @@ async def test_check_team_key_limits_no_existing_keys():
     data = GenerateKeyRequest(
         tpm_limit=5000,
         rpm_limit=500,
+        tpm_limit_type="guaranteed_throughput",
+        rpm_limit_type="guaranteed_throughput",
     )
 
     # Should not raise any exception
@@ -1333,10 +1342,12 @@ async def test_check_team_key_limits_tpm_overallocation():
     existing_key1 = MagicMock()
     existing_key1.tpm_limit = 6000
     existing_key1.rpm_limit = 100
+    existing_key1.metadata = {}
 
     existing_key2 = MagicMock()
     existing_key2.tpm_limit = 3000
     existing_key2.rpm_limit = 200
+    existing_key2.metadata = {}
 
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
@@ -1360,6 +1371,7 @@ async def test_check_team_key_limits_tpm_overallocation():
     data = GenerateKeyRequest(
         tpm_limit=2000,
         rpm_limit=100,
+        tpm_limit_type="guaranteed_throughput",
     )
 
     # Should raise HTTPException for TPM overallocation
@@ -1387,10 +1399,12 @@ async def test_check_team_key_limits_rpm_overallocation():
     existing_key1 = MagicMock()
     existing_key1.tpm_limit = 1000
     existing_key1.rpm_limit = 600
+    existing_key1.metadata = {}
 
     existing_key2 = MagicMock()
     existing_key2.tpm_limit = 2000
     existing_key2.rpm_limit = 300
+    existing_key2.metadata = {}
 
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
@@ -1414,6 +1428,7 @@ async def test_check_team_key_limits_rpm_overallocation():
     data = GenerateKeyRequest(
         tpm_limit=1000,
         rpm_limit=200,
+        rpm_limit_type="guaranteed_throughput",
     )
 
     # Should raise HTTPException for RPM overallocation
