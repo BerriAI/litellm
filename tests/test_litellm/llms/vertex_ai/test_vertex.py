@@ -145,6 +145,7 @@ def test_build_vertex_schema():
         ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
         ([{"enterpriseWebSearch": {}}], "enterpriseWebSearch"),
         ([{"code_execution": {}}], "code_execution"),
+        ([{"googleMaps": {}}], "googleMaps"),
     ],
 )
 def test_vertex_tool_params(tools, key):

@@ -1,7 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.types.rerank import OptionalRerankParams
 
 
 def get_optional_rerank_params(
@@ -17,7 +16,7 @@ def get_optional_rerank_params(
     max_chunks_per_doc: Optional[int] = None,
     max_tokens_per_doc: Optional[int] = None,
     non_default_params: Optional[dict] = None,
-) -> OptionalRerankParams:
+) -> Dict:
     all_non_default_params = non_default_params or {}
     if query is not None:
         all_non_default_params["query"] = query

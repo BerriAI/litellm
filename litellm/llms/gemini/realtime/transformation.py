@@ -3,10 +3,10 @@ This file contains the transformation logic for the Gemini realtime API.
 """
 
 import json
-from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -186,9 +186,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
                 vertex_gemini_config = VertexGeminiConfig()
-                vertex_gemini_config._map_function(value)
                 optional_params["generationConfig"]["tools"] = (
-                    vertex_gemini_config._map_function(value)
+                    vertex_gemini_config._map_function(
+                        value=value, optional_params=optional_params
+                    )
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}

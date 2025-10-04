@@ -539,13 +539,15 @@ async def update_sso_settings(sso_config: SSOConfig):
 @router.get(
     "/get/ui_theme_settings",
     tags=["UI Theme Settings"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=UIThemeSettingsResponse,
 )
 async def get_ui_theme_settings():
     """
     Get UI theme configuration from the litellm_settings.
     Returns current logo settings for UI customization.
+
+    Note: This endpoint is public (no authentication required) so all users can see custom branding.
+    Only the /update/ui_theme_settings endpoint requires authentication for admins to change settings.
     """
     from litellm.proxy.proxy_server import proxy_config
 
