@@ -1,22 +1,22 @@
 import pytest
 
 import litellm
-from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5ReasoningConfig
 
 
 @pytest.fixture()
-def config() -> AzureOpenAIGPT5Config:
-    return AzureOpenAIGPT5Config()
+def config() -> AzureOpenAIGPT5ReasoningConfig:
+    return AzureOpenAIGPT5ReasoningConfig()
 
 
-def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5ReasoningConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(
         model="gpt5_series/my-deployment"
     )
 
 
-def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5ReasoningConfig):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 5},
         optional_params={},
@@ -28,7 +28,7 @@ def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     assert "max_tokens" not in params
 
 
-def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5ReasoningConfig):
     with pytest.raises(litellm.utils.UnsupportedParamsError):
         config.map_openai_params(
             non_default_params={"temperature": 0.2},
@@ -39,7 +39,7 @@ def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
         )
 
 
-def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5Config):
+def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5ReasoningConfig):
     request = config.transform_request(
         model="gpt5_series/gpt-5",
         messages=[],

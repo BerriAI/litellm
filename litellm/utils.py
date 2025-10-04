@@ -4001,8 +4001,8 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
-            optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
+        elif litellm.AzureOpenAIGPT5ReasoningConfig.is_model_gpt_5_reasoning_model(model=model):
+            optional_params = litellm.AzureOpenAIGPT5ReasoningConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -6899,9 +6899,9 @@ class ProviderConfigManager:
             return litellm.openaiOSeriesConfig
         elif (
             provider == LlmProviders.OPENAI
-            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+            and litellm.OpenAIGPT5ReasoningConfig.is_model_gpt_5_reasoning_model(model=model)
         ):
-            return litellm.OpenAIGPT5Config()
+            return litellm.OpenAIGPT5ReasoningConfig()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
@@ -7012,8 +7012,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE == provider:
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
-            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
-                return litellm.AzureOpenAIGPT5Config()
+            if litellm.AzureOpenAIGPT5ReasoningConfig.is_model_gpt_5_reasoning_model(model=model):
+                return litellm.AzureOpenAIGPT5ReasoningConfig()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()
