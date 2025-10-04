@@ -2702,12 +2702,12 @@ class PriorityReservationSettings(BaseModel):
     """
 
     default_priority: float = Field(
-        default=0.5,
+        default=0.25,
         description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
     
     saturation_threshold: float = Field(
-        default=0.80,
+        default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
     )
     
