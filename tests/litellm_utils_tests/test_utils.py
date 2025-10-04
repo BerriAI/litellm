@@ -1426,6 +1426,44 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
     )
 
 
+@pytest.mark.parametrize(
+    "litellm_params, expected_end_user_id",
+    [
+        # Test with only metadata field (old behavior)
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, "user_from_metadata"),
+        # Test with only litellm_metadata field (new behavior)
+        ({"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, "user_from_litellm_metadata"),
+        # Test with both fields - metadata should take precedence for user_api_key fields
+        ({"metadata": {"user_api_key_end_user_id": "user_from_metadata"}, 
+          "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_metadata"),
+        # Test with user_api_key_end_user_id in litellm_params (should take precedence over metadata)
+        ({"user_api_key_end_user_id": "user_from_params", 
+          "metadata": {"user_api_key_end_user_id": "user_from_metadata"}}, 
+         "user_from_params"),
+        # Test with empty metadata but valid litellm_metadata
+        ({"metadata": {}, "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}}, 
+         "user_from_litellm_metadata"),
+        # Test with no metadata fields
+        ({}, None),
+    ],
+)
+def test_get_end_user_id_for_cost_tracking_metadata_handling(
+    litellm_params, expected_end_user_id
+):
+    """
+    Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
+    fields using the get_litellm_metadata_from_kwargs helper function.
+    """
+    from litellm.utils import get_end_user_id_for_cost_tracking
+    
+    # Ensure cost tracking is enabled for this test
+    litellm.disable_end_user_cost_tracking = False
+    
+    result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+    assert result == expected_end_user_id
+
+
 def test_is_prompt_caching_enabled_error_handling():
     """
     Assert that `is_prompt_caching_valid_prompt` safely handles errors in `token_counter`.

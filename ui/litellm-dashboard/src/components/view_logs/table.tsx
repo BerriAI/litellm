@@ -53,7 +53,7 @@ export function DataTable<TData, TValue>({
 
   return (
     <div className="rounded-lg custom-border overflow-x-auto w-full max-w-full box-border">
-      <Table className="[&_td]:py-0.5 [&_th]:py-1 table-fixed w-full box-border" style={{minWidth: '800px'}}>
+      <Table className="[&_td]:py-0.5 [&_th]:py-1 table-fixed w-full box-border" style={{minWidth: '400px'}}>
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>

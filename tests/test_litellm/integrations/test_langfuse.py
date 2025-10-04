@@ -109,6 +109,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         usage_details: LangfuseUsageDetails = {
             "input": 10,
             "output": 20,
+            "total": 30,
             "cache_creation_input_tokens": 5,
             "cache_read_input_tokens": 3
         }
@@ -116,6 +117,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # Verify all fields are present
         self.assertEqual(usage_details["input"], 10)
         self.assertEqual(usage_details["output"], 20)
+        self.assertEqual(usage_details["total"], 30)
         self.assertEqual(usage_details["cache_creation_input_tokens"], 5)
         self.assertEqual(usage_details["cache_read_input_tokens"], 3)
 
@@ -123,12 +125,14 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         minimal_usage_details: LangfuseUsageDetails = {
             "input": 10,
             "output": 20,
+            "total": 30,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0
         }
 
         self.assertEqual(minimal_usage_details["input"], 10)
         self.assertEqual(minimal_usage_details["output"], 20)
+        self.assertEqual(minimal_usage_details["total"], 30)
 
     def test_log_langfuse_v2_usage_details(self):
         """Test that usage_details in _log_langfuse_v2 is correctly typed and assigned"""
@@ -183,6 +187,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         usage_details: LangfuseUsageDetails = {
             "input": 10,
             "output": 20,
+            "total": 30,
             "cache_creation_input_tokens": None,
             "cache_read_input_tokens": None
         }
@@ -190,6 +195,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # Verify fields can be None
         self.assertEqual(usage_details["input"], 10)
         self.assertEqual(usage_details["output"], 20)
+        self.assertEqual(usage_details["total"], 30)
         self.assertIsNone(usage_details["cache_creation_input_tokens"])
         self.assertIsNone(usage_details["cache_read_input_tokens"])
 
@@ -202,6 +208,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         usage_details = {
             "input": 15,
             "output": 25,
+            "total": 40,
             "cache_creation_input_tokens": 7,
             "cache_read_input_tokens": 4
         }
@@ -209,12 +216,14 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # Verify the structure matches what we expect
         self.assertIn("input", usage_details)
         self.assertIn("output", usage_details)
+        self.assertIn("total", usage_details)
         self.assertIn("cache_creation_input_tokens", usage_details)
         self.assertIn("cache_read_input_tokens", usage_details)
 
         # Verify the values
         self.assertEqual(usage_details["input"], 15)
         self.assertEqual(usage_details["output"], 25)
+        self.assertEqual(usage_details["total"], 40)
         self.assertEqual(usage_details["cache_creation_input_tokens"], 7)
         self.assertEqual(usage_details["cache_read_input_tokens"], 4)
 

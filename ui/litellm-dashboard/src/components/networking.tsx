@@ -10,6 +10,7 @@ export const formatDate = (date: Date) => {
  */
 import { all_admin_roles } from "@/utils/roles";
 import { message } from "antd";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import {
   TagNewRequest,
   TagUpdateRequest,
@@ -169,8 +170,7 @@ const handleError = async (errorData: string) => {
     if (errorData.includes("Authentication Error - Expired Key")) {
       NotificationsManager.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
-      document.cookie =
-        "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+      clearTokenCookies();
       window.location.href = window.location.pathname;
     }
     lastErrorTime = currentTime;
@@ -335,14 +335,14 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
         "Content-Type": "application/json",
       },
     });
-    
+
     if (!response.ok) {
       console.error(`Status request failed with status: ${response.status}`);
       const errorText = await response.text();
       console.error("Error response:", errorText);
       throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
-    
+
     const jsonData = await response.json();
     console.log(`Model cost map reload status:`, jsonData);
     return jsonData;
@@ -4090,7 +4090,7 @@ export const teamMemberUpdateCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
       : `/team/member_update`;
-    
+
     const requestBody: any = {
       team_id: teamId,
       role: formValues.role,
@@ -4373,9 +4373,9 @@ export const userBulkUpdateUserCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/user/bulk_update`
       : `/user/bulk_update`;
-    
+
     let request_body_json: string;
-    
+
     if (allUsers) {
       // Update all users mode
       request_body_json = JSON.stringify({
@@ -4384,7 +4384,7 @@ export const userBulkUpdateUserCall = async (
       });
     } else if (userIds && userIds.length > 0) {
       // Update specific users mode
-      let request_body = [] 
+      let request_body = []
       for (const user_id of userIds) {
         request_body.push({
           user_id: user_id,
@@ -4397,7 +4397,7 @@ export const userBulkUpdateUserCall = async (
     } else {
       throw new Error("Must provide either userIds or set allUsers=true");
     }
-    
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -5410,11 +5410,11 @@ export const convertPromptFileToJson = async (
   try {
     const formData = new FormData();
     formData.append("file", file);
-    
-    const url = proxyBaseUrl 
-      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter`
       : `/utils/dotprompt_json_converter`;
-    
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -5879,14 +5879,14 @@ export const callMCPTool = async (
     if (!response.ok) {
       let errorMessage = "Network response was not ok";
       let errorDetails = null;
-      
+
       // First, try to get the response as text to see what we're dealing with
       const responseText = await response.text();
-      
+
       try {
         // Try to parse as JSON
         const errorData = JSON.parse(responseText);
-        
+
         if (errorData.detail) {
           if (typeof errorData.detail === 'string') {
             errorMessage = errorData.detail;
@@ -5897,7 +5897,7 @@ export const callMCPTool = async (
         } else {
           errorMessage = errorData.message || errorData.error || errorMessage;
         }
-        
+
       } catch (parseError) {
         console.error("Failed to parse JSON error response:", parseError);
         // If JSON parsing fails, use the raw text
@@ -5905,13 +5905,13 @@ export const callMCPTool = async (
           errorMessage = responseText;
         }
       }
-      
+
       // Create a more informative error object
       const enhancedError = new Error(errorMessage);
       (enhancedError as any).status = response.status;
       (enhancedError as any).statusText = response.statusText;
       (enhancedError as any).details = errorDetails;
-      
+
       handleError(errorMessage);
       throw enhancedError;
     }
@@ -7126,9 +7126,9 @@ export const userAgentAnalyticsCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/user-agent/analytics`
       : `/tag/user-agent/analytics`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7136,16 +7136,16 @@ export const userAgentAnalyticsCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page", page.toString());
     queryParams.append("page_size", pageSize.toString());
-    
+
     if (userAgentFilter) {
       queryParams.append("user_agent_filter", userAgentFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7189,9 +7189,9 @@ export const tagDauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/dau`
       : `/tag/dau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7199,9 +7199,9 @@ export const tagDauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7210,7 +7210,7 @@ export const tagDauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7253,9 +7253,9 @@ export const tagWauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/wau`
       : `/tag/wau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7263,9 +7263,9 @@ export const tagWauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7274,7 +7274,7 @@ export const tagWauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7317,9 +7317,9 @@ export const tagMauCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/mau`
       : `/tag/mau`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7327,9 +7327,9 @@ export const tagMauCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("end_date", formatDate(endDate));
-    
+
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
@@ -7338,7 +7338,7 @@ export const tagMauCall = async (
     } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7416,9 +7416,9 @@ export const userAgentSummaryCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/summary`
       : `/tag/summary`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -7426,17 +7426,17 @@ export const userAgentSummaryCall = async (
       const day = String(date.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
     };
-    
+
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
-    
+
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
         queryParams.append("tag_filters", tag);
       });
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -7479,19 +7479,19 @@ export const perUserAnalyticsCall = async (
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
       : `/tag/user-agent/per-user-analytics`;
-    
+
     const queryParams = new URLSearchParams();
-    
+
     queryParams.append("page", page.toString());
     queryParams.append("page_size", pageSize.toString());
-    
+
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
       tagFilters.forEach(tag => {
         queryParams.append("tag_filters", tag);
       });
     }
-    
+
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;

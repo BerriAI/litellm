@@ -186,3 +186,16 @@ def test_in_memory_cache_eviction_order():
     # Items with later expiration should remain
     assert "late_expire" in in_memory_cache.cache_dict
     assert "new_item" in in_memory_cache.cache_dict
+
+
+def test_in_memory_cache_heap_size_staus_bounded():
+    """
+    Test that the expiration_heap does not grow unbounded when the same key is updated repeaatedly.
+    """
+    in_memory_cache = InMemoryCache(max_size_in_memory=10)
+
+    for i in range(1_000):
+        in_memory_cache.set_cache(key="hot_key", value=f"value_{i}", ttl=60)
+
+    # Expiration heap should only have 1 entry
+    assert len(in_memory_cache.expiration_heap) == 1
