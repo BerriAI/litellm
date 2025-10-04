@@ -406,6 +406,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               accessToken={accessToken}
               formValues={formValues}
               allowedTools={allowedTools}
+              existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
             />
           </div>

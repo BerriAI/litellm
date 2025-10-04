@@ -8,6 +8,7 @@ interface MCPToolConfigurationProps {
   accessToken: string | null
   formValues: Record<string, any>
   allowedTools: string[]
+  existingAllowedTools: string[] | null
   onAllowedToolsChange: (tools: string[]) => void
 }
 
@@ -15,6 +16,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   accessToken,
   formValues,
   allowedTools,
+  existingAllowedTools,
   onAllowedToolsChange,
 }) => {
   const previousToolsLengthRef = useRef(0)
@@ -25,19 +27,28 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     enabled: true,
   })
 
-  // Auto-select all tools when tools are first loaded
+  // Auto-select tools when tools are first loaded
   useEffect(() => {
     // Only auto-select if:
     // 1. We have tools
     // 2. Tools length changed (new tools loaded)
     // 3. No tools are currently selected (initial state)
     if (tools.length > 0 && tools.length !== previousToolsLengthRef.current && allowedTools.length === 0) {
-      const allToolNames = tools.map((tool) => tool.name)
-      onAllowedToolsChange(allToolNames)
+      if (existingAllowedTools && existingAllowedTools.length > 0) {
+        // If we have existing allowed tools, use those as the initial selection
+        // Filter to only include tools that are actually available from the server
+        const availableToolNames = tools.map((tool) => tool.name)
+        const validExistingTools = existingAllowedTools.filter(toolName => availableToolNames.includes(toolName))
+        onAllowedToolsChange(validExistingTools)
+      } else {
+        // If no existing allowed tools, auto-select all tools (create mode)
+        const allToolNames = tools.map((tool) => tool.name)
+        onAllowedToolsChange(allToolNames)
+      }
     }
     // Update ref to track tools length (will be 0 when tools clear)
     previousToolsLengthRef.current = tools.length
-  }, [tools, allowedTools.length, onAllowedToolsChange])
+  }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange])
 
   const handleToolToggle = (toolName: string) => {
     if (allowedTools.includes(toolName)) {
