@@ -415,17 +415,34 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                             },
                         )
         
-        # PHASE 3: All checks passed - now increment ALL counters atomically
-        increment_response = await self.v3_limiter.should_rate_limit(
-            descriptors=descriptors_to_check,
+        # PHASE 3: Increment counters separately to avoid early-exit issues
+        # Model counter must ALWAYS increment, but priority counter might be over limit
+        # If we increment them together, v3_limiter's in-memory check will exit early
+        # and skip incrementing the model counter
+        
+        # Step 3a: Increment model-wide counter (always)
+        model_increment_response = await self.v3_limiter.should_rate_limit(
+            descriptors=[model_wide_descriptor],
             parent_otel_span=user_api_key_dict.parent_otel_span,
-            read_only=False,  # Now actually increment the counters
+            read_only=False,
         )
-        
-        verbose_proxy_logger.debug(f"Increment response: {json.dumps(increment_response, indent=2)}")
-        
-        # Store responses for post-call hook
-        data["litellm_proxy_rate_limit_response"] = increment_response
+
+        # Step 3b: Increment priority counter (may be over limit, but we still track it)
+        if priority_descriptors:
+            priority_increment_response = await self.v3_limiter.should_rate_limit(
+                descriptors=priority_descriptors,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                read_only=False,
+            )
+            
+            # Combine responses for post-call hook
+            combined_response = {
+                "overall_code": model_increment_response["overall_code"],
+                "statuses": model_increment_response["statuses"] + priority_increment_response["statuses"]
+            }
+            data["litellm_proxy_rate_limit_response"] = combined_response
+        else:
+            data["litellm_proxy_rate_limit_response"] = model_increment_response
 
     async def async_pre_call_hook(
         self,
