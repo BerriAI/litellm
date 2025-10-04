@@ -1358,19 +1358,22 @@ async def update_key_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        team_obj = await get_team_object(
-            team_id=cast(str, data.team_id),
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            check_db_only=True,
-        )
-
-        if team_obj is not None:
-            await _check_team_key_limits(
-                team_table=team_obj,
-                data=data,
+        # Only check team limits if key has a team_id
+        team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+        if data.team_id is not None:
+            team_obj = await get_team_object(
+                team_id=data.team_id,
                 prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
             )
+
+            if team_obj is not None:
+                await _check_team_key_limits(
+                    team_table=team_obj,
+                    data=data,
+                    prisma_client=prisma_client,
+                )
 
         # if team change - check if this is possible
         if is_different_team(data=data, existing_key_row=existing_key_row):
@@ -1379,6 +1382,14 @@ async def update_key_fn(
                     status_code=400,
                     detail={
                         "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                    },
+                )
+            # team_obj should be set since is_different_team() returns True only when data.team_id is not None
+            if team_obj is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Team object not found for team change validation"
                     },
                 )
             validate_key_team_change(
