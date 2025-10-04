@@ -918,6 +918,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
+    extra_headers: Optional[List[str]] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
