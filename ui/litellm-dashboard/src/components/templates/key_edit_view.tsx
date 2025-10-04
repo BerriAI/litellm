@@ -137,8 +137,8 @@ export function KeyEditView({
     token: keyData.token || keyData.token_id,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(keyData.metadata),
-    guardrails: keyData.metadata?.guardrails || [],
-    prompts: keyData.metadata?.prompts || [],
+    guardrails: keyData.metadata?.guardrails,
+    prompts: keyData.metadata?.prompts,
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
@@ -158,8 +158,8 @@ export function KeyEditView({
       token: keyData.token || keyData.token_id,
       budget_duration: getBudgetDuration(keyData.budget_duration),
       metadata: formatMetadataForDisplay(keyData.metadata),
-      guardrails: keyData.metadata?.guardrails || [],
-      prompts: keyData.metadata?.prompts || [],
+      guardrails: keyData.metadata?.guardrails,
+      prompts: keyData.metadata?.prompts,
       vector_stores: keyData.object_permission?.vector_stores || [],
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
@@ -240,7 +240,7 @@ export function KeyEditView({
 
       <Form.Item label="Guardrails" name="guardrails">
         { accessToken &&
-          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} />
+          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} disabled={!premiumUser}/>
         }
       </Form.Item>
 
