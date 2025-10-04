@@ -8,6 +8,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config"
 import MCPConnectionStatus from "./mcp_connection_status"
 import MCPToolConfiguration from "./mcp_tool_configuration"
 import StdioConfiguration from "./StdioConfiguration"
+import MCPPermissionManagement from "./MCPPermissionManagement"
 import { isAdminRole } from "@/utils/roles"
 import { validateMCPServerUrl, validateMCPServerName } from "./utils"
 import NotificationsManager from "../molecules/notifications_manager"
@@ -381,32 +382,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
 
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  MCP Access Groups
-                  <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="mcp_access_groups"
-              className="mb-4"
-            >
-              <Select
-                mode="tags"
-                showSearch
-                placeholder="Select existing groups or type to create new ones"
-                optionFilterProp="value"
-                filterOption={(input, option) => (option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-                onSearch={(value) => setSearchValue(value)}
-                tokenSeparators={[","]}
-                options={getAccessGroupOptions()}
-                maxTagCount="responsive"
-                allowClear
-              />
-            </Form.Item>
+          {/* Permission Management / Access Control Section */}
+          <div className="mt-8">
+            <MCPPermissionManagement
+              availableAccessGroups={availableAccessGroups}
+              mcpServer={null}
+              searchValue={searchValue}
+              setSearchValue={setSearchValue}
+              getAccessGroupOptions={getAccessGroupOptions}
+            />
           </div>
 
           {/* Connection Status Section */}
@@ -420,6 +406,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               accessToken={accessToken}
               formValues={formValues}
               allowedTools={allowedTools}
+              existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
             />
           </div>
