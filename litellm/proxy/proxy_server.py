@@ -3731,24 +3731,30 @@ class DatabaseJobsCoordinator:
 
 async def high_frequency_database_jobs_coordinator(
     prisma_client: PrismaClient,
+    db_writer_client: Optional[AsyncHTTPHandler],
     proxy_logging_obj: ProxyLogging,
     coordinator: DatabaseJobsCoordinator,
     proxy_config: ProxyConfig,
+    llm_router: Optional[Router],
 ):
     """
     High-frequency database jobs coordinator - handles tasks that need to run every 10 seconds.
     
     Runs every 10 seconds and executes:
-    - add_deployment: Refresh model configuration from database
-    - get_credentials: Refresh credentials from database
+    - add_deployment: Refresh model configuration from database (10s interval)
+    - get_credentials: Refresh credentials from database (10s interval)
+    - update_spend: Update spend logs (60s interval)
+    - check_batch_cost: Check batch costs (60s interval)
     
     If one job fails, execution continues to the next job to maintain system stability.
     
     Args:
         prisma_client: Database client
+        db_writer_client: Async HTTP handler for batch writes
         proxy_logging_obj: Logging object
         coordinator: Job coordinator tracking last run times
         proxy_config: Proxy configuration object
+        llm_router: LLM router instance
     """
     global store_model_in_db
     
@@ -3776,6 +3782,36 @@ async def high_frequency_database_jobs_coordinator(
                 except Exception as e:
                     verbose_proxy_logger.error(f"✗ High-freq coordinator: get_credentials failed - {e}")
         
+        # 3. Update spend logs (uses pre-calculated randomized interval ~60s)
+        if coordinator.should_run("update_spend", coordinator.task_intervals["update_spend"]):
+            try:
+                await update_spend(prisma_client, db_writer_client, proxy_logging_obj)
+                coordinator.mark_run("update_spend")
+                verbose_proxy_logger.debug("✓ High-freq coordinator: update_spend completed")
+            except Exception as e:
+                verbose_proxy_logger.error(f"✗ High-freq coordinator: update_spend failed - {e}")
+        
+        # 4. Check batch cost (runs every 60 seconds)
+        if llm_router is not None:
+            if coordinator.should_run("check_batch_cost", 60):
+                try:
+                    from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+                        CheckBatchCost,
+                    )
+                    check_batch_cost_job = CheckBatchCost(
+                        proxy_logging_obj=proxy_logging_obj,
+                        prisma_client=prisma_client,
+                        llm_router=llm_router,
+                    )
+                    await check_batch_cost_job.check_batch_cost()
+                    coordinator.mark_run("check_batch_cost")
+                    verbose_proxy_logger.debug("✓ High-freq coordinator: check_batch_cost completed")
+                except ImportError:
+                    # Enterprise feature not available - this is expected
+                    pass
+                except Exception as e:
+                    verbose_proxy_logger.error(f"✗ High-freq coordinator: check_batch_cost failed - {e}")
+        
     except Exception as e:
         verbose_proxy_logger.error(
             f"High-frequency database jobs coordinator error: {e}\n{traceback.format_exc()}"
@@ -3797,11 +3833,9 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
     """
     Low-frequency database jobs coordinator - handles tasks that run less frequently.
     
-    Runs every 10 seconds (fixed interval) and executes:
-    - update_spend: Update spend logs (uses pre-calculated interval ~60s)
+    Runs every 30 minutes and executes:
     - reset_budget: Reset budget (uses pre-calculated interval 3600-7200s)
     - spend_log_cleanup: Clean old logs (based on retention interval)
-    - check_batch_cost: Check batch costs (based on polling interval)
     
     If one job fails, execution continues to the next job to maintain system stability.
     
@@ -3818,16 +3852,7 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
         proxy_batch_polling_interval: Interval for batch polling
     """
     try:
-        # 1. Update spend logs (uses pre-calculated randomized interval from initialization)
-        if coordinator.should_run("update_spend", coordinator.task_intervals["update_spend"]):
-            try:
-                await update_spend(prisma_client, db_writer_client, proxy_logging_obj)
-                coordinator.mark_run("update_spend")
-                verbose_proxy_logger.debug("✓ Low-freq coordinator: update_spend completed")
-            except Exception as e:
-                verbose_proxy_logger.error(f"✗ Low-freq coordinator: update_spend failed - {e}")
-        
-        # 2. Reset budget (uses pre-calculated randomized interval from initialization)
+        # 1. Reset budget (uses pre-calculated randomized interval from initialization)
         if coordinator.should_run("reset_budget", coordinator.task_intervals["reset_budget"]):
             try:
                 if general_settings.get("disable_reset_budget", False) is False:
@@ -3841,7 +3866,7 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
             except Exception as e:
                 verbose_proxy_logger.error(f"✗ Low-freq coordinator: reset_budget failed - {e}")
         
-        # 3. Spend log cleanup (runs based on configured retention interval)
+        # 2. Spend log cleanup (runs based on configured retention interval)
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             retention_interval = general_settings.get(
                 "maximum_spend_logs_retention_interval", "1d"
@@ -3873,27 +3898,6 @@ async def low_frequency_database_jobs_coordinator(  # noqa: PLR0915
                         verbose_proxy_logger.debug("✓ Low-freq coordinator: spend_log_cleanup completed")
                 except Exception as e:
                     verbose_proxy_logger.error(f"✗ Low-freq coordinator: spend_log_cleanup failed - {e}")
-        
-        # 4. Check batch cost (runs based on proxy_batch_polling_interval)
-        if llm_router is not None:
-            if coordinator.should_run("check_batch_cost", proxy_batch_polling_interval):
-                try:
-                    from litellm_enterprise.proxy.common_utils.check_batch_cost import (
-                        CheckBatchCost,
-                    )
-                    check_batch_cost_job = CheckBatchCost(
-                        proxy_logging_obj=proxy_logging_obj,
-                        prisma_client=prisma_client,
-                        llm_router=llm_router,
-                    )
-                    await check_batch_cost_job.check_batch_cost()
-                    coordinator.mark_run("check_batch_cost")
-                    verbose_proxy_logger.debug("✓ Low-freq coordinator: check_batch_cost completed")
-                except ImportError:
-                    # Enterprise feature not available - this is expected
-                    pass
-                except Exception as e:
-                    verbose_proxy_logger.error(f"✗ Low-freq coordinator: check_batch_cost failed - {e}")
         
     except Exception as e:
         verbose_proxy_logger.error(
@@ -4026,25 +4030,33 @@ class ProxyStartupEvent:
             await proxy_config.get_credentials(prisma_client=prisma_client)
         
         # Add high-frequency coordinator job - runs every 10 seconds
-        # Handles: add_deployment, get_credentials
+        # Handles: add_deployment, get_credentials, update_spend, check_batch_cost
         scheduler.add_job(
             high_frequency_database_jobs_coordinator,
             "interval",
             seconds=10,
+            max_instances=1,
+            coalesce=False,
+            misfire_grace_time=5,
             args=[
                 prisma_client,
+                db_writer_client,
                 proxy_logging_obj,
                 coordinator,
                 proxy_config,
+                llm_router,
             ],
         )
         
-        # Add low-frequency coordinator job - runs every 10 seconds (fixed interval)
-        # Handles: update_spend, reset_budget, spend_log_cleanup, check_batch_cost
+        # Add low-frequency coordinator job - runs every 30 minutes
+        # Handles: reset_budget, spend_log_cleanup
         scheduler.add_job(
             low_frequency_database_jobs_coordinator,
             "interval",
-            seconds=10,
+            seconds=1800,
+            max_instances=1,
+            coalesce=False,
+            misfire_grace_time=1200,
             args=[
                 prisma_client,
                 db_writer_client,
