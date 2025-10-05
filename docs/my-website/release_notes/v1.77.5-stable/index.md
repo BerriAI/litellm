@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.77.5-stable - MCP OAuth 2.0 Support"
+title: "v1.77.5-stable - MCP OAuth 2.0 Support"
 slug: "v1-77-5"
 date: 2025-09-29T10:00:00
 authors:
@@ -32,7 +32,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.77.5.rc.1
+ghcr.io/berriai/litellm:v1.77.5-stable
 ```
 
 </TabItem>
