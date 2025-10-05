@@ -78,7 +78,6 @@ As a result, performance improved across all latency percentiles:
 - **p99 latency:** 1,400 ms → **810 ms** (−42.1%)
 - **Average latency:** 864 ms → **310 ms** (−64%)
 
-Overall throughput increased to ~1,880 RPS (aggregated) per instance, while maintaining low overhead (~27 ms average). 
 
 #### Test Setup
 
