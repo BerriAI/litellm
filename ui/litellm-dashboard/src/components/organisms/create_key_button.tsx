@@ -131,6 +131,14 @@ export const fetchUserModels = async (
   }
 };
 
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(console)/virtual-keys/components/CreateKey.tsx
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
