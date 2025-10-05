@@ -216,6 +216,7 @@ class MCPServerManager:
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 access_groups=server_config.get("access_groups", None),
+                static_headers=server_config.get("static_headers", None),
             )
             self.config_mcp_servers[server_id] = new_server
         verbose_logger.debug(
@@ -475,6 +476,11 @@ class MCPServerManager:
         client = None
 
         try:
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
+
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
@@ -769,6 +775,11 @@ class MCPServerManager:
             for header in mcp_server.extra_headers:
                 if header in raw_headers:
                     extra_headers[header] = raw_headers[header]
+
+        if mcp_server.static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(mcp_server.static_headers)
 
         client = self._create_mcp_client(
             server=mcp_server,

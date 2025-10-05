@@ -21,7 +21,7 @@ class MCPServer(BaseModel):
     authentication_token: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     extra_headers: Optional[List[str]] = (
-        None  # allow admin to specify which headers to forward to the MCP server
+        None  # allow admin to specify which headers to forward from client to the MCP server
     )
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
@@ -36,4 +36,7 @@ class MCPServer(BaseModel):
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
+    static_headers: Optional[Dict[str, str]] = (
+        None  # static headers to forward to the MCP server
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True)
