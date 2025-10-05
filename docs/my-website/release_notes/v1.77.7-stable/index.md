@@ -89,10 +89,10 @@ Overall throughput increased to ~1,880 RPS (aggregated) per instance, while main
 
 **System Specs**
 
-- **CPU:** 8 vCPUs
-- **Memory:** 32 GB RAM
-- **LiteLLM Workers:** 8
-- **Instances**: 1
+- **CPU:** 4 vCPUs
+- **Memory:** 8 GB RAM
+- **LiteLLM Workers:** 4
+- **Instances**: 4
 
 **Configuration (config.yaml)**
 
