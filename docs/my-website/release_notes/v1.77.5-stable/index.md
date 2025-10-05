@@ -57,13 +57,30 @@ pip install litellm==1.77.5
 
 ---
 
+### Scheduled Key Rotations
+
+<Image img={require('../../img/release_notes/schedule_key_rotations.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
+
+This release brings support for scheduling virtual key rotations on LiteLLM AI Gateway.
+
+This is great for Proxy Admins looking to enforce Enterprise Grade security for use cases going through LiteLLM AI Gateway.
+
+From this release you can enforce Virtual Keys to rotate ona schedule of your choice e.g every 15 days/30 days/60 days etc.
+
+---
 ### Performance Improvements - 54% RPS Improvement
 
 <Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
-Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead. The improvement comes from fixing major O(n²) inefficiencies in the router, primarily caused by repeated use of in statements inside loops over large arrays. Tests were run with a database-only setup (no cache hits). As a result, p95 latency improved by 30% (2,700 → 1,900 ms), enhancing overall stability and scalability under heavy load.
+This release brings a 54% RPS improvement (1,040 → 1,602 RPS, aggregated) per instance. 
+
+The improvement comes from fixing O(n²) inefficiencies in the LiteLLM Router, primarily caused by repeated use of `in` statements inside loops over large arrays. 
+
+Tests were run with a database-only setup (no cache hits).
 
 #### Test Setup
 
