@@ -65,6 +65,41 @@ pip install litellm==1.77.7.rc.1
 - **AMD Lemonade & Nvidia NIM** - New provider support for AMD Lemonade and Nvidia NIM Rerank
 - **GitLab Prompt Management** - GitLab-based prompt management integration
 
+### 62.5% Faster P99 Latency
+
+This update removes LiteLLM router inefficiencies, reducing complexity from O(M×N) to O(1). Previously, it built a new array and ran repeated checks like data["model"] in llm_router.get_model_ids(). Now, a direct ID-to-deployment map eliminates redundant allocations and scans.
+
+As a result, performance improved across all latency percentiles:
+
+- **Median latency:** 600 ms → **280 ms** (−53%)
+- **p95 latency:** 1,900 ms → **520 ms** (−72%)
+- **p99 latency:** 3,000 ms → **1,000 ms** (−62.5%)
+- **Average latency:** 864 ms → **310 ms** (−64%)
+
+Overall throughput increased to ~1,880 RPS (aggregated) per instance, while maintaining low overhead (~27 ms average). 
+
+#### Test Setup
+
+**Locust**
+
+- **Concurrent users:** 1,000
+- **Ramp-up:** 500
+
+**System Specs**
+
+- **CPU:** 8 vCPUs
+- **Memory:** 32 GB RAM
+- **LiteLLM Workers:** 8
+- **Instances**: 1
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
 ## New Models / Updated Models
 
 #### New Model Support
