@@ -193,8 +193,9 @@ class RealTimeStreaming:
                     message = self.provider_config.transform_realtime_request(
                         message, self.model
                     )
-
+                    print(f"🔥Message: {message}")
                     for msg in message:
+                        print(f"🔥Sending message to backend: {msg}")
                         await self.backend_ws.send(msg)
                 else:
                     await self.backend_ws.send(message)

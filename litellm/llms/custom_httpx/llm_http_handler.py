@@ -3049,6 +3049,8 @@ class BaseLLMHTTPHandler:
             model=model,
             api_key=api_key,
         )
+        print(f"🔥Headers: {headers}")
+        print(f"🔥URL: {url}")
 
         try:
             async with websockets.connect(  # type: ignore
