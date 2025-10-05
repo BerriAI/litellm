@@ -617,6 +617,24 @@ jobs:
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Set DATABASE_URL environment variable
+          command: |
+            echo 'export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/circle_test"' >> $BASH_ENV
+            source $BASH_ENV
+      - run:
           name: Run Security Scans
           command: |
             chmod +x ci_cd/security_scans.sh
@@ -2588,6 +2606,8 @@ jobs:
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
+              -e AZURE_API_KEY_PASSHROUGH=$AZURE_API_KEY_PASSHROUGH \
+              -e AZURE_API_BASE_PASSHROUGH=$AZURE_API_BASE_PASSHROUGH \
               -e USE_DDTRACE=True \
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \

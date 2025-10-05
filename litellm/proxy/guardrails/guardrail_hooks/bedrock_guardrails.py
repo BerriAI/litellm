@@ -727,6 +727,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             return
 
+        # Check if the ModelResponse has text content in its choices
+        # to avoid sending empty content to Bedrock (e.g., during tool calls)
+        if isinstance(response, litellm.ModelResponse):
+            has_text_content = False
+            for choice in response.choices:
+                if isinstance(choice, litellm.Choices):
+                    if choice.message.content and isinstance(choice.message.content, str):
+                        has_text_content = True
+                        break
+            
+            if not has_text_content:
+                verbose_proxy_logger.warning(
+                    "Bedrock AI: not running guardrail. No output text in response"
+                )
+                return
+
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
         #########################################################
