@@ -439,18 +439,28 @@ class LiteLLMAnthropicMessagesAdapter:
             elif choice.message.thinking_blocks is not None:
                 for thinking_block in choice.message.thinking_blocks:
                     if "thinking" in thinking_block and "signature" in thinking_block:
+                        thinking = thinking_block.get("thinking")
+                        signature = thinking_block.get("signature")
+
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str) or signature is None
+
                         new_content.append(
                             AnthropicResponseContentBlockThinking(
                                 type="thinking",
-                                thinking=thinking_block.get("thinking") or "",
-                                signature=thinking_block.get("signature") or "",
+                                thinking=thinking,
+                                signature=signature,
                             )
                         )
                     elif "data" in thinking_block:
+                        data = thinking_block.get("data")
+
+                        assert isinstance(data, str)
+
                         new_content.append(
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
-                                data=thinking_block.get("data", ""),
+                                data=data,
                             )
                         )
                     
@@ -525,16 +535,22 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
-                    thinking = thinking_blocks[0].get("thinking") or ""
-                    signature = thinking_blocks[0].get("signature") or ""
+                    thinking_block = thinking_blocks[0]
+                    if thinking_block["type"] == "thinking":
+                        thinking = thinking_block.get("thinking") or ""
+                        signature = thinking_block.get("signature") or ""
 
-                    if thinking and signature:
-                        raise ValueError("Both `thinking` and `signature` in a single streaming chunk isn't supported.")
-                    return "thinking", ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking=thinking,
-                        signature=signature
-                    )
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str)
+
+                        if thinking and signature:
+                            raise ValueError("Both `thinking` and `signature` in a single streaming chunk isn't supported.")
+
+                        return "thinking", ChatCompletionThinkingBlock(
+                            type="thinking",
+                            thinking=thinking,
+                            signature=signature
+                        )
 
 
         return "text", TextBlock(type="text", text="")
@@ -564,8 +580,16 @@ class LiteLLMAnthropicMessagesAdapter:
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
-                    reasoning_content += thinking_blocks[0].get("thinking") or ""
-                    reasoning_signature += thinking_blocks[0].get("signature") or ""
+                    for thinking_block in thinking_blocks:
+                        if thinking_block["type"] == "thinking":
+                            thinking = thinking_block.get("thinking") or ""
+                            signature = thinking_block.get("signature") or ""
+
+                            assert isinstance(thinking, str)
+                            assert isinstance(signature, str)
+
+                            reasoning_content += thinking
+                            reasoning_signature += signature
         
         if reasoning_content and reasoning_signature:
             raise ValueError("Both `reasoning` and `signature` in a single streaming chunk isn't supported.")
