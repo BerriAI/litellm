@@ -234,7 +234,6 @@ export default function CreateKeyPage() {
               teams={teams}
               keys={keys}
               setUserRole={setUserRole}
-              userEmail={userEmail}
               setUserEmail={setUserEmail}
               setTeams={setTeams}
               setKeys={setKeys}
@@ -275,7 +274,6 @@ export default function CreateKeyPage() {
                     teams={teams}
                     keys={keys}
                     setUserRole={setUserRole}
-                    userEmail={userEmail}
                     setUserEmail={setUserEmail}
                     setTeams={setTeams}
                     setKeys={setKeys}

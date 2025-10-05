@@ -135,6 +135,13 @@ interface CombinedLimits {
   [key: string]: CombinedLimit; // Index signature allowing string keys
 }
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * @deprecated
+ * This component is being DEPRECATED in favor of src/app/(console)/virtual-keys/components/VirtualKeysTable/
+ * Please contribute to the new refactor.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
 const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
