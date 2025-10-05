@@ -67,7 +67,7 @@ This release brings support for scheduling virtual key rotations on LiteLLM AI G
 
 This is great for Proxy Admins looking to enforce Enterprise Grade security for use cases going through LiteLLM AI Gateway.
 
-From this release you can enforce Virtual Keys to rotate ona schedule of your choice e.g every 15 days/30 days/60 days etc.
+From this release you can enforce Virtual Keys to rotate on a schedule of your choice e.g every 15 days/30 days/60 days etc.
 
 ---
 ### Performance Improvements - 54% RPS Improvement
