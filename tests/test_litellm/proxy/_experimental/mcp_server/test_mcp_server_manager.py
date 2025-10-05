@@ -1,6 +1,6 @@
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -654,6 +654,7 @@ class TestMCPServerManager:
             "Tool tool3 is not allowed for server test-server"
             in exc_info.value.detail["error"]
         )
+
     async def test_get_tools_from_server_add_prefix(self):
         """Verify _get_tools_from_server respects add_prefix True/False."""
         manager = MCPServerManager()
@@ -758,6 +759,189 @@ class TestMCPServerManager:
         )
         assert resolved_server_pref is not None
         assert resolved_server_pref.server_id == server.server_id
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_filters_by_allowed_tools(self):
+        """Test that REST endpoint _get_tools_for_single_server respects allowed_tools configuration"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools configured
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=["allowed_tool_1", "allowed_tool_2"],
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager (3 tools, but only 2 are allowed)
+        tool1 = MagicMock()
+        tool1.name = "allowed_tool_1"
+        tool1.description = "This tool is allowed"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "blocked_tool"
+        tool2.description = "This tool is not allowed"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "allowed_tool_2"
+        tool3.description = "This tool is also allowed"
+        tool3.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2, tool3]),
+        ):
+            # Call the REST endpoint helper
+            filtered_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify only allowed tools are in the response
+            assert len(filtered_response) == 2
+            tool_names = [t.name for t in filtered_response]
+            assert "allowed_tool_1" in tool_names
+            assert "allowed_tool_2" in tool_names
+            assert "blocked_tool" not in tool_names
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_shows_all_when_allowed_tools_is_none(self):
+        """Test that REST endpoint shows all tools when allowed_tools is None (backwards compatibility)"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools as None
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=None,  # No filtering
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager
+        tool1 = MagicMock()
+        tool1.name = "tool_1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool_2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        tool3 = MagicMock()
+        tool3.name = "tool_3"
+        tool3.description = "Tool 3"
+        tool3.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2, tool3]),
+        ):
+            # Call the REST endpoint helper
+            all_tools_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify all tools are returned (no filtering)
+            assert len(all_tools_response) == 3
+            tool_names = [t.name for t in all_tools_response]
+            assert "tool_1" in tool_names
+            assert "tool_2" in tool_names
+            assert "tool_3" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_rest_endpoint_shows_all_when_allowed_tools_is_empty_list(self):
+        """Test that REST endpoint shows all tools when allowed_tools is empty list (backwards compatibility)"""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+            _get_tools_for_single_server,
+        )
+
+        # Create server with allowed_tools as empty list
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            allowed_tools=[],  # Empty list means no filtering
+        )
+        server.mcp_info = {"server_name": "test-server"}
+
+        # Mock tools returned from manager
+        tool1 = MagicMock()
+        tool1.name = "tool_1"
+        tool1.description = "Tool 1"
+        tool1.inputSchema = {}
+
+        tool2 = MagicMock()
+        tool2.name = "tool_2"
+        tool2.description = "Tool 2"
+        tool2.inputSchema = {}
+
+        # Mock the global_mcp_server_manager._get_tools_from_server
+        from litellm.proxy._experimental.mcp_server import rest_endpoints
+
+        with patch.object(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool1, tool2]),
+        ):
+            # Call the REST endpoint helper
+            all_tools_response = await _get_tools_for_single_server(
+                server, server_auth_header=None
+            )
+
+            # Verify all tools are returned (no filtering)
+            assert len(all_tools_response) == 2
+            tool_names = [t.name for t in all_tools_response]
+            assert "tool_1" in tool_names
+            assert "tool_2" in tool_names
+
+    def test_add_db_mcp_server_to_registry(self):
+        """Test that add_db_mcp_server_to_registry adds a MCP server to the registry"""
+        manager = MCPServerManager()
+        server = LiteLLM_MCPServerTable(
+            **{
+                "server_id": "4c679a81-acd9-4954-9f84-30b739362498",
+                "server_name": "edc_mcp_server",
+                "alias": "edc_mcp_server",
+                "description": None,
+                "url": "fake_mcp_url",
+                "transport": "http",
+                "auth_type": "none",
+                "created_at": "2025-09-30T08:28:31.353000Z",
+                "created_by": "a1248959",
+                "updated_at": "2025-09-30T08:28:31.353000Z",
+                "updated_by": "a1248959",
+                "teams": [],
+                "mcp_access_groups": [],
+                "mcp_info": {
+                    "server_name": "edc_mcp_server",
+                    "mcp_server_cost_info": None,
+                },
+                "status": "unknown",
+                "last_health_check": None,
+                "health_check_error": None,
+                "command": None,
+                "args": [],
+                "env": {},
+            },
+        )
+        manager.add_update_server(server)
+        assert server.server_id in manager.get_registry()
 
 
 if __name__ == "__main__":
