@@ -55,10 +55,23 @@ jobs:
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
 
-          # For carto/main pushes: carto-main-latest and carto-main-<sha>
+          # Always tag with SHA
           echo "tags<<EOF" >> $GITHUB_OUTPUT
-          echo "type=raw,value=carto-main-latest" >> $GITHUB_OUTPUT
-          echo "type=raw,value=carto-main-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "type=raw,value=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+          # On push to carto/main: add carto-main-latest
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/carto/main" ]]; then
+            echo "type=raw,value=carto-main-latest" >> $GITHUB_OUTPUT
+          fi
+
+          # On PR: add branch name tag
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BRANCH_NAME="${{ github.head_ref }}"
+            # Sanitize branch name for Docker tag (replace / and _ with -)
+            BRANCH_TAG=$(echo "${BRANCH_NAME}" | sed 's/[/_]/-/g')
+            echo "type=raw,value=${BRANCH_TAG}" >> $GITHUB_OUTPUT
+          fi
+
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Extract metadata for tags & labels
@@ -70,8 +83,9 @@ jobs:
             ${{ steps.tag-config.outputs.tags }}
   
       # Configure multi platform Docker builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
 
