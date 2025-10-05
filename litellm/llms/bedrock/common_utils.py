@@ -440,7 +440,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Abbreviations of regions AWS Bedrock supports for cross region inference
         """
-        return ["us", "eu", "apac", "jp"]
+        return ["global", "us", "eu", "apac", "jp"]
 
     @staticmethod
     def get_bedrock_route(
