@@ -100,10 +100,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def _is_foundational_model(self, model: str) -> bool:
         """
         Check if a model is a Databricks foundational model by looking it up in the model cost map.
-        
+
         Args:
             model: The model name to check
-            
+
         Returns:
             bool: True if the model is a Databricks foundational model, False otherwise
         """
@@ -163,9 +163,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stream: Optional[bool] = None,
     ) -> str:
         api_base = self._get_api_base(api_base)
-         # Ensure /serving-endpoints is included
+        # Ensure /serving-endpoints is included
         if not api_base.endswith("/serving-endpoints"):
-                api_base = f"{api_base.rstrip('/')}/serving-endpoints"
+            api_base = f"{api_base.rstrip('/')}/serving-endpoints"
         if self._is_foundational_model(model):
             return f"{api_base}/{model}/invocations"
         return f"{api_base}/chat/completions"
@@ -195,9 +195,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Build DatabricksFunction explicitly to avoid parameter conflicts
         function_params: DatabricksFunction = {
             "name": tool["name"],
-            "parameters": cast(dict, tool.get("input_schema") or {})
+            "parameters": cast(dict, tool.get("input_schema") or {}),
         }
-        
+
         # Only add description if it exists
         description = tool.get("description")
         if description is not None:
