@@ -186,7 +186,10 @@ class OllamaChatConfig(BaseConfig):
                     optional_params["format"] = value["json_schema"]["schema"]
             ### FUNCTION CALLING LOGIC ###
             if param == "reasoning_effort" and value is not None:
-                optional_params["think"] = value
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = True
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:

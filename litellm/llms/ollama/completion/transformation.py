@@ -180,7 +180,10 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                optional_params["think"] = value
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = True
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
