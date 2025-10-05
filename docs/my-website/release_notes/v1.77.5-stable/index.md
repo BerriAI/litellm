@@ -59,6 +59,8 @@ pip install litellm==1.77.5
 
 ### Performance Improvements - 54% RPS Improvement
 
+<Image img={require('../../img/release_notes/perf_77_5.png')}  style={{ width: '800px', height: 'auto' }} />
+
 Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead. The improvement comes from fixing major O(n²) inefficiencies in the router, primarily caused by repeated use of in statements inside loops over large arrays. Tests were run with a database-only setup (no cache hits). As a result, p95 latency improved by 30% (2,700 → 1,900 ms), enhancing overall stability and scalability under heavy load.
 
 #### Test Setup
