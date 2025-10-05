@@ -490,10 +490,10 @@ class MCPServerManager:
             return prefixed_or_original_tools
 
         except Exception as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 f"Failed to get tools from server {server.name}: {str(e)}"
             )
-            return []
+            raise e
         finally:
             if client:
                 try:
@@ -522,14 +522,14 @@ class MCPServerManager:
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
+            except asyncio.CancelledError as e:
+                verbose_logger.debug(f"Client operation cancelled for {server_name}")
+                raise e
             except Exception as e:
-                verbose_logger.warning(
+                verbose_logger.debug(
                     f"Client operation failed for {server_name}: {str(e)}"
                 )
-                return []
+                raise e
             finally:
                 try:
                     await client.disconnect()
@@ -538,22 +538,22 @@ class MCPServerManager:
 
         try:
             return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
-            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
-            return []
-        except asyncio.CancelledError:
-            verbose_logger.warning(
+        except asyncio.TimeoutError as e:
+            verbose_logger.debug(f"Timeout while listing tools from {server_name}")
+            raise e
+        except asyncio.CancelledError as e:
+            verbose_logger.debug(
                 f"Task cancelled while listing tools from {server_name}"
             )
-            return []
+            raise e
         except ConnectionError as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 f"Connection error while listing tools from {server_name}: {str(e)}"
             )
-            return []
+            raise e
         except Exception as e:
-            verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
-            return []
+            verbose_logger.debug(f"Error listing tools from {server_name}: {str(e)}")
+            raise e
 
     def _create_prefixed_tools(
         self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
