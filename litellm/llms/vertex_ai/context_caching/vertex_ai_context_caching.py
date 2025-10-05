@@ -23,9 +23,6 @@ from .transformation import (
     transform_openai_messages_to_gemini_context_caching,
 )
 
-from litellm.types.llms.vertex_ai import *
-
-
 local_cache_obj = Cache(
     type=LiteLLMCacheType.LOCAL
 )  # only used for calling 'get_cache_key' function
