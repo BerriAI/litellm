@@ -67,7 +67,9 @@ pip install litellm==1.77.7.rc.1
 
 ### 2.9x Lower Median Latency
 
-<Image img={require('../../img/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('../../img/release_notes/perf_77_7.png')}  style={{ width: '800px', height: 'auto' }} />
+
+<br/>
 
 This update removes LiteLLM router inefficiencies, reducing complexity from O(M×N) to O(1). Previously, it built a new array and ran repeated checks like data["model"] in llm_router.get_model_ids(). Now, a direct ID-to-deployment map eliminates redundant allocations and scans.
 
