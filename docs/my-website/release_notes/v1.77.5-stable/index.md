@@ -11,6 +11,10 @@ authors:
     title: CTO, LiteLLM
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - name: Alexsander Hamir
+    title: Backend Performance Engineer
+    url: https://www.linkedin.com/in/alexsander-baptista/
+    image_url: https://media.licdn.com/dms/image/v2/D5603AQGXnziu4kqNCQ/profile-displayphoto-crop_800_800/B56ZkxEcuOKEAI-/0/1757464874550?e=1762387200&v=beta&t=9SNXLsWhx8OnYPAMQ9fqAr02oevDYEAL2vMYg2f9ieg
 
 hide_table_of_contents: false
 ---
@@ -49,7 +53,35 @@ pip install litellm==1.77.5
 - **MCP OAuth 2.0 Support** - Enhanced authentication for Model Context Protocol integrations
 - **Scheduled Key Rotations** - Automated key rotation capabilities for enhanced security
 - **New Gemini 2.5 Flash & Flash-lite Models** - Latest September 2025 preview models with improved pricing and features
-- **Performance Improvements** - Critical InMemoryCache unbounded growth resolution
+- **Performance Improvements** - 54% RPS improvement
+
+---
+
+### Performance Improvements - 54% RPS Improvement
+
+Throughput increased by 54% (1,040 → 1,602 RPS, aggregated) per instance while maintaining a 40 ms median overhead. The improvement comes from fixing major O(n²) inefficiencies in the router, primarily caused by repeated use of in statements inside loops over large arrays. Tests were run with a database-only setup (no cache hits). As a result, p95 latency improved by 30% (2,700 → 1,900 ms), enhancing overall stability and scalability under heavy load.
+
+---
+
+### Test Setup
+
+All benchmarks were executed using Locust with 1,000 concurrent users and a ramp-up of 500. The environment was configured to stress the routing layer and eliminate caching as a variable.
+
+**System Specs**
+
+- **CPU:** 8 vCPUs
+- **Memory:** 32 GB RAM
+
+**Configuration (config.yaml)**
+
+View the complete configuration: [gist.github.com/AlexsanderHamir/config.yaml](https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4)
+
+**Load Script (no_cache_hits.py)**
+
+View the complete load testing script: [gist.github.com/AlexsanderHamir/no_cache_hits.py](https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42)
+
+---
+
 
 ## New Models / Updated Models
 
