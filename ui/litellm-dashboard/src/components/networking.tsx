@@ -1,8 +1,8 @@
 // Shared date formatter for daily activity endpoints
 export const formatDate = (date: Date) => {
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
 /**
@@ -21,11 +21,8 @@ import {
 } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
-import {
-  EmailEventSettingsResponse,
-  EmailEventSettingsUpdateRequest,
-} from "./email_events/types";
-import { jsonFields } from "./common_components/check_openapi_schema"
+import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
@@ -37,24 +34,15 @@ if (isLocal != true) {
   console.log = function () {};
 }
 
-const updateProxyBaseUrl = (
-  serverRootPath: string,
-  receivedProxyBaseUrl: string | null = null
-) => {
+const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string | null = null) => {
   /**
    * Special function for updating the proxy base url. Should only be called by getUiConfig.
    */
-  const defaultProxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
+  const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   let initialProxyBaseUrl = receivedProxyBaseUrl || defaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
-  if (
-    serverRootPath.length > 0 &&
-    !initialProxyBaseUrl.endsWith(serverRootPath) &&
-    serverRootPath != "/"
-  ) {
+  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
     initialProxyBaseUrl += serverRootPath;
     proxyBaseUrl = initialProxyBaseUrl;
   }
@@ -92,8 +80,8 @@ export interface PromptSpec {
   prompt_id: string;
   litellm_params: Object;
   prompt_info: PromptInfo;
-  created_at?: string
-  updated_at?: string
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface PromptTemplateBase {
@@ -180,13 +168,11 @@ const handleError = async (errorData: string) => {
 };
 
 // Global variable for the header name
-let globalLitellmHeaderName: string  = "Authorization";
-const MCP_AUTH_HEADER: string  = "x-mcp-auth";
+let globalLitellmHeaderName: string = "Authorization";
+const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
-export function setGlobalLitellmHeaderName(
-  headerName: string = "Authorization"
-) {
+export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
 }
@@ -223,9 +209,7 @@ export const getUiConfig = async () => {
 };
 
 export const getPublicModelHubInfo = async () => {
-  const url = defaultProxyBaseUrl
-    ? `${defaultProxyBaseUrl}/public/model_hub/info`
-    : `/public/model_hub/info`;
+  const url = defaultProxyBaseUrl ? `${defaultProxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
   const response = await fetch(url);
   const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
@@ -240,9 +224,7 @@ export const getOpenAPISchema = async () => {
 
 export const modelCostMap = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/litellm_model_cost_map`
-      : `/get/litellm_model_cost_map`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -261,9 +243,7 @@ export const modelCostMap = async (accessToken: string) => {
 
 export const reloadModelCostMap = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/reload/model_cost_map`
-      : `/reload/model_cost_map`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/reload/model_cost_map` : `/reload/model_cost_map`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -303,9 +283,7 @@ export const scheduleModelCostMapReload = async (accessToken: string, hours: num
 
 export const cancelModelCostMapReload = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/schedule/model_cost_map_reload`
-      : `/schedule/model_cost_map_reload`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/schedule/model_cost_map_reload` : `/schedule/model_cost_map_reload`;
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -351,10 +329,7 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
     throw error;
   }
 };
-export const modelCreateCall = async (
-  accessToken: string,
-  formValues: Model
-) => {
+export const modelCreateCall = async (accessToken: string, formValues: Model) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/new` : `/model/new`;
     const response = await fetch(url, {
@@ -374,7 +349,6 @@ export const modelCreateCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -397,9 +371,7 @@ export const modelSettingsCall = async (accessToken: String) => {
    * Get all configurable params for setting a model
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/settings`
-      : `/model/settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/settings` : `/model/settings`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -417,7 +389,6 @@ export const modelSettingsCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -427,10 +398,7 @@ export const modelSettingsCall = async (accessToken: String) => {
   }
 };
 
-export const modelDeleteCall = async (
-  accessToken: string,
-  model_id: string
-) => {
+export const modelDeleteCall = async (accessToken: string, model_id: string) => {
   console.log(`model_id in model delete call: ${model_id}`);
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/delete` : `/model/delete`;
@@ -452,7 +420,6 @@ export const modelDeleteCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -462,10 +429,7 @@ export const modelDeleteCall = async (
   }
 };
 
-export const budgetDeleteCall = async (
-  accessToken: string | null,
-  budget_id: string
-) => {
+export const budgetDeleteCall = async (accessToken: string | null, budget_id: string) => {
   console.log(`budget_id in budget delete call: ${budget_id}`);
 
   if (accessToken == null) {
@@ -473,9 +437,7 @@ export const budgetDeleteCall = async (
   }
 
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/budget/delete`
-      : `/budget/delete`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/delete` : `/budget/delete`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -505,7 +467,7 @@ export const budgetDeleteCall = async (
 
 export const budgetCreateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in budgetCreateCall:", formValues); // Log the form values before making the API call
@@ -530,7 +492,6 @@ export const budgetCreateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -543,15 +504,13 @@ export const budgetCreateCall = async (
 
 export const budgetUpdateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in budgetUpdateCall:", formValues); // Log the form values before making the API call
 
     console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/budget/update`
-      : `/budget/update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/update` : `/budget/update`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -570,7 +529,6 @@ export const budgetUpdateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -583,12 +541,10 @@ export const budgetUpdateCall = async (
 
 export const invitationCreateCall = async (
   accessToken: string,
-  userID: string // Assuming formValues is an object
+  userID: string, // Assuming formValues is an object
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/invitation/new`
-      : `/invitation/new`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/invitation/new` : `/invitation/new`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -607,7 +563,6 @@ export const invitationCreateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -620,15 +575,13 @@ export const invitationCreateCall = async (
 
 export const invitationClaimCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in invitationCreateCall:", formValues); // Log the form values before making the API call
 
     console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/invitation/claim`
-      : `/invitation/claim`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/invitation/claim` : `/invitation/claim`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -647,7 +600,6 @@ export const invitationClaimCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -663,9 +615,7 @@ export const alertingSettingsCall = async (accessToken: String) => {
    * Get all configurable params for setting a model
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/alerting/settings`
-      : `/alerting/settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/alerting/settings` : `/alerting/settings`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -682,7 +632,6 @@ export const alertingSettingsCall = async (accessToken: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     //NotificationsManager.info("Received model data");
@@ -823,7 +772,7 @@ export const keyCreateCall = async (
 export const userCreateCall = async (
   accessToken: string,
   userID: string | null,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
@@ -907,7 +856,6 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     //NotificationsManager.success("API Key Deleted");
@@ -919,10 +867,7 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
   }
 };
 
-export const userDeleteCall = async (
-  accessToken: string,
-  userIds: string[]
-) => {
+export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/user/delete` : `/user/delete`;
     console.log("in userDeleteCall:", userIds);
@@ -944,7 +889,6 @@ export const userDeleteCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log(data);
@@ -1006,7 +950,7 @@ export const userListCall = async (
   team: string | null = null,
   sso_user_id: string | null = null,
   sortBy: string | null = null,
-  sortOrder: "asc" | "desc" | null = null
+  sortOrder: "asc" | "desc" | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1074,7 +1018,6 @@ export const userListCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = (await response.json()) as UserListResponse;
     console.log("/user/list API Response:", data);
     return data;
@@ -1092,11 +1035,9 @@ export const userInfoCall = async (
   viewAll: Boolean = false,
   page: number | null,
   page_size: number | null,
-  lookup_user_id: boolean = false
+  lookup_user_id: boolean = false,
 ) => {
-  console.log(
-    `userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`
-  );
+  console.log(`userInfoCall: ${userID}, ${userRole}, ${viewAll}, ${page}, ${page_size}, ${lookup_user_id}`);
   try {
     let url: string;
 
@@ -1105,16 +1046,12 @@ export const userInfoCall = async (
       url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
       const queryParams = new URLSearchParams();
       if (page != null) queryParams.append("page", page.toString());
-      if (page_size != null)
-        queryParams.append("page_size", page_size.toString());
+      if (page_size != null) queryParams.append("page_size", page_size.toString());
       url += `?${queryParams.toString()}`;
     } else {
       // Use /user/info endpoint for individual user info
       url = proxyBaseUrl ? `${proxyBaseUrl}/user/info` : `/user/info`;
-      if (
-        (userRole === "Admin" || userRole === "Admin Viewer") &&
-        !lookup_user_id
-      ) {
+      if ((userRole === "Admin" || userRole === "Admin Viewer") && !lookup_user_id) {
         // do nothing
       } else if (userID) {
         url += `?user_id=${userID}`;
@@ -1137,7 +1074,6 @@ export const userInfoCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -1147,10 +1083,7 @@ export const userInfoCall = async (
   }
 };
 
-export const teamInfoCall = async (
-  accessToken: String,
-  teamID: String | null
-) => {
+export const teamInfoCall = async (accessToken: String, teamID: String | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
     if (teamID) {
@@ -1171,7 +1104,6 @@ export const teamInfoCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1200,7 +1132,7 @@ export const v2TeamListCall = async (
   page: number = 1,
   page_size: number = 10,
   sort_by: string | null = null,
-  sort_order: "asc" | "desc" | null = null
+  sort_order: "asc" | "desc" | null = null,
 ): Promise<TeamListResponse> => {
   /**
    * Get list of teams with filtering and sorting options
@@ -1246,7 +1178,6 @@ export const v2TeamListCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/v2/team/list API Response:", data);
     return data;
@@ -1262,7 +1193,7 @@ export const teamListCall = async (
   organizationID: string | null,
   userID: String | null = null,
   teamID: string | null = null,
-  team_alias: string | null = null
+  team_alias: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1308,7 +1239,6 @@ export const teamListCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/team/list API Response:", data);
     return data;
@@ -1324,9 +1254,7 @@ export const availableTeamListCall = async (accessToken: String) => {
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/available`
-      : `/team/available`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/available` : `/team/available`;
     console.log("in availableTeamListCall");
     const response = await fetch(url, {
       method: "GET",
@@ -1343,7 +1271,6 @@ export const availableTeamListCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/team/available_teams API Response:", data);
     return data;
@@ -1357,9 +1284,7 @@ export const organizationListCall = async (accessToken: String) => {
    * Get all organizations on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/list`
-      : `/organization/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1375,7 +1300,6 @@ export const organizationListCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -1384,14 +1308,9 @@ export const organizationListCall = async (accessToken: String) => {
   }
 };
 
-export const organizationInfoCall = async (
-  accessToken: String,
-  organizationID: String
-) => {
+export const organizationInfoCall = async (accessToken: String, organizationID: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/info`
-      : `/organization/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/info` : `/organization/info`;
     if (organizationID) {
       url = `${url}?organization_id=${organizationID}`;
     }
@@ -1411,7 +1330,6 @@ export const organizationInfoCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -1424,7 +1342,7 @@ export const organizationInfoCall = async (
 
 export const organizationCreateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in organizationCreateCall:", formValues); // Log the form values before making the API call
@@ -1440,9 +1358,7 @@ export const organizationCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/new`
-      : `/organization/new`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/new` : `/organization/new`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -1461,7 +1377,6 @@ export const organizationCreateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -1474,14 +1389,12 @@ export const organizationCreateCall = async (
 
 export const organizationUpdateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in organizationUpdateCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/update`
-      : `/organization/update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/update` : `/organization/update`;
     const response = await fetch(url, {
       method: "PATCH",
       headers: {
@@ -1510,14 +1423,9 @@ export const organizationUpdateCall = async (
   }
 };
 
-export const organizationDeleteCall = async (
-  accessToken: string,
-  organizationID: string
-) => {
+export const organizationDeleteCall = async (accessToken: string, organizationID: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/delete`
-      : `/organization/delete`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/delete` : `/organization/delete`;
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -1543,18 +1451,13 @@ export const organizationDeleteCall = async (
   }
 };
 
-export const transformRequestCall = async (
-  accessToken: String,
-  request: object
-) => {
+export const transformRequestCall = async (accessToken: String, request: object) => {
   /**
    * Transform request
    */
 
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/utils/transform_request`
-      : `/utils/transform_request`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/utils/transform_request` : `/utils/transform_request`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -1572,7 +1475,6 @@ export const transformRequestCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -1581,19 +1483,12 @@ export const transformRequestCall = async (
   }
 };
 
-export const userDailyActivityCall = async (
-  accessToken: String,
-  startTime: Date,
-  endTime: Date,
-  page: number = 1
-) => {
+export const userDailyActivityCall = async (accessToken: String, startTime: Date, endTime: Date, page: number = 1) => {
   /**
    * Get daily user activity on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/daily/activity`
-      : `/user/daily/activity`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity` : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
@@ -1619,7 +1514,6 @@ export const userDailyActivityCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -1633,15 +1527,13 @@ export const tagDailyActivityCall = async (
   startTime: Date,
   endTime: Date,
   page: number = 1,
-  tags: string[] | null = null
+  tags: string[] | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/daily/activity`
-      : `/tag/daily/activity`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/daily/activity` : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
@@ -1670,7 +1562,6 @@ export const tagDailyActivityCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -1684,15 +1575,13 @@ export const teamDailyActivityCall = async (
   startTime: Date,
   endTime: Date,
   page: number = 1,
-  teamIds: string[] | null = null
+  teamIds: string[] | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/daily/activity`
-      : `/team/daily/activity`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/daily/activity` : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
@@ -1721,7 +1610,6 @@ export const teamDailyActivityCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -1754,7 +1642,6 @@ export const getTotalSpendCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -1769,9 +1656,7 @@ export const getOnboardingCredentials = async (inviteUUID: String) => {
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/onboarding/get_token`
-      : `/onboarding/get_token`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/onboarding/get_token` : `/onboarding/get_token`;
     url += `?invite_link=${inviteUUID}`;
 
     const response = await fetch(url, {
@@ -1788,7 +1673,6 @@ export const getOnboardingCredentials = async (inviteUUID: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -1802,11 +1686,9 @@ export const claimOnboardingToken = async (
   accessToken: string,
   inviteUUID: string,
   userID: string,
-  password: String
+  password: String,
 ) => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/onboarding/claim_token`
-    : `/onboarding/claim_token`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/onboarding/claim_token` : `/onboarding/claim_token`;
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -1838,11 +1720,7 @@ export const claimOnboardingToken = async (
   }
 };
 
-export const regenerateKeyCall = async (
-  accessToken: string,
-  keyToRegenerate: string,
-  formData: any
-) => {
+export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/key/${keyToRegenerate}/regenerate`
@@ -1864,7 +1742,6 @@ export const regenerateKeyCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Regenerate key Response:", data);
     return data;
@@ -1877,11 +1754,7 @@ export const regenerateKeyCall = async (
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String
-) => {
+export const modelInfoCall = async (accessToken: String, userID: String, userRole: String) => {
   /**
    * Get all models on proxy
    */
@@ -1956,7 +1829,6 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("modelInfoV1Call:", data);
     return data;
@@ -1982,9 +1854,7 @@ export const modelHubCall = async (accessToken: String) => {
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model_group/info`
-      : `/model_group/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/info` : `/model_group/info`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -2002,7 +1872,6 @@ export const modelHubCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("modelHubCall:", data);
     //NotificationsManager.info("Received model data");
@@ -2017,9 +1886,7 @@ export const modelHubCall = async (accessToken: String) => {
 // Function to get allowed IPs
 export const getAllowedIPs = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/allowed_ips`
-      : `/get/allowed_ips`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/allowed_ips` : `/get/allowed_ips`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -2036,7 +1903,6 @@ export const getAllowedIPs = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("getAllowedIPs:", data);
     return data.data; // Assuming the API returns { data: [...] }
@@ -2049,9 +1915,7 @@ export const getAllowedIPs = async (accessToken: String) => {
 // Function to add an allowed IP
 export const addAllowedIP = async (accessToken: String, ip: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/add/allowed_ip`
-      : `/add/allowed_ip`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/add/allowed_ip` : `/add/allowed_ip`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -2068,7 +1932,6 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log("addAllowedIP:", data);
@@ -2082,9 +1945,7 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
 // Function to delete an allowed IP
 export const deleteAllowedIP = async (accessToken: String, ip: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/delete/allowed_ip`
-      : `/delete/allowed_ip`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/delete/allowed_ip` : `/delete/allowed_ip`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -2101,7 +1962,6 @@ export const deleteAllowedIP = async (accessToken: String, ip: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log("deleteAllowedIP:", data);
@@ -2120,7 +1980,7 @@ export const modelMetricsCall = async (
   startTime: String | undefined,
   endTime: String | undefined,
   apiKey: String | null,
-  customer: String | null
+  customer: String | null,
 ) => {
   /**
    * Get all models on proxy
@@ -2159,15 +2019,13 @@ export const streamingModelMetricsCall = async (
   accessToken: String,
   modelGroup: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   /**
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/streaming_metrics`
-      : `/model/streaming_metrics`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/streaming_metrics` : `/model/streaming_metrics`;
     if (modelGroup) {
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}`;
     }
@@ -2205,15 +2063,13 @@ export const modelMetricsSlowResponsesCall = async (
   startTime: String | undefined,
   endTime: String | undefined,
   apiKey: String | null,
-  customer: String | null
+  customer: String | null,
 ) => {
   /**
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/metrics/slow_responses`
-      : `/model/metrics/slow_responses`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/slow_responses` : `/model/metrics/slow_responses`;
     if (modelGroup) {
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
     }
@@ -2252,15 +2108,13 @@ export const modelExceptionsCall = async (
   startTime: String | undefined,
   endTime: String | undefined,
   apiKey: String | null,
-  customer: String | null
+  customer: String | null,
 ) => {
   /**
    * Get all models on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/metrics/exceptions`
-      : `/model/metrics/exceptions`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/model/metrics/exceptions` : `/model/metrics/exceptions`;
 
     if (modelGroup) {
       url = `${url}?_selected_model_group=${modelGroup}&startTime=${startTime}&endTime=${endTime}&api_key=${apiKey}&customer=${customer}`;
@@ -2322,15 +2176,12 @@ export const modelAvailableCall = async (
   return_wildcard_routes: boolean = false,
   teamID: String | null = null,
   include_model_access_groups: boolean = false,
-  only_model_access_groups: boolean = false
+  only_model_access_groups: boolean = false,
 ) => {
   /**
    * Get all the models user has access to
    */
-  console.log(
-    "in /models calls, globalLitellmHeaderName",
-    globalLitellmHeaderName
-  );
+  console.log("in /models calls, globalLitellmHeaderName", globalLitellmHeaderName);
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/models` : `/models`;
     const params = new URLSearchParams();
@@ -2364,7 +2215,6 @@ export const modelAvailableCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -2377,9 +2227,7 @@ export const modelAvailableCall = async (
 
 export const keySpendLogsCall = async (accessToken: String, token: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/logs`
-      : `/global/spend/logs`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
     console.log("in keySpendLogsCall:", url);
     const response = await fetch(`${url}?api_key=${token}`, {
       method: "GET",
@@ -2395,7 +2243,6 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2407,9 +2254,7 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
 
 export const teamSpendLogsCall = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/teams`
-      : `/global/spend/teams`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/teams` : `/global/spend/teams`;
     console.log("in teamSpendLogsCall:", url);
     const response = await fetch(`${url}`, {
       method: "GET",
@@ -2425,7 +2270,6 @@ export const teamSpendLogsCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2439,12 +2283,10 @@ export const tagsSpendLogsCall = async (
   accessToken: String,
   startTime: String | undefined,
   endTime: String | undefined,
-  tags: String[] | undefined
+  tags: String[] | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/tags`
-      : `/global/spend/tags`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/tags` : `/global/spend/tags`;
 
     if (startTime && endTime) {
       url = `${url}?start_date=${startTime}&end_date=${endTime}`;
@@ -2470,7 +2312,6 @@ export const tagsSpendLogsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2482,9 +2323,7 @@ export const tagsSpendLogsCall = async (
 
 export const allTagNamesCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/all_tag_names`
-      : `/global/spend/all_tag_names`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/all_tag_names` : `/global/spend/all_tag_names`;
 
     console.log("in global/spend/all_tag_names call", url);
     const response = await fetch(`${url}`, {
@@ -2501,7 +2340,6 @@ export const allTagNamesCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2513,9 +2351,7 @@ export const allTagNamesCall = async (accessToken: String) => {
 
 export const allEndUsersCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/customer/list`
-      : `/customer/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/list` : `/customer/list`;
 
     console.log("in customer/list", url);
     const response = await fetch(`${url}`, {
@@ -2532,7 +2368,6 @@ export const allEndUsersCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2542,14 +2377,9 @@ export const allEndUsersCall = async (accessToken: String) => {
   }
 };
 
-export const userFilterUICall = async (
-  accessToken: String,
-  params: URLSearchParams
-) => {
+export const userFilterUICall = async (accessToken: String, params: URLSearchParams) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/filter/ui`
-      : `/user/filter/ui`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/filter/ui` : `/user/filter/ui`;
 
     if (params.get("user_email")) {
       url += `?user_email=${params.get("user_email")}`;
@@ -2585,7 +2415,7 @@ export const userSpendLogsCall = async (
   userRole: String,
   userID: String,
   startTime: String,
-  endTime: String
+  endTime: String,
 ) => {
   try {
     console.log(`user role in spend logs call: ${userRole}`);
@@ -2610,7 +2440,6 @@ export const userSpendLogsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     //NotificationsManager.success("Spend Logs received");
@@ -2634,7 +2463,7 @@ export const uiSpendLogsCall = async (
   end_user?: string,
   status_filter?: string,
   model?: string,
-  keyAlias?: string
+  keyAlias?: string,
 ) => {
   try {
     // Construct base URL
@@ -2675,7 +2504,6 @@ export const uiSpendLogsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Spend Logs Response:", data);
     return data;
@@ -2687,9 +2515,7 @@ export const uiSpendLogsCall = async (
 
 export const adminSpendLogsCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/logs`
-      : `/global/spend/logs`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/logs` : `/global/spend/logs`;
 
     //NotificationsManager.info("Making spend logs request");
     const response = await fetch(url, {
@@ -2706,7 +2532,6 @@ export const adminSpendLogsCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     //NotificationsManager.success("Spend Logs received");
@@ -2719,9 +2544,7 @@ export const adminSpendLogsCall = async (accessToken: String) => {
 
 export const adminTopKeysCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/keys?limit=5`
-      : `/global/spend/keys?limit=5`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
 
     //NotificationsManager.info("Making spend keys request");
     const response = await fetch(url, {
@@ -2738,7 +2561,6 @@ export const adminTopKeysCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     //NotificationsManager.success("Spend Logs received");
@@ -2753,12 +2575,10 @@ export const adminTopEndUsersCall = async (
   accessToken: String,
   keyToken: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/end_users`
-      : `/global/spend/end_users`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/end_users` : `/global/spend/end_users`;
 
     let body = "";
     if (keyToken) {
@@ -2791,7 +2611,6 @@ export const adminTopEndUsersCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     //NotificationsManager.success("Top End users received");
@@ -2806,12 +2625,10 @@ export const adminspendByProvider = async (
   accessToken: String,
   keyToken: String | null,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/provider`
-      : `/global/spend/provider`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -2837,7 +2654,6 @@ export const adminspendByProvider = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -2850,12 +2666,10 @@ export const adminspendByProvider = async (
 export const adminGlobalActivity = async (
   accessToken: String,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/activity`
-      : `/global/activity`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity` : `/global/activity`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -2889,12 +2703,10 @@ export const adminGlobalActivity = async (
 export const adminGlobalCacheActivity = async (
   accessToken: String,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/activity/cache_hits`
-      : `/global/activity/cache_hits`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/cache_hits` : `/global/activity/cache_hits`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -2928,12 +2740,10 @@ export const adminGlobalCacheActivity = async (
 export const adminGlobalActivityPerModel = async (
   accessToken: String,
   startTime: String | undefined,
-  endTime: String | undefined
+  endTime: String | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/activity/model`
-      : `/global/activity/model`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/model` : `/global/activity/model`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -2968,12 +2778,10 @@ export const adminGlobalActivityExceptions = async (
   accessToken: String,
   startTime: String | undefined,
   endTime: String | undefined,
-  modelGroup: String
+  modelGroup: String,
 ) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/activity/exceptions`
-      : `/global/activity/exceptions`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity/exceptions` : `/global/activity/exceptions`;
 
     if (startTime && endTime) {
       url += `?start_date=${startTime}&end_date=${endTime}`;
@@ -3012,7 +2820,7 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
   accessToken: String,
   startTime: String | undefined,
   endTime: String | undefined,
-  modelGroup: String
+  modelGroup: String,
 ) => {
   try {
     let url = proxyBaseUrl
@@ -3054,9 +2862,7 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
 
 export const adminTopModelsCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/spend/models?limit=5`
-      : `/global/spend/models?limit=5`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
 
     //NotificationsManager.info("Making top models request");
     const response = await fetch(url, {
@@ -3072,7 +2878,6 @@ export const adminTopModelsCall = async (accessToken: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log(data);
@@ -3121,18 +2926,13 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string
+  mode: string,
 ) => {
   try {
-    console.log(
-      "Sending model connection test request:",
-      JSON.stringify(litellm_params)
-    );
+    console.log("Sending model connection test request:", JSON.stringify(litellm_params));
 
     // Construct the URL based on environment
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/health/test_connection`
-      : `/health/test_connection`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/health/test_connection` : `/health/test_connection`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -3153,7 +2953,7 @@ export const testConnectionRequest = async (
       const text = await response.text();
       console.error("Received non-JSON response:", text);
       throw new Error(
-        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`,
       );
     }
 
@@ -3167,9 +2967,7 @@ export const testConnectionRequest = async (
       } else {
         return {
           status: "error",
-          message:
-            data.error?.message ||
-            `Connection test failed: ${response.status} ${response.statusText}`,
+          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`,
         };
       }
     }
@@ -3225,7 +3023,7 @@ export const keyListCall = async (
   page: number,
   pageSize: number,
   sortBy: string | null = null,
-  sortOrder: string | null = null
+  sortOrder: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3294,7 +3092,6 @@ export const keyListCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/team/list API Response:", data);
     return data;
@@ -3323,7 +3120,6 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log(data);
     return data;
@@ -3337,12 +3133,10 @@ export const userRequestModelCall = async (
   accessToken: String,
   model: String,
   UserID: String,
-  justification: String
+  justification: String,
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/request_model`
-      : `/user/request_model`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/request_model` : `/user/request_model`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -3376,9 +3170,7 @@ export const userRequestModelCall = async (
 
 export const userGetRequesedtModelsCall = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/get_requests`
-      : `/user/get_requests`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_requests` : `/user/get_requests`;
     console.log("in userGetRequesedtModelsCall:", url);
     const response = await fetch(url, {
       method: "GET",
@@ -3413,24 +3205,18 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
-export const userDailyActivityAggregatedCall = async (
-  accessToken: String,
-  startTime: Date,
-  endTime: Date
-) => {
+export const userDailyActivityAggregatedCall = async (accessToken: String, startTime: Date, endTime: Date) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
-      : `/user/daily/activity/aggregated`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/daily/activity/aggregated` : `/user/daily/activity/aggregated`;
     const queryParams = new URLSearchParams();
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
     queryParams.append("start_date", formatDate(startTime));
@@ -3455,7 +3241,6 @@ export const userDailyActivityAggregatedCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -3464,14 +3249,9 @@ export const userDailyActivityAggregatedCall = async (
   }
 };
 
-export const userGetAllUsersCall = async (
-  accessToken: String,
-  role: String
-) => {
+export const userGetAllUsersCall = async (accessToken: String, role: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/get_users?role=${role}`
-      : `/user/get_users?role=${role}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/get_users?role=${role}` : `/user/get_users?role=${role}`;
     console.log("in userGetAllUsersCall:", url);
     const response = await fetch(url, {
       method: "GET",
@@ -3501,9 +3281,7 @@ export const userGetAllUsersCall = async (
 
 export const getPossibleUserRoles = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/available_roles`
-      : `/user/available_roles`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_roles` : `/user/available_roles`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3519,10 +3297,7 @@ export const getPossibleUserRoles = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-    const data = (await response.json()) as Record<
-      string,
-      Record<string, string>
-    >;
+    const data = (await response.json()) as Record<string, Record<string, string>>;
     console.log("response from user/available_role", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3533,7 +3308,7 @@ export const getPossibleUserRoles = async (accessToken: String) => {
 
 export const teamCreateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in teamCreateCall:", formValues); // Log the form values before making the API call
@@ -3566,7 +3341,6 @@ export const teamCreateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -3579,7 +3353,7 @@ export const teamCreateCall = async (
 
 export const credentialCreateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in credentialCreateCall:", formValues); // Log the form values before making the API call
@@ -3611,7 +3385,6 @@ export const credentialCreateCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3646,7 +3419,6 @@ export const credentialListCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/credentials API Response:", data);
     return data;
@@ -3657,11 +3429,7 @@ export const credentialListCall = async (accessToken: String) => {
   }
 };
 
-export const credentialGetCall = async (
-  accessToken: String,
-  credentialName: String | null,
-  modelId: String | null
-) => {
+export const credentialGetCall = async (accessToken: String, credentialName: String | null, modelId: String | null) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
 
@@ -3688,7 +3456,6 @@ export const credentialGetCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("/credentials API Response:", data);
     return data;
@@ -3699,14 +3466,9 @@ export const credentialGetCall = async (
   }
 };
 
-export const credentialDeleteCall = async (
-  accessToken: String,
-  credentialName: String
-) => {
+export const credentialDeleteCall = async (accessToken: String, credentialName: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/credentials/${credentialName}`
-      : `/credentials/${credentialName}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
     console.log("in credentialDeleteCall:", credentialName);
     const response = await fetch(url, {
       method: "DELETE",
@@ -3736,7 +3498,7 @@ export const credentialDeleteCall = async (
 export const credentialUpdateCall = async (
   accessToken: string,
   credentialName: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in credentialUpdateCall:", formValues); // Log the form values before making the API call
@@ -3750,9 +3512,7 @@ export const credentialUpdateCall = async (
       }
     }
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/credentials/${credentialName}`
-      : `/credentials/${credentialName}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
     const response = await fetch(url, {
       method: "PATCH",
       headers: {
@@ -3771,7 +3531,6 @@ export const credentialUpdateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -3784,7 +3543,7 @@ export const credentialUpdateCall = async (
 
 export const keyUpdateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in keyUpdateCall:", formValues); // Log the form values before making the API call
@@ -3838,7 +3597,7 @@ export const keyUpdateCall = async (
 
 export const teamUpdateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in teamUpateCall:", formValues); // Log the form values before making the API call
@@ -3882,14 +3641,12 @@ export const teamUpdateCall = async (
 export const modelPatchUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object
-  modelId: string
+  modelId: string,
 ) => {
   try {
     console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/model/${modelId}/update`
-      : `/model/${modelId}/update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
     const response = await fetch(url, {
       method: "PATCH",
       headers: {
@@ -3919,7 +3676,7 @@ export const modelPatchUpdateCall = async (
 
 export const modelUpdateCall = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
@@ -3961,17 +3718,11 @@ export interface Member {
   rpm_limit?: number | null;
 }
 
-export const teamMemberAddCall = async (
-  accessToken: string,
-  teamId: string,
-  formValues: Member
-) => {
+export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
   try {
     console.log("Form Values in teamMemberAddCall:", formValues);
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/member_add`
-      : `/team/member_add`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_add` : `/team/member_add`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -3996,8 +3747,7 @@ export const teamMemberAddCall = async (
         console.warn("Failed to parse error body as JSON:", errorText);
       }
 
-      const rawMessage =
-        parsedError?.detail?.error || "Failed to add team member";
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
       const err = new Error(rawMessage);
       (err as any).raw = parsedError;
       throw err;
@@ -4017,14 +3767,12 @@ export const teamBulkMemberAddCall = async (
   teamId: string,
   members: Member[] | null,
   maxBudgetInTeam?: number,
-  allUsers?: boolean
+  allUsers?: boolean,
 ) => {
   try {
     console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/bulk_member_add`
-      : `/team/bulk_member_add`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/bulk_member_add` : `/team/bulk_member_add`;
 
     let requestBody: any = {
       team_id: teamId,
@@ -4060,8 +3808,7 @@ export const teamBulkMemberAddCall = async (
         console.warn("Failed to parse error body as JSON:", errorText);
       }
 
-      const rawMessage =
-        parsedError?.detail?.error || "Failed to bulk add team members";
+      const rawMessage = parsedError?.detail?.error || "Failed to bulk add team members";
       const err = new Error(rawMessage);
       (err as any).raw = parsedError;
       throw err;
@@ -4079,7 +3826,7 @@ export const teamBulkMemberAddCall = async (
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in teamMemberUpdateCall:", formValues);
@@ -4087,9 +3834,7 @@ export const teamMemberUpdateCall = async (
     console.log("TPM limit:", formValues.tpm_limit);
     console.log("RPM limit:", formValues.rpm_limit);
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/member_update`
-      : `/team/member_update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_update` : `/team/member_update`;
 
     const requestBody: any = {
       team_id: teamId,
@@ -4133,8 +3878,7 @@ export const teamMemberUpdateCall = async (
         console.warn("Failed to parse error body as JSON:", errorText);
       }
 
-      const rawMessage =
-        parsedError?.detail?.error || "Failed to add team member";
+      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
       const err = new Error(rawMessage);
       (err as any).raw = parsedError;
       throw err;
@@ -4152,14 +3896,12 @@ export const teamMemberUpdateCall = async (
 export const teamMemberDeleteCall = async (
   accessToken: string,
   teamId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/member_delete`
-      : `/team/member_delete`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_delete` : `/team/member_delete`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4184,7 +3926,6 @@ export const teamMemberDeleteCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -4198,14 +3939,12 @@ export const teamMemberDeleteCall = async (
 export const organizationMemberAddCall = async (
   accessToken: string,
   organizationId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/member_add`
-      : `/organization/member_add`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_add` : `/organization/member_add`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4235,17 +3974,11 @@ export const organizationMemberAddCall = async (
   }
 };
 
-export const organizationMemberDeleteCall = async (
-  accessToken: string,
-  organizationId: string,
-  userId: string
-) => {
+export const organizationMemberDeleteCall = async (accessToken: string, organizationId: string, userId: string) => {
   try {
     console.log("Form Values in organizationMemberDeleteCall:", userId); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/member_delete`
-      : `/organization/member_delete`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_delete` : `/organization/member_delete`;
 
     const response = await fetch(url, {
       method: "DELETE",
@@ -4266,7 +3999,6 @@ export const organizationMemberDeleteCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -4278,14 +4010,12 @@ export const organizationMemberDeleteCall = async (
 export const organizationMemberUpdateCall = async (
   accessToken: string,
   organizationId: string,
-  formValues: Member // Assuming formValues is an object
+  formValues: Member, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in organizationMemberUpdateCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/organization/member_update`
-      : `/organization/member_update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/member_update` : `/organization/member_update`;
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -4306,7 +4036,6 @@ export const organizationMemberUpdateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -4319,7 +4048,7 @@ export const organizationMemberUpdateCall = async (
 export const userUpdateUserCall = async (
   accessToken: string,
   formValues: any, // Assuming formValues is an object
-  userRole: string | null
+  userRole: string | null,
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
@@ -4346,7 +4075,6 @@ export const userUpdateUserCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = (await response.json()) as {
       user_id: string;
       data: UserInfo;
@@ -4365,14 +4093,12 @@ export const userBulkUpdateUserCall = async (
   accessToken: string,
   formValues: any, // Assuming formValues is an object
   userIds?: string[], // Optional - if not provided, will update all users
-  allUsers: boolean = false // Flag to update all users
+  allUsers: boolean = false, // Flag to update all users
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/bulk_update`
-      : `/user/bulk_update`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/bulk_update` : `/user/bulk_update`;
 
     let request_body_json: string;
 
@@ -4384,7 +4110,7 @@ export const userBulkUpdateUserCall = async (
       });
     } else if (userIds && userIds.length > 0) {
       // Update specific users mode
-      let request_body = []
+      let request_body = [];
       for (const user_id of userIds) {
         request_body.push({
           user_id: user_id,
@@ -4414,7 +4140,6 @@ export const userBulkUpdateUserCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = (await response.json()) as {
       results: Array<{
         user_id?: string;
@@ -4437,14 +4162,9 @@ export const userBulkUpdateUserCall = async (
   }
 };
 
-export const PredictedSpendLogsCall = async (
-  accessToken: string,
-  requestData: any
-) => {
+export const PredictedSpendLogsCall = async (accessToken: string, requestData: any) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/global/predict/spend/logs`
-      : `/global/predict/spend/logs`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/predict/spend/logs` : `/global/predict/spend/logs`;
 
     //NotificationsManager.info("Predicting spend logs request");
 
@@ -4465,7 +4185,6 @@ export const PredictedSpendLogsCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     console.log(data);
@@ -4514,10 +4233,7 @@ export const slackBudgetAlertsHealthCheck = async (accessToken: String) => {
   }
 };
 
-export const serviceHealthCheck = async (
-  accessToken: String,
-  service: String
-) => {
+export const serviceHealthCheck = async (accessToken: String, service: String) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/health/services?service=${service}`
@@ -4572,7 +4288,6 @@ export const getBudgetList = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -4587,9 +4302,7 @@ export const getBudgetSettings = async (accessToken: String) => {
    * Get all configurable params for setting a budget
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/budget/settings`
-      : `/budget/settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/budget/settings` : `/budget/settings`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -4606,7 +4319,6 @@ export const getBudgetSettings = async (accessToken: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     //NotificationsManager.info("Received model data");
@@ -4618,18 +4330,12 @@ export const getBudgetSettings = async (accessToken: String) => {
   }
 };
 
-export const getCallbacksCall = async (
-  accessToken: String,
-  userID: String,
-  userRole: String
-) => {
+export const getCallbacksCall = async (accessToken: String, userID: String, userRole: String) => {
   /**
    * Get all the models user has access to
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/config/callbacks`
-      : `/get/config/callbacks`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/config/callbacks` : `/get/config/callbacks`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -4646,7 +4352,6 @@ export const getCallbacksCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     //NotificationsManager.info("Received model data");
@@ -4680,7 +4385,6 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -4693,9 +4397,7 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
 
 export const getPassThroughEndpointsCall = async (accessToken: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/pass_through_endpoint`
-      : `/config/pass_through_endpoint`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -4713,7 +4415,6 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -4724,10 +4425,7 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
   }
 };
 
-export const getConfigFieldSetting = async (
-  accessToken: String,
-  fieldName: string
-) => {
+export const getConfigFieldSetting = async (accessToken: String, fieldName: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
@@ -4749,7 +4447,6 @@ export const getConfigFieldSetting = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4759,15 +4456,9 @@ export const getConfigFieldSetting = async (
   }
 };
 
-export const updatePassThroughFieldSetting = async (
-  accessToken: String,
-  fieldName: string,
-  fieldValue: any
-) => {
+export const updatePassThroughFieldSetting = async (accessToken: String, fieldName: string, fieldValue: any) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/pass_through_endpoint`
-      : `/config/pass_through_endpoint`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
     let formData = {
       field_name: fieldName,
@@ -4790,7 +4481,6 @@ export const updatePassThroughFieldSetting = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     NotificationsManager.success("Successfully updated value!");
@@ -4802,17 +4492,12 @@ export const updatePassThroughFieldSetting = async (
   }
 };
 
-export const createPassThroughEndpoint = async (
-  accessToken: String,
-  formValues: Record<string, any>
-) => {
+export const createPassThroughEndpoint = async (accessToken: String, formValues: Record<string, any>) => {
   /**
    * Set callbacks on proxy
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/pass_through_endpoint`
-      : `/config/pass_through_endpoint`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/pass_through_endpoint` : `/config/pass_through_endpoint`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -4833,7 +4518,6 @@ export const createPassThroughEndpoint = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -4844,15 +4528,9 @@ export const createPassThroughEndpoint = async (
   }
 };
 
-export const updateConfigFieldSetting = async (
-  accessToken: String,
-  fieldName: string,
-  fieldValue: any
-) => {
+export const updateConfigFieldSetting = async (accessToken: String, fieldName: string, fieldValue: any) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/field/update`
-      : `/config/field/update`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/update` : `/config/field/update`;
 
     let formData = {
       field_name: fieldName,
@@ -4876,7 +4554,6 @@ export const updateConfigFieldSetting = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     NotificationsManager.success("Successfully updated value!");
@@ -4888,14 +4565,9 @@ export const updateConfigFieldSetting = async (
   }
 };
 
-export const deleteConfigFieldSetting = async (
-  accessToken: String,
-  fieldName: String
-) => {
+export const deleteConfigFieldSetting = async (accessToken: String, fieldName: String) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/field/delete`
-      : `/config/field/delete`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/delete` : `/config/field/delete`;
 
     let formData = {
       field_name: fieldName,
@@ -4918,7 +4590,6 @@ export const deleteConfigFieldSetting = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     NotificationsManager.success("Field reset on proxy");
     return data;
@@ -4929,10 +4600,7 @@ export const deleteConfigFieldSetting = async (
   }
 };
 
-export const deletePassThroughEndpointsCall = async (
-  accessToken: String,
-  endpointId: string
-) => {
+export const deletePassThroughEndpointsCall = async (accessToken: String, endpointId: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
@@ -4954,7 +4622,6 @@ export const deletePassThroughEndpointsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -4965,10 +4632,7 @@ export const deletePassThroughEndpointsCall = async (
   }
 };
 
-export const setCallbacksCall = async (
-  accessToken: String,
-  formValues: Record<string, any>
-) => {
+export const setCallbacksCall = async (accessToken: String, formValues: Record<string, any>) => {
   /**
    * Set callbacks on proxy
    */
@@ -4993,7 +4657,6 @@ export const setCallbacksCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     //NotificationsManager.info("Received model data");
@@ -5028,7 +4691,6 @@ export const healthCheckCall = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -5039,10 +4701,7 @@ export const healthCheckCall = async (accessToken: String) => {
   }
 };
 
-export const individualModelHealthCheckCall = async (
-  accessToken: String,
-  modelName: string
-) => {
+export const individualModelHealthCheckCall = async (accessToken: String, modelName: string) => {
   /**
    * Run health check for a specific model using model name
    */
@@ -5065,7 +4724,6 @@ export const individualModelHealthCheckCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -5112,15 +4770,13 @@ export const healthCheckHistoryCall = async (
   model?: string,
   statusFilter?: string,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
 ) => {
   /**
    * Get health check history for models
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/health/history`
-      : `/health/history`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/health/history` : `/health/history`;
 
     const params = new URLSearchParams();
     if (model) params.append("model", model);
@@ -5153,7 +4809,6 @@ export const healthCheckHistoryCall = async (
     throw error;
   }
 };
-
 
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
@@ -5191,9 +4846,7 @@ export const getProxyUISettings = async (accessToken: String) => {
   try {
     console.log("Getting proxy UI settings");
     console.log("proxyBaseUrl in getProxyUISettings:", proxyBaseUrl);
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/sso/get/ui_settings`
-      : `/sso/get/ui_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/sso/get/ui_settings` : `/sso/get/ui_settings`;
 
     //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
@@ -5211,7 +4864,6 @@ export const getProxyUISettings = async (accessToken: String) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     //NotificationsManager.info("Received model data");
     return data;
@@ -5224,9 +4876,7 @@ export const getProxyUISettings = async (accessToken: String) => {
 
 export const getGuardrailsList = async (accessToken: String) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v2/guardrails/list`
-      : `/v2/guardrails/list`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -5241,7 +4891,6 @@ export const getGuardrailsList = async (accessToken: String) => {
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -5251,11 +4900,9 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
-export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+export const getPromptsList = async (accessToken: String): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/prompts/list`
-      : `/prompts/list`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -5270,7 +4917,6 @@ export const getPromptsList = async (accessToken: String) : Promise<ListPromptsR
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -5298,7 +4944,6 @@ export const getPromptInfo = async (accessToken: String, promptId: string): Prom
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -5307,10 +4952,7 @@ export const getPromptInfo = async (accessToken: String, promptId: string): Prom
   }
 };
 
-export const createPromptCall = async (
-  accessToken: string,
-  promptData: any
-) => {
+export const createPromptCall = async (accessToken: string, promptData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
 
@@ -5330,7 +4972,6 @@ export const createPromptCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -5339,11 +4980,7 @@ export const createPromptCall = async (
   }
 };
 
-export const updatePromptCall = async (
-  accessToken: string,
-  promptId: string,
-  promptData: any
-) => {
+export const updatePromptCall = async (accessToken: string, promptId: string, promptData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
 
@@ -5363,7 +5000,6 @@ export const updatePromptCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -5372,10 +5008,7 @@ export const updatePromptCall = async (
   }
 };
 
-export const deletePromptCall = async (
-  accessToken: string,
-  promptId: string
-) => {
+export const deletePromptCall = async (accessToken: string, promptId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
 
@@ -5394,7 +5027,6 @@ export const deletePromptCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -5405,15 +5037,13 @@ export const deletePromptCall = async (
 
 export const convertPromptFileToJson = async (
   accessToken: string,
-  file: File
+  file: File,
 ): Promise<{ prompt_id: string; json_data: any }> => {
   try {
     const formData = new FormData();
     formData.append("file", file);
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/utils/dotprompt_json_converter`
-      : `/utils/dotprompt_json_converter`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/utils/dotprompt_json_converter` : `/utils/dotprompt_json_converter`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -5430,7 +5060,6 @@ export const convertPromptFileToJson = async (
       throw new Error(errorMessage);
     }
 
-
     return await response.json();
   } catch (error) {
     console.error("Failed to convert prompt file:", error);
@@ -5438,11 +5067,7 @@ export const convertPromptFileToJson = async (
   }
 };
 
-export const patchPromptCall = async (
-  accessToken: string,
-  promptId: string,
-  promptData: any
-) => {
+export const patchPromptCall = async (accessToken: string, promptId: string, promptData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
 
@@ -5462,7 +5087,6 @@ export const patchPromptCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -5471,10 +5095,7 @@ export const patchPromptCall = async (
   }
 };
 
-export const createGuardrailCall = async (
-  accessToken: string,
-  guardrailData: any
-) => {
+export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
 
@@ -5504,11 +5125,7 @@ export const createGuardrailCall = async (
   }
 };
 
-export const uiSpendLogDetailsCall = async (
-  accessToken: string,
-  logId: string,
-  start_date: string
-) => {
+export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, start_date: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5532,7 +5149,6 @@ export const uiSpendLogDetailsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched log details:", data);
     return data;
@@ -5545,9 +5161,7 @@ export const uiSpendLogDetailsCall = async (
 export const getInternalUserSettings = async (accessToken: string) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/internal_user_settings`
-      : `/get/internal_user_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/internal_user_settings` : `/get/internal_user_settings`;
 
     console.log("Fetching SSO settings from:", url);
 
@@ -5566,7 +5180,6 @@ export const getInternalUserSettings = async (accessToken: string) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched SSO settings:", data);
     return data;
@@ -5576,15 +5189,10 @@ export const getInternalUserSettings = async (accessToken: string) => {
   }
 };
 
-export const updateInternalUserSettings = async (
-  accessToken: string,
-  settings: Record<string, any>
-) => {
+export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/update/internal_user_settings`
-      : `/update/internal_user_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
 
     console.log("Updating internal user settings:", settings);
 
@@ -5616,9 +5224,7 @@ export const updateInternalUserSettings = async (
 export const fetchMCPServers = async (accessToken: string) => {
   try {
     // Construct base URL
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/server`
-      : `/v1/mcp/server`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
     console.log("Fetching MCP servers from:", url);
 
@@ -5637,7 +5243,6 @@ export const fetchMCPServers = async (accessToken: string) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched MCP servers:", data);
     return data;
@@ -5650,9 +5255,7 @@ export const fetchMCPServers = async (accessToken: string) => {
 export const fetchMCPAccessGroups = async (accessToken: string) => {
   try {
     // Construct base URL
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/access_groups`
-      : `/v1/mcp/access_groups`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/access_groups` : `/v1/mcp/access_groups`;
 
     console.log("Fetching MCP access groups from:", url);
 
@@ -5671,7 +5274,6 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched MCP access groups:", data);
     return data.access_groups || [];
@@ -5683,14 +5285,12 @@ export const fetchMCPAccessGroups = async (accessToken: string) => {
 
 export const createMCPServer = async (
   accessToken: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
     console.log("Form Values in createMCPServer:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/server`
-      : `/v1/mcp/server`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -5720,14 +5320,9 @@ export const createMCPServer = async (
   }
 };
 
-export const updateMCPServer = async (
-  accessToken: string,
-  formValues: Record<string, any>
-) => {
+export const updateMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/v1/mcp/server`
-      : `/v1/mcp/server`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
     const response = await fetch(url, {
       method: "PUT",
       headers: {
@@ -5751,13 +5346,9 @@ export const updateMCPServer = async (
   }
 };
 
-export const deleteMCPServer = async (
-  accessToken: String,
-  serverId: String
-) => {
+export const deleteMCPServer = async (accessToken: String, serverId: String) => {
   try {
-    const url =
-      (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/server/${serverId}`;
     console.log("in deleteMCPServer:", serverId);
     const response = await fetch(url, {
       method: HTTP_REQUEST.DELETE,
@@ -5773,7 +5364,6 @@ export const deleteMCPServer = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
@@ -5827,11 +5417,10 @@ export const listMCPTools = async (accessToken: string, serverId: string, authVa
     return {
       tools: [],
       error: "network_error",
-      message: error instanceof Error ? error.message : "Failed to fetch MCP tools"
+      message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
     };
   }
 };
-
 
 export const callMCPTool = async (
   accessToken: string,
@@ -5842,16 +5431,9 @@ export const callMCPTool = async (
 ) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/tools/call`
-      : `/mcp-rest/tools/call`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
 
-    console.log(
-      "Calling MCP tool:",
-      toolName,
-      "with arguments:",
-      toolArguments
-    );
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -5865,7 +5447,6 @@ export const callMCPTool = async (
       // Fall back to deprecated x-mcp-auth header for backward compatibility
       headers[MCP_AUTH_HEADER] = authValue;
     }
-
 
     const response = await fetch(url, {
       method: "POST",
@@ -5888,16 +5469,15 @@ export const callMCPTool = async (
         const errorData = JSON.parse(responseText);
 
         if (errorData.detail) {
-          if (typeof errorData.detail === 'string') {
+          if (typeof errorData.detail === "string") {
             errorMessage = errorData.detail;
-          } else if (typeof errorData.detail === 'object') {
+          } else if (typeof errorData.detail === "object") {
             errorMessage = errorData.detail.message || errorData.detail.error || "An error occurred";
             errorDetails = errorData.detail;
           }
         } else {
           errorMessage = errorData.message || errorData.error || errorMessage;
         }
-
       } catch (parseError) {
         console.error("Failed to parse JSON error response:", parseError);
         // If JSON parsing fails, use the raw text
@@ -5930,10 +5510,7 @@ export const callMCPTool = async (
   }
 };
 
-export const tagCreateCall = async (
-  accessToken: string,
-  formValues: TagNewRequest
-): Promise<void> => {
+export const tagCreateCall = async (accessToken: string, formValues: TagNewRequest): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/new` : `/tag/new`;
 
@@ -5959,10 +5536,7 @@ export const tagCreateCall = async (
   }
 };
 
-export const tagUpdateCall = async (
-  accessToken: string,
-  formValues: TagUpdateRequest
-): Promise<void> => {
+export const tagUpdateCall = async (accessToken: string, formValues: TagUpdateRequest): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/update` : `/tag/update`;
 
@@ -5988,10 +5562,7 @@ export const tagUpdateCall = async (
   }
 };
 
-export const tagInfoCall = async (
-  accessToken: string,
-  tagNames: string[]
-): Promise<TagInfoResponse> => {
+export const tagInfoCall = async (accessToken: string, tagNames: string[]): Promise<TagInfoResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/info` : `/tag/info`;
 
@@ -6018,9 +5589,7 @@ export const tagInfoCall = async (
   }
 };
 
-export const tagListCall = async (
-  accessToken: string
-): Promise<TagListResponse> => {
+export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
 
@@ -6045,10 +5614,7 @@ export const tagListCall = async (
   }
 };
 
-export const tagDeleteCall = async (
-  accessToken: string,
-  tagName: string
-): Promise<void> => {
+export const tagDeleteCall = async (accessToken: string, tagName: string): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/delete` : `/tag/delete`;
 
@@ -6077,9 +5643,7 @@ export const tagDeleteCall = async (
 export const getDefaultTeamSettings = async (accessToken: string) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/default_team_settings`
-      : `/get/default_team_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/default_team_settings` : `/get/default_team_settings`;
 
     console.log("Fetching default team settings from:", url);
 
@@ -6098,7 +5662,6 @@ export const getDefaultTeamSettings = async (accessToken: string) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched default team settings:", data);
     return data;
@@ -6108,15 +5671,10 @@ export const getDefaultTeamSettings = async (accessToken: string) => {
   }
 };
 
-export const updateDefaultTeamSettings = async (
-  accessToken: string,
-  settings: Record<string, any>
-) => {
+export const updateDefaultTeamSettings = async (accessToken: string, settings: Record<string, any>) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/update/default_team_settings`
-      : `/update/default_team_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/default_team_settings` : `/update/default_team_settings`;
 
     console.log("Updating default team settings:", settings);
 
@@ -6136,7 +5694,6 @@ export const updateDefaultTeamSettings = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Updated default team settings:", data);
     NotificationsManager.success("Default team settings updated successfully");
@@ -6147,10 +5704,7 @@ export const updateDefaultTeamSettings = async (
   }
 };
 
-export const getTeamPermissionsCall = async (
-  accessToken: string,
-  teamId: string
-) => {
+export const getTeamPermissionsCall = async (accessToken: string, teamId: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/permissions_list?team_id=${teamId}`
@@ -6171,7 +5725,6 @@ export const getTeamPermissionsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Team permissions response:", data);
     return data;
@@ -6181,15 +5734,9 @@ export const getTeamPermissionsCall = async (
   }
 };
 
-export const teamPermissionsUpdateCall = async (
-  accessToken: string,
-  teamId: string,
-  permissions: string[]
-) => {
+export const teamPermissionsUpdateCall = async (accessToken: string, teamId: string, permissions: string[]) => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/team/permissions_update`
-      : `/team/permissions_update`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/permissions_update` : `/team/permissions_update`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6210,7 +5757,6 @@ export const teamPermissionsUpdateCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Team permissions response:", data);
     return data;
@@ -6223,10 +5769,7 @@ export const teamPermissionsUpdateCall = async (
 /**
  * Get all spend logs for a particular session
  */
-export const sessionSpendLogsCall = async (
-  accessToken: string,
-  session_id: string
-) => {
+export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
@@ -6247,7 +5790,6 @@ export const sessionSpendLogsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -6256,14 +5798,9 @@ export const sessionSpendLogsCall = async (
   }
 };
 
-export const vectorStoreCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>
-): Promise<void> => {
+export const vectorStoreCreateCall = async (accessToken: string, formValues: Record<string, any>): Promise<void> => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/vector_store/new`
-      : `/vector_store/new`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/new` : `/vector_store/new`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6289,12 +5826,10 @@ export const vectorStoreCreateCall = async (
 export const vectorStoreListCall = async (
   accessToken: string,
   page: number = 1,
-  page_size: number = 100
+  page_size: number = 100,
 ): Promise<any> => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/vector_store/list`
-      : `/vector_store/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/list` : `/vector_store/list`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -6316,14 +5851,9 @@ export const vectorStoreListCall = async (
   }
 };
 
-export const vectorStoreDeleteCall = async (
-  accessToken: string,
-  vectorStoreId: string
-): Promise<void> => {
+export const vectorStoreDeleteCall = async (accessToken: string, vectorStoreId: string): Promise<void> => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/vector_store/delete`
-      : `/vector_store/delete`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/delete` : `/vector_store/delete`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6346,14 +5876,9 @@ export const vectorStoreDeleteCall = async (
   }
 };
 
-export const vectorStoreInfoCall = async (
-  accessToken: string,
-  vectorStoreId: string
-): Promise<any> => {
+export const vectorStoreInfoCall = async (accessToken: string, vectorStoreId: string): Promise<any> => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/vector_store/info`
-      : `/vector_store/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/info` : `/vector_store/info`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6376,14 +5901,9 @@ export const vectorStoreInfoCall = async (
   }
 };
 
-export const vectorStoreUpdateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>
-): Promise<any> => {
+export const vectorStoreUpdateCall = async (accessToken: string, formValues: Record<string, any>): Promise<any> => {
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/vector_store/update`
-      : `/vector_store/update`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/update` : `/vector_store/update`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6406,13 +5926,9 @@ export const vectorStoreUpdateCall = async (
   }
 };
 
-export const getEmailEventSettings = async (
-  accessToken: string
-): Promise<EmailEventSettingsResponse> => {
+export const getEmailEventSettings = async (accessToken: string): Promise<EmailEventSettingsResponse> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/email/event_settings`
-      : `/email/event_settings`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -6437,14 +5953,9 @@ export const getEmailEventSettings = async (
   }
 };
 
-export const updateEmailEventSettings = async (
-  accessToken: string,
-  settings: EmailEventSettingsUpdateRequest
-) => {
+export const updateEmailEventSettings = async (accessToken: string, settings: EmailEventSettingsUpdateRequest) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/email/event_settings`
-      : `/email/event_settings`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings` : `/email/event_settings`;
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -6472,9 +5983,7 @@ export const updateEmailEventSettings = async (
 
 export const resetEmailEventSettings = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/email/event_settings/reset`
-      : `/email/event_settings/reset`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/email/event_settings/reset` : `/email/event_settings/reset`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6502,14 +6011,9 @@ export const resetEmailEventSettings = async (accessToken: string) => {
 export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
-export const deleteGuardrailCall = async (
-  accessToken: string,
-  guardrailId: string
-) => {
+export const deleteGuardrailCall = async (accessToken: string, guardrailId: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/${guardrailId}`
-      : `/guardrails/${guardrailId}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
 
     const response = await fetch(url, {
       method: "DELETE",
@@ -6563,9 +6067,7 @@ export const getGuardrailUISettings = async (accessToken: string) => {
   }
 };
 
-export const getGuardrailProviderSpecificParams = async (
-  accessToken: string
-) => {
+export const getGuardrailProviderSpecificParams = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/guardrails/ui/provider_specific_params`
@@ -6589,22 +6091,14 @@ export const getGuardrailProviderSpecificParams = async (
     console.log("Guardrail provider specific params response:", data);
     return data;
   } catch (error) {
-    console.error(
-      "Failed to get guardrail provider specific parameters:",
-      error
-    );
+    console.error("Failed to get guardrail provider specific parameters:", error);
     throw error;
   }
 };
 
-export const getGuardrailInfo = async (
-  accessToken: string,
-  guardrailId: string
-) => {
+export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/${guardrailId}/info`
-      : `/guardrails/${guardrailId}/info`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -6636,12 +6130,10 @@ export const updateGuardrailCall = async (
     guardrail_name?: string;
     default_on?: boolean;
     guardrail_info?: Record<string, any>;
-  }
+  },
 ) => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/guardrails/${guardrailId}`
-      : `/guardrails/${guardrailId}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}` : `/guardrails/${guardrailId}`;
 
     const response = await fetch(url, {
       method: "PATCH",
@@ -6670,9 +6162,7 @@ export const updateGuardrailCall = async (
 export const getSSOSettings = async (accessToken: string) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/get/sso_settings`
-      : `/get/sso_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/get/sso_settings` : `/get/sso_settings`;
 
     console.log("Fetching SSO configuration from:", url);
 
@@ -6691,7 +6181,6 @@ export const getSSOSettings = async (accessToken: string) => {
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Fetched SSO configuration:", data);
     return data;
@@ -6701,15 +6190,10 @@ export const getSSOSettings = async (accessToken: string) => {
   }
 };
 
-export const updateSSOSettings = async (
-  accessToken: string,
-  settings: Record<string, any>
-) => {
+export const updateSSOSettings = async (accessToken: string, settings: Record<string, any>) => {
   try {
     // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/update/sso_settings`
-      : `/update/sso_settings`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/sso_settings` : `/update/sso_settings`;
 
     console.log("Updating SSO configuration:", settings);
 
@@ -6729,7 +6213,6 @@ export const updateSSOSettings = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     console.log("Updated SSO configuration:", data);
     return data;
@@ -6744,7 +6227,7 @@ export const uiAuditLogsCall = async (
   start_date?: string,
   end_date?: string,
   page?: number,
-  page_size?: number
+  page_size?: number,
 ) => {
   try {
     // Construct base URL
@@ -6778,7 +6261,6 @@ export const uiAuditLogsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -6788,7 +6270,7 @@ export const uiAuditLogsCall = async (
 };
 
 export const getRemainingUsers = async (
-  accessToken: string
+  accessToken: string,
 ): Promise<{
   total_users: number | null;
   total_users_used: number;
@@ -6798,9 +6280,7 @@ export const getRemainingUsers = async (
   total_teams_remaining: number | null;
 } | null> => {
   try {
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/user/available_users`
-      : `/user/available_users`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/available_users` : `/user/available_users`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -6830,7 +6310,7 @@ export const getRemainingUsers = async (
 export const updatePassThroughEndpoint = async (
   accessToken: string,
   endpointPath: string,
-  formValues: Record<string, any>
+  formValues: Record<string, any>,
 ) => {
   try {
     let url = proxyBaseUrl
@@ -6853,7 +6333,6 @@ export const updatePassThroughEndpoint = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     NotificationsManager.success("Pass through endpoint updated successfully");
     return data;
@@ -6863,10 +6342,7 @@ export const updatePassThroughEndpoint = async (
   }
 };
 
-export const getPassThroughEndpointInfo = async (
-  accessToken: string,
-  endpointPath: string
-) => {
+export const getPassThroughEndpointInfo = async (accessToken: string, endpointPath: string) => {
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${encodeURIComponent(endpointPath)}`
@@ -6887,7 +6363,6 @@ export const getPassThroughEndpointInfo = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     const endpoints = data["endpoints"];
 
@@ -6902,17 +6377,12 @@ export const getPassThroughEndpointInfo = async (
   }
 };
 
-export const deleteCallback = async (
-  accessToken: String,
-  callbackName: string
-) => {
+export const deleteCallback = async (accessToken: String, callbackName: string) => {
   /**
    * Delete specific callback from proxy using the /config/callback/delete API
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/config/callback/delete`
-      : `/config/callback/delete`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/config/callback/delete` : `/config/callback/delete`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6932,7 +6402,6 @@ export const deleteCallback = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -6951,8 +6420,6 @@ export const mcpToolsCall = async (accessToken: string) => {
     },
   });
 
-
-
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
@@ -6960,20 +6427,12 @@ export const mcpToolsCall = async (accessToken: string) => {
   return await response.json();
 };
 
-export const testMCPConnectionRequest = async (
-  accessToken: string,
-  mcpServerConfig: Record<string, any>
-) => {
+export const testMCPConnectionRequest = async (accessToken: string, mcpServerConfig: Record<string, any>) => {
   try {
-    console.log(
-      "Testing MCP connection with config:",
-      JSON.stringify(mcpServerConfig)
-    );
+    console.log("Testing MCP connection with config:", JSON.stringify(mcpServerConfig));
 
     // Construct the URL for POST request
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/test/connection`
-      : `/mcp-rest/test/connection`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/test/connection` : `/mcp-rest/test/connection`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6990,7 +6449,7 @@ export const testMCPConnectionRequest = async (
       const text = await response.text();
       console.error("Received non-JSON response:", text);
       throw new Error(
-        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`,
       );
     }
 
@@ -7004,9 +6463,7 @@ export const testMCPConnectionRequest = async (
       } else {
         return {
           status: "error",
-          message:
-            data.error?.message ||
-            `MCP connection test failed: ${response.status} ${response.statusText}`,
+          message: data.error?.message || `MCP connection test failed: ${response.status} ${response.statusText}`,
         };
       }
     }
@@ -7019,20 +6476,12 @@ export const testMCPConnectionRequest = async (
   }
 };
 
-export const testMCPToolsListRequest = async (
-  accessToken: string,
-  mcpServerConfig: Record<string, any>
-) => {
+export const testMCPToolsListRequest = async (accessToken: string, mcpServerConfig: Record<string, any>) => {
   try {
-    console.log(
-      "Testing MCP tools list with config:",
-      JSON.stringify(mcpServerConfig)
-    );
+    console.log("Testing MCP tools list with config:", JSON.stringify(mcpServerConfig));
 
     // Construct the URL for POST request
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/test/tools/list`
-      : `/mcp-rest/test/tools/list`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/test/tools/list` : `/mcp-rest/test/tools/list`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -7049,7 +6498,7 @@ export const testMCPToolsListRequest = async (
       const text = await response.text();
       console.error("Received non-JSON response:", text);
       throw new Error(
-        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`,
       );
     }
 
@@ -7064,9 +6513,7 @@ export const testMCPToolsListRequest = async (
         return {
           tools: [],
           error: "request_failed",
-          message:
-            data.message ||
-            `MCP tools list failed: ${response.status} ${response.statusText}`,
+          message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
         };
       }
     }
@@ -7082,18 +6529,18 @@ export const testMCPToolsListRequest = async (
 export const vectorStoreSearchCall = async (
   accessToken: string,
   vectorStoreId: string,
-  query: string
+  query: string,
 ): Promise<any> => {
   try {
     const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        query: query
+        query: query,
       }),
     });
 
@@ -7117,23 +6564,21 @@ export const userAgentAnalyticsCall = async (
   endTime: Date,
   page: number = 1,
   pageSize: number = 50,
-  userAgentFilter?: string
+  userAgentFilter?: string,
 ) => {
   /**
    * Get user agent analytics data including DAU, WAU, MAU, successful requests, and completed tokens
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/user-agent/analytics`
-      : `/tag/user-agent/analytics`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/user-agent/analytics` : `/tag/user-agent/analytics`;
 
     const queryParams = new URLSearchParams();
 
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
 
@@ -7166,7 +6611,6 @@ export const userAgentAnalyticsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -7176,27 +6620,20 @@ export const userAgentAnalyticsCall = async (
 };
 
 // New endpoint functions for DAU, WAU, MAU
-export const tagDauCall = async (
-  accessToken: string,
-  endDate: Date,
-  tagFilter?: string,
-  tagFilters?: string[]
-) => {
+export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
   /**
    * Get Daily Active Users (DAU) for last 7 days ending on endDate
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/dau`
-      : `/tag/dau`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/dau` : `/tag/dau`;
 
     const queryParams = new URLSearchParams();
 
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
 
@@ -7204,7 +6641,7 @@ export const tagDauCall = async (
 
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach(tag => {
+      tagFilters.forEach((tag) => {
         queryParams.append("tag_filters", tag);
       });
     } else if (tagFilter) {
@@ -7230,7 +6667,6 @@ export const tagDauCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -7240,27 +6676,20 @@ export const tagDauCall = async (
   }
 };
 
-export const tagWauCall = async (
-  accessToken: string,
-  endDate: Date,
-  tagFilter?: string,
-  tagFilters?: string[]
-) => {
+export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
   /**
    * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/wau`
-      : `/tag/wau`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/wau` : `/tag/wau`;
 
     const queryParams = new URLSearchParams();
 
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
 
@@ -7268,7 +6697,7 @@ export const tagWauCall = async (
 
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach(tag => {
+      tagFilters.forEach((tag) => {
         queryParams.append("tag_filters", tag);
       });
     } else if (tagFilter) {
@@ -7294,7 +6723,6 @@ export const tagWauCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -7304,27 +6732,20 @@ export const tagWauCall = async (
   }
 };
 
-export const tagMauCall = async (
-  accessToken: string,
-  endDate: Date,
-  tagFilter?: string,
-  tagFilters?: string[]
-) => {
+export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
   /**
    * Get Monthly Active Users (MAU) for last 7 months ending on endDate
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/mau`
-      : `/tag/mau`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/mau` : `/tag/mau`;
 
     const queryParams = new URLSearchParams();
 
     // Format date as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
 
@@ -7332,7 +6753,7 @@ export const tagMauCall = async (
 
     // Handle multiple tag filters (takes precedence over single tag filter)
     if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach(tag => {
+      tagFilters.forEach((tag) => {
         queryParams.append("tag_filters", tag);
       });
     } else if (tagFilter) {
@@ -7359,7 +6780,6 @@ export const tagMauCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -7368,16 +6788,12 @@ export const tagMauCall = async (
   }
 };
 
-export const tagDistinctCall = async (
-  accessToken: string
-) => {
+export const tagDistinctCall = async (accessToken: string) => {
   /**
    * Get all distinct user agent tags (up to 250)
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/distinct`
-      : `/tag/distinct`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/distinct` : `/tag/distinct`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7393,7 +6809,6 @@ export const tagDistinctCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -7407,23 +6822,21 @@ export const userAgentSummaryCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  tagFilters?: string[]
+  tagFilters?: string[],
 ) => {
   /**
    * Get user agent summary statistics
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/summary`
-      : `/tag/summary`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/summary` : `/tag/summary`;
 
     const queryParams = new URLSearchParams();
 
     // Format dates as YYYY-MM-DD for the API
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
     };
 
@@ -7432,7 +6845,7 @@ export const userAgentSummaryCall = async (
 
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach(tag => {
+      tagFilters.forEach((tag) => {
         queryParams.append("tag_filters", tag);
       });
     }
@@ -7456,7 +6869,6 @@ export const userAgentSummaryCall = async (
       handleError(errorMessage);
       throw new Error(errorMessage);
     }
-
 
     const data = await response.json();
     return data;
@@ -7470,15 +6882,13 @@ export const perUserAnalyticsCall = async (
   accessToken: string,
   page: number = 1,
   pageSize: number = 50,
-  tagFilters?: string[]
+  tagFilters?: string[],
 ) => {
   /**
    * Get per-user analytics data for the last 30 days
    */
   try {
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
-      : `/tag/user-agent/per-user-analytics`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics` : `/tag/user-agent/per-user-analytics`;
 
     const queryParams = new URLSearchParams();
 
@@ -7487,7 +6897,7 @@ export const perUserAnalyticsCall = async (
 
     // Handle multiple tag filters
     if (tagFilters && tagFilters.length > 0) {
-      tagFilters.forEach(tag => {
+      tagFilters.forEach((tag) => {
         queryParams.append("tag_filters", tag);
       });
     }
@@ -7512,7 +6922,6 @@ export const perUserAnalyticsCall = async (
       throw new Error(errorMessage);
     }
 
-
     const data = await response.json();
     return data;
   } catch (error) {
@@ -7522,9 +6931,11 @@ export const perUserAnalyticsCall = async (
 };
 
 const deriveErrorMessage = (errorData: any): string => {
-  return (errorData?.error && (errorData.error.message || errorData.error)) ||
+  return (
+    (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
     errorData?.detail ||
     errorData?.error ||
-    JSON.stringify(errorData);
+    JSON.stringify(errorData)
+  );
 };

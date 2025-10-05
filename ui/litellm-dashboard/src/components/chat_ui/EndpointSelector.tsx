@@ -12,18 +12,14 @@ interface EndpointSelectorProps {
 /**
  * A reusable component for selecting API endpoints
  */
-const EndpointSelector: React.FC<EndpointSelectorProps> = ({
-  endpointType,
-  onEndpointChange,
-  className,
-}) => {
+const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEndpointChange, className }) => {
   // Map endpoint types to their display labels
   const endpointOptions = [
-    { value: EndpointType.CHAT, label: '/v1/chat/completions' },
-    { value: EndpointType.RESPONSES, label: '/v1/responses' },
-    { value: EndpointType.ANTHROPIC_MESSAGES, label: '/v1/messages' },
-    { value: EndpointType.IMAGE, label: '/v1/images/generations' },
-    { value: EndpointType.IMAGE_EDITS, label: '/v1/images/edits' },
+    { value: EndpointType.CHAT, label: "/v1/chat/completions" },
+    { value: EndpointType.RESPONSES, label: "/v1/responses" },
+    { value: EndpointType.ANTHROPIC_MESSAGES, label: "/v1/messages" },
+    { value: EndpointType.IMAGE, label: "/v1/images/generations" },
+    { value: EndpointType.IMAGE_EDITS, label: "/v1/images/edits" },
   ];
 
   return (
@@ -41,4 +37,4 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({
   );
 };
 
-export default EndpointSelector; 
+export default EndpointSelector;
