@@ -182,6 +182,25 @@ mcp_servers:
     extra_headers: ["custom_key", "x-custom-header"]  # These headers will be forwarded from client
 ```
 
+### Static Headers
+
+Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.
+
+```yaml title="config.yaml" showLineNumbers
+mcp_servers:
+  my_mcp_server:
+    url: "https://my-mcp-server.com/mcp"
+    static_headers:
+      X-API-Key: "abc123"
+      X-Custom-Header: "some-value"
+```
+
+These headers get sent with every request to the server. That's it.
+
+**When to use this:**
+- Your server needs custom headers that don't fit the standard auth patterns
+- You want full control over exactly what headers are sent
+- You're debugging and need to quickly add headers without changing auth configuration
 
 ### MCP Aliases
 
