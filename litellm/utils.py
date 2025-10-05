@@ -1402,7 +1402,7 @@ def client(original_function):  # noqa: PLR0915
             print_verbose(
                 f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
             )
-            _caching_handler_response: CachingHandlerResponse = (
+            _caching_handler_response: Optional[CachingHandlerResponse] = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
                     original_function=original_function,
@@ -1414,14 +1414,15 @@ def client(original_function):  # noqa: PLR0915
                 )
             )
 
-            if (
-                _caching_handler_response.cached_result is not None
-                and _caching_handler_response.final_embedding_cached_response is None
-            ):
-                return _caching_handler_response.cached_result
+            if _caching_handler_response is not None:
+                if (
+                    _caching_handler_response.cached_result is not None
+                    and _caching_handler_response.final_embedding_cached_response is None
+                ):
+                    return _caching_handler_response.cached_result
 
-            elif _caching_handler_response.embedding_all_elements_cache_hit is True:
-                return _caching_handler_response.final_embedding_cached_response
+                elif _caching_handler_response.embedding_all_elements_cache_hit is True:
+                    return _caching_handler_response.final_embedding_cached_response
 
             # CHECK MAX TOKENS
             if (
@@ -1524,6 +1525,7 @@ def client(original_function):  # noqa: PLR0915
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
+                and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response
                 is not None
             ):

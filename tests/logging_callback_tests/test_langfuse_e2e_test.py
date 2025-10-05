@@ -21,6 +21,7 @@ os.environ["LANGFUSE_DEBUG"] = "True"
 import time
 
 import pytest
+import pytest_asyncio
 
 
 def assert_langfuse_request_matches_expected(
@@ -116,7 +117,7 @@ def assert_langfuse_request_matches_expected(
 
 
 class TestLangfuseLogging:
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def mock_setup(self):
         """Common setup for Langfuse logging tests"""
         from litellm._uuid import uuid
@@ -168,7 +169,7 @@ class TestLangfuseLogging:
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion(self, mock_setup):
         """Test Langfuse logging for chat completion"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         with patch("httpx.Client.post", setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -183,7 +184,7 @@ class TestLangfuseLogging:
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion_with_tags(self, mock_setup):
         """Test Langfuse logging for chat completion with tags"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         with patch("httpx.Client.post", setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -201,7 +202,7 @@ class TestLangfuseLogging:
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion_with_tags_stream(self, mock_setup):
         """Test Langfuse logging for chat completion with tags"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         with patch("httpx.Client.post", setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -221,7 +222,7 @@ class TestLangfuseLogging:
     @pytest.mark.asyncio
     async def test_langfuse_logging_completion_with_langfuse_metadata(self, mock_setup):
         """Test Langfuse logging for chat completion with metadata for langfuse"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         with patch("httpx.Client.post", setup["mock_post"]):
             await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -259,7 +260,7 @@ class TestLangfuseLogging:
             last_login: datetime.datetime
             settings: dict
 
-        setup = await mock_setup
+        setup = mock_setup
 
         test_metadata = {
             "user_prefs": UserPreferences(
@@ -334,7 +335,7 @@ class TestLangfuseLogging:
         """Test Langfuse logging with various metadata types including non-serializable objects"""
         import threading
 
-        setup = await mock_setup
+        setup = mock_setup
 
         if test_metadata is not None:
             test_metadata["trace_id"] = setup["trace_id"]
@@ -358,7 +359,7 @@ class TestLangfuseLogging:
         self, mock_setup
     ):
         """Test Langfuse logging for chat completion with malformed LLM response"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         litellm._turn_on_debug()
         with patch("httpx.Client.post", setup["mock_post"]):
             mock_response = litellm.ModelResponse(
@@ -387,7 +388,7 @@ class TestLangfuseLogging:
         self, mock_setup
     ):
         """Test Langfuse logging for chat completion with malformed LLM response"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         litellm._turn_on_debug()
         with patch("httpx.Client.post", setup["mock_post"]):
             mock_response = litellm.ModelResponse(
@@ -418,7 +419,7 @@ class TestLangfuseLogging:
         self, mock_setup
     ):
         """Test Langfuse logging for chat completion with malformed LLM response"""
-        setup = await mock_setup  # Await the fixture
+        setup = mock_setup
         litellm._turn_on_debug()
         with patch("httpx.Client.post", setup["mock_post"]):
             mock_response = litellm.ModelResponse(
@@ -447,7 +448,6 @@ class TestLangfuseLogging:
     @pytest.mark.asyncio
     async def test_langfuse_logging_with_router(self, mock_setup):
         """Test Langfuse logging with router"""
-        setup = await mock_setup  # Await the fixture
         litellm._turn_on_debug()
         router = litellm.Router(
             model_list=[
@@ -461,7 +461,7 @@ class TestLangfuseLogging:
                 }
             ]
         )
-        with patch("httpx.Client.post", setup["mock_post"]):
+        with patch("httpx.Client.post", mock_setup["mock_post"]):
             mock_response = litellm.ModelResponse(
                 choices=[],
                 usage=litellm.Usage(
@@ -477,8 +477,8 @@ class TestLangfuseLogging:
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hello!"}],
                 mock_response=mock_response,
-                metadata={"trace_id": setup["trace_id"]},
+                metadata={"trace_id": mock_setup["trace_id"]},
             )
             await self._verify_langfuse_call(
-                setup["mock_post"], "completion_with_router.json", setup["trace_id"]
+                mock_setup["mock_post"], "completion_with_router.json", mock_setup["trace_id"]
             )

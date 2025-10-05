@@ -290,7 +290,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
-### PROMPTS ###
+### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
 prompt_name_config_map: Dict[str, PromptSpec] = {}
@@ -367,7 +367,7 @@ disable_add_prefix_to_prompt: bool = (
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION ######
+#### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, float]] = None
 priority_reservation_settings: "PriorityReservationSettings" = (
     PriorityReservationSettings()

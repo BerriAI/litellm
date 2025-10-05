@@ -102,7 +102,7 @@ def test_openai_assistants_e2e_operations_stream():
 def test_azure_openai_assistants_e2e_operations_stream():
     from openai import AzureOpenAI
     client = AzureOpenAI(
-        base_url="http://0.0.0.0:4000/azure-config-passthrough", 
+        base_url="http://0.0.0.0:4000/azure-config-passthrough/openai", 
         api_key="sk-1234",
         api_version="2025-01-01-preview"
     )

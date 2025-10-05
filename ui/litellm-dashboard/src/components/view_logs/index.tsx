@@ -419,7 +419,8 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!accessToken) return []
         const data = await allEndUsersCall(accessToken)
-        const users = data?.end_users || []
+        // data if set, is a list of objects, with key = user_id 
+        const users = data?.map((u: any) => u.user_id) || []
         const filtered = users.filter((u: string) => u.toLowerCase().includes(searchText.toLowerCase()))
         return filtered.map((u: string) => ({ label: u, value: u }))
       },

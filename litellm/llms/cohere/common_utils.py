@@ -31,7 +31,7 @@ def validate_environment(
         "Request-Source": "unspecified:litellm",
         "accept": "application/json",
         "content-type": "application/json",
-        "Authorization": "bearer $CO_API_KEY"
+        "Authorization": "Bearer $CO_API_KEY"
     }
     """
     headers.update(
@@ -42,7 +42,7 @@ def validate_environment(
         }
     )
     if api_key:
-        headers["Authorization"] = f"bearer {api_key}"
+        headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
 
