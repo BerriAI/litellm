@@ -3,7 +3,7 @@ import { Text, Badge } from "@tremor/react";
 import { ServerIcon } from "@heroicons/react/outline";
 import { Tooltip } from "antd";
 import { fetchMCPServers } from "../networking";
-import { MCPServer } from '../mcp_tools/types';
+import { MCPServer } from "../mcp_tools/types";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
@@ -11,11 +11,7 @@ interface MCPServerPermissionsProps {
   accessToken?: string | null;
 }
 
-export function MCPServerPermissions({ 
-  mcpServers, 
-  mcpAccessGroups = [],
-  accessToken 
-}: MCPServerPermissionsProps) {
+export function MCPServerPermissions({ mcpServers, mcpAccessGroups = [], accessToken }: MCPServerPermissionsProps) {
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
   const [accessGroupNames, setAccessGroupNames] = useState<string[]>([]);
 
@@ -43,8 +39,8 @@ export function MCPServerPermissions({
     const fetchGroups = async () => {
       if (accessToken && mcpAccessGroups.length > 0) {
         try {
-          const groups = await import("../networking").then(m => m.fetchMCPAccessGroups(accessToken));
-          setAccessGroupNames(Array.isArray(groups) ? groups : (groups.data || []));
+          const groups = await import("../networking").then((m) => m.fetchMCPAccessGroups(accessToken));
+          setAccessGroupNames(Array.isArray(groups) ? groups : groups.data || []);
         } catch (error) {
           console.error("Error fetching MCP access groups:", error);
         }
@@ -55,11 +51,9 @@ export function MCPServerPermissions({
 
   // Function to get display name for MCP server
   const getMCPServerDisplayName = (serverId: string) => {
-    const serverDetail = mcpServerDetails.find(server => server.server_id === serverId);
+    const serverDetail = mcpServerDetails.find((server) => server.server_id === serverId);
     if (serverDetail) {
-      const truncatedId = serverId.length > 7 
-        ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}`
-        : serverId;
+      const truncatedId = serverId.length > 7 ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}` : serverId;
       return `${serverDetail.alias} (${truncatedId})`;
     }
     return serverId;
@@ -72,8 +66,8 @@ export function MCPServerPermissions({
 
   // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers.map(server => ({ type: 'server', value: server })),
-    ...mcpAccessGroups.map(group => ({ type: 'accessGroup', value: group })),
+    ...mcpServers.map((server) => ({ type: "server", value: server })),
+    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
   ];
   const totalCount = mergedItems.length;
 
@@ -88,12 +82,10 @@ export function MCPServerPermissions({
       </div>
       {totalCount > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {mergedItems.map((item, index) => (
-            item.type === 'server' ? (
+          {mergedItems.map((item, index) =>
+            item.type === "server" ? (
               <Tooltip key={index} title={`Full ID: ${item.value}`} placement="top">
-                <div
-                  className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium cursor-help"
-                >
+                <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm font-medium cursor-help">
                   {getMCPServerDisplayName(item.value)}
                 </div>
               </Tooltip>
@@ -103,10 +95,11 @@ export function MCPServerPermissions({
                 className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium"
               >
                 <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-                {getAccessGroupDisplayName(item.value)} <span className="ml-1 text-xs text-green-500">(Access Group)</span>
+                {getAccessGroupDisplayName(item.value)}{" "}
+                <span className="ml-1 text-xs text-green-500">(Access Group)</span>
               </div>
-            )
-          ))}
+            ),
+          )}
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
@@ -118,4 +111,4 @@ export function MCPServerPermissions({
   );
 }
 
-export default MCPServerPermissions; 
+export default MCPServerPermissions;

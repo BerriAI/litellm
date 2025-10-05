@@ -1,15 +1,15 @@
-import React, { useEffect, useRef } from "react"
-import { Card, Title, Text } from "@tremor/react"
-import { ToolOutlined, CheckCircleOutlined } from "@ant-design/icons"
-import { Badge, Spin, Checkbox } from "antd"
-import { useTestMCPConnection } from "../../hooks/useTestMCPConnection"
+import React, { useEffect, useRef } from "react";
+import { Card, Title, Text } from "@tremor/react";
+import { ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { Badge, Spin, Checkbox } from "antd";
+import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPToolConfigurationProps {
-  accessToken: string | null
-  formValues: Record<string, any>
-  allowedTools: string[]
-  existingAllowedTools: string[] | null
-  onAllowedToolsChange: (tools: string[]) => void
+  accessToken: string | null;
+  formValues: Record<string, any>;
+  allowedTools: string[];
+  existingAllowedTools: string[] | null;
+  onAllowedToolsChange: (tools: string[]) => void;
 }
 
 const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
@@ -19,13 +19,13 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   existingAllowedTools,
   onAllowedToolsChange,
 }) => {
-  const previousToolsLengthRef = useRef(0)
+  const previousToolsLengthRef = useRef(0);
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
     accessToken,
     formValues,
     enabled: true,
-  })
+  });
 
   // Auto-select tools when tools are first loaded
   useEffect(() => {
@@ -37,39 +37,39 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
       if (existingAllowedTools && existingAllowedTools.length > 0) {
         // If we have existing allowed tools, use those as the initial selection
         // Filter to only include tools that are actually available from the server
-        const availableToolNames = tools.map((tool) => tool.name)
-        const validExistingTools = existingAllowedTools.filter(toolName => availableToolNames.includes(toolName))
-        onAllowedToolsChange(validExistingTools)
+        const availableToolNames = tools.map((tool) => tool.name);
+        const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
+        onAllowedToolsChange(validExistingTools);
       } else {
         // If no existing allowed tools, auto-select all tools (create mode)
-        const allToolNames = tools.map((tool) => tool.name)
-        onAllowedToolsChange(allToolNames)
+        const allToolNames = tools.map((tool) => tool.name);
+        onAllowedToolsChange(allToolNames);
       }
     }
     // Update ref to track tools length (will be 0 when tools clear)
-    previousToolsLengthRef.current = tools.length
-  }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange])
+    previousToolsLengthRef.current = tools.length;
+  }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange]);
 
   const handleToolToggle = (toolName: string) => {
     if (allowedTools.includes(toolName)) {
-      onAllowedToolsChange(allowedTools.filter((name) => name !== toolName))
+      onAllowedToolsChange(allowedTools.filter((name) => name !== toolName));
     } else {
-      onAllowedToolsChange([...allowedTools, toolName])
+      onAllowedToolsChange([...allowedTools, toolName]);
     }
-  }
+  };
 
   const handleSelectAll = () => {
-    const allToolNames = tools.map((tool) => tool.name)
-    onAllowedToolsChange(allToolNames)
-  }
+    const allToolNames = tools.map((tool) => tool.name);
+    onAllowedToolsChange(allToolNames);
+  };
 
   const handleDeselectAll = () => {
-    onAllowedToolsChange([])
-  }
+    onAllowedToolsChange([]);
+  };
 
   // Don't show anything if required fields aren't filled
   if (!canFetchTools && !formValues.url) {
-    return null
+    return null;
   }
 
   return (
@@ -89,12 +89,12 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             )}
           </div>
         </div>
-        
+
         {/* Description */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <Text className="text-blue-800 text-sm">
-            <strong>Select which tools users can call:</strong> Only checked tools will be available for users to invoke. 
-            Unchecked tools will be blocked from execution.
+            <strong>Select which tools users can call:</strong> Only checked tools will be available for users to
+            invoke. Unchecked tools will be blocked from execution.
           </Text>
         </div>
 
@@ -143,7 +143,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200 flex-1">
                 <CheckCircleOutlined className="text-green-600" />
                 <Text className="text-green-700 font-medium">
-                  {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user access
+                  {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user
+                  access
                 </Text>
               </div>
               <div className="flex gap-2 ml-3">
@@ -181,20 +182,19 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <Text className="font-medium text-gray-900">{tool.name}</Text>
-                        <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-                          allowedTools.includes(tool.name)
-                            ? "bg-green-100 text-green-800"
-                            : "bg-red-100 text-red-800"
-                        }`}>
+                        <span
+                          className={`px-2 py-0.5 text-xs rounded-full font-medium ${
+                            allowedTools.includes(tool.name) ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                          }`}
+                        >
                           {allowedTools.includes(tool.name) ? "Enabled" : "Disabled"}
                         </span>
                       </div>
                       {tool.description && <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>}
                       <Text className="text-gray-400 text-xs block mt-1">
-                        {allowedTools.includes(tool.name) 
-                          ? "✓ Users can call this tool" 
-                          : "✗ Users cannot call this tool"
-                        }
+                        {allowedTools.includes(tool.name)
+                          ? "✓ Users can call this tool"
+                          : "✗ Users cannot call this tool"}
                       </Text>
                     </div>
                   </div>
@@ -205,7 +205,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
       </div>
     </Card>
-  )
-}
+  );
+};
 
-export default MCPToolConfiguration
+export default MCPToolConfiguration;

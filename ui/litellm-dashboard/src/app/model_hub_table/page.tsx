@@ -19,7 +19,5 @@ export default function PublicModelHubTable() {
    * populate navbar
    *
    */
-  return (
-    <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null}/>
-  );
-} 
+  return <ModelHubTable accessToken={accessToken} publicPage={true} premiumUser={false} userRole={null} />;
+}
