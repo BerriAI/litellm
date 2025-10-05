@@ -444,13 +444,33 @@ class LangFuseLogger:
                 modelParameters=optional_params,
                 prompt=input,
                 completion=output,
-                usage={
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                },
+                usage=self._get_usage_for_langfuse_v1(response_obj.usage),
                 metadata=metadata,
             )
         )
+
+    def _get_usage_for_langfuse_v1(self, usage_obj):
+        """Helper method to get usage data for Langfuse v1, handling both standard and ResponseAPIUsage formats"""
+        if usage_obj is None:
+            return {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+        
+        # Handle ResponseAPIUsage format (new OpenAI Responses API)
+        from litellm.responses.utils import ResponseAPILoggingUtils
+        if ResponseAPILoggingUtils._is_response_api_usage(usage_obj):
+            # Transform ResponseAPIUsage to standard Usage format
+            transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+            return {
+                "prompt_tokens": transformed_usage.prompt_tokens,
+                "completion_tokens": transformed_usage.completion_tokens,
+            }
+        else:
+            return {
+                "prompt_tokens": usage_obj.prompt_tokens,
+                "completion_tokens": usage_obj.completion_tokens,
+            }
 
     def _log_langfuse_v2(  # noqa: PLR0915
         self,
@@ -683,16 +703,33 @@ class LangFuseLogger:
                 _usage_obj = getattr(response_obj, "usage", None)
 
                 if _usage_obj:
-                    usage = {
-                        "prompt_tokens": _usage_obj.prompt_tokens,
-                        "completion_tokens": _usage_obj.completion_tokens,
-                        "total_cost": cost if self._supports_costs() else None,
-                    }
-                    usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
-                                                        output=_usage_obj.completion_tokens,
-                                                        total=_usage_obj.total_tokens,
-                                                        cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
-                                                        cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
+                    # Handle ResponseAPIUsage format (new OpenAI Responses API)
+                    from litellm.responses.utils import ResponseAPILoggingUtils
+                    if ResponseAPILoggingUtils._is_response_api_usage(_usage_obj):
+                        # Transform ResponseAPIUsage to standard Usage format
+                        transformed_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_obj)
+                        usage = {
+                            "prompt_tokens": transformed_usage.prompt_tokens,
+                            "completion_tokens": transformed_usage.completion_tokens,
+                            "total_cost": cost if self._supports_costs() else None,
+                        }
+                        usage_details = LangfuseUsageDetails(input=transformed_usage.prompt_tokens,
+                                                            output=transformed_usage.completion_tokens,
+                                                            total=transformed_usage.total_tokens,
+                                                            cache_creation_input_tokens=getattr(transformed_usage, 'cache_creation_input_tokens', 0),
+                                                            cache_read_input_tokens=getattr(transformed_usage, 'cache_read_input_tokens', 0))
+                    else:
+                        # Handle standard Usage format
+                        usage = {
+                            "prompt_tokens": _usage_obj.prompt_tokens,
+                            "completion_tokens": _usage_obj.completion_tokens,
+                            "total_cost": cost if self._supports_costs() else None,
+                        }
+                        usage_details = LangfuseUsageDetails(input=_usage_obj.prompt_tokens,
+                                                            output=_usage_obj.completion_tokens,
+                                                            total=_usage_obj.total_tokens,
+                                                            cache_creation_input_tokens=_usage_obj.get('cache_creation_input_tokens', 0),
+                                                            cache_read_input_tokens=_usage_obj.get('cache_read_input_tokens', 0))
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
