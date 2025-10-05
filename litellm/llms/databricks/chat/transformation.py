@@ -110,7 +110,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         try:
             # Use get_model_info to check if the model exists and has foundational_model flag
             model_info = get_model_info(model=model, custom_llm_provider="databricks")
-            return model_info.get("foundational_model", False)
+            return bool(model_info.get("foundational_model", False))
         except Exception:
             # If there's any error accessing the model info, fall back to False
             return False
