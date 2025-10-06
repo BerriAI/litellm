@@ -602,6 +602,50 @@ class MCPServerManager:
             return tool_name not in server.disallowed_tools
         return True
 
+    def check_tool_permission_for_key_team(
+        self,
+        tool_name: str,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """
+        Check if a tool is allowed based on key/team object_permission.mcp_tool_permissions.
+        Raises HTTPException if tool is not allowed.
+
+        Args:
+            tool_name: Name of the tool to check
+            server: MCPServer object
+            user_api_key_auth: User authentication with potential object_permission
+
+        Raises:
+            HTTPException: If tool is not allowed for this key/team
+        """
+        if not user_api_key_auth or not user_api_key_auth.object_permission:
+            return
+
+        mcp_tool_permissions = user_api_key_auth.object_permission.mcp_tool_permissions
+        
+        if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
+            return
+        
+        server_id = server.server_id
+        
+        # Check if this server has tool-level restrictions
+        if server_id not in mcp_tool_permissions:
+            return
+        
+        allowed_tools = mcp_tool_permissions[server_id]
+        
+        # If tool list exists and is not empty, enforce it
+        if allowed_tools and isinstance(allowed_tools, list):
+            if tool_name not in allowed_tools:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": f"Tool '{tool_name}' is not allowed for your key/team on server '{server.name}'. Allowed tools: {', '.join(allowed_tools)}. Contact proxy admin for access."
+                    },
+                )
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -620,6 +664,13 @@ class MCPServerManager:
                     "error": f"Tool {name} is not allowed for server {server.name}. Contact proxy admin to allow this tool."
                 },
             )
+
+        ## check tool-level permissions from object_permission
+        self.check_tool_permission_for_key_team(
+            tool_name=name,
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+        )
 
         pre_hook_kwargs = {
             "name": name,
