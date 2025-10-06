@@ -24,10 +24,10 @@ export const convertImageToBase64 = (file: File): Promise<string> => {
 
 export const createChatMultimodalMessage = async (
   inputMessage: string,
-  file: File
+  file: File,
 ): Promise<{ role: string; content: ChatMultimodalContent[] }> => {
   const base64DataUri = await convertImageToBase64(file);
-  
+
   return {
     role: "user",
     content: [
@@ -46,30 +46,30 @@ export const createChatDisplayMessage = (
   inputMessage: string,
   hasFile: boolean,
   filePreviewUrl?: string,
-  fileName?: string
+  fileName?: string,
 ): MessageType => {
   let attachmentText = "";
   if (hasFile && fileName) {
-    attachmentText = fileName.toLowerCase().endsWith('.pdf') ? "[PDF attached]" : "[Image attached]";
+    attachmentText = fileName.toLowerCase().endsWith(".pdf") ? "[PDF attached]" : "[Image attached]";
   }
-  
-  const displayMessage: MessageType = { 
-    role: "user", 
-    content: hasFile ? `${inputMessage} ${attachmentText}` : inputMessage 
+
+  const displayMessage: MessageType = {
+    role: "user",
+    content: hasFile ? `${inputMessage} ${attachmentText}` : inputMessage,
   };
-  
+
   if (hasFile && filePreviewUrl) {
     displayMessage.imagePreviewUrl = filePreviewUrl;
   }
-  
+
   return displayMessage;
 };
 
 export const shouldShowChatAttachedImage = (message: MessageType): boolean => {
   return (
-    message.role === "user" && 
-    typeof message.content === "string" && 
-    (message.content.includes("[Image attached]") || message.content.includes("[PDF attached]")) && 
+    message.role === "user" &&
+    typeof message.content === "string" &&
+    (message.content.includes("[Image attached]") || message.content.includes("[PDF attached]")) &&
     !!message.imagePreviewUrl
   );
 };

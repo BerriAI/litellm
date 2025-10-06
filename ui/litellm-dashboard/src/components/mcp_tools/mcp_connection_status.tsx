@@ -1,13 +1,13 @@
-import React, { useEffect } from "react"
-import { Button, Spin, Alert } from "antd"
-import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons"
-import { Card, Title, Text } from "@tremor/react"
-import { useTestMCPConnection } from "../../hooks/useTestMCPConnection"
+import React, { useEffect } from "react";
+import { Button, Spin, Alert } from "antd";
+import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
+import { Card, Title, Text } from "@tremor/react";
+import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPConnectionStatusProps {
-  accessToken: string | null
-  formValues: Record<string, any>
-  onToolsLoaded?: (tools: any[]) => void
+  accessToken: string | null;
+  formValues: Record<string, any>;
+  onToolsLoaded?: (tools: any[]) => void;
 }
 
 const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, formValues, onToolsLoaded }) => {
@@ -15,16 +15,16 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
     accessToken,
     formValues,
     enabled: true, // Auto-fetch when required fields are available
-  })
+  });
 
   // Notify parent component when tools change
   useEffect(() => {
-    onToolsLoaded?.(tools)
-  }, [tools, onToolsLoaded])
+    onToolsLoaded?.(tools);
+  }, [tools, onToolsLoaded]);
 
   // Don't show anything if required fields aren't filled
   if (!canFetchTools && !formValues.url) {
-    return null
+    return null;
   }
 
   return (
@@ -116,7 +116,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
         )}
       </div>
     </Card>
-  )
-}
+  );
+};
 
-export default MCPConnectionStatus
+export default MCPConnectionStatus;

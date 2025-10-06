@@ -1,8 +1,8 @@
-import React, { useState } from "react"
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react"
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline"
-import { Tooltip } from "antd"
-import {PromptSpec} from "@/components/networking"
+import React, { useState } from "react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react";
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline";
+import { Tooltip } from "antd";
+import { PromptSpec } from "@/components/networking";
 import {
   ColumnDef,
   flexRender,
@@ -10,16 +10,15 @@ import {
   getSortedRowModel,
   SortingState,
   useReactTable,
-} from "@tanstack/react-table"
-
+} from "@tanstack/react-table";
 
 interface PromptTableProps {
-  promptsList: PromptSpec[]
-  isLoading: boolean
-  onPromptClick?: (id: string) => void
-  onDeleteClick?: (id: string, name: string) => void
-  accessToken: string | null
-  isAdmin: boolean
+  promptsList: PromptSpec[];
+  isLoading: boolean;
+  onPromptClick?: (id: string) => void;
+  onDeleteClick?: (id: string, name: string) => void;
+  accessToken: string | null;
+  isAdmin: boolean;
 }
 
 const PromptTable: React.FC<PromptTableProps> = ({
@@ -30,14 +29,14 @@ const PromptTable: React.FC<PromptTableProps> = ({
   accessToken,
   isAdmin,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }])
+  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
   // Format date helper function
   const formatDate = (dateString?: string) => {
-    if (!dateString) return "-"
-    const date = new Date(dateString)
-    return date.toLocaleString()
-  }
+    if (!dateString) return "-";
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
 
   const columns: ColumnDef<PromptSpec>[] = [
     {
@@ -60,66 +59,70 @@ const PromptTable: React.FC<PromptTableProps> = ({
       header: "Created At",
       accessorKey: "created_at",
       cell: ({ row }) => {
-        const prompt = row.original
+        const prompt = row.original;
         return (
           <Tooltip title={prompt.created_at}>
             <span className="text-xs">{formatDate(prompt.created_at)}</span>
           </Tooltip>
-        )
+        );
       },
     },
     {
       header: "Updated At",
       accessorKey: "updated_at",
       cell: ({ row }) => {
-        const prompt = row.original
+        const prompt = row.original;
         return (
           <Tooltip title={prompt.updated_at}>
             <span className="text-xs">{formatDate(prompt.updated_at)}</span>
           </Tooltip>
-        )
+        );
       },
     },
     {
       header: "Type",
       accessorKey: "prompt_info.prompt_type",
       cell: ({ row }) => {
-        const prompt = row.original
+        const prompt = row.original;
         return (
           <Tooltip title={prompt.prompt_info.prompt_type}>
             <span className="text-xs">{prompt.prompt_info.prompt_type}</span>
           </Tooltip>
-        )
+        );
       },
     },
-    ...(isAdmin ? [{
-      header: "Actions",
-      id: "actions",
-      enableSorting: false,
-      cell: ({ row }: any) => {
-        const prompt = row.original
-        const promptName = prompt.prompt_id || "Unknown Prompt"
-        
-        return (
-          <div className="flex items-center gap-1">
-            <Tooltip title="Delete prompt">
-              <Button
-                size="xs"
-                variant="light"
-                color="red"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDeleteClick?.(prompt.prompt_id, promptName)
-                }}
-                icon={TrashIcon}
-                className="text-red-500 hover:text-red-700 hover:bg-red-50"
-              />
-            </Tooltip>
-          </div>
-        )
-      },
-    }] : []),
-  ]
+    ...(isAdmin
+      ? [
+          {
+            header: "Actions",
+            id: "actions",
+            enableSorting: false,
+            cell: ({ row }: any) => {
+              const prompt = row.original;
+              const promptName = prompt.prompt_id || "Unknown Prompt";
+
+              return (
+                <div className="flex items-center gap-1">
+                  <Tooltip title="Delete prompt">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="red"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteClick?.(prompt.prompt_id, promptName);
+                      }}
+                      icon={TrashIcon}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                    />
+                  </Tooltip>
+                </div>
+              );
+            },
+          },
+        ]
+      : []),
+  ];
 
   const table = useReactTable({
     data: promptsList,
@@ -131,7 +134,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
-  })
+  });
 
   return (
     <div className="rounded-lg custom-border relative">
@@ -179,10 +182,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
               table.getRowModel().rows.map((row) => (
                 <TableRow key={row.id} className="h-8">
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap"
-                    >
+                    <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
@@ -201,7 +201,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
         </Table>
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default PromptTable
+export default PromptTable;

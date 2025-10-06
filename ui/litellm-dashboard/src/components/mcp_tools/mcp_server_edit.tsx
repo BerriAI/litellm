@@ -18,7 +18,13 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess, availableAccessGroups }) => {
+const MCPServerEdit: React.FC<MCPServerEditProps> = ({
+  mcpServer,
+  accessToken,
+  onCancel,
+  onSuccess,
+  availableAccessGroups,
+}) => {
   const [form] = Form.useForm();
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
@@ -45,8 +51,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   useEffect(() => {
     if (mcpServer.mcp_access_groups) {
       // If access groups are objects, extract the name property; if strings, use as is
-      const groupNames = mcpServer.mcp_access_groups.map((g: any) => typeof g === 'string' ? g : g.name || String(g));
-      form.setFieldValue('mcp_access_groups', groupNames);
+      const groupNames = mcpServer.mcp_access_groups.map((g: any) => (typeof g === "string" ? g : g.name || String(g)));
+      form.setFieldValue("mcp_access_groups", groupNames);
     }
   }, [mcpServer]);
 
@@ -61,7 +67,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
     }
 
     setIsLoadingTools(true);
-    
+
     try {
       // Prepare the MCP server config from existing server data
       const mcpServerConfig = {
@@ -74,7 +80,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       };
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig);
-      
+
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
@@ -99,10 +105,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
           <span className="font-medium">{group}</span>
         </div>
       ),
-    }))
+    }));
 
     // If search value doesn't match any existing group and is not empty, add "create new group" option
-    if (searchValue && !availableAccessGroups.some(group => group.toLowerCase().includes(searchValue.toLowerCase()))) {
+    if (
+      searchValue &&
+      !availableAccessGroups.some((group) => group.toLowerCase().includes(searchValue.toLowerCase()))
+    ) {
       existingOptions.push({
         value: searchValue,
         label: (
@@ -112,17 +121,19 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             <span className="text-gray-400 text-xs ml-1">create new group</span>
           </div>
         ),
-      })
+      });
     }
 
-    return existingOptions
-  }
+    return existingOptions;
+  };
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const accessGroups = (values.mcp_access_groups || []).map((g: any) => typeof g === 'string' ? g : g.name || String(g));
+      const accessGroups = (values.mcp_access_groups || []).map((g: any) =>
+        typeof g === "string" ? g : g.name || String(g),
+      );
 
       // Prepare the payload with cost configuration and permission fields
       const payload = {
@@ -131,7 +142,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         mcp_info: {
           server_name: values.server_name || values.url,
           description: values.description,
-          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
+          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
         alias: values.alias,
@@ -158,33 +169,48 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       <TabPanels className="mt-6">
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
-            <Form.Item label="MCP Server Name" name="server_name" rules={[{
-              validator: (_, value) => validateMCPServerName(value),
-            }]}>
+            <Form.Item
+              label="MCP Server Name"
+              name="server_name"
+              rules={[
+                {
+                  validator: (_, value) => validateMCPServerName(value),
+                },
+              ]}
+            >
               <TextInput />
             </Form.Item>
-            <Form.Item label="Alias" name="alias" rules={[{
-                validator: (_, value) => validateMCPServerName(value),
-              }]}
+            <Form.Item
+              label="Alias"
+              name="alias"
+              rules={[
+                {
+                  validator: (_, value) => validateMCPServerName(value),
+                },
+              ]}
             >
               <TextInput onChange={() => setAliasManuallyEdited(true)} />
             </Form.Item>
             <Form.Item label="Description" name="description">
               <TextInput />
             </Form.Item>
-            <Form.Item label="MCP Server URL" name="url" rules={[
-              { required: true, message: "Please enter a server URL" },
-              { validator: (_, value) => validateMCPServerUrl(value) },
-            ]}> 
+            <Form.Item
+              label="MCP Server URL"
+              name="url"
+              rules={[
+                { required: true, message: "Please enter a server URL" },
+                { validator: (_, value) => validateMCPServerUrl(value) },
+              ]}
+            >
               <TextInput />
             </Form.Item>
-            <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}> 
+            <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="http">HTTP</Select.Option>
               </Select>
             </Form.Item>
-            <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}> 
+            <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
               <Select>
                 <Select.Option value="none">None</Select.Option>
                 <Select.Option value="api_key">API Key</Select.Option>
@@ -228,16 +254,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             </div>
           </Form>
         </TabPanel>
-        
+
         <TabPanel>
           <div className="space-y-6">
-              <MCPServerCostConfig
-                value={costConfig}
-                onChange={setCostConfig}
-                tools={tools}
-                disabled={isLoadingTools}
-              />
-            
+            <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
+
             <div className="flex justify-end gap-2">
               <AntdButton onClick={onCancel}>Cancel</AntdButton>
               <Button onClick={() => form.submit()}>Save Changes</Button>

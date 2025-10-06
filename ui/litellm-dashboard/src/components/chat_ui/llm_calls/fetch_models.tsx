@@ -10,9 +10,7 @@ export interface ModelGroup {
 /**
  * Fetches available models using modelHubCall and formats them for the selection dropdown.
  */
-export const fetchAvailableModels = async (
-  accessToken: string
-): Promise<ModelGroup[]> => {
+export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
   try {
     const fetchedModels = await modelHubCall(accessToken);
     console.log("model_info:", fetchedModels);
