@@ -42,8 +42,12 @@ def get_azure_ad_token_provider(
         )
 
     cred: str = (
-        azure_credential.value if azure_credential else None
-        or os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
+        azure_credential.value
+        if azure_credential
+        else None
+        or os.environ.get(
+            "AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential
+        )
         or AzureCredentialType.ClientSecretCredential
     )
     credential: Optional[

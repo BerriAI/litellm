@@ -25,31 +25,28 @@ def test_non_stream_response_when_stream_requested_sync():
     the sync handler correctly transforms it to generate_content format.
     """
     from litellm.types.utils import Choices
-    
+
     # Mock a non-stream response (ModelResponse with valid choices)
     mock_response = ModelResponse(
         id="test-123",
         choices=[
             Choices(
                 index=0,
-                message={
-                    "role": "assistant",
-                    "content": "Hello, world!"
-                },
-                finish_reason="stop"
+                message={"role": "assistant", "content": "Hello, world!"},
+                finish_reason="stop",
             )
         ],
         created=1234567890,
         model="gpt-3.5-turbo",
-        object="chat.completion"
+        object="chat.completion",
     )
-    
+
     # Create an instance of the adapter
     adapter = GoogleGenAIAdapter()
-    
+
     # Test the adapter's translate_completion_to_generate_content method directly
     result = adapter.translate_completion_to_generate_content(mock_response)
-    
+
     # Verify the result is a valid Google GenAI format response
     assert "candidates" in result
     assert isinstance(result["candidates"], list)
@@ -70,31 +67,28 @@ async def test_non_stream_response_when_stream_requested_async():
     the async handler correctly transforms it to generate_content format.
     """
     from litellm.types.utils import Choices
-    
+
     # Mock a non-stream response (ModelResponse with valid choices)
     mock_response = ModelResponse(
         id="test-123",
         choices=[
             Choices(
                 index=0,
-                message={
-                    "role": "assistant",
-                    "content": "Hello, world!"
-                },
-                finish_reason="stop"
+                message={"role": "assistant", "content": "Hello, world!"},
+                finish_reason="stop",
             )
         ],
         created=1234567890,
         model="gpt-3.5-turbo",
-        object="chat.completion"
+        object="chat.completion",
     )
-    
+
     # Create an instance of the adapter
     adapter = GoogleGenAIAdapter()
-    
+
     # Test the adapter's translate_completion_to_generate_content method directly
     result = adapter.translate_completion_to_generate_content(mock_response)
-    
+
     # Verify the result is a valid Google GenAI format response
     assert "candidates" in result
     assert isinstance(result["candidates"], list)
@@ -116,12 +110,12 @@ def test_stream_response_when_stream_requested_sync():
     # Mock a stream response
     mock_stream = MagicMock()
     mock_stream.__iter__ = MagicMock(return_value=iter([]))
-    
+
     # Mock the GoogleGenAIAdapter's translate_completion_output_params_streaming method
     with patch.object(
-        GoogleGenAIAdapter, 
-        "translate_completion_output_params_streaming", 
-        return_value=mock_stream
+        GoogleGenAIAdapter,
+        "translate_completion_output_params_streaming",
+        return_value=mock_stream,
     ) as mock_translate:
         with patch("litellm.completion", return_value=mock_stream):
             # Call the handler with stream=True
@@ -129,9 +123,9 @@ def test_stream_response_when_stream_requested_sync():
                 model="gemini-pro",
                 contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
                 litellm_params={},  # Empty dict for params
-                stream=True
+                stream=True,
             )
-            
+
             # Verify that translate_completion_output_params_streaming was called
             mock_translate.assert_called_once_with(mock_stream)
             # Verify the result is the transformed stream
@@ -146,23 +140,27 @@ async def test_stream_response_when_stream_requested_async():
     """
     # Mock a stream response
     mock_stream = MagicMock()
-    mock_stream.__aiter__ = AsyncMock(return_value=iter([]))  # Return an empty async iterator
-    
+    mock_stream.__aiter__ = AsyncMock(
+        return_value=iter([])
+    )  # Return an empty async iterator
+
     # Mock the GoogleGenAIAdapter's translate_completion_output_params_streaming method
     with patch.object(
-        GoogleGenAIAdapter, 
-        "translate_completion_output_params_streaming", 
-        return_value=mock_stream
+        GoogleGenAIAdapter,
+        "translate_completion_output_params_streaming",
+        return_value=mock_stream,
     ) as mock_translate:
         with patch("litellm.acompletion", return_value=mock_stream):
             # Call the handler with stream=True
-            result = await GenerateContentToCompletionHandler.async_generate_content_handler(
-                model="gemini-pro",
-                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
-                litellm_params={},  # Empty dict for params
-                stream=True
+            result = (
+                await GenerateContentToCompletionHandler.async_generate_content_handler(
+                    model="gemini-pro",
+                    contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                    litellm_params={},  # Empty dict for params
+                    stream=True,
+                )
             )
-            
+
             # Verify that translate_completion_output_params_streaming was called
             mock_translate.assert_called_once_with(mock_stream)
             # Verify the result is the transformed stream
@@ -176,21 +174,23 @@ def test_stream_transformation_error_sync():
     # Mock a stream response
     mock_stream = MagicMock()
     mock_stream.__iter__ = MagicMock(return_value=iter([]))
-    
+
     # Mock the GoogleGenAIAdapter's translate_completion_output_params_streaming method to return None
     with patch.object(
-        GoogleGenAIAdapter, 
-        "translate_completion_output_params_streaming", 
-        return_value=None
+        GoogleGenAIAdapter,
+        "translate_completion_output_params_streaming",
+        return_value=None,
     ):
         with patch("litellm.completion", return_value=mock_stream):
             # Call the handler with stream=True and expect a ValueError
-            with pytest.raises(ValueError, match="Failed to transform streaming response"):
+            with pytest.raises(
+                ValueError, match="Failed to transform streaming response"
+            ):
                 GenerateContentToCompletionHandler.generate_content_handler(
                     model="gemini-pro",
                     contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
                     litellm_params={},  # Empty dict for params
-                    stream=True
+                    stream=True,
                 )
 
 
@@ -202,19 +202,21 @@ async def test_stream_transformation_error_async():
     # Mock a stream response
     mock_stream = MagicMock()
     mock_stream.__aiter__ = AsyncMock(return_value=mock_stream)
-    
+
     # Mock the GoogleGenAIAdapter's translate_completion_output_params_streaming method to return None
     with patch.object(
-        GoogleGenAIAdapter, 
-        "translate_completion_output_params_streaming", 
-        return_value=None
+        GoogleGenAIAdapter,
+        "translate_completion_output_params_streaming",
+        return_value=None,
     ):
         with patch("litellm.acompletion", return_value=mock_stream):
             # Call the handler with stream=True and expect a ValueError
-            with pytest.raises(ValueError, match="Failed to transform streaming response"):
+            with pytest.raises(
+                ValueError, match="Failed to transform streaming response"
+            ):
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
                     model="gemini-pro",
                     contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
                     litellm_params={},  # Empty dict for params
-                    stream=True
+                    stream=True,
                 )

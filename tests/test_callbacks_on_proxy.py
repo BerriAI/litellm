@@ -168,15 +168,19 @@ async def test_check_num_callbacks_on_lowest_latency():
 
         await asyncio.sleep(30)
 
-        num_callbacks_1, num_alerts_1, all_litellm_callbacks_1 = (
-            await get_active_callbacks(session=session)
-        )
+        (
+            num_callbacks_1,
+            num_alerts_1,
+            all_litellm_callbacks_1,
+        ) = await get_active_callbacks(session=session)
 
         await asyncio.sleep(30)
 
-        num_callbacks_2, num_alerts_2, all_litellm_callbacks_2 = (
-            await get_active_callbacks(session=session)
-        )
+        (
+            num_callbacks_2,
+            num_alerts_2,
+            all_litellm_callbacks_2,
+        ) = await get_active_callbacks(session=session)
 
         print(
             "diff in callbacks all_litellm_callbacks_2 - all_litellm_callbacks_1 =",
@@ -187,9 +191,11 @@ async def test_check_num_callbacks_on_lowest_latency():
 
         await asyncio.sleep(30)
 
-        num_callbacks_3, num_alerts_3, all_litellm_callbacks_3 = (
-            await get_active_callbacks(session=session)
-        )
+        (
+            num_callbacks_3,
+            num_alerts_3,
+            all_litellm_callbacks_3,
+        ) = await get_active_callbacks(session=session)
 
         print(
             "diff in callbacks all_litellm_callbacks_3 - all_litellm_callbacks_2 =",

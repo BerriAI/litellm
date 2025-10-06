@@ -604,19 +604,35 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = self.wait_for_log(log_exporter, "gen_ai.")
         self.assertTrue(logs, "Expected at least one gen_ai log")
 
-        user_logs = [log for log in logs if log.log_record.attributes.get("event_name") == "gen_ai.content.prompt"]
+        user_logs = [
+            log
+            for log in logs
+            if log.log_record.attributes.get("event_name") == "gen_ai.content.prompt"
+        ]
         self.assertTrue(user_logs, "did not see a gen_ai.content.prompt log")
         # check log bodies
         user_prompt = user_logs[0].log_record.attributes.get("gen_ai.prompt")
-        self.assertEqual("What is the capital of France?", user_prompt, "did not see a prompt message")
+        self.assertEqual(
+            "What is the capital of France?",
+            user_prompt,
+            "did not see a prompt message",
+        )
 
-        choice_logs = [log for log in logs if log.log_record.attributes.get("event_name") == "gen_ai.content.completion"]
+        choice_logs = [
+            log
+            for log in logs
+            if log.log_record.attributes.get("event_name")
+            == "gen_ai.content.completion"
+        ]
         self.assertTrue(choice_logs, "did not see a gen_ai.content.completion event")
 
         choice_response = choice_logs[0].log_record.body
         self.assertIsNotNone(choice_response, "did not see a response message")
-        self.assertEqual("stop", choice_response.get("finish_reason"), "did not see expected finish reason")
-
+        self.assertEqual(
+            "stop",
+            choice_response.get("finish_reason"),
+            "did not see expected finish reason",
+        )
 
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on
@@ -670,8 +686,7 @@ class TestOpenTelemetry(unittest.TestCase):
         # )
         # model attribute should be on that span
         found = any(
-            s.attributes
-            and s.attributes.get("gen_ai.request.model") == self.MODEL
+            s.attributes and s.attributes.get("gen_ai.request.model") == self.MODEL
             for s in spans
         )
         self.assertTrue(found, "expected gen_ai.request.model on span attributes")
@@ -755,13 +770,7 @@ class TestOpenTelemetry(unittest.TestCase):
     def test_get_span_name_with_generation_name(self):
         """Test _get_span_name returns generation_name when present"""
         otel = OpenTelemetry()
-        kwargs = {
-            "litellm_params": {
-                "metadata": {
-                    "generation_name": "custom_span"
-                }
-            }
-        }
+        kwargs = {"litellm_params": {"metadata": {"generation_name": "custom_span"}}}
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, "custom_span")
 
@@ -774,7 +783,7 @@ class TestOpenTelemetry(unittest.TestCase):
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
 
-    @patch('litellm.turn_off_message_logging', False)
+    @patch("litellm.turn_off_message_logging", False)
     def test_maybe_log_raw_request_creates_span(self):
         """Test _maybe_log_raw_request creates span when logging enabled"""
         from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME
@@ -790,12 +799,16 @@ class TestOpenTelemetry(unittest.TestCase):
         otel._to_ns = MagicMock(return_value=1234567890)
 
         kwargs = {"litellm_params": {"metadata": {}}}
-        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+        otel._maybe_log_raw_request(
+            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+        )
 
         mock_tracer.start_span.assert_called_once()
-        self.assertEqual(mock_tracer.start_span.call_args[1]['name'], RAW_REQUEST_SPAN_NAME)
+        self.assertEqual(
+            mock_tracer.start_span.call_args[1]["name"], RAW_REQUEST_SPAN_NAME
+        )
 
-    @patch('litellm.turn_off_message_logging', True)
+    @patch("litellm.turn_off_message_logging", True)
     def test_maybe_log_raw_request_skips_when_logging_disabled(self):
         """Test _maybe_log_raw_request skips when logging disabled"""
         otel = OpenTelemetry()
@@ -803,6 +816,8 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
 
         kwargs = {"litellm_params": {"metadata": {}}}
-        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+        otel._maybe_log_raw_request(
+            kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+        )
 
         mock_tracer.start_span.assert_not_called()

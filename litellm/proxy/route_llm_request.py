@@ -128,9 +128,8 @@ async def route_request(
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif (
-            data["model"] in router_model_names
-            or llm_router.has_model_id(data["model"])
+        elif data["model"] in router_model_names or llm_router.has_model_id(
+            data["model"]
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 

@@ -198,7 +198,6 @@ def test_router_specific_model_via_id():
     reason="Router no longer creates clients, this is delegated to the provider integration."
 )
 def test_router_azure_ai_client_init():
-
     _deployment = {
         "model_name": "meta-llama-3-70b",
         "litellm_params": {

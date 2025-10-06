@@ -64,7 +64,9 @@ async def get_deployments_for_tag(
         )
         return healthy_deployments
 
-    verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
+    verbose_logger.debug(
+        "request metadata: %s", request_kwargs.get(metadata_variable_name)
+    )
     if metadata_variable_name in request_kwargs:
         metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
@@ -101,7 +103,11 @@ async def get_deployments_for_tag(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
+            return (
+                new_healthy_deployments
+                if len(new_healthy_deployments) > 0
+                else default_deployments
+            )
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []

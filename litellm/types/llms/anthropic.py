@@ -442,6 +442,7 @@ class AnthropicThinkingParam(TypedDict, total=False):
     type: Literal["enabled"]
     budget_tokens: int
 
+
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_SEARCH = "web_search"
     BASH = "bash"
@@ -449,8 +450,10 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     CODE_EXECUTION = "code_execution"
     WEB_FETCH = "web_fetch"
 
+
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
     """
+
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"

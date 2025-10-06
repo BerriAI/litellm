@@ -103,6 +103,7 @@ class OCIServingMode(BaseModel):
     endpointId: Optional[str] = None
     modelId: Optional[str] = None
 
+
 class OCICompletionPayload(BaseModel):
     """Pydantic model for the complete OCI chat request body."""
 

@@ -66,7 +66,9 @@ def test_gitlab_prompt_manager_with_prompts_path(mock_client_class):
 
     manager = GitLabPromptManager(config, prompt_id="greet/hi")
     # Expected path: prompts/chat/greet/hi.prompt
-    mock_client.get_file_content.assert_called_with("prompts/chat/greet/hi.prompt", ref=None)
+    mock_client.get_file_content.assert_called_with(
+        "prompts/chat/greet/hi.prompt", ref=None
+    )
 
     rendered = manager.prompt_manager.render_template("greet/hi", {"name": "World"})
     assert rendered == "Hello World!"
@@ -94,8 +96,8 @@ def test_gitlab_prompt_manager_config_validation_via_client_ctor():
     Ensures manager surfaces the ValueError while building prompt_manager.
     """
     with patch(
-            "litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient",
-            side_effect=ValueError("project and access_token are required"),
+        "litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient",
+        side_effect=ValueError("project and access_token are required"),
     ):
         with pytest.raises(ValueError, match="project and access_token are required"):
             GitLabPromptManager({}).prompt_manager
@@ -271,7 +273,7 @@ def test_gitlab_template_manager_load_all_prompts(mock_client_class):
         "prompts/sub/b.prompt",
     ]
     mock_client.get_file_content.side_effect = [
-        "Hello {{x}}",        # for a.prompt
+        "Hello {{x}}",  # for a.prompt
         "---\nmodel: gpt-4\n---\nUser: {{y}}",  # for b.prompt with frontmatter
     ]
     mock_client_class.return_value = mock_client
@@ -317,6 +319,7 @@ def test_gitlab_prompt_manager_post_call_hook_passthrough(mock_client_class):
     )
     assert out is dummy_response
 
+
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
 def test_gitlab_prompt_version_precedence_prompt_version_wins(mock_client_class):
     """
@@ -342,8 +345,8 @@ User: {{q}}"""
         litellm_params={},
         prompt_id="promptA",
         prompt_variables={"q": "hello"},
-        prompt_version="sha-111",         # highest precedence
-        git_ref="feature/branch-xyz",     # should be ignored because prompt_version provided
+        prompt_version="sha-111",  # highest precedence
+        git_ref="feature/branch-xyz",  # should be ignored because prompt_version provided
     )
 
     mock_client.get_file_content.assert_any_call("promptA.prompt", ref="sha-111")
@@ -370,14 +373,16 @@ def test_gitlab_prompt_version_ref_kwarg_used_when_no_prompt_version(mock_client
         litellm_params={},
         prompt_id="promptB",
         prompt_variables={"q": "hi"},
-        git_ref="hotfix/ref-2",   # used since prompt_version not provided
+        git_ref="hotfix/ref-2",  # used since prompt_version not provided
     )
 
     mock_client.get_file_content.assert_any_call("promptB.prompt", ref="hotfix/ref-2")
 
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")
-def test_gitlab_prompt_version_manager_override_used_when_no_prompt_version_or_kwarg(mock_client_class):
+def test_gitlab_prompt_version_manager_override_used_when_no_prompt_version_or_kwarg(
+    mock_client_class,
+):
     """
     If neither prompt_version nor git_ref is supplied, fall back to manager-level ref override.
     """
@@ -396,7 +401,9 @@ def test_gitlab_prompt_version_manager_override_used_when_no_prompt_version_or_k
         prompt_variables={"q": "hey"},
     )
 
-    mock_client.get_file_content.assert_any_call("promptC.prompt", ref="manager-override-ref")
+    mock_client.get_file_content.assert_any_call(
+        "promptC.prompt", ref="manager-override-ref"
+    )
 
 
 @patch("litellm.integrations.gitlab.gitlab_prompt_manager.GitLabClient")

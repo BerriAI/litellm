@@ -47,11 +47,8 @@ class SensitiveDataMasker:
         # Split on underscores and check if any segment matches the pattern
         # This avoids false positives like "max_tokens" matching "token"
         # but still catches "api_key", "access_token", etc.
-        key_segments = key_lower.replace('-', '_').split('_')
-        result = any(
-            pattern in key_segments
-            for pattern in self.sensitive_patterns
-        )
+        key_segments = key_lower.replace("-", "_").split("_")
+        result = any(pattern in key_segments for pattern in self.sensitive_patterns)
         return result
 
     def mask_dict(

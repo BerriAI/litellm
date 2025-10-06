@@ -267,7 +267,10 @@ class CompletionCustomHandler(
         try:
             print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
             self.states.append("async_success")
-            print("############### CompletionCustomHandler async success, kwargs: ", kwargs)
+            print(
+                "############### CompletionCustomHandler async success, kwargs: ",
+                kwargs,
+            )
             ## START TIME
             assert isinstance(start_time, datetime)
             ## END TIME
@@ -627,18 +630,14 @@ async def test_async_completion_azure_caching():
     router = Router(model_list=model_list)  # type: ignore
     response1 = await router.acompletion(
         model="gpt-4.1-nano",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
     )
     await asyncio.sleep(1)
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
         model="gpt-4.1-nano",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
@@ -664,7 +663,7 @@ async def test_async_completion_azure_caching_streaming():
     )
     litellm.callbacks = [customHandler_caching]
     unique_time = uuid.uuid4()
-    
+
     # Use Router instead of direct litellm.acompletion to get router-specific metadata
     model_list = [
         {
@@ -680,12 +679,10 @@ async def test_async_completion_azure_caching_streaming():
         },
     ]
     router = Router(model_list=model_list)
-    
+
     response1 = await router.acompletion(
         model="gpt-4.1-nano",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
         stream=True,
     )
@@ -696,9 +693,7 @@ async def test_async_completion_azure_caching_streaming():
     print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
     response2 = await router.acompletion(
         model="gpt-4.1-nano",
-        messages=[
-            {"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}
-        ],
+        messages=[{"role": "user", "content": f"Hi 👋 - i'm async azure {unique_time}"}],
         caching=True,
         stream=True,
     )
@@ -725,12 +720,16 @@ async def test_async_embedding_azure_caching():
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
     )
-    router = Router(model_list=[{
-        "model_name": "text-embedding-ada-002",
-        "litellm_params": {
-            "model": "openai/text-embedding-ada-002",
-        },
-    }])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            }
+        ]
+    )
     litellm.callbacks = [customHandler_caching]
     unique_time = time.time()
     response1 = await router.aembedding(
@@ -799,7 +798,6 @@ async def test_rate_limit_error_callback():
     with patch.object(
         customHandler, "log_model_group_rate_limit_error", new=AsyncMock()
     ) as mock_client:
-
         print(
             f"customHandler.log_model_group_rate_limit_error: {customHandler.log_model_group_rate_limit_error}"
         )
@@ -818,4 +816,3 @@ async def test_rate_limit_error_callback():
 
         assert "original_model_group" in mock_client.call_args.kwargs
         assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"
-

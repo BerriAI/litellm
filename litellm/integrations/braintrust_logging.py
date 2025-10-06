@@ -42,9 +42,9 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: Dict[str, str] = (
-            {}
-        )  # Cache mapping project names to IDs
+        self._project_id_cache: Dict[
+            str, str
+        ] = {}  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )

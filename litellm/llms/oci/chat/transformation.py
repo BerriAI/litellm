@@ -309,7 +309,9 @@ class OCIChatConfig(BaseConfig):
         private_key = (
             load_private_key_from_str(oci_key)
             if oci_key
-            else load_private_key_from_file(oci_key_file) if oci_key_file else None
+            else load_private_key_from_file(oci_key_file)
+            if oci_key_file
+            else None
         )
 
         if private_key is None:
