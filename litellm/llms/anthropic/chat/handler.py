@@ -4,10 +4,12 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
+from collections import deque
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Deque,
     Dict,
     List,
     Optional,
@@ -498,6 +500,7 @@ class ModelResponseIterator:
         self.is_response_format_tool: bool = False
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
+        self._pending_chunks: Deque[Union[ModelResponseStream, ModelResponse]] = deque()
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -851,36 +854,22 @@ class ModelResponseIterator:
 
     def __next__(self):
         try:
-            chunk = self.response_iterator.__next__()
+            if self._pending_chunks:
+                return self._pending_chunks.popleft()
+
+            while True:
+                chunk = self.response_iterator.__next__()
+                self._buffer_chunk(chunk)
+
+                if self._pending_chunks:
+                    return self._pending_chunks.popleft()
+
         except StopIteration:
+            if self._pending_chunks:
+                return self._pending_chunks.popleft()
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-
-            if str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                return self.chunk_parser(chunk=data_json)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -889,36 +878,22 @@ class ModelResponseIterator:
 
     async def __anext__(self):
         try:
-            chunk = await self.async_response_iterator.__anext__()
+            if self._pending_chunks:
+                return self._pending_chunks.popleft()
+
+            while True:
+                chunk = await self.async_response_iterator.__anext__()
+                self._buffer_chunk(chunk)
+
+                if self._pending_chunks:
+                    return self._pending_chunks.popleft()
+
         except StopAsyncIteration:
+            if self._pending_chunks:
+                return self._pending_chunks.popleft()
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-
-            if str_line.startswith("data:"):
-                data_json = json.loads(str_line[5:])
-                return self.chunk_parser(chunk=data_json)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
@@ -941,3 +916,65 @@ class ModelResponseIterator:
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)
+
+    def _buffer_chunk(self, chunk: Any) -> None:
+        if chunk is None:
+            return
+
+        if isinstance(chunk, (ModelResponseStream, ModelResponse)):
+            self._pending_chunks.append(chunk)
+            return
+
+        if isinstance(chunk, (bytes, bytearray)):
+            chunk_str: Any = chunk.decode("utf-8", errors="ignore")
+        else:
+            chunk_str = chunk
+
+        if not isinstance(chunk_str, str):
+            return
+
+        payloads = self._extract_json_payloads(chunk_str)
+        for payload in payloads:
+            try:
+                parsed_chunk = self.chunk_parser(chunk=payload)
+                self._pending_chunks.append(parsed_chunk)
+            except Exception:
+                continue
+
+    def _extract_json_payloads(self, raw_chunk: str) -> List[dict]:
+        if "data:" not in raw_chunk:
+            return []
+
+        payloads: List[dict] = []
+        segments = raw_chunk.split("\n\n")
+
+        for segment in segments:
+            if "data:" not in segment:
+                continue
+
+            data_lines: List[str] = []
+            for line in segment.splitlines():
+                stripped_line = line.strip()
+                if not stripped_line:
+                    continue
+                if stripped_line.startswith("data:"):
+                    data_lines.append(stripped_line.split("data:", 1)[1].strip())
+
+            if not data_lines:
+                continue
+
+            data_str = "".join(data_lines).strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+
+            try:
+                payload = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(payload, dict) and payload.get("type") == "ping":
+                continue
+
+            payloads.append(payload)
+
+        return payloads
