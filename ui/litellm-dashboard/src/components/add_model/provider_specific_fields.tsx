@@ -566,36 +566,6 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
     },
   ],
-  [Providers.Voyage]: [{
-    key: "api_key",
-    label: "API Key",
-    type: "password",
-    required: true
-  }],
-  [Providers.JinaAI]: [{
-    key: "api_key",
-    label: "API Key",
-    type: "password",
-    required: true
-  }],
-  [Providers.VolcEngine]: [{
-    key: "api_key",
-    label: "API Key",
-    type: "password",
-    required: true
-  }],
-  [Providers.DeepInfra]: [{
-    key: "api_key",
-    label: "API Key",
-    type: "password",
-    required: true
-  }],
-  [Providers.Oracle]: [{
-    key: "api_key",
-    label: "API Key",
-    type: "password",
-    required: true
-  }],
   [Providers.IOIntelligence]: [
     {
       key: "api_base",
@@ -610,20 +580,7 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
       tooltip: "Get your API key from IO.NET dashboard"
     }
-  ]
-  [Providers.Snowflake]: [{
-    key: "api_key",
-    label: "Snowflake API Key / JWT Key for Authentication",
-    type: "password",
-    required: true
-  },
-  {
-    key: "api_base",
-    label: "Snowflake API Endpoint",
-    placeholder: "https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
-    tooltip: "Enter the full endpoint with path here. Example: https://1234567890.snowflakecomputing.com/api/v2/cortex/inference:complete",
-    required: true
-  }],
+  ],
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
