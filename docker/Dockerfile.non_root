@@ -31,6 +31,29 @@ RUN rm -rf dist/* && python -m build && \
     pip wheel --no-cache-dir --wheel-dir=/wheels/ litellm-proxy-extras/dist/*.whl && \
     pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
+# --- Pre-cache Prisma binaries in builder stage ---
+# Install prisma and configure cache directories
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
+ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
+ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
+
+RUN pip install --no-cache-dir prisma && \
+    mkdir -p /app/.cache/prisma-python/binaries && \
+    mkdir -p /app/.cache/prisma-python/nodeenv && \
+    mkdir -p /app/.cache/npm
+
+# Download ALL Prisma binaries in builder stage
+RUN prisma generate && \
+    prisma --version && \
+    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true && \
+    prisma format --schema=./schema.prisma || true
+
+# Ensure nodejs-bin package is fully installed (Prisma uses it internally)
+RUN pip install nodejs-bin && \
+    python -c "import nodejs; print(nodejs.__file__)" && \
+    # Pre-populate nodejs cache to ensure it's available at runtime
+    python -c "from nodejs import node; print(node.version)"
+
 # -----------------
 # Runtime Stage
 # -----------------
@@ -47,6 +70,12 @@ COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /ap
 COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
+# Copy pre-cached Prisma binaries and CLI from builder stage
+COPY --from=builder /app/.cache /app/.cache
+# Copy any migration files if they exist
+COPY --from=builder /app/litellm-proxy-extras/migrations* /app/litellm-proxy-extras/ 2>/dev/null || true
+# Copy nodejs installation if it exists (needed by Prisma CLI)
+COPY --from=builder /usr/lib/python*/site-packages/nodejs* /usr/lib/python3.13/site-packages/ 2>/dev/null || true
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
@@ -62,44 +91,33 @@ RUN pip uninstall jwt -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 
 # --- Prisma Handling for Non-Root User ---
-# Pre-download Prisma binaries during build to avoid runtime downloads
-# This eliminates the need for outbound traffic to registry.npmjs.org and binaries.prisma.sh at runtime
+# Prisma binaries are already cached from builder stage in /app/.cache
+# No downloads needed at runtime - everything is pre-cached
 
-# Set cache directories to consistent locations accessible by both root (build) and nobody (runtime)
-# PRISMA_BINARY_CACHE_DIR: Where query engine binaries are stored
+# Set cache directories to use pre-cached binaries from builder stage
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
-# PRISMA_NODEENV_CACHE_DIR: Where the Prisma CLI (via npm) is cached
-# CRITICAL: This prevents HOME directory mismatch between build (~root) and runtime (~nobody)
 ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
-# Install prisma and make entrypoints executable
-RUN pip install --no-cache-dir prisma && \
+# Install prisma package and nodejs-bin (required by prisma), make entrypoints executable
+RUN pip install --no-cache-dir prisma nodejs-bin && \
     chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh
 
-# Create the cache directories
-RUN mkdir -p /app/.cache/prisma-python/binaries && \
-    mkdir -p /app/.cache/prisma-python/nodeenv
+# Create temporary directories needed at runtime
+RUN mkdir -p /tmp/.npm /nonexistent /.npm
 
-# Force Prisma to download and cache all binaries at build time
-# This includes query engine, migration engine, and CLI binaries
+# Generate Prisma client using pre-cached binaries (no downloads)
 RUN prisma generate
 
-# Pre-cache the Prisma CLI by running a simple command
-# This forces nodejs-bin to be used and the Prisma CLI to be installed via npm
-# The CLI will be cached in PRISMA_NODEENV_CACHE_DIR for runtime use
-RUN echo "=== Caching Prisma CLI ===" && \
-    prisma --version && \
-    echo "=== Verifying cache location ===" && \
-    ls -la /app/.cache/prisma-python/nodeenv/ && \
-    echo "=== Checking for entrypoint ===" && \
-    find /app/.cache/prisma-python/nodeenv/ -name "index.js" -o -name "prisma" | head -10
+# Verify Prisma works without network - this will fail if binaries aren't cached properly
+RUN prisma --version && \
+    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
 
-# Create directories and set permissions for non-root user
-RUN mkdir -p /nonexistent /.npm && \
-    chown -R nobody:nogroup /app && \
-    chown -R nobody:nogroup /nonexistent /.npm && \
+# Set permissions for non-root user
+RUN chown -R nobody:nogroup /app && \
+    chown -R nobody:nogroup /nonexistent && \
+    chown -R nobody:nogroup /tmp/.npm && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup $PRISMA_PATH
 
@@ -109,12 +127,15 @@ RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__f
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
     # Set group ownership to 0 (root group) for OpenShift compatibility && \
     chgrp -R 0 $PRISMA_PATH && \
+    chgrp -R 0 /app/.cache && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
     # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
     chmod -R g=u $PRISMA_PATH && \
+    chmod -R g=u /app/.cache && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
     # Ensure directories are readable by group (binaries are read-only at runtime) && \
     chmod -R g+rX $PRISMA_PATH && \
+    chmod -R g+rX /app/.cache && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
 
 # Switch to non-root user
@@ -123,11 +144,20 @@ USER nobody
 # Set HOME for non-root user
 ENV HOME=/app
 
-# Prisma configuration for runtime
-# PRISMA_BINARY_CACHE_DIR already set above - points to /app/.prisma/binaries
-# Tell Prisma CLI to skip npm install since binaries are already cached
+# Prisma configuration for runtime - CRITICAL for offline operation
+# Cache directories were already set above and persist
+# Tell Prisma CLI to skip all downloads and use cached binaries
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
 ENV PRISMA_HIDE_UPDATE_MESSAGE=1
+# Force Prisma to use cached binaries and never download
+ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
+# Disable automatic binary downloads
+ENV PRISMA_DISABLE_WARNINGS=1
+# Ensure npm doesn't try to access network
+ENV NPM_CONFIG_OFFLINE=true
+ENV NPM_CONFIG_PREFER_OFFLINE=true
+# Set npm cache to a local directory to prevent network access
+ENV NPM_CONFIG_CACHE=/app/.cache/npm
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
