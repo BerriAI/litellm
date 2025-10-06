@@ -58,7 +58,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,
-            litellm_params=GenericLiteLLMParams(**litellm_params),
+            litellm_params=GenericLiteLLMParams(
+                **{**litellm_params, "api_key": api_key}
+            ),
         )
 
     @staticmethod
