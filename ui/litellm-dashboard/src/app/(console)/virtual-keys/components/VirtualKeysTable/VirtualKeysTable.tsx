@@ -15,10 +15,10 @@ import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
 import { Organization, userListCall } from "@/components/networking";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import FilterComponent, { FilterOption } from "@/components/molecules/filter";
-import KeyInfoView from "@/components/templates/key_info_view";
 import { useFilterLogic } from "@/components/key_team_helpers/filter_logic";
 import useTeams from "@/app/(console)/virtual-keys/hooks/useTeams";
 import useAuthorized from "@/app/(console)/hooks/useAuthorized";
+import KeyInfoView from "@/app/(console)/virtual-keys/components/KeyInfoView";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];
