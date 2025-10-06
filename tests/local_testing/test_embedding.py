@@ -366,7 +366,6 @@ def _openai_mock_response(*args, **kwargs):
 
 
 def test_openai_azure_embedding_optional_arg():
-
     with patch.object(
         openai.resources.embeddings.Embeddings,
         "create",
@@ -381,11 +380,11 @@ def test_openai_azure_embedding_optional_arg():
         )
 
         mock_client.assert_called_once_with(
-            model="test", 
-            input=["test"], 
-            extra_body={"azure_ad_token": "test"}, 
-            timeout=600, 
-            extra_headers={"X-Stainless-Raw-Response": "true"}
+            model="test",
+            input=["test"],
+            extra_body={"azure_ad_token": "test"},
+            timeout=600,
+            extra_headers={"X-Stainless-Raw-Response": "true"},
         )
         # Verify azure_ad_token is passed in extra_body, not as a direct parameter
         assert "azure_ad_token" not in mock_client.call_args.kwargs
@@ -871,7 +870,6 @@ async def test_watsonx_aembeddings():
     client = AsyncHTTPHandler()
 
     def mock_async_client(*args, **kwargs):
-
         mocked_client = MagicMock()
 
         async def mock_send(request, *args, stream: bool = False, **kwags):
@@ -1169,7 +1167,6 @@ def test_cohere_img_embeddings(input, input_type):
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_embedding_with_extra_headers(sync_mode):
-
     input = ["hello world"]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
@@ -1261,9 +1258,7 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
 
         # Call the function we want to test
         try:
-            litellm.embedding(
-                model="jina_ai/jina-embeddings-v4", input=input_data
-            )
+            litellm.embedding(model="jina_ai/jina-embeddings-v4", input=input_data)
         except Exception as e:
             pytest.fail(
                 f"litellm.embedding call failed with an unexpected exception: {e}"

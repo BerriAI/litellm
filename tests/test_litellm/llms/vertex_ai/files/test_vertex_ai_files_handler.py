@@ -24,9 +24,10 @@ class TestVertexAIFilesHandler:
         # Sample file_id with nested folder structure
         file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-folder" "%2Fsub-folder%2Ftest-file.txt"
 
-        bucket_name, encoded_object_path = (
-            self.handler._extract_bucket_and_object_from_file_id(file_id)
-        )
+        (
+            bucket_name,
+            encoded_object_path,
+        ) = self.handler._extract_bucket_and_object_from_file_id(file_id)
 
         # Verify bucket name extraction
         assert bucket_name == "test-bucket"
@@ -39,9 +40,10 @@ class TestVertexAIFilesHandler:
         """Test extraction when only bucket name is provided"""
         file_id = "gs%3A%2F%2Ftest-bucket"
 
-        bucket_name, encoded_object_path = (
-            self.handler._extract_bucket_and_object_from_file_id(file_id)
-        )
+        (
+            bucket_name,
+            encoded_object_path,
+        ) = self.handler._extract_bucket_and_object_from_file_id(file_id)
 
         assert bucket_name == "test-bucket"
         assert encoded_object_path == ""
@@ -50,9 +52,10 @@ class TestVertexAIFilesHandler:
         """Test extraction with simple path"""
         file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
 
-        bucket_name, encoded_object_path = (
-            self.handler._extract_bucket_and_object_from_file_id(file_id)
-        )
+        (
+            bucket_name,
+            encoded_object_path,
+        ) = self.handler._extract_bucket_and_object_from_file_id(file_id)
 
         assert bucket_name == "test-bucket"
         assert encoded_object_path == "test-file.txt"
@@ -61,9 +64,10 @@ class TestVertexAIFilesHandler:
         """Test extraction when gs:// prefix is missing"""
         file_id = "test-bucket%2Ftest-file.txt"
 
-        bucket_name, encoded_object_path = (
-            self.handler._extract_bucket_and_object_from_file_id(file_id)
-        )
+        (
+            bucket_name,
+            encoded_object_path,
+        ) = self.handler._extract_bucket_and_object_from_file_id(file_id)
 
         assert bucket_name == "test-bucket"
         assert encoded_object_path == "test-file.txt"

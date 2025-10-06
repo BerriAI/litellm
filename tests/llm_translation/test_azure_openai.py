@@ -263,7 +263,6 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     )
 
     class ResponseFormat(BaseModel):
-
         number: str = Field(description="total number of days in a week")
         days: list[str] = Field(description="name of days in a week")
 

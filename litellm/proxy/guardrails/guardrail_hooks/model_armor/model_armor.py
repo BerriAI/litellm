@@ -226,7 +226,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 }
             }
 
-    def _should_block_content(self, armor_response: dict, allow_sanitization: bool = False) -> bool:
+    def _should_block_content(
+        self, armor_response: dict, allow_sanitization: bool = False
+    ) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         sanitization_result = armor_response.get("sanitizationResult", {})
         filter_results = sanitization_result.get("filterResults", {})
@@ -412,11 +414,15 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 #   fail_on_error=False) we still want the correct status reflected.
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
+                    if self._should_block_content(
+                        armor_response, allow_sanitization=self.mask_request_content
+                    )
                     else "success"
                 )
             # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content):
+            if self._should_block_content(
+                armor_response, allow_sanitization=self.mask_request_content
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -497,12 +503,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 metadata["_model_armor_response"] = armor_response
                 metadata["_model_armor_status"] = (
                     "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+                    if self._should_block_content(
+                        armor_response, allow_sanitization=self.mask_response_content
+                    )
                     else "success"
                 )
 
             # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            if self._should_block_content(
+                armor_response, allow_sanitization=self.mask_response_content
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail={

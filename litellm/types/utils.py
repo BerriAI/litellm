@@ -2044,11 +2044,9 @@ class GuardrailMode(TypedDict, total=False):
 
 
 GuardrailStatus = Literal[
-    "success",
-    "guardrail_intervened", 
-    "guardrail_failed_to_respond",
-    "not_run"
+    "success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
 ]
+
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
@@ -2109,6 +2107,7 @@ class CostBreakdown(TypedDict):
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
+
     llm_api_status: StandardLoggingPayloadStatus
     """Status of the LLM API call - 'success' if completed, 'failure' if errored"""
     guardrail_status: GuardrailStatus
@@ -2712,15 +2711,15 @@ class PriorityReservationSettings(BaseModel):
         default=0.25,
         description="Priority level to assign to API keys without explicit priority metadata. Should match a key in litellm.priority_reservation.",
     )
-    
+
     saturation_threshold: float = Field(
         default=0.50,
-        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits."
+        description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
-    
+
     tracking_multiplier: int = Field(
         default=10,
-        description="Multiplier for model-wide tracking limits in strict mode. Set to 10x because v3_limiter.should_rate_limit() both increments counters AND enforces limits - we need the counter increment (for saturation checks) but not the enforcement (priority limits handle that). High multiplier ensures tracking never blocks."
+        description="Multiplier for model-wide tracking limits in strict mode. Set to 10x because v3_limiter.should_rate_limit() both increments counters AND enforces limits - we need the counter increment (for saturation checks) but not the enforcement (priority limits handle that). High multiplier ensures tracking never blocks.",
     )
 
     model_config = ConfigDict(protected_namespaces=())

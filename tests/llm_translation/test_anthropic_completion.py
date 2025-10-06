@@ -361,6 +361,7 @@ def test_process_anthropic_headers_with_no_matching_headers():
 def test_anthropic_tool_use(tool_type, tool_config, message_content):
     """Test Anthropic tool use with computer use and web fetch tools."""
     from litellm import completion
+
     litellm._turn_on_debug()
 
     tools = [tool_config]

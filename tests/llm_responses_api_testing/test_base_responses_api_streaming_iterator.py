@@ -32,7 +32,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
-    OutputTextDeltaEvent
+    OutputTextDeltaEvent,
 )
 
 
@@ -41,30 +41,30 @@ class TestBaseResponsesAPIStreamingIterator:
 
     def test_process_chunk_with_response_completed_event(self):
         """
-        Test that _process_chunk correctly processes a ResponseCompletedEvent 
+        Test that _process_chunk correctly processes a ResponseCompletedEvent
         and calls _update_responses_api_response_id_with_model_id for the final chunk.
         """
         # Mock dependencies
         mock_response = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create a mock ResponsesAPIResponse for the completed event
         mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
         mock_responses_api_response.id = "original_response_id"
-        
+
         # Create a mock ResponseCompletedEvent
         mock_completed_event = Mock(spec=ResponseCompletedEvent)
         mock_completed_event.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
         mock_completed_event.response = mock_responses_api_response
-        
+
         # Set up the mock transform method to return our completed event
         mock_config.transform_streaming_response.return_value = mock_completed_event
-        
+
         # Mock the _update_responses_api_response_id_with_model_id method
         updated_response = Mock(spec=ResponsesAPIResponse)
         updated_response.id = "updated_response_id"
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
@@ -72,40 +72,40 @@ class TestBaseResponsesAPIStreamingIterator:
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
-            custom_llm_provider="openai"
+            custom_llm_provider="openai",
         )
-        
+
         # Prepare test chunk data
         test_chunk_data = {
             "type": "response.completed",
             "response": {
                 "id": "original_response_id",
-                "output": [{"type": "message", "content": [{"text": "Hello World"}]}]
-            }
+                "output": [{"type": "message", "content": [{"text": "Hello World"}]}],
+            },
         }
-        
+
         with patch.object(
-            ResponsesAPIRequestUtils, 
-            '_update_responses_api_response_id_with_model_id',
-            return_value=updated_response
+            ResponsesAPIRequestUtils,
+            "_update_responses_api_response_id_with_model_id",
+            return_value=updated_response,
         ) as mock_update_id:
             # Process the chunk
             result = iterator._process_chunk(json.dumps(test_chunk_data))
-            
+
             # Assertions
             assert result is not None
             assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-            
+
             # Verify that _update_responses_api_response_id_with_model_id was called
             mock_update_id.assert_called_once_with(
                 responses_api_response=mock_responses_api_response,
                 litellm_metadata={"model_info": {"id": "model_123"}},
-                custom_llm_provider="openai"
+                custom_llm_provider="openai",
             )
-            
+
             # Verify the completed response was stored
             assert iterator.completed_response == result
-            
+
             # Verify the response was updated on the event
             assert result.response == updated_response
 
@@ -118,17 +118,19 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create a mock OutputTextDeltaEvent (not a completed event)
         mock_delta_event = Mock(spec=OutputTextDeltaEvent)
         mock_delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
         mock_delta_event.delta = "Hello"
         # Delta events don't have a response attribute
-        delattr(mock_delta_event, 'response') if hasattr(mock_delta_event, 'response') else None
-        
+        delattr(mock_delta_event, "response") if hasattr(
+            mock_delta_event, "response"
+        ) else None
+
         # Set up the mock transform method to return our delta event
         mock_config.transform_streaming_response.return_value = mock_delta_event
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
@@ -136,32 +138,31 @@ class TestBaseResponsesAPIStreamingIterator:
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj,
             litellm_metadata={"model_info": {"id": "model_123"}},
-            custom_llm_provider="openai"
+            custom_llm_provider="openai",
         )
-        
+
         # Prepare test chunk data for a delta event
         test_chunk_data = {
             "type": "response.output_text.delta",
             "delta": "Hello",
             "item_id": "item_123",
             "output_index": 0,
-            "content_index": 0
+            "content_index": 0,
         }
-        
+
         with patch.object(
-            ResponsesAPIRequestUtils, 
-            '_update_responses_api_response_id_with_model_id'
+            ResponsesAPIRequestUtils, "_update_responses_api_response_id_with_model_id"
         ) as mock_update_id:
             # Process the chunk
             result = iterator._process_chunk(json.dumps(test_chunk_data))
-            
+
             # Assertions
             assert result is not None
             assert result.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-            
+
             # Verify that _update_responses_api_response_id_with_model_id was NOT called
             mock_update_id.assert_not_called()
-            
+
             # Verify no completed response was stored (since this is not a completed event)
             assert iterator.completed_response is None
 
@@ -173,18 +174,18 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
             model="gpt-4",
             responses_api_provider_config=mock_config,
-            logging_obj=mock_logging_obj
+            logging_obj=mock_logging_obj,
         )
-        
+
         # Test with invalid JSON
         result = iterator._process_chunk("invalid json {")
-        
+
         # Should return None for invalid JSON
         assert result is None
         assert iterator.completed_response is None
@@ -197,18 +198,18 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
             model="gpt-4",
             responses_api_provider_config=mock_config,
-            logging_obj=mock_logging_obj
+            logging_obj=mock_logging_obj,
         )
-        
+
         # Test with [DONE] marker
         result = iterator._process_chunk(STREAM_SSE_DONE_STRING)
-        
+
         # Should return None and set finished flag
         assert result is None
         assert iterator.finished is True
@@ -221,19 +222,19 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_response = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
             model="gpt-4",
             responses_api_provider_config=mock_config,
-            logging_obj=mock_logging_obj
+            logging_obj=mock_logging_obj,
         )
-        
+
         # Test with empty chunk
         result = iterator._process_chunk("")
         assert result is None
-        
+
         # Test with None chunk
         result = iterator._process_chunk(None)
         assert result is None

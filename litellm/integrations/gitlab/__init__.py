@@ -39,7 +39,6 @@ def prompt_initializer(
     gitlab_config = getattr(litellm_params, "gitlab_config", None)
     prompt_id = getattr(litellm_params, "prompt_id", None)
 
-
     if not gitlab_config:
         raise ValueError(
             "bitbucket_config is required for BitBucket prompt integration"
@@ -55,9 +54,10 @@ def prompt_initializer(
     except Exception as e:
         raise e
 
+
 def _gitlab_prompt_initializer(
-        litellm_params: PromptLiteLLMParams,
-        prompt: PromptSpec,
+    litellm_params: PromptLiteLLMParams,
+    prompt: PromptSpec,
 ) -> CustomPromptManagement:
     """
     Build a GitLab-backed prompt manager for this prompt.

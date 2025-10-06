@@ -168,23 +168,33 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
         litellm_model_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks, logging_obj=self.litellm_logging_obj)
+        ] = stream_chunk_builder(
+            chunks=self.collected_chat_completion_chunks,
+            logging_obj=self.litellm_logging_obj,
+        )
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
             # Add cost to usage object if include_cost_in_streaming_usage is True
-            if litellm.include_cost_in_streaming_usage and self.litellm_logging_obj is not None:
+            if (
+                litellm.include_cost_in_streaming_usage
+                and self.litellm_logging_obj is not None
+            ):
                 usage = getattr(litellm_model_response, "usage", None)
                 if usage is not None:
                     setattr(
-                        usage, "cost", self.litellm_logging_obj._response_cost_calculator(result=litellm_model_response)
+                        usage,
+                        "cost",
+                        self.litellm_logging_obj._response_cost_calculator(
+                            result=litellm_model_response
+                        ),
                     )
-            
+
             # Transform the response
             responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                 request_input=self.request_input,
                 chat_completion_response=litellm_model_response,
                 responses_api_request=self.responses_api_request,
             )
-            
+
             # Encode the response ID to match non-streaming behavior
             encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
                 responses_api_response=responses_api_response,

@@ -32,7 +32,6 @@ async def get_active_tasks_stats():
     # Count how many active tasks exist, grouped by coroutine function name.
     counter = Counter()
     for idx, task in enumerate(active_tasks):
-
         # reasonable max circuit breaker
         if idx >= MAX_TASKS_TO_CHECK:
             break

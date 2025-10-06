@@ -2514,8 +2514,6 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 
 
-
-
 async def test_re_use_azure_async_client():
     try:
         print("azure gpt-3.5 ASYNC with clie nttest\n\n")
@@ -3145,7 +3143,6 @@ def response_format_tests(response: litellm.ModelResponse):
 async def test_completion_bedrock_httpx_models(sync_mode, model):
     litellm.set_verbose = True
     try:
-
         if sync_mode:
             response = completion(
                 model=model,

@@ -175,9 +175,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AI21_API_KEY"] = "bad-key"
         elif "togethercomputer" in model:
             temporary_key = os.environ["TOGETHERAI_API_KEY"]
-            os.environ["TOGETHERAI_API_KEY"] = (
-                "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
-            )
+            os.environ[
+                "TOGETHERAI_API_KEY"
+            ] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
         elif model in litellm.openrouter_models:
             temporary_key = os.environ["OPENROUTER_API_KEY"]
             os.environ["OPENROUTER_API_KEY"] = "bad-key"
@@ -280,7 +280,6 @@ def test_completion_azure_exception():
 
 def test_azure_embedding_exceptions():
     try:
-
         response = litellm.embedding(
             model="azure/text-embedding-ada-002",
             input="hello",
@@ -494,6 +493,7 @@ def test_completion_bedrock_invalid_role_exception():
             (str(e))
             == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
         )
+
 
 @pytest.mark.skip(reason="OpenAI exception changed to a generic error")
 def test_content_policy_exceptionimage_generation_openai():
@@ -773,7 +773,15 @@ def test_litellm_predibase_exception():
 
 
 @pytest.mark.parametrize(
-    "provider", ["predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx", "fireworks_ai"]
+    "provider",
+    [
+        "predibase",
+        "vertex_ai_beta",
+        "anthropic",
+        "databricks",
+        "watsonx",
+        "fireworks_ai",
+    ],
 )
 def test_exception_mapping(provider):
     """
@@ -826,14 +834,14 @@ def test_fireworks_ai_exception_mapping():
     2. Text-based rate limit detection (the main issue fixed)
     3. Generic 400 errors that should NOT be rate limits
     4. ExceptionCheckers utility function
-    
+
     Related to: https://github.com/BerriAI/litellm/pull/11455
     Based on Fireworks AI documentation: https://docs.fireworks.ai/tools-sdks/python-client/api-reference
     """
     import litellm
     from litellm.llms.fireworks_ai.common_utils import FireworksAIException
     from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
-    
+
     # Test scenarios covering all important cases
     test_scenarios = [
         {
@@ -855,57 +863,63 @@ def test_fireworks_ai_exception_mapping():
             "expected_exception": litellm.BadRequestError,
         },
     ]
-    
+
     # Test each scenario
     for scenario in test_scenarios:
         mock_exception = FireworksAIException(
-            status_code=scenario["status_code"],
-            message=scenario["message"],
-            headers={}
+            status_code=scenario["status_code"], message=scenario["message"], headers={}
         )
-        
+
         try:
             response = litellm.completion(
                 model="fireworks_ai/llama-v3p1-70b-instruct",
                 messages=[{"role": "user", "content": "Hello"}],
                 mock_response=mock_exception,
             )
-            pytest.fail(f"Expected {scenario['expected_exception'].__name__} to be raised")
+            pytest.fail(
+                f"Expected {scenario['expected_exception'].__name__} to be raised"
+            )
         except scenario["expected_exception"] as e:
             if scenario["expected_exception"] == litellm.RateLimitError:
                 assert "rate limit" in str(e).lower() or "429" in str(e)
         except Exception as e:
-            pytest.fail(f"Expected {scenario['expected_exception'].__name__} but got {type(e).__name__}: {e}")
-    
+            pytest.fail(
+                f"Expected {scenario['expected_exception'].__name__} but got {type(e).__name__}: {e}"
+            )
+
     # Test ExceptionCheckers.is_error_str_rate_limit() method directly
-    
+
     # Test cases that should return True (rate limit detected)
     rate_limit_strings = [
         "429 rate limit exceeded",
-        "Rate limit exceeded, please try again later", 
+        "Rate limit exceeded, please try again later",
         "RATE LIMIT ERROR",
         "Error 429: rate limit",
         '{"error":{"type":"invalid_request_error","message":"rate limit exceeded, please try again later"}}',
         "HTTP 429 Too Many Requests",
     ]
-    
+
     for error_str in rate_limit_strings:
-        assert ExceptionCheckers.is_error_str_rate_limit(error_str), f"Should detect rate limit in: {error_str}"
-    
+        assert ExceptionCheckers.is_error_str_rate_limit(
+            error_str
+        ), f"Should detect rate limit in: {error_str}"
+
     # Test cases that should return False (not rate limit)
     non_rate_limit_strings = [
         "400 Bad Request",
-        "Authentication failed", 
+        "Authentication failed",
         "Invalid model specified",
         "Context window exceeded",
         "Internal server error",
         "",
         "Some other error message",
     ]
-    
+
     for error_str in non_rate_limit_strings:
-        assert not ExceptionCheckers.is_error_str_rate_limit(error_str), f"Should NOT detect rate limit in: {error_str}"
-    
+        assert not ExceptionCheckers.is_error_str_rate_limit(
+            error_str
+        ), f"Should NOT detect rate limit in: {error_str}"
+
     # Test edge cases
     assert not ExceptionCheckers.is_error_str_rate_limit(None)  # type: ignore
     assert not ExceptionCheckers.is_error_str_rate_limit(42)  # type: ignore
@@ -1142,6 +1156,7 @@ def test_openai_gateway_timeout_error():
     """
     openai_client = OpenAI()
     mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
+
     def _return_exception(*args, **kwargs):
         import datetime
 
@@ -1175,13 +1190,17 @@ def test_openai_gateway_timeout_error():
             setattr(exception, k, v)
         raise exception
 
-    try: 
+    try:
         with patch.object(
             mapped_target,
             "create",
             side_effect=_return_exception,
         ):
-            litellm.completion(model="openai/gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}], client=openai_client)
+            litellm.completion(
+                model="openai/gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello world"}],
+                client=openai_client,
+            )
         pytest.fail("Expected to raise Timeout")
     except litellm.Timeout as e:
         assert e.status_code == 504
@@ -1377,6 +1396,3 @@ async def test_exception_bubbling_up(sync_mode, stream_mode, model):
     assert exc_info.value.code == "invalid_value"
     assert exc_info.value.param is not None
     assert exc_info.value.type == "invalid_request_error"
-
-
-

@@ -34,7 +34,6 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="processed text",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant"},
@@ -62,7 +61,6 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="async processed text",
         ),
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "acompletion")
@@ -111,7 +109,6 @@ async def test_guardrails_ai_process_input():
             rawLlmOutput="sanitized message",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant"},
@@ -145,10 +142,12 @@ async def test_guardrails_ai_process_input():
             callId="test-123",
         ),
     ) as mock_api_request:
-
         data = {
             "messages": [
-                {"role": "user", "content": "Somtimes I hav spelling errors in my vriting"}
+                {
+                    "role": "user",
+                    "content": "Somtimes I hav spelling errors in my vriting",
+                }
             ]
         }
 
@@ -159,7 +158,10 @@ async def test_guardrails_ai_process_input():
         )
 
         # Should use validatedOutput when available
-        assert result["messages"][0]["content"] == "Sometimes I have spelling errors in my writing"
+        assert (
+            result["messages"][0]["content"]
+            == "Sometimes I have spelling errors in my writing"
+        )
 
     # Test case 8: Test fallback to rawLlmOutput when validatedOutput is not present
     with patch.object(
@@ -172,7 +174,6 @@ async def test_guardrails_ai_process_input():
             callId="test-456",
         ),
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "Test message"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "completion")
@@ -185,7 +186,6 @@ async def test_guardrails_ai_process_input():
         "make_guardrails_ai_api_request",
         return_value={},  # Empty response
     ) as mock_api_request:
-
         data = {"messages": [{"role": "user", "content": "Original message"}]}
 
         result = await guardrails_ai_guardrail.process_input(data, "completion")

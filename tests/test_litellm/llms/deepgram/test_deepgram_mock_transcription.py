@@ -169,7 +169,6 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
-
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_bytes,
@@ -221,7 +220,6 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
-
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_bytes,
@@ -257,7 +255,6 @@ class TestDeepgramMockTranscription:
             "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
             return_value=mock_response,
         ) as mock_post:
-
             response: TranscriptionResponse = litellm.transcription(
                 model="deepgram/nova-2",
                 file=test_audio_file,

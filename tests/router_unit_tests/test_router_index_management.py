@@ -20,14 +20,20 @@ class TestRouterIndexManagement:
         """Test _update_deployment_indices_after_removal function"""
         # Setup: Add models to router with proper structure
         router.model_list = [
-            {"model": "test1", "model_info": {"id": "model-1"}}, 
-            {"model": "test2", "model_info": {"id": "model-2"}}, 
-            {"model": "test3", "model_info": {"id": "model-3"}}
+            {"model": "test1", "model_info": {"id": "model-1"}},
+            {"model": "test2", "model_info": {"id": "model-2"}},
+            {"model": "test3", "model_info": {"id": "model-3"}},
         ]
-        router.model_id_to_deployment_index_map = {"model-1": 0, "model-2": 1, "model-3": 2}
+        router.model_id_to_deployment_index_map = {
+            "model-1": 0,
+            "model-2": 1,
+            "model-3": 2,
+        }
 
         # Test: Remove model-2 (index 1)
-        router._update_deployment_indices_after_removal(model_id="model-2", removal_idx=1)
+        router._update_deployment_indices_after_removal(
+            model_id="model-2", removal_idx=1
+        )
 
         # Verify: model-2 is removed from index
         assert "model-2" not in router.model_id_to_deployment_index_map
@@ -65,15 +71,15 @@ class TestRouterIndexManagement:
         # Setup: Empty router
         router.model_list = []
         router.model_id_to_deployment_index_map = {}
-        
+
         # Test: Add model without explicit model_id
         model = {"model": "test-model", "model_info": {"id": "model-info-id"}}
         router._add_model_to_list_and_index_map(model=model)
-        
+
         # Verify: Model added to list
         assert len(router.model_list) == 1
         assert router.model_list[0] == model
-        
+
         # Verify: Index map uses model_info.id
         assert router.model_id_to_deployment_index_map["model-info-id"] == 0
 
@@ -82,22 +88,22 @@ class TestRouterIndexManagement:
         # Setup: Empty router
         router.model_list = []
         router.model_id_to_deployment_index_map = {}
-        
+
         # Test: Add multiple models
         model1 = {"model": "model1", "model_info": {"id": "id-1"}}
         model2 = {"model": "model2", "model_info": {"id": "id-2"}}
         model3 = {"model": "model3", "model_info": {"id": "id-3"}}
-        
+
         router._add_model_to_list_and_index_map(model=model1, model_id="id-1")
         router._add_model_to_list_and_index_map(model=model2, model_id="id-2")
         router._add_model_to_list_and_index_map(model=model3, model_id="id-3")
-        
+
         # Verify: All models added to list
         assert len(router.model_list) == 3
         assert router.model_list[0] == model1
         assert router.model_list[1] == model2
         assert router.model_list[2] == model3
-        
+
         # Verify: Correct indices in map
         assert router.model_id_to_deployment_index_map["id-1"] == 0
         assert router.model_id_to_deployment_index_map["id-2"] == 1
@@ -107,11 +113,15 @@ class TestRouterIndexManagement:
         """Test has_model_id function for O(1) membership check"""
         # Setup: Add models to router
         router.model_list = [
-            {"model": "test1", "model_info": {"id": "model-1"}}, 
-            {"model": "test2", "model_info": {"id": "model-2"}}, 
-            {"model": "test3", "model_info": {"id": "model-3"}}
+            {"model": "test1", "model_info": {"id": "model-1"}},
+            {"model": "test2", "model_info": {"id": "model-2"}},
+            {"model": "test3", "model_info": {"id": "model-3"}},
         ]
-        router.model_id_to_deployment_index_map = {"model-1": 0, "model-2": 1, "model-3": 2}
+        router.model_id_to_deployment_index_map = {
+            "model-1": 0,
+            "model-2": 1,
+            "model-3": 2,
+        }
 
         # Test: Check existing model IDs
         assert router.has_model_id("model-1") == True
@@ -153,13 +163,13 @@ class TestRouterIndexManagement:
         # Verify: model_name_to_deployment_indices is correctly built
         assert "gpt-3.5-turbo" in router.model_name_to_deployment_indices
         assert "gpt-4" in router.model_name_to_deployment_indices
-        
+
         # Verify: gpt-3.5-turbo has single deployment
         assert router.model_name_to_deployment_indices["gpt-3.5-turbo"] == [0]
-        
+
         # Verify: gpt-4 has multiple deployments
         assert router.model_name_to_deployment_indices["gpt-4"] == [1, 2]
-        
+
         # Test: Rebuild index (should clear and rebuild)
         new_model_list = [
             {
@@ -169,11 +179,11 @@ class TestRouterIndexManagement:
             },
         ]
         router._build_model_name_index(new_model_list)
-        
+
         # Verify: Old entries are cleared
         assert "gpt-3.5-turbo" not in router.model_name_to_deployment_indices
         assert "gpt-4" not in router.model_name_to_deployment_indices
-        
+
         # Verify: New entry is added
         assert "claude-3" in router.model_name_to_deployment_indices
         assert router.model_name_to_deployment_indices["claude-3"] == [0]

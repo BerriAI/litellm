@@ -23,9 +23,9 @@ def load_cli_token() -> Optional[dict]:
     token_file = get_cli_token_file_path()
     if not os.path.exists(token_file):
         return None
-    
+
     try:
-        with open(token_file, 'r') as f:
+        with open(token_file, "r") as f:
             return json.load(f)
     except (json.JSONDecodeError, IOError):
         return None
@@ -34,13 +34,13 @@ def load_cli_token() -> Optional[dict]:
 def get_litellm_gateway_api_key() -> Optional[str]:
     """
     Get the stored CLI API key for use with LiteLLM SDK.
-    
+
     This function reads the token file created by `litellm-proxy login`
     and returns the API key for use in Python scripts.
-    
+
     Returns:
         str: The API key if found, None otherwise
-        
+
     Example:
         >>> import litellm
         >>> api_key = litellm.get_litellm_gateway_api_key()
@@ -53,6 +53,6 @@ def get_litellm_gateway_api_key() -> Optional[str]:
         >>>     )
     """
     token_data = load_cli_token()
-    if token_data and 'key' in token_data:
-        return token_data['key']
+    if token_data and "key" in token_data:
+        return token_data["key"]
     return None

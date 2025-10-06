@@ -233,9 +233,10 @@ class StandardBuiltInToolCostTracking:
             return 0.0
 
         model_info_dict = dict(model_info) if model_info is not None else None
-        input_tokens, output_tokens = (
-            StandardBuiltInToolCostTracking._extract_token_counts(computer_use_usage)
-        )
+        (
+            input_tokens,
+            output_tokens,
+        ) = StandardBuiltInToolCostTracking._extract_token_counts(computer_use_usage)
 
         return StandardBuiltInToolCostTracking.get_cost_for_computer_use(
             input_tokens=input_tokens,
@@ -454,7 +455,9 @@ class StandardBuiltInToolCostTracking:
         """
         if model_info is None:
             return 0.0
-        search_context_raw: Any = model_info.get("search_context_cost_per_query", {}) or {}
+        search_context_raw: Any = (
+            model_info.get("search_context_cost_per_query", {}) or {}
+        )
         search_context_pricing: SearchContextCostPerQuery = (
             SearchContextCostPerQuery(**search_context_raw)
             if search_context_raw

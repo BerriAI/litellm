@@ -2,7 +2,8 @@ from unittest.mock import patch
 
 import litellm
 
-model="ovhcloud/BGE-M3"
+model = "ovhcloud/BGE-M3"
+
 
 def mock_embedding_response(*args, **kwargs):
     class MockResponse:

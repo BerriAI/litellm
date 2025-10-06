@@ -7,7 +7,9 @@ from litellm.types.llms.openai import FileTypes, OpenAIFilesPurpose
 
 
 class InMemoryFile(io.BytesIO):
-    def __init__(self, content: bytes, name: str, content_type: str = "application/jsonl"):
+    def __init__(
+        self, content: bytes, name: str, content_type: str = "application/jsonl"
+    ):
         super().__init__(content)
         self.name = name
         self.content_type = content_type
@@ -80,7 +82,13 @@ def _get_router_metadata_variable_name(function_name: Optional[str]) -> str:
     For ALL other endpoints we call this "metadata
     """
     ROUTER_METHODS_USING_LITELLM_METADATA = set(
-        ["batch", "generic_api_call", "_acreate_batch", "file", "_ageneric_api_call_with_fallbacks"]
+        [
+            "batch",
+            "generic_api_call",
+            "_acreate_batch",
+            "file",
+            "_ageneric_api_call_with_fallbacks",
+        ]
     )
     if function_name and any(
         method in function_name for method in ROUTER_METHODS_USING_LITELLM_METADATA

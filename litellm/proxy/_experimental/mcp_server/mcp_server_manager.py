@@ -611,7 +611,6 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         server: MCPServer,
     ):
-
         ## check if the tool is allowed or banned for the given server
         if not self.check_allowed_or_banned_tools(name, server):
             raise HTTPException(

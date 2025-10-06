@@ -445,13 +445,17 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}
-    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
+    tools = v._map_function(
+        value=[{"code_execution": {}}], optional_params=optional_params
+    )
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
     new_optional_params = {}
-    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
+    new_tools = v._map_function(
+        value=[{"codeExecution": {}}], optional_params=new_optional_params
+    )
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -961,7 +965,7 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.
-    
+
     The ID should be in format 'call_' + 28 hex characters (total 33 characters).
     This test verifies the fix for keeping the code line under 40 characters.
     """
@@ -978,12 +982,7 @@ def test_vertex_ai_tool_call_id_format():
                 "args": {"location": "San Francisco", "unit": "celsius"},
             }
         ),
-        HttpxPartType(
-            functionCall={
-                "name": "get_time", 
-                "args": {"timezone": "PST"}
-            }
-        ),
+        HttpxPartType(functionCall={"name": "get_time", "args": {"timezone": "PST"}}),
     ]
 
     function, tools, updated_idx = VertexGeminiConfig._transform_parts(
@@ -998,19 +997,27 @@ def test_vertex_ai_tool_call_id_format():
     # Test ID format for both tool calls
     for tool in tools:
         tool_id = tool["id"]
-        
+
         # Should start with 'call_'
-        assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
-        
+        assert tool_id.startswith(
+            "call_"
+        ), f"ID should start with 'call_', got: {tool_id}"
+
         # Should have exactly 33 total characters (call_ + 28 hex chars)
-        assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
-        
+        assert (
+            len(tool_id) == 33
+        ), f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
+
         # The part after 'call_' should be 28 hex characters
         hex_part = tool_id[5:]  # Remove 'call_' prefix
-        assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
-        
+        assert (
+            len(hex_part) == 28
+        ), f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
+
         # Should only contain valid hex characters
-        assert re.match(r'^[0-9a-f]{28}$', hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
+        assert re.match(
+            r"^[0-9a-f]{28}$", hex_part
+        ), f"Should contain only lowercase hex chars, got: {hex_part}"
 
     # Verify IDs are unique
     assert tools[0]["id"] != tools[1]["id"], "Tool call IDs should be unique"
@@ -1025,15 +1032,17 @@ def test_vertex_ai_tool_call_id_format():
         )
         if test_tools:
             ids_generated.add(test_tools[0]["id"])
-    
+
     # All generated IDs should be unique
-    assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
+    assert (
+        len(ids_generated) == 10
+    ), f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
 
 def test_vertex_ai_code_line_length():
     """
     Test that the specific code line generating tool call IDs is within character limit.
-    
+
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
@@ -1043,45 +1052,49 @@ def test_vertex_ai_code_line_length():
     )
 
     # Get the source code of the _transform_parts method
-    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
-    
+    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split("\n")
+
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
         if 'id=f"call_{uuid.uuid4().hex' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
-    
+
     assert id_line is not None, "Could not find the ID generation line in source code"
-    
+
     # Check that the line is 40 characters or less (excluding indentation)
     line_length = len(id_line)
-    assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
-    
+    assert (
+        line_length <= 40
+    ), f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
+
     # Verify it contains the expected UUID format
-    assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+    assert (
+        "uuid.uuid4().hex[:28]" in id_line
+    ), f"Line should contain shortened UUID format: {id_line}"
 
 
 def test_vertex_ai_map_google_maps_tool_simple():
     """
     Test googleMaps tool transformation without location data.
-    
+
     Input:
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={}
-    
+
     Expected Output:
         tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={} (unchanged)
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
-        optional_params=optional_params
+        optional_params=optional_params,
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
     assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
@@ -1092,7 +1105,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     Test googleMaps tool transformation with location data.
     Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
-    
+
     Input:
         value=[{
             "googleMaps": {
@@ -1103,7 +1116,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
             }
         }]
         optional_params={}
-    
+
     Expected Output:
         tools=[{
             "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
@@ -1122,31 +1135,33 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
-        value=[{
-            "googleMaps": {
-                "enableWidget": "ENABLE_WIDGET",
-                "latitude": 37.7749,
-                "longitude": -122.4194,
-                "languageCode": "en_US"
+        value=[
+            {
+                "googleMaps": {
+                    "enableWidget": "ENABLE_WIDGET",
+                    "latitude": 37.7749,
+                    "longitude": -122.4194,
+                    "languageCode": "en_US",
+                }
             }
-        }],
-        optional_params=optional_params
+        ],
+        optional_params=optional_params,
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
-    
+
     google_maps_tool = tools[0]["googleMaps"]
     assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
     assert "latitude" not in google_maps_tool
     assert "longitude" not in google_maps_tool
     assert "languageCode" not in google_maps_tool
-    
+
     assert "toolConfig" in optional_params
     assert "retrievalConfig" in optional_params["toolConfig"]
-    
+
     retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
     assert retrieval_config["latLng"]["latitude"] == 37.7749
     assert retrieval_config["latLng"]["longitude"] == -122.4194

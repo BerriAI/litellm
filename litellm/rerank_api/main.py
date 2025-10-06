@@ -173,7 +173,10 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == litellm.LlmProviders.COHERE or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY:
+        if (
+            _custom_llm_provider == litellm.LlmProviders.COHERE
+            or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
+        ):
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key

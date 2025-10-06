@@ -211,10 +211,16 @@ class BaseResponsesAPITest(ABC):
         )
 
         # assert the response completed event includes cost when include_cost_in_streaming_usage is True
-        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
-        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
-        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
-        
+        assert hasattr(
+            response_completed_event.response.usage, "cost"
+        ), "Cost should be included in streaming responses API usage object"
+        assert (
+            response_completed_event.response.usage.cost > 0
+        ), "Cost should be greater than 0"
+        print(
+            f"Cost found in streaming response: {response_completed_event.response.usage.cost}"
+        )
+
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False
 
@@ -552,21 +558,20 @@ class BaseResponsesAPITest(ABC):
         Test that regular dict inputs with status fields are properly filtered
         to replicate exclude_unset=True behavior for non-Pydantic objects.
         """
-        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
+        )
 
         # Test input with regular dict objects (like from JSON)
         test_input = [
-            {
-                "role": "user",
-                "content": "test"
-            },
+            {"role": "user", "content": "test"},
             {
                 "id": "rs_123",
                 "summary": [{"text": "test", "type": "summary_text"}],
                 "type": "reasoning",
                 "content": None,  # Should be filtered out
                 "encrypted_content": None,  # Should be filtered out
-                "status": None  # Should be filtered out
+                "status": None,  # Should be filtered out
             },
             {
                 "arguments": "{}",
@@ -574,8 +579,8 @@ class BaseResponsesAPITest(ABC):
                 "name": "get_today",
                 "type": "function_call",
                 "id": "fc_123",
-                "status": "completed"  # Should be preserved (not a default field)
-            }
+                "status": "completed",  # Should be preserved (not a default field)
+            },
         ]
 
         config = OpenAIResponsesAPIConfig()
@@ -587,17 +592,27 @@ class BaseResponsesAPITest(ABC):
         # Check reasoning item (index 1)
         reasoning_item = validated_input[1]
         assert reasoning_item["type"] == "reasoning"
-        assert "status" not in reasoning_item, "status field should be filtered out from reasoning item"
-        assert "content" not in reasoning_item, "content field should be filtered out from reasoning item"
-        assert "encrypted_content" not in reasoning_item, "encrypted_content field should be filtered out from reasoning item"
+        assert (
+            "status" not in reasoning_item
+        ), "status field should be filtered out from reasoning item"
+        assert (
+            "content" not in reasoning_item
+        ), "content field should be filtered out from reasoning item"
+        assert (
+            "encrypted_content" not in reasoning_item
+        ), "encrypted_content field should be filtered out from reasoning item"
         assert "id" in reasoning_item, "id field should be preserved"
         assert "summary" in reasoning_item, "summary field should be preserved"
 
         # Check function call item (index 2)
         function_call_item = validated_input[2]
         assert function_call_item["type"] == "function_call"
-        assert "status" in function_call_item, "status field should be preserved in function call item"
-        assert function_call_item["status"] == "completed", "status value should be preserved"
+        assert (
+            "status" in function_call_item
+        ), "status field should be preserved in function call item"
+        assert (
+            function_call_item["status"] == "completed"
+        ), "status value should be preserved"
 
         print("✅ OpenAI Responses API dict input filtering test passed")
 
@@ -611,7 +626,10 @@ class BaseResponsesAPITest(ABC):
             base_completion_call_args = self.get_base_completion_call_args()
             if sync_mode:
                 response = litellm.responses(
-                    input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+                    input="Basic ping",
+                    max_output_tokens=20,
+                    background=True,
+                    **base_completion_call_args,
                 )
 
                 # cancel the response
@@ -627,7 +645,10 @@ class BaseResponsesAPITest(ABC):
                     raise ValueError("response is not a ResponsesAPIResponse")
             else:
                 response = await litellm.aresponses(
-                    input="Basic ping", max_output_tokens=20, background=True, **base_completion_call_args
+                    input="Basic ping",
+                    max_output_tokens=20,
+                    background=True,
+                    **base_completion_call_args,
                 )
 
                 # async cancel the response
@@ -652,7 +673,7 @@ class BaseResponsesAPITest(ABC):
     async def test_cancel_responses_invalid_response_id(self, sync_mode):
         """Test cancel_responses with invalid response ID should raise appropriate error"""
         base_completion_call_args = self.get_base_completion_call_args()
-        
+
         if sync_mode:
             with pytest.raises(Exception):
                 litellm.cancel_responses(

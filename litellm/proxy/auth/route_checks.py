@@ -62,13 +62,13 @@ class RouteChecks:
             for allowed_route in valid_token.allowed_routes
         ):
             for allowed_route in valid_token.allowed_routes:
-                if allowed_route in LiteLLMRoutes._member_names_:                    
+                if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
                         return True
-                    
+
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
@@ -76,7 +76,10 @@ class RouteChecks:
                         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                             InitPassThroughEndpointHelpers,
                         )
-                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+
+                        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                            route=route
+                        ):
                             return True
 
         # check if wildcard pattern is allowed
