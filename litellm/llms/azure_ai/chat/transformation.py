@@ -35,8 +35,26 @@ class AzureAIStudioConfig(OpenAIConfig):
             for param in supported_params:
                 if param != "tool_choice":
                     filtered_supported_params.append(param)
-            return filtered_supported_params
+            supported_params = filtered_supported_params
+        
+        # Filter out unsupported parameters for specific models
+        if not self._supports_stop_reason(model):
+            supported_params = [param for param in supported_params if param != "stop"]
+        
         return supported_params
+
+    def _supports_stop_reason(self, model: str) -> bool:
+        """
+        Check if the model supports stop tokens.
+        Grok models don't support stop tokens.
+        """
+        if "grok-3-mini" in model:
+            return False
+        elif "grok-4" in model:
+            return False
+        elif "grok-code-fast" in model:
+            return False
+        return True
 
     def validate_environment(
         self,
