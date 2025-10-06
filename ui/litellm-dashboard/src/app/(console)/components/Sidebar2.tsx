@@ -44,7 +44,7 @@ interface MenuItem {
   icon?: React.ReactNode;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelectedKey, collapsed = false }) => {
+const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelectedKey, collapsed = false }) => {
   const menuItems: MenuItem[] = [
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined style={{ fontSize: 18 }} /> },
     {
@@ -288,4 +288,4 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelecte
   );
 };
 
-export default Sidebar;
+export default Sidebar2;
