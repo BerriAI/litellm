@@ -926,7 +926,41 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       placeholder="Select vector stores (optional)"
                     />
                   </Form.Item>
-
+                  <Form.Item
+                    label={
+                      <span>
+                        Metadata{" "}
+                        <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="metadata"
+                    className="mt-4"
+                  >
+                    <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Tags{" "}
+                        <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tags"
+                    className="mt-4"
+                    help={`Tags for tracking spend and/or doing tag-based routing.`}
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      placeholder="Enter tags"
+                      tokenSeparators={[","]}
+                      options={predefinedTags}
+                    />
+                  </Form.Item>
                   <Accordion
                     className="mt-4 mb-4"
                     onClick={() => {
@@ -980,42 +1014,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>
-
-                  <Form.Item
-                    label={
-                      <span>
-                        Metadata{" "}
-                        <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="metadata"
-                    className="mt-4"
-                  >
-                    <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
-                  </Form.Item>
-                  <Form.Item
-                    label={
-                      <span>
-                        Tags{" "}
-                        <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="tags"
-                    className="mt-4"
-                    help={`Tags for tracking spend and/or doing tag-based routing.`}
-                  >
-                    <Select
-                      mode="tags"
-                      style={{ width: "100%" }}
-                      placeholder="Enter tags"
-                      tokenSeparators={[","]}
-                      options={predefinedTags}
-                    />
-                  </Form.Item>
 
                   {premiumUser ? (
                     <Accordion className="mt-4 mb-4">
