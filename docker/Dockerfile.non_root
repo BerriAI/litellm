@@ -41,32 +41,32 @@ ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 RUN pip install --no-cache-dir prisma==0.11.0 nodejs-bin==18.4.0a4 && \
     mkdir -p /app/.cache/prisma-python/binaries && \
     mkdir -p /app/.cache/prisma-python/nodeenv && \
-    mkdir -p /app/.cache/npm && \
-    mkdir -p /app/.npm
+    mkdir -p /app/.cache/npm
 
 # Setup nodeenv first to ensure nodejs is available for Prisma
 RUN python -c "import nodejs; print(nodejs.__file__)" && \
     # Ensure the nodejs binary is accessible
     python -c "from nodejs import node; import subprocess; subprocess.run([node.path, '--version'], check=True)"
 
-# CRITICAL: Pre-install Prisma CLI via npm to populate npm cache
-# This is what the Prisma Python package tries to do at runtime
-RUN python -c "from nodejs import node; import subprocess; import os; \
-    node_path = os.path.dirname(node.path); \
-    npm_path = os.path.join(node_path, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'); \
-    subprocess.run([node.path, npm_path, 'install', 'prisma@5.4.2', '--cache=/app/.cache/npm'], check=True, cwd='/app/.cache/prisma-python/nodeenv')"
-
 # Download ALL Prisma binaries in builder stage
-# Generate client first to download query engine
-RUN prisma generate || true
+# Let Prisma Python package handle its own CLI installation and caching
+# Set PATH so node is available for npm scripts
+ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-# Download CLI and migration engine by running commands that trigger downloads
-RUN prisma --version || true && \
-    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true && \
+# Trigger Prisma CLI download and caching
+RUN python -c "import prisma.cli.prisma as p; p.ensure_cached()" || \
+    echo "Prisma CLI download triggered"
+
+# Generate client to download query engine
+RUN prisma generate
+
+# Download migration engine by running commands that trigger downloads  
+RUN prisma --version && \
+    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script || true && \
     prisma format --schema=./schema.prisma || true
 
-# Force download migration engine explicitly if not already downloaded
-RUN prisma migrate deploy --dry-run 2>/dev/null || true
+# Force cache migration engine
+RUN prisma migrate deploy --dry-run || true
 
 # -----------------
 # Runtime Stage
@@ -86,8 +86,6 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 # Copy pre-cached Prisma binaries, CLI, and npm cache from builder stage
 COPY --from=builder /app/.cache /app/.cache
-# Also copy npm directory if it exists
-COPY --from=builder /app/.npm /app/.npm
 # Copy litellm-proxy-extras directory if it has migrations
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 # Copy nodejs and prisma installations from builder (needed by Prisma CLI)
@@ -128,20 +126,14 @@ RUN chmod +x docker/entrypoint.sh && \
     chmod +x /usr/bin/prisma
 
 # Create temporary directories needed at runtime
-RUN mkdir -p /tmp/.npm /nonexistent /.npm /app/.npm
+RUN mkdir -p /tmp/.npm /nonexistent /.npm
 
-# Pre-install Prisma CLI in the runtime stage using the cached npm packages
-# This ensures the Prisma Python package finds the CLI already installed
-RUN python -c "from nodejs import node; import subprocess; import os; \
-    node_path = os.path.dirname(node.path); \
-    npm_path = os.path.join(node_path, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'); \
-    env = os.environ.copy(); \
-    env['npm_config_cache'] = '/app/.cache/npm'; \
-    env['npm_config_offline'] = 'true'; \
-    env['npm_config_prefer_offline'] = 'true'; \
-    subprocess.run([node.path, npm_path, 'install', 'prisma@5.4.2', '--cache=/app/.cache/npm', '--offline'], \
-                   check=True, cwd='/app/.cache/prisma-python/nodeenv', env=env)" || \
-    echo "Prisma CLI already installed or in offline mode"
+# Set PATH so node is available for npm scripts (same as builder)
+ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
+
+# Ensure Prisma CLI is properly cached - this should use cached version, not download
+RUN python -c "import prisma.cli.prisma as p; p.ensure_cached()" || \
+    echo "Using cached Prisma CLI"
 
 # Test that Prisma works with pre-cached binaries (no downloads)
 # This will fail if binaries aren't properly cached
@@ -153,7 +145,6 @@ RUN prisma --version && \
 RUN chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent && \
     chown -R nobody:nogroup /tmp/.npm && \
-    chown -R nobody:nogroup /app/.npm && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup $PRISMA_PATH
 
