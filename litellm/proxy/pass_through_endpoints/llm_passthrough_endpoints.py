@@ -840,39 +840,51 @@ async def azure_proxy_route(
             if is_router_model:
                 request_body = await get_request_body(request)
                 is_streaming_request = is_passthrough_request_streaming(request_body)
-                result = cast(
-                    httpx.Response,
-                    await llm_router.allm_passthrough_route(
-                        model=part,
-                        method=request.method,
-                        endpoint=endpoint,
-                        request_query_params=request.query_params,
-                        request_headers=dict(request.headers),
-                        stream=request_body.get("stream", False),
-                        content=None,
-                        data=None,
-                        files=None,
-                        json=(
-                            request_body
-                            if request.headers.get("content-type") == "application/json"
-                            else None
-                        ),
-                        params=None,
-                        headers=None,
-                        cookies=None,
+                result = await llm_router.allm_passthrough_route(
+                    model=part,
+                    method=request.method,
+                    endpoint=endpoint,
+                    request_query_params=request.query_params,
+                    request_headers=dict(request.headers),
+                    stream=request_body.get("stream", False),
+                    content=None,
+                    data=None,
+                    files=None,
+                    json=(
+                        request_body
+                        if request.headers.get("content-type") == "application/json"
+                        else None
                     ),
+                    params=None,
+                    headers=None,
+                    cookies=None,
                 )
 
                 if is_streaming_request:
-                    return StreamingResponse(
-                        content=result.aiter_bytes(),
-                        status_code=result.status_code,
-                        headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                            headers=result.headers,
-                            custom_headers=None,
-                        ),
-                    )
+                    # Check if result is an async generator (from _async_streaming)
+                    import inspect
 
+                    if inspect.isasyncgen(result):
+                        # Result is already an async generator, use it directly
+                        return StreamingResponse(
+                            content=result,
+                            status_code=200,
+                            headers={"content-type": "text/event-stream"},
+                        )
+                    else:
+                        # Result is an httpx.Response, use aiter_bytes()
+                        result = cast(httpx.Response, result)
+                        return StreamingResponse(
+                            content=result.aiter_bytes(),
+                            status_code=result.status_code,
+                            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                                headers=result.headers,
+                                custom_headers=None,
+                            ),
+                        )
+
+                # Non-streaming response
+                result = cast(httpx.Response, result)
                 content = await result.aread()
                 return Response(
                     content=content,
