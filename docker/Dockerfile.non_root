@@ -65,9 +65,12 @@ RUN pip uninstall jwt -y && \
 # Pre-download Prisma binaries during build to avoid runtime downloads
 # This eliminates the need for outbound traffic to registry.npmjs.org and binaries.prisma.sh at runtime
 
-# Set binary cache directory to a local path inside the container
-# This ensures all Prisma binaries (query engine, CLI, etc.) are downloaded at build time
-ENV PRISMA_BINARY_CACHE_DIR=/app/.prisma/binaries
+# Set cache directories to consistent locations accessible by both root (build) and nobody (runtime)
+# PRISMA_BINARY_CACHE_DIR: Where query engine binaries are stored
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
+# PRISMA_NODEENV_CACHE_DIR: Where the Prisma CLI (via npm) is cached
+# CRITICAL: This prevents HOME directory mismatch between build (~root) and runtime (~nobody)
+ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
 # Install prisma and make entrypoints executable
@@ -75,15 +78,17 @@ RUN pip install --no-cache-dir prisma && \
     chmod +x docker/entrypoint.sh && \
     chmod +x docker/prod_entrypoint.sh
 
-# Create the binary cache directory
-RUN mkdir -p /app/.prisma/binaries
+# Create the cache directories
+RUN mkdir -p /app/.cache/prisma-python/binaries && \
+    mkdir -p /app/.cache/prisma-python/nodeenv
 
 # Force Prisma to download and cache all binaries at build time
 # This includes query engine, migration engine, and CLI binaries
 RUN prisma generate
 
 # Pre-cache the Prisma CLI by running a simple command
-# This forces the Prisma Python CLI wrapper to download and cache itself
+# This forces nodejs-bin to be used and the Prisma CLI to be installed via npm
+# The CLI will be cached in PRISMA_NODEENV_CACHE_DIR for runtime use
 RUN prisma --version
 
 # Create directories and set permissions for non-root user
