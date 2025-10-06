@@ -1,10 +1,11 @@
+"use client";
+
 import React, { useEffect, useState } from "react";
 import {
   Card,
   Text,
   Button,
   Grid,
-  Col,
   Tab,
   TabList,
   TabGroup,
@@ -12,25 +13,24 @@ import {
   TabPanels,
   Title,
   Badge,
-  TextInput,
-  Select as TremorSelect,
 } from "@tremor/react";
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
-import { KeyResponse } from "../key_team_helpers/key_list";
-import { Form, Input, InputNumber, Select, Tooltip, Button as AntdButton } from "antd";
-import NotificationManager from "../molecules/notifications_manager";
-import { KeyEditView } from "./key_edit_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import ObjectPermissionsView from "../object_permissions_view";
-import LoggingSettingsView from "../logging_settings_view";
+import { Form, Tooltip, Button as AntdButton } from "antd";
 import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
-import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
 import { CopyIcon, CheckIcon } from "lucide-react";
-import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers";
-import { parseErrorMessage } from "../shared/errorUtils";
-import AutoRotationView from "../common_components/AutoRotationView";
+import { KeyResponse } from "@/components/key_team_helpers/key_list"
+import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "@/components/callback_info_helpers"
+import NotificationManager from "@/components/molecules/notifications_manager"
+import { keyDeleteCall, keyUpdateCall } from "@/components/networking"
+import { parseErrorMessage } from "@/components/shared/errorUtils"
+import { rolesWithWriteAccess } from "@/utils/roles"
+import { RegenerateKeyModal } from "@/components/organisms/regenerate_key_modal"
+import ObjectPermissionsView from "@/components/object_permissions_view"
+import LoggingSettingsView from "@/components/logging_settings_view"
+import { extractLoggingSettings, formatMetadataForDisplay } from "@/components/key_info_utils"
+import AutoRotationView from "@/components/common_components/AutoRotationView"
+import { KeyEditView } from "@/components/templates/key_edit_view"
+
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -47,27 +47,20 @@ interface KeyInfoViewProps {
   backButtonText?: string;
 }
 
-/**
- * ─────────────────────────────────────────────────────────────────────────
- * @deprecated
- * This component is being DEPRECATED in favor of src/app/dashboard/virtual-keys/components/KeyInfoView.tsx
- * Please contribute to the new refactor.
- * ─────────────────────────────────────────────────────────────────────────
- */
-export default function KeyInfoView({
-  keyId,
-  onClose,
-  keyData,
-  accessToken,
-  userID,
-  userRole,
-  teams,
-  onKeyDataUpdate,
-  onDelete,
-  premiumUser,
-  setAccessToken,
-  backButtonText = "Back to Keys",
-}: KeyInfoViewProps) {
+const KeyInfoView = ({
+                                      keyId,
+                                      onClose,
+                                      keyData,
+                                      accessToken,
+                                      userID,
+                                      userRole,
+                                      teams,
+                                      onKeyDataUpdate,
+                                      onDelete,
+                                      premiumUser,
+                                      setAccessToken,
+                                      backButtonText = "Back to Keys",
+                                    }: KeyInfoViewProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -153,8 +146,8 @@ export default function KeyInfoView({
             ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
-                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-                }
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+              }
               : {}),
           };
         } catch (error) {
@@ -169,8 +162,8 @@ export default function KeyInfoView({
           ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
-                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-              }
+              litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+            }
             : {}),
         };
       }
@@ -622,10 +615,10 @@ export default function KeyInfoView({
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
                               {prompt}
                             </span>
-                          ))
+                        ))
                         : "No prompts specified"}
                     </Text>
                   </div>
@@ -702,3 +695,5 @@ export default function KeyInfoView({
     </div>
   );
 }
+
+export default KeyInfoView;
