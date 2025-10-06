@@ -4,8 +4,14 @@ import { fetchMCPServers, fetchMCPAccessGroups } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
 interface MCPServerSelectorProps {
-  onChange: (selected: { servers: string[]; accessGroups: string[] }) => void;
-  value?: { servers: string[]; accessGroups: string[] };
+  onChange: (selected: { 
+    servers: string[]; 
+    accessGroups: string[];
+  }) => void;
+  value?: { 
+    servers: string[]; 
+    accessGroups: string[];
+  };
   className?: string;
   accessToken: string;
   placeholder?: string;

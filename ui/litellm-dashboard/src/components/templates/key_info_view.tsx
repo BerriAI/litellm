@@ -136,6 +136,18 @@ export default function KeyInfoView({
         delete formValues.mcp_servers_and_groups;
       }
 
+      // Handle MCP tool permissions
+      if (formValues.mcp_tool_permissions !== undefined) {
+        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          formValues.object_permission = {
+            ...formValues.object_permission,
+            mcp_tool_permissions: mcpToolPermissions,
+          };
+        }
+        delete formValues.mcp_tool_permissions;
+      }
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
