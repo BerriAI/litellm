@@ -415,8 +415,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 googleSearchRetrieval = self.get_tool_value(tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value)
             elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
                 enterpriseWebSearch = self.get_tool_value(tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value)
-            elif tool_name and tool_name == VertexToolName.URL_CONTEXT.value:
-                urlContext = self.get_tool_value(tool, VertexToolName.URL_CONTEXT.value)
+            elif tool_name and (tool_name == VertexToolName.URL_CONTEXT.value or tool_name == "urlContext"):
+                urlContext = self.get_tool_value(tool, tool_name)
             elif tool_name and (
                 tool_name == VertexToolName.GOOGLE_MAPS.value or tool_name == "google_maps"
             ):
@@ -448,9 +448,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     "Invalid tool={}. Use `litellm.set_verbose` or `litellm --detailed_debug` to see raw request."
                 )
 
-        _tools = Tools(
-            function_declarations=gtool_func_declarations,
-        )
+        # Only include function_declarations if there are actual functions
+        _tools = Tools()
+        if gtool_func_declarations:
+            _tools["function_declarations"] = gtool_func_declarations
         if googleSearch is not None:
             _tools[VertexToolName.GOOGLE_SEARCH.value] = googleSearch
         if googleSearchRetrieval is not None:
