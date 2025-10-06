@@ -579,7 +579,12 @@ class LiteLLMProxyRequestSetup:
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
-            user_api_key_budget_reset_at=user_api_key_dict.budget_reset_at.isoformat() if user_api_key_dict.budget_reset_at else None,
+            user_api_key_budget_reset_at=(
+                user_api_key_dict.budget_reset_at.isoformat()
+                if user_api_key_dict.budget_reset_at
+                else None
+            ),
+            user_api_key_auth_metadata=None,
         )
         return user_api_key_logged_metadata
 
@@ -604,6 +609,39 @@ class LiteLLMProxyRequestSetup:
 
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
+        )
+        return data
+
+    @staticmethod
+    def add_management_endpoint_metadata_to_request_metadata(
+        data: dict,
+        management_endpoint_metadata: dict,
+        _metadata_variable_name: str,
+    ) -> dict:
+        """
+        Adds the `UserAPIKeyAuth` metadata to the request metadata.
+
+        ignore any sensitive fields like logging, api_key, etc.
+        """
+        if _metadata_variable_name not in data:
+            return data
+        from litellm.proxy._types import (
+            LiteLLM_ManagementEndpoint_MetadataFields,
+            LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+        )
+
+        # ignore any special fields
+        added_metadata = {}
+        for k, v in management_endpoint_metadata.items():
+            if k not in (
+                LiteLLM_ManagementEndpoint_MetadataFields_Premium
+                + LiteLLM_ManagementEndpoint_MetadataFields
+            ):
+                added_metadata[k] = v
+        if data[_metadata_variable_name].get("user_api_key_auth_metadata") is None:
+            data[_metadata_variable_name]["user_api_key_auth_metadata"] = {}
+        data[_metadata_variable_name]["user_api_key_auth_metadata"].update(
+            added_metadata
         )
         return data
 
@@ -651,6 +689,13 @@ class LiteLLMProxyRequestSetup:
             key_metadata["disable_fallbacks"], bool
         ):
             data["disable_fallbacks"] = key_metadata["disable_fallbacks"]
+
+        ## KEY-LEVEL METADATA
+        data = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+            data=data,
+            management_endpoint_metadata=key_metadata,
+            _metadata_variable_name=_metadata_variable_name,
+        )
         return data
 
     @staticmethod
@@ -888,6 +933,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata[
                 "spend_logs_metadata"
             ]
+
+    ## TEAM-LEVEL METADATA
+    data = (
+        LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+            data=data,
+            management_endpoint_metadata=team_metadata,
+            _metadata_variable_name=_metadata_variable_name,
+        )
+    )
 
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name][

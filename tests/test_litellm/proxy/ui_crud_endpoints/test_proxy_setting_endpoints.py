@@ -526,3 +526,33 @@ class TestProxySettingEndpoints:
 
         # Verify save_config was called twice (once for each update)
         assert mock_proxy_config["save_call_count"]() == 2
+
+    def test_get_ui_theme_settings(self, mock_proxy_config):
+        """Test getting UI theme settings without authentication"""
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "values" in data
+        assert "field_schema" in data
+
+    def test_update_ui_theme_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        """Test updating UI theme settings"""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        new_theme = {"logo_url": "https://example.com/new-logo.png"}
+
+        response = client.patch("/update/ui_theme_settings", json=new_theme)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["status"] == "success"
+        assert data["theme_config"]["logo_url"] == "https://example.com/new-logo.png"
+
+        # Verify config was updated
+        updated_config = mock_proxy_config["config"]
+        assert "UI_LOGO_PATH" in updated_config["environment_variables"]
+        assert mock_proxy_config["save_call_count"]() == 1

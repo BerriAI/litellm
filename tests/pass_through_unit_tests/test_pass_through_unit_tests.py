@@ -45,6 +45,18 @@ def mock_request():
     class QueryParams:
         def __init__(self):
             self._dict = {}
+        
+        def __iter__(self):
+            return iter(self._dict.items())
+        
+        def items(self):
+            return self._dict.items()
+        
+        def keys(self):
+            return self._dict.keys()
+        
+        def values(self):
+            return self._dict.values()
 
     class MockRequest:
         def __init__(
