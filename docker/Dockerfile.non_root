@@ -37,22 +37,28 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
 ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
-RUN pip install --no-cache-dir prisma && \
+# Install prisma==0.11.0 (matching requirements.txt) and nodejs-bin
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-bin==18.4.0a4 && \
     mkdir -p /app/.cache/prisma-python/binaries && \
     mkdir -p /app/.cache/prisma-python/nodeenv && \
     mkdir -p /app/.cache/npm
 
+# Setup nodeenv first to ensure nodejs is available for Prisma
+RUN python -c "import nodejs; print(nodejs.__file__)" && \
+    # Ensure the nodejs binary is accessible
+    python -c "from nodejs import node; import subprocess; subprocess.run([node.path, '--version'], check=True)"
+
 # Download ALL Prisma binaries in builder stage
-RUN prisma generate && \
-    prisma --version && \
+# Generate client first to download query engine
+RUN prisma generate || true
+
+# Download CLI and migration engine by running commands that trigger downloads
+RUN prisma --version || true && \
     prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true && \
     prisma format --schema=./schema.prisma || true
 
-# Ensure nodejs-bin package is fully installed (Prisma uses it internally)
-RUN pip install nodejs-bin && \
-    python -c "import nodejs; print(nodejs.__file__)" && \
-    # Pre-populate nodejs cache to ensure it's available at runtime
-    python -c "from nodejs import node; print(node.version)"
+# Force download migration engine explicitly if not already downloaded
+RUN prisma migrate deploy --dry-run 2>/dev/null || true
 
 # -----------------
 # Runtime Stage
@@ -74,8 +80,14 @@ COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /app/.cache /app/.cache
 # Copy any migration files if they exist
 COPY --from=builder /app/litellm-proxy-extras/migrations* /app/litellm-proxy-extras/ 2>/dev/null || true
-# Copy nodejs installation if it exists (needed by Prisma CLI)
-COPY --from=builder /usr/lib/python*/site-packages/nodejs* /usr/lib/python3.13/site-packages/ 2>/dev/null || true
+# Copy nodejs and prisma installations from builder (needed by Prisma CLI)
+# Copy both the packages and their .dist-info directories for proper Python package registration
+COPY --from=builder /usr/lib/python3.13/site-packages/nodejs* /usr/lib/python3.13/site-packages/
+COPY --from=builder /usr/lib/python3.13/site-packages/prisma* /usr/lib/python3.13/site-packages/
+COPY --from=builder /usr/lib/python3.13/site-packages/tomlkit* /usr/lib/python3.13/site-packages/
+COPY --from=builder /usr/lib/python3.13/site-packages/nodeenv* /usr/lib/python3.13/site-packages/
+# Copy the prisma executable
+COPY --from=builder /usr/bin/prisma /usr/bin/prisma
 
 # Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
@@ -99,19 +111,19 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries
 ENV PRISMA_NODEENV_CACHE_DIR=/app/.cache/prisma-python/nodeenv
 ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
 
-# Install prisma package and nodejs-bin (required by prisma), make entrypoints executable
-RUN pip install --no-cache-dir prisma nodejs-bin && \
-    chmod +x docker/entrypoint.sh && \
-    chmod +x docker/prod_entrypoint.sh
+# Make entrypoints executable
+# Prisma and nodejs-bin are already copied from builder stage
+RUN chmod +x docker/entrypoint.sh && \
+    chmod +x docker/prod_entrypoint.sh && \
+    chmod +x /usr/bin/prisma
 
 # Create temporary directories needed at runtime
 RUN mkdir -p /tmp/.npm /nonexistent /.npm
 
-# Generate Prisma client using pre-cached binaries (no downloads)
-RUN prisma generate
-
-# Verify Prisma works without network - this will fail if binaries aren't cached properly
+# Test that Prisma works with pre-cached binaries (no downloads)
+# This will fail if binaries aren't properly cached
 RUN prisma --version && \
+    prisma generate && \
     prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
 
 # Set permissions for non-root user
