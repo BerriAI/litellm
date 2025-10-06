@@ -56,14 +56,6 @@ def completion(...):
 - OpenAI migrated
 - 99 lines removed
 - All tests passing
-
-**Next Steps**
-
-- Top 5 providers → 85% coverage
-- HTTP providers → 95% coverage
-- Remaining → 100% coverage
-- Cleanup and documentation
-
 ---
 
 ## Detailed Final Structure
