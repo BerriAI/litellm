@@ -53,7 +53,7 @@ def completion(...):
 
 **Current (POC)**
 
-- OpenAI + 12 providers migrated
+- OpenAI migrated
 - 99 lines removed
 - All tests passing
 
