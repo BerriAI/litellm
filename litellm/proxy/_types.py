@@ -1416,7 +1416,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = []
     mcp_access_groups: Optional[List[str]] = []
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
-    f"""
+    """
     Mapping - server_id -> list of tools
 
     Enforces allowed tools for a specific key/team/organization
