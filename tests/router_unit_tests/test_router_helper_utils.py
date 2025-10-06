@@ -777,6 +777,57 @@ def test_set_model_group_info(model_list, user_facing_model_group_name):
     assert resp.model_group == user_facing_model_group_name
 
 
+def test_set_model_group_info_providers_deduplication():
+    """Test that providers_set correctly deduplicates providers in model group info
+    
+    This test verifies the optimization where a set is used for O(1) deduplication
+    instead of checking if provider exists in list before appending.
+    """
+    # Create a model list with multiple deployments using the same provider (openai)
+    model_list_with_duplicates = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "test-key-1",
+            },
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "test-key-2",
+            },
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "test-azure-key",
+                "api_base": "https://test.openai.azure.com/",
+            },
+        },
+    ]
+    
+    router = Router(model_list=model_list_with_duplicates)
+    resp = router._set_model_group_info(
+        model_group="gpt-3.5-turbo",
+        user_facing_model_group_name="gpt-3.5-turbo",
+    )
+    
+    assert resp is not None
+    assert resp.model_group == "gpt-3.5-turbo"
+    
+    # Verify providers list contains unique providers only
+    assert resp.providers is not None
+    assert len(resp.providers) == 2  # openai and azure (deduplicated)
+    assert "openai" in resp.providers
+    assert "azure" in resp.providers
+    
+    # Verify no duplicates in the providers list
+    assert len(resp.providers) == len(set(resp.providers))
+
+
 @pytest.mark.asyncio
 async def test_set_response_headers(model_list):
     """Test if the 'set_response_headers' function is working correctly"""
