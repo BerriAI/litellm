@@ -933,7 +933,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
             "content": [
                 {
                     "type": "text",
-                    "text": "Long cache message (must be >= 1025 tokens)",
+                    "text": "Long cache message (must be >= 1024 tokens)",
                     "cache_control": {
                         "type": "ephemeral",
                         "ttl": "7200s"
