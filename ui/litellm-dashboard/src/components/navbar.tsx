@@ -32,8 +32,6 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
-  refactoredUIFlag: boolean;
-  setRefactoredUIFlag: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -46,13 +44,12 @@ const Navbar: React.FC<NavbarProps> = ({
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
-  onToggleSidebar,
-  refactoredUIFlag,
-  setRefactoredUIFlag,
+  onToggleSidebar
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
   const { logoUrl } = useTheme();
+  const { refactoredUIFlag, setRefactoredUIFlag } = useFeatureFlags();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;

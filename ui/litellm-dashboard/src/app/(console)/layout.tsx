@@ -5,6 +5,7 @@ import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(console)/components/Sidebar2";
 import useAuthorized from "@/app/(console)/hooks/useAuthorized";
+import useFeatureFlags, { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { accessToken, userRole } = useAuthorized();
