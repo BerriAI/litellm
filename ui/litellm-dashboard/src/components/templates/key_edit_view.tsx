@@ -7,6 +7,7 @@ import { modelAvailableCall, getPromptsList } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils";
 import { fetchMCPAccessGroups } from "../networking";
@@ -145,6 +146,7 @@ export function KeyEditView({
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
     },
+    mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
     logging_settings: extractLoggingSettings(keyData.metadata),
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -166,6 +168,7 @@ export function KeyEditView({
         servers: keyData.object_permission?.mcp_servers || [],
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
       },
+      mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       logging_settings: extractLoggingSettings(keyData.metadata),
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -289,6 +292,25 @@ export function KeyEditView({
           accessToken={accessToken || ""}
           placeholder="Select MCP servers or access groups (optional)"
         />
+      </Form.Item>
+
+      <Form.Item 
+        noStyle
+        shouldUpdate={(prevValues, currentValues) => 
+          prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
+          prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+        }
+      >
+        {() => (
+          <div className="mb-6">
+            <MCPToolPermissions
+              accessToken={accessToken || ""}
+              selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+              toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+              onChange={(toolPerms) => form.setFieldValue("mcp_tool_permissions", toolPerms)}
+            />
+          </div>
+        )}
       </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
