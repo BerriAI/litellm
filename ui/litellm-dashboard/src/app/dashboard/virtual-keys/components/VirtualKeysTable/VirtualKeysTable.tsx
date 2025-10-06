@@ -105,18 +105,19 @@ const VirtualKeysTable = ({
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
-    if (refresh) {
-      const handleStorageChange = () => {
-        refresh();
-      };
-
-      // Listen for storage events that might indicate a key was created
-      window.addEventListener("storage", handleStorageChange);
-
-      return () => {
-        window.removeEventListener("storage", handleStorageChange);
-      };
+    if (!refresh || typeof window === "undefined") {
+      return;
     }
+    const handleStorageChange = () => {
+      refresh();
+    };
+
+    // Listen for storage events that might indicate a key was created
+    window.addEventListener("storage", handleStorageChange);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
   }, [refresh]);
 
   const columns: ColumnDef<KeyResponse>[] = [
