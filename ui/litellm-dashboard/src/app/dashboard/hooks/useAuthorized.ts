@@ -1,24 +1,41 @@
 "use client";
 
-import { getCookie } from "@/utils/cookieUtils";
+import { useEffect, useMemo } from "react";
+import { getCookie, clearTokenCookies } from "@/utils/cookieUtils";
 import { useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 
 const useAuthorized = () => {
-  const token = getCookie("token");
   const router = useRouter();
 
-  if (!token) {
-    router.replace("/sso/key/generate");
-  }
+  const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  const decoded = jwtDecode(token as string) as { [key: string]: any };
-  const accessToken = decoded.key;
-  const userId = decoded.user_id;
-  const userRole = decoded.user_role;
-  const premiumUser = decoded.premium_user;
+  // Redirect after mount if missing/invalid token
+  useEffect(() => {
+    if (!token) {
+      router.replace("/sso/key/generate");
+    }
+  }, [token, router]);
 
-  return { accessToken, userId, userRole, premiumUser };
+  // Decode safely
+  const decoded = useMemo(() => {
+    if (!token) return null;
+    try {
+      return jwtDecode(token) as Record<string, any>;
+    } catch {
+      // Bad token in cookie — clear and bounce
+      clearTokenCookies();
+      router.replace("/sso/key/generate");
+      return null;
+    }
+  }, [token, router]);
+
+  return {
+    accessToken: decoded?.key ?? null,
+    userId: decoded?.user_id ?? null,
+    userRole: decoded?.user_role ?? null,
+    premiumUser: decoded?.premium_user ?? null,
+  };
 };
 
 export default useAuthorized;

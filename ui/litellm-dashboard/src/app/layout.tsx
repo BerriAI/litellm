@@ -18,9 +18,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <FeatureFlagsProvider>
-        <body className={inter.className}>{children}</body>
-      </FeatureFlagsProvider>
+
+        <body className={inter.className}>
+          <FeatureFlagsProvider>
+            {children}
+          </FeatureFlagsProvider>
+        </body>
     </html>
   );
 }
