@@ -2551,7 +2551,7 @@ def _handle_vertex_ai_image_params(n: Optional[int], size: Optional[str]) -> Dic
     if n is not None:
         optional_params["sampleCount"] = int(n)
     if size is not None:
-        optional_params["aspectRatio"] = _map_openai_size_to_vertex_ai_aspect_ratio(size)
+        optional_params["aspectRatio"] = int(_map_openai_size_to_vertex_ai_aspect_ratio(size))
     return optional_params
 
 
