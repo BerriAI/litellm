@@ -943,6 +943,99 @@ class TestMCPServerManager:
         manager.add_update_server(server)
         assert server.server_id in manager.get_registry()
 
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_allows_permitted_tool(self):
+        """
+        Test that key can call tool when it's in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should succeed
+        await manager.pre_call_tool_check(
+            name="read_wiki_structure",
+            arguments={"repoName": "facebook/react"},
+            server_name_from_prefix="test",
+            user_api_key_auth=user_auth,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_blocks_unpermitted_tool(self):
+        """
+        Test that key cannot call tool when it's NOT in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should fail with 403
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="ask_question",
+                arguments={"question": "test"},
+                server_name_from_prefix="test",
+                user_api_key_auth=user_auth,
+                proxy_logging_obj=proxy_logging,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
