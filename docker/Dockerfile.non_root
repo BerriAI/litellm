@@ -89,7 +89,12 @@ RUN prisma generate
 # Pre-cache the Prisma CLI by running a simple command
 # This forces nodejs-bin to be used and the Prisma CLI to be installed via npm
 # The CLI will be cached in PRISMA_NODEENV_CACHE_DIR for runtime use
-RUN prisma --version
+RUN echo "=== Caching Prisma CLI ===" && \
+    prisma --version && \
+    echo "=== Verifying cache location ===" && \
+    ls -la /app/.cache/prisma-python/nodeenv/ && \
+    echo "=== Checking for entrypoint ===" && \
+    find /app/.cache/prisma-python/nodeenv/ -name "index.js" -o -name "prisma" | head -10
 
 # Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
