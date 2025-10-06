@@ -66,7 +66,10 @@ class ContextCachingEndpoints(VertexBase):
             endpoint = "cachedContents"
             url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
         else:
-            raise NotImplementedError
+            auth_header = vertex_auth_header
+            endpoint = "cachedContents"
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+
 
         return self._check_custom_proxy(
             api_base=api_base,
