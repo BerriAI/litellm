@@ -78,8 +78,8 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 # Copy pre-cached Prisma binaries and CLI from builder stage
 COPY --from=builder /app/.cache /app/.cache
-# Copy any migration files if they exist
-COPY --from=builder /app/litellm-proxy-extras/migrations* /app/litellm-proxy-extras/ 2>/dev/null || true
+# Copy litellm-proxy-extras directory if it has migrations
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 # Copy nodejs and prisma installations from builder (needed by Prisma CLI)
 # Copy both the packages and their .dist-info directories for proper Python package registration
 COPY --from=builder /usr/lib/python3.13/site-packages/nodejs* /usr/lib/python3.13/site-packages/
