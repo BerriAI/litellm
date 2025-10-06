@@ -6,6 +6,10 @@
  * Clears the token cookie from both root and /ui paths
  */
 export function clearTokenCookies() {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
   // Get the current domain
   const domain = window.location.hostname;
 
