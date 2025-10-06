@@ -693,7 +693,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _get_base_azure_url(
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Literal["/openai/responses", "/openai/vector_stores"],
+        route: Union[Literal["/openai/responses", "/openai/vector_stores"], str],
         default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
     ) -> str:
         """
