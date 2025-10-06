@@ -314,6 +314,51 @@ class TestProxyInitializationHelpers:
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30
 
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_max_requests_before_restart_flag(self, mock_print, mock_uvicorn_run):
+        """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--max_requests_before_restart", "123"]
+            )
+
+            assert result.exit_code == 0
+            mock_uvicorn_run.assert_called_once()
+
+            # Check that uvicorn.run was called with limit_max_requests parameter
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["limit_max_requests"] == 123
+
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
         """Test the construct_database_url_from_env_vars function with various scenarios"""

@@ -84,7 +84,7 @@ async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optiona
 
     example header can be
 
-    {"Authorization": "bearer os.environ/COHERE_API_KEY"}
+    {"Authorization": "Bearer os.environ/COHERE_API_KEY"}
     """
     if custom_headers is None:
         return None
@@ -222,8 +222,8 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             llm_response = asyncio.create_task(
                 llm_router.aadapter_completion(**data, specific_deployment=True)
             )
-        elif (
-            llm_router is not None and llm_router.has_model_id(data["model"])
+        elif llm_router is not None and llm_router.has_model_id(
+            data["model"]
         ):  # model in router model list
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
         elif (
@@ -489,6 +489,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     if user_api_key_dict.budget_reset_at
                     else None
                 ),
+                user_api_key_auth_metadata=user_api_key_dict.metadata,
             )
         )
 
@@ -581,6 +582,7 @@ async def pass_through_request(  # noqa: PLR0915
     query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
     cost_per_request: Optional[float] = None,
+    custom_llm_provider: Optional[str] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -695,8 +697,8 @@ async def pass_through_request(  # noqa: PLR0915
         logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
 
         # combine url with query params for logging
-        requested_query_params: Optional[dict] = (
-            query_params or dict(request.query_params)
+        requested_query_params: Optional[dict] = query_params or dict(
+            request.query_params
         )
 
         requested_query_params_str = None
@@ -835,6 +837,7 @@ async def pass_through_request(  # noqa: PLR0915
                 logging_obj=logging_obj,
                 cache_hit=False,
                 request_body=_parsed_body,
+                custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
         )
@@ -930,6 +933,7 @@ def create_pass_through_route(
     dependencies: Optional[List] = None,
     include_subpath: Optional[bool] = False,
     cost_per_request: Optional[float] = None,
+    custom_llm_provider: Optional[str] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -988,6 +992,7 @@ def create_pass_through_route(
                 stream=stream,
                 custom_body=custom_body,
                 cost_per_request=cost_per_request,
+                custom_llm_provider=custom_llm_provider,
             )
 
     return endpoint_func
@@ -1125,7 +1130,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
-        def __init__(self, url: str, method: str = "WEBSOCKET", headers: Optional[dict] = None):
+        def __init__(
+            self, url: str, method: str = "WEBSOCKET", headers: Optional[dict] = None
+        ):
             self.url = url
             self.method = method
             self.headers = headers or {}
@@ -1230,9 +1237,9 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                                             )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
-                                                kwargs[
-                                                    "custom_llm_provider"
-                                                ] = "vertex_ai-language-models"
+                                                kwargs["custom_llm_provider"] = (
+                                                    "vertex_ai-language-models"
+                                                )
                                                 # Update logging object with correct model
                                                 logging_obj.model = extracted_model
                                                 logging_obj.model_call_details[
@@ -1298,10 +1305,10 @@ async def websocket_passthrough_request(  # noqa: PLR0915
                             # Update logging object with correct model
                             logging_obj.model = extracted_model
                             logging_obj.model_call_details["model"] = extracted_model
-                            logging_obj.model_call_details[
-                                "custom_llm_provider"
-                            ] = "vertex_ai_language_models"
-                            verbose_proxy_logger.info(
+                            logging_obj.model_call_details["custom_llm_provider"] = (
+                                "vertex_ai_language_models"
+                            )
+                            verbose_proxy_logger.debug(
                                 f"WebSocket passthrough ({endpoint}): Successfully extracted model '{extracted_model}' and set provider to 'vertex_ai' from server setup response"
                             )
                         else:
@@ -1465,7 +1472,7 @@ async def websocket_passthrough_request(  # noqa: PLR0915
 
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(
-                code=exc.status_code if hasattr(exc, "status_code") else 1011,
+                code=getattr(exc, "status_code", 1011),
                 reason="Upstream connection rejected",
             )
     except Exception as e:
@@ -1653,6 +1660,39 @@ class InitPassThroughEndpointHelpers:
             verbose_proxy_logger.debug(
                 "Removed pass-through route from registry: %s", key
             )
+
+    @staticmethod
+    def is_registered_pass_through_route(route: str) -> bool:
+        """
+        Check if route is a registered pass-through endpoint from DB
+
+        Uses the in-memory registry to avoid additional DB queries
+        Optimized for minimal latency
+
+        Args:
+            route: The route to check
+
+        Returns:
+            bool: True if route is a registered pass-through endpoint, False otherwise
+        """
+        # Fast path: check if any registered route key contains this path
+        # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
+        # Extract unique paths from keys for quick checking
+        for key in _registered_pass_through_routes.keys():
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
+                route_type = parts[1]
+                registered_path = parts[2]
+
+                if route_type == "exact" and route == registered_path:
+                    return True
+                elif route_type == "subpath":
+                    if route == registered_path or route.startswith(
+                        registered_path + "/"
+                    ):
+                        return True
+
+        return False
 
 
 async def initialize_pass_through_endpoints(

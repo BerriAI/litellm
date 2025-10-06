@@ -155,7 +155,6 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     router as mcp_discoverable_endpoints_router,
 )
-
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -464,9 +463,9 @@ except ImportError:
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -963,9 +962,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
@@ -1296,9 +1295,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -1873,6 +1872,13 @@ class ProxyConfig:
                     set_global_bitbucket_config(value)
                     verbose_proxy_logger.info(
                         f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
+                    )
+                elif key == "global_gitlab_config":
+                    from litellm.integrations.gitlab import set_global_gitlab_config
+
+                    set_global_gitlab_config(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global Gitlab Config on LiteLLM Proxy{reset_color_code}"
                     )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
@@ -2529,10 +2535,14 @@ class ProxyConfig:
         _model_list: list = []
         for m in new_models:
             _litellm_params = m.litellm_params
+            if isinstance(_litellm_params, BaseModel):
+                _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(value=v, key=k)
+                    decrypted_value = decrypt_value_helper(
+                        value=v, key=k, return_original_value=True
+                    )
                     _litellm_params[k] = decrypted_value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
@@ -2608,6 +2618,31 @@ class ProxyConfig:
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    def _add_callback_from_db_to_in_memory_litellm_callbacks(
+        self,
+        callback: str,
+        event_types: List[Literal["success", "failure"]],
+        existing_callbacks: list,
+    ) -> None:
+        """
+        Helper method to add a single callback to litellm for specified event types.
+
+        Args:
+            callback: The callback name to add
+            event_types: List of event types (e.g., ["success"], ["failure"], or ["success", "failure"])
+            existing_callbacks: The existing callback list to check against
+        """
+        if callback in litellm._known_custom_logger_compatible_callbacks:
+            for event_type in event_types:
+                _add_custom_logger_callback_to_specific_event(callback, event_type)
+        elif callback not in existing_callbacks:
+            if event_types == ["success"]:
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            elif event_types == ["failure"]:
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+            else:  # Both success and failure
+                litellm.logging_callback_manager.add_litellm_callback(callback)
+
     def _add_callbacks_from_db_config(self, config_data: dict) -> None:
         """
         Adds callbacks from DB config to litellm
@@ -2615,35 +2650,31 @@ class ProxyConfig:
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)
+        callbacks = litellm_settings.get("callbacks", None)
 
         if success_callbacks is not None and isinstance(success_callbacks, list):
             for success_callback in success_callbacks:
-                if (
-                    success_callback
-                    in litellm._known_custom_logger_compatible_callbacks
-                ):
-                    _add_custom_logger_callback_to_specific_event(
-                        success_callback, "success"
-                    )
-                elif success_callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(
-                        success_callback
-                    )
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=success_callback,
+                    event_types=["success"],
+                    existing_callbacks=litellm.success_callback,
+                )
 
-        # Add failure callbacks from DB to litellm
         if failure_callbacks is not None and isinstance(failure_callbacks, list):
             for failure_callback in failure_callbacks:
-                if (
-                    failure_callback
-                    in litellm._known_custom_logger_compatible_callbacks
-                ):
-                    _add_custom_logger_callback_to_specific_event(
-                        failure_callback, "failure"
-                    )
-                elif failure_callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(
-                        failure_callback
-                    )
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=failure_callback,
+                    event_types=["failure"],
+                    existing_callbacks=litellm.failure_callback,
+                )
+
+        if callbacks is not None and isinstance(callbacks, list):
+            for callback in callbacks:
+                self._add_callback_from_db_to_in_memory_litellm_callbacks(
+                    callback=callback,
+                    event_types=["success", "failure"],
+                    existing_callbacks=litellm.callbacks,
+                )
 
     def _encrypt_env_variables(
         self, environment_variables: dict, new_encryption_key: Optional[str] = None
@@ -3120,10 +3151,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3353,9 +3384,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -3855,10 +3886,10 @@ class ProxyStartupEvent:
             LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
             LITELLM_KEY_ROTATION_ENABLED,
         )
-        
+
         key_rotation_enabled: Optional[bool] = str_to_bool(LITELLM_KEY_ROTATION_ENABLED)
         verbose_proxy_logger.debug(f"key_rotation_enabled: {key_rotation_enabled}")
-        
+
         if key_rotation_enabled is True:
             try:
                 from litellm.proxy.common_utils.key_rotation_manager import (
@@ -3869,19 +3900,25 @@ class ProxyStartupEvent:
                 global prisma_client
                 if prisma_client is not None:
                     key_rotation_manager = KeyRotationManager(prisma_client)
-                    verbose_proxy_logger.debug(f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)")
+                    verbose_proxy_logger.debug(
+                        f"Key rotation background job scheduled every {LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS} seconds (LITELLM_KEY_ROTATION_ENABLED=true)"
+                    )
                     scheduler.add_job(
                         key_rotation_manager.process_rotations,
                         "interval",
                         seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
-                        id="key_rotation_job"
+                        id="key_rotation_job",
                     )
                 else:
-                    verbose_proxy_logger.warning("Key rotation enabled but prisma_client not available")
+                    verbose_proxy_logger.warning(
+                        "Key rotation enabled but prisma_client not available"
+                    )
             except Exception as e:
                 verbose_proxy_logger.warning(f"Failed to setup key rotation job: {e}")
         else:
-            verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
+            verbose_proxy_logger.debug(
+                "Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)"
+            )
 
     @classmethod
     async def _setup_prisma_client(
@@ -8712,9 +8749,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None

@@ -4,36 +4,36 @@ import NotificationManager from "./molecules/notifications_manager";
 
 export enum Providers {
   AIML = "AI/ML API",
-  Bedrock = "Amazon Bedrock",           
-  Anthropic = "Anthropic",              
-  AssemblyAI = "AssemblyAI",            
-  SageMaker = "AWS SageMaker",         
-  Azure = "Azure",                     
-  Azure_AI_Studio = "Azure AI Foundry (Studio)", 
-  Cerebras = "Cerebras",                
-  Cohere = "Cohere",         
+  Bedrock = "Amazon Bedrock",
+  Anthropic = "Anthropic",
+  AssemblyAI = "AssemblyAI",
+  SageMaker = "AWS SageMaker",
+  Azure = "Azure",
+  Azure_AI_Studio = "Azure AI Foundry (Studio)",
+  Cerebras = "Cerebras",
+  Cohere = "Cohere",
   Dashscope = "Dashscope",
-  Databricks = "Databricks (Qwen API)",            
-  DeepInfra = "DeepInfra",             
-  Deepgram = "Deepgram",                
-  Deepseek = "Deepseek",               
-  ElevenLabs = "ElevenLabs",            
-  FireworksAI = "Fireworks AI",         
+  Databricks = "Databricks (Qwen API)",
+  DeepInfra = "DeepInfra",
+  Deepgram = "Deepgram",
+  Deepseek = "Deepseek",
+  ElevenLabs = "ElevenLabs",
+  FireworksAI = "Fireworks AI",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
-  Groq = "Groq",                       
+  Groq = "Groq",
   Hosted_Vllm = "vllm",
-  JinaAI = "Jina AI",                 
-  MistralAI = "Mistral AI",             
-  Ollama = "Ollama",                   
-  OpenAI = "OpenAI",                    
+  JinaAI = "Jina AI",
+  MistralAI = "Mistral AI",
+  Ollama = "Ollama",
+  OpenAI = "OpenAI",
   OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
   OpenAI_Text = "OpenAI Text Completion",
   OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
-  Openrouter = "Openrouter",            
+  Openrouter = "Openrouter",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
-  Perplexity = "Perplexity",           
-  Sambanova = "Sambanova",              
+  Perplexity = "Perplexity",
+  Sambanova = "Sambanova",
   Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",            
   Triton = "Triton",                    
@@ -84,9 +84,15 @@ export const provider_map: Record<string, string> = {
     DeepInfra: "deepinfra",
     Hosted_Vllm: "hosted_vllm",
     IOIntelligence: "io_intelligence",
-};
+    TogetherAI = "TogetherAI",
+    Triton = "Triton",
+    Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
+    VolcEngine = "VolcEngine",
+    Voyage = "Voyage AI",
+    xAI = "xAI",
+}
 
-const asset_logos_folder = '/ui/assets/logos/';
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
     [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
@@ -127,123 +133,123 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
     [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
     [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`,
-    [Providers.IOIntelligence]: `${asset_logos_folder}io_intelligence.png`
+    [Providers.IOIntelligence]: `${asset_logos_folder}io_intelligence.png`,
 };
 
-export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
-    if (!providerValue) {
-        return { logo: "", displayName: "-" };
-    }
+export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
+  if (!providerValue) {
+    return { logo: "", displayName: "-" };
+  }
 
-    // Handle special case for "gemini" provider value
-    if (providerValue.toLowerCase() === "gemini") {
-        const displayName = Providers.Google_AI_Studio;
-        const logo = providerLogoMap[displayName];
-        return { logo, displayName };
-    }
-
-    // Find the enum key by matching provider_map values
-    const enumKey = Object.keys(provider_map).find(
-        key => provider_map[key].toLowerCase() === providerValue.toLowerCase()
-    );
-
-    if (!enumKey) {
-        return { logo: "", displayName: providerValue };
-    }
-
-    // Get the display name from Providers enum and logo from map
-    const displayName = Providers[enumKey as keyof typeof Providers];
-    const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
-
+  // Handle special case for "gemini" provider value
+  if (providerValue.toLowerCase() === "gemini") {
+    const displayName = Providers.Google_AI_Studio;
+    const logo = providerLogoMap[displayName];
     return { logo, displayName };
+  }
+
+  // Find the enum key by matching provider_map values
+  const enumKey = Object.keys(provider_map).find(
+    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase(),
+  );
+
+  if (!enumKey) {
+    return { logo: "", displayName: providerValue };
+  }
+
+  // Get the display name from Providers enum and logo from map
+  const displayName = Providers[enumKey as keyof typeof Providers];
+  const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
+
+  return { logo, displayName };
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
-    if (selectedProvider === Providers.AIML) {
-      return "aiml/flux-pro/v1.1";
-    } else if (selectedProvider === Providers.Vertex_AI) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Anthropic) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.Bedrock) {
-      return "claude-3-opus";
-    } else if (selectedProvider == Providers.SageMaker) {
-      return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
-    } else if (selectedProvider == Providers.Google_AI_Studio) {
-      return "gemini-pro";
-    } else if (selectedProvider == Providers.Azure_AI_Studio) {
-      return "azure_ai/command-r-plus";
-    } else if (selectedProvider == Providers.Azure) {
-      return "azure/my-deployment";
-    } else if (selectedProvider == Providers.Oracle) {
-      return "oci/xai.grok-4";
-    } else if (selectedProvider == Providers.Snowflake) {
-      return "snowflake/mistral-7b";
-    } else if (selectedProvider == Providers.Voyage) {
-      return "voyage/";
-    } else if (selectedProvider == Providers.JinaAI) {
-      return "jina_ai/";
-    } else if (selectedProvider == Providers.VolcEngine) {
-      return "volcengine/<any-model-on-volcengine>";
-    } else if (selectedProvider == Providers.DeepInfra) {
-      return "deepinfra/<any-model-on-deepinfra>";
-    } else {
-      return "gpt-3.5-turbo";
-    }
-  };
+  if (selectedProvider === Providers.AIML) {
+    return "aiml/flux-pro/v1.1";
+  } else if (selectedProvider === Providers.Vertex_AI) {
+    return "gemini-pro";
+  } else if (selectedProvider == Providers.Anthropic) {
+    return "claude-3-opus";
+  } else if (selectedProvider == Providers.Bedrock) {
+    return "claude-3-opus";
+  } else if (selectedProvider == Providers.SageMaker) {
+    return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
+  } else if (selectedProvider == Providers.Google_AI_Studio) {
+    return "gemini-pro";
+  } else if (selectedProvider == Providers.Azure_AI_Studio) {
+    return "azure_ai/command-r-plus";
+  } else if (selectedProvider == Providers.Azure) {
+    return "azure/my-deployment";
+  } else if (selectedProvider == Providers.Oracle) {
+    return "oci/xai.grok-4";
+  } else if (selectedProvider == Providers.Snowflake) {
+    return "snowflake/mistral-7b";
+  } else if (selectedProvider == Providers.Voyage) {
+    return "voyage/";
+  } else if (selectedProvider == Providers.JinaAI) {
+    return "jina_ai/";
+  } else if (selectedProvider == Providers.VolcEngine) {
+    return "volcengine/<any-model-on-volcengine>";
+  } else if (selectedProvider == Providers.DeepInfra) {
+    return "deepinfra/<any-model-on-deepinfra>";
+  } else {
+    return "gpt-3.5-turbo";
+  }
+};
 
-  export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
-    let providerKey = provider;
-    console.log(`Provider key: ${providerKey}`);
-    let custom_llm_provider = provider_map[providerKey];
-    console.log(`Provider mapped to: ${custom_llm_provider}`);
+export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
+  let providerKey = provider;
+  console.log(`Provider key: ${providerKey}`);
+  let custom_llm_provider = provider_map[providerKey];
+  console.log(`Provider mapped to: ${custom_llm_provider}`);
 
-    let providerModels: Array<string> = [];
+  let providerModels: Array<string> = [];
 
-    if (providerKey && typeof modelMap === "object") {
+  if (providerKey && typeof modelMap === "object") {
+    Object.entries(modelMap).forEach(([key, value]) => {
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        "litellm_provider" in (value as object) &&
+        ((value as any)["litellm_provider"] === custom_llm_provider ||
+          (value as any)["litellm_provider"].includes(custom_llm_provider))
+      ) {
+        providerModels.push(key);
+      }
+    });
+    // Special case for cohere
+    // we need both cohere_chat and cohere models to show on dropdown
+    if (providerKey == Providers.Cohere) {
+      console.log("Adding cohere chat models");
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
           value !== null &&
           typeof value === "object" &&
           "litellm_provider" in (value as object) &&
-          ((value as any)["litellm_provider"] === custom_llm_provider ||
-            (value as any)["litellm_provider"].includes(custom_llm_provider))
+          (value as any)["litellm_provider"] === "cohere_chat"
         ) {
           providerModels.push(key);
         }
       });
-      // Special case for cohere
-      // we need both cohere_chat and cohere models to show on dropdown
-      if (providerKey == Providers.Cohere) {
-        console.log("Adding cohere chat models");
-        Object.entries(modelMap).forEach(([key, value]) => {
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === "cohere_chat")
-          ) {
-            providerModels.push(key);
-          }
-        });
-      }
-      
-      // Special case for sagemaker
-      // we need both sagemaker and sagemaker_chat models to show on dropdown
-      if (providerKey == Providers.SageMaker) {
-        console.log("Adding sagemaker chat models");
-        Object.entries(modelMap).forEach(([key, value]) => {
-          if (
-            value !== null &&
-            typeof value === "object" &&
-            "litellm_provider" in (value as object) &&
-            ((value as any)["litellm_provider"] === "sagemaker_chat")
-          ) {
-            providerModels.push(key);
-          }
-        });
-      }
     }
 
-    return providerModels;
-  };
+    // Special case for sagemaker
+    // we need both sagemaker and sagemaker_chat models to show on dropdown
+    if (providerKey == Providers.SageMaker) {
+      console.log("Adding sagemaker chat models");
+      Object.entries(modelMap).forEach(([key, value]) => {
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          "litellm_provider" in (value as object) &&
+          (value as any)["litellm_provider"] === "sagemaker_chat"
+        ) {
+          providerModels.push(key);
+        }
+      });
+    }
+  }
+
+  return providerModels;
+};
