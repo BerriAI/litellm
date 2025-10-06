@@ -665,10 +665,6 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        # If api-key is already in headers, preserve it
-        if "api-key" in headers:
-            return headers
-
         api_key = (
             litellm_params.api_key
             or litellm.api_key
