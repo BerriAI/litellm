@@ -80,6 +80,7 @@ export interface KeyResponse {
     object_permission_id: string;
     mcp_servers: string[];
     mcp_access_groups?: string[];
+    mcp_tool_permissions?: Record<string, string[]>;
     vector_stores: string[];
   };
   auto_rotate?: boolean;

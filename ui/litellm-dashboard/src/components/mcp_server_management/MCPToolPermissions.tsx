@@ -85,23 +85,15 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   // Handle tool selection
   const handleToolToggle = (serverId: string, toolName: string) => {
-    console.log("🔧 handleToolToggle called:", { serverId, toolName });
-    console.log("📋 Current toolPermissions:", toolPermissions);
-    
     const currentTools = toolPermissions[serverId] || [];
     const newTools = currentTools.includes(toolName)
       ? currentTools.filter(name => name !== toolName)
       : [...currentTools, toolName];
     
-    console.log("✅ New tools for server:", newTools);
-    
-    const updatedPermissions = {
+    onChange({
       ...toolPermissions,
       [serverId]: newTools,
-    };
-    
-    console.log("📦 Calling onChange with:", updatedPermissions);
-    onChange(updatedPermissions);
+    });
   };
 
   const handleSelectAll = (serverId: string) => {
@@ -193,16 +185,12 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 <div className="space-y-2">
                   {tools.map((tool) => {
                     const isSelected = selectedTools.includes(tool.name);
-                    console.log(`🔍 Tool ${tool.name} - isSelected: ${isSelected}, selectedTools:`, selectedTools);
 
                     return (
                       <div key={tool.name} className="flex items-start gap-2">
                         <Checkbox
                           checked={isSelected}
-                          onChange={(e) => {
-                            console.log("📝 Checkbox onChange event:", e);
-                            handleToolToggle(server.server_id, tool.name);
-                          }}
+                          onChange={() => handleToolToggle(server.server_id, tool.name)}
                           disabled={disabled}
                         />
                         <div className="flex-1 min-w-0">

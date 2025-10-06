@@ -1287,23 +1287,16 @@ const Teams: React.FC<TeamProps> = ({
                           prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
                         }
                       >
-                        {() => {
-                          console.log("🔄 Form re-rendering MCPToolPermissions");
-                          console.log("📋 Current mcp_tool_permissions:", form.getFieldValue("mcp_tool_permissions"));
-                          return (
-                            <div className="mt-6">
-                              <MCPToolPermissions
-                                accessToken={accessToken || ""}
-                                selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
-                                toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
-                                onChange={(toolPerms) => {
-                                  console.log("🎯 Parent onChange called with:", toolPerms);
-                                  form.setFieldValue("mcp_tool_permissions", toolPerms);
-                                }}
-                              />
-                            </div>
-                          );
-                        }}
+                        {() => (
+                          <div className="mt-6">
+                            <MCPToolPermissions
+                              accessToken={accessToken || ""}
+                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                              onChange={(toolPerms) => form.setFieldValue("mcp_tool_permissions", toolPerms)}
+                            />
+                          </div>
+                        )}
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>
