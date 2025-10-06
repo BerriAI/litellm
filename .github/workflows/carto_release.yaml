@@ -1,0 +1,244 @@
+name: Create CARTO Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type (leave "auto" to detect from commits)'
+        required: true
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+        default: 'auto'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for tags
+
+      - name: Detect upstream version from pyproject.toml
+        id: detect-upstream
+        run: |
+          # Extract version from pyproject.toml
+          UPSTREAM_VERSION=$(grep -E "^version\s*=" pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "upstream_version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "Detected upstream version: ${UPSTREAM_VERSION}"
+
+      - name: Get latest CARTO tag for this upstream version
+        id: get-latest-tag
+        run: |
+          # Get all tags matching the pattern carto-v{upstream_version}-*
+          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+          PREFIX="carto-v${UPSTREAM_VERSION}-"
+
+          # Get the latest tag with this prefix
+          LATEST_TAG=$(git tag -l "${PREFIX}*" | sort -V | tail -n 1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No existing tags found for ${PREFIX}, starting with 0.0.0"
+            echo "latest_tag=" >> $GITHUB_OUTPUT
+            echo "current_version=0.0.0" >> $GITHUB_OUTPUT
+          else
+            echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+            # Extract the semver part (everything after the prefix)
+            CURRENT_VERSION="${LATEST_TAG#${PREFIX}}"
+            echo "current_version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+            echo "Found latest tag: ${LATEST_TAG} (version: ${CURRENT_VERSION})"
+          fi
+
+      - name: Prepare semver config with dynamic prefix
+        if: github.event.inputs.bump_type == 'auto'
+        run: |
+          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+          cat > semver_dynamic.yaml << EOF
+          bump:
+            major:
+              - "BREAKING CHANGE:"
+              - "breaking:"
+              - "major:"
+            minor:
+              - "feat:"
+              - "feature:"
+            patch:
+              - "fix:"
+              - "bugfix:"
+              - "patch:"
+              - "chore:"
+              - "docs:"
+              - "refactor:"
+          default: patch
+          tag_prefix: "carto-v${UPSTREAM_VERSION}-"
+          EOF
+          cat semver_dynamic.yaml
+
+      - name: Calculate next version with semver-generator
+        id: semver
+        if: github.event.inputs.bump_type == 'auto'
+        uses: lukaszraczylo/semver-generator@1.12.379
+        with:
+          config_file: semver_dynamic.yaml
+          repository_local: true
+          github_username: ${{ github.actor }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate next version (manual or auto)
+        id: calc-version
+        run: |
+          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+          BUMP_TYPE="${{ github.event.inputs.bump_type }}"
+
+          if [ "$BUMP_TYPE" = "auto" ]; then
+            # Use semver-generator output
+            NEXT_VERSION="${{ steps.semver.outputs.semantic_version }}"
+            echo "Auto-detected version from commits: ${NEXT_VERSION}"
+          else
+            # Manual bump
+            CURRENT="${{ steps.get-latest-tag.outputs.current_version }}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+            case "$BUMP_TYPE" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
+
+            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Manual bump (${BUMP_TYPE}): ${NEXT_VERSION}"
+          fi
+
+          RELEASE_TAG="carto-v${UPSTREAM_VERSION}-${NEXT_VERSION}"
+
+          echo "next_version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+          echo "Release tag: ${RELEASE_TAG}"
+
+      - name: Generate release notes
+        id: release-notes
+        run: |
+          UPSTREAM_VERSION="${{ steps.detect-upstream.outputs.upstream_version }}"
+          PREFIX="carto-v${UPSTREAM_VERSION}-"
+          LATEST_TAG=$(git tag -l "${PREFIX}*" | sort -V | tail -n 1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            # First release for this upstream version - get all commits
+            echo "## 🎉 First CARTO Release for LiteLLM v${UPSTREAM_VERSION}" > release_notes.md
+            echo "" >> release_notes.md
+            echo "### Changes" >> release_notes.md
+            git log --oneline --no-merges -20 >> release_notes.md
+          else
+            # Get commits since last tag
+            echo "## 🚀 CARTO Release" > release_notes.md
+            echo "" >> release_notes.md
+            echo "**Base Version:** LiteLLM v${UPSTREAM_VERSION}" >> release_notes.md
+            echo "**Previous Tag:** ${LATEST_TAG}" >> release_notes.md
+            echo "" >> release_notes.md
+            echo "### Changes Since Last Release" >> release_notes.md
+            echo "" >> release_notes.md
+
+            # Categorize commits
+            echo "#### 🐛 Bug Fixes" >> release_notes.md
+            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="fix:" --grep="bugfix:" --grep="Fix" -i >> release_notes.md || echo "No bug fixes" >> release_notes.md
+            echo "" >> release_notes.md
+
+            echo "#### ✨ Features" >> release_notes.md
+            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="feat:" --grep="feature:" -i >> release_notes.md || echo "No new features" >> release_notes.md
+            echo "" >> release_notes.md
+
+            echo "#### 🔧 Chores & Maintenance" >> release_notes.md
+            git log ${LATEST_TAG}..HEAD --oneline --no-merges --grep="chore:" -i >> release_notes.md || echo "No chores" >> release_notes.md
+            echo "" >> release_notes.md
+
+            echo "#### 📦 All Commits" >> release_notes.md
+            git log ${LATEST_TAG}..HEAD --oneline --no-merges >> release_notes.md
+          fi
+
+          # Read the release notes into output
+          cat release_notes.md
+
+      - name: Create Git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.calc-version.outputs.release_tag }}" -m "Release ${{ steps.calc-version.outputs.release_tag }}"
+          git push origin "${{ steps.calc-version.outputs.release_tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.calc-version.outputs.release_tag }}
+          name: ${{ steps.calc-version.outputs.release_tag }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
+          tags: |
+            type=raw,value=${{ steps.calc-version.outputs.release_tag }}
+            type=raw,value=carto-stable
+            type=raw,value=carto-v${{ steps.detect-upstream.outputs.upstream_version }}-latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: ./docker/Dockerfile.non_root
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+
+      - name: Release Summary
+        run: |
+          echo "## 🎉 Release Created Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Upstream Version:** \`${{ steps.detect-upstream.outputs.upstream_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`${{ steps.calc-version.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:${{ steps.calc-version.outputs.release_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:carto-stable\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ env.IMAGE_NAME }}-non_root:carto-v${{ steps.detect-upstream.outputs.upstream_version }}-latest\`" >> $GITHUB_STEP_SUMMARY

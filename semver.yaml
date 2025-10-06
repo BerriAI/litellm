@@ -1,0 +1,24 @@
+# Semantic versioning configuration for CARTO LiteLLM fork
+# The tag_prefix is set dynamically in the workflow based on detected upstream version
+# Format: carto-v{UPSTREAM_VERSION}-{CARTO_SEMVER}
+# Example: carto-v1.75.2-0.1.0
+
+# Commit message patterns for automatic version bumps
+bump:
+  major:
+    - "BREAKING CHANGE:"
+    - "breaking:"
+    - "major:"
+  minor:
+    - "feat:"
+    - "feature:"
+  patch:
+    - "fix:"
+    - "bugfix:"
+    - "patch:"
+    - "chore:"
+    - "docs:"
+    - "refactor:"
+
+# Default bump level if no pattern matches
+default: patch

@@ -1,47 +1,38 @@
-name: Deploy CartoDB Docker Image
+name: Deploy CartoDB Docker Image (CI)
 on:
   push:
     branches:
-      - main
-      - dev
+      - carto/main
     paths:
       - "litellm/**"
+      - "litellm-proxy-extras/**"
       - "docker/**"
+      - "Dockerfile"
+      - "requirements.txt"
       - ".github/workflows/ghcr_carto_deploy.yaml"
   pull_request:
     branches:
-      - main
-      - dev
+      - carto/main
     paths:
       - "litellm/**"
+      - "litellm-proxy-extras/**"
       - "docker/**"
+      - "Dockerfile"
+      - "requirements.txt"
       - ".github/workflows/ghcr_carto_deploy.yaml"
-     
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or full commit SHA to build"
-        default: "main"
-      tag:
-        description: "Extra tag (e.g., v1.2.3). Leave blank for none."
-        required: true
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  DOCKER_GIT_REVISION_SHA: ${{ github.event.inputs.ref || github.sha }}
-  CHANNEL: ${{ github.ref_name || 'manual' }}
 
 jobs:
-  # print commit hash, tag, and release type
   print:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "Ref      : ${{ github.event.inputs.ref || github.ref }}"
-          echo "Tag      : ${{ github.event.inputs.tag }}"
-          echo "Channel  : ${{ env.CHANNEL }}"
-          echo "DOCKER_GIT_REVISION_SHA: ${{ env.DOCKER_GIT_REVISION_SHA }}"
+          echo "Branch   : ${{ github.ref_name }}"
+          echo "SHA      : ${{ github.sha }}"
+          echo "Event    : ${{ github.event_name }}"
 
   build-and-push-image-non_root:
     runs-on: ubuntu-latest
@@ -51,8 +42,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.sha }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -64,19 +53,26 @@ jobs:
       - name: Configure tags
         id: tag-config
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # For workflow_dispatch: only use the input tag (now required)
-            echo "tags=type=raw,value=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            # For push/pull_request: use channel-latest and just SHA
-            echo "tags=type=raw,value=${{ env.CHANNEL }}-latest" >> $GITHUB_OUTPUT
-            echo "tags<<EOF" >> $GITHUB_OUTPUT
-            echo "type=raw,value=${{ env.DOCKER_GIT_REVISION_SHA }}" >> $GITHUB_OUTPUT
-            if [ -n "${{ github.event.inputs.tag }}" ]; then
-              echo "type=raw,value=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-            fi
-            echo "EOF" >> $GITHUB_OUTPUT
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          # Always tag with SHA
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "type=raw,value=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+          # On push to carto/main: add carto-main-latest
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/carto/main" ]]; then
+            echo "type=raw,value=carto-main-latest" >> $GITHUB_OUTPUT
           fi
+
+          # On PR: add branch name tag
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BRANCH_NAME="${{ github.head_ref }}"
+            # Sanitize branch name for Docker tag (replace / and _ with -)
+            BRANCH_TAG=$(echo "${BRANCH_NAME}" | sed 's/[/_]/-/g')
+            echo "type=raw,value=${BRANCH_TAG}" >> $GITHUB_OUTPUT
+          fi
+
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Extract metadata for tags & labels
         id: meta
@@ -87,8 +83,9 @@ jobs:
             ${{ steps.tag-config.outputs.tags }}
   
       # Configure multi platform Docker builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
 
