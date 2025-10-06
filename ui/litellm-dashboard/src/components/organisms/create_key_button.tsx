@@ -32,6 +32,7 @@ import BudgetDurationDropdown from "../common_components/budget_duration_dropdow
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import NotificationsManager from "../molecules/notifications_manager";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -356,6 +357,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_servers_and_groups;
       }
+
+      // Add MCP tool permissions to object_permission
+      const mcpToolPermissions = formValues.mcp_tool_permissions || {};
+      if (Object.keys(mcpToolPermissions).length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.mcp_tool_permissions = mcpToolPermissions;
+      }
+      delete formValues.mcp_tool_permissions;
 
       // Transform allowed_mcp_access_groups into object_permission format
       if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
@@ -715,15 +726,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {/* Section 3: Optional Settings */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Accordion
-                className="mt-4 mb-4"
-                onClick={() => {
-                  if (!mcpAccessGroupsLoaded) {
-                    fetchMcpAccessGroups();
-                    setMcpAccessGroupsLoaded(true);
-                  }
-                }}
-              >
+              <Accordion className="mt-4 mb-4">
                 <AccordionHeader>
                   <Title className="m-0">Optional Settings</Title>
                 </AccordionHeader>
@@ -923,28 +926,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       placeholder="Select vector stores (optional)"
                     />
                   </Form.Item>
-
-                  <Form.Item
-                    label={
-                      <span>
-                        Allowed MCP Servers{" "}
-                        <Tooltip title="Select which MCP servers or access groups this key can access. ">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </span>
-                    }
-                    name="allowed_mcp_servers_and_groups"
-                    className="mt-4"
-                    help="Select MCP servers or access groups this key can access. "
-                  >
-                    <MCPServerSelector
-                      onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
-                      value={form.getFieldValue("allowed_mcp_servers_and_groups")}
-                      accessToken={accessToken}
-                      placeholder="Select MCP servers or access groups (optional)"
-                    />
-                  </Form.Item>
-
                   <Form.Item
                     label={
                       <span>
@@ -980,6 +961,59 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       options={predefinedTags}
                     />
                   </Form.Item>
+                  <Accordion
+                    className="mt-4 mb-4"
+                    onClick={() => {
+                      if (!mcpAccessGroupsLoaded) {
+                        fetchMcpAccessGroups();
+                        setMcpAccessGroupsLoaded(true);
+                      }
+                    }}
+                  >
+                    <AccordionHeader>
+                      <b>MCP Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed MCP Servers{" "}
+                            <Tooltip title="Select which MCP servers or access groups this key can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_mcp_servers_and_groups"
+                        help="Select MCP servers or access groups this key can access"
+                      >
+                        <MCPServerSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_mcp_servers_and_groups", val)}
+                          value={form.getFieldValue("allowed_mcp_servers_and_groups")}
+                          accessToken={accessToken}
+                          placeholder="Select MCP servers or access groups (optional)"
+                        />
+                      </Form.Item>
+
+                      <Form.Item 
+                        noStyle
+                        shouldUpdate={(prevValues, currentValues) => 
+                          prevValues.allowed_mcp_servers_and_groups !== currentValues.allowed_mcp_servers_and_groups ||
+                          prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+                        }
+                      >
+                        {() => (
+                          <div className="mt-6">
+                            <MCPToolPermissions
+                              accessToken={accessToken}
+                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                              onChange={(toolPerms) => form.setFieldValue("mcp_tool_permissions", toolPerms)}
+                            />
+                          </div>
+                        )}
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
 
                   {premiumUser ? (
                     <Accordion className="mt-4 mb-4">
