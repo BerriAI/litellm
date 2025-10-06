@@ -3,7 +3,7 @@
 import React from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import Sidebar from "@/app/(console)/components/Sidebar";
+import Sidebar2 from "@/app/(console)/components/Sidebar2";
 import useAuthorized from "@/app/(console)/hooks/useAuthorized";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -31,7 +31,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
-            <Sidebar
+            <Sidebar2
               collapsed={sidebarCollapsed}
               accessToken={accessToken}
               userRole={userRole}

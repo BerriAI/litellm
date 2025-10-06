@@ -39,6 +39,8 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
+import useFeatureFlags from "@/hooks/useFeatureFlags";
+import Sidebar2 from "@/app/(console)/components/Sidebar2";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
@@ -115,6 +117,8 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
+
+  const { refactoredUIFlag, setRefactoredUIFlag } = useFeatureFlags();
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -254,16 +258,22 @@ export default function CreateKeyPage() {
                 isPublicPage={false}
                 sidebarCollapsed={sidebarCollapsed}
                 onToggleSidebar={toggleSidebar}
+                refactoredUIFlag={refactoredUIFlag}
+                setRefactoredUIFlag={setRefactoredUIFlag}
               />
               <div className="flex flex-1 overflow-auto">
                 <div className="mt-2">
-                  <Sidebar
-                    accessToken={accessToken}
-                    setPage={updatePage}
-                    userRole={userRole}
-                    defaultSelectedKey={page}
-                    collapsed={sidebarCollapsed}
-                  />
+                  {refactoredUIFlag ? (
+                    <Sidebar2 accessToken={accessToken} userRole={userRole} />
+                  ) : (
+                    <Sidebar
+                      accessToken={accessToken}
+                      setPage={updatePage}
+                      userRole={userRole}
+                      defaultSelectedKey={page}
+                      collapsed={sidebarCollapsed}
+                    />
+                  )}
                 </div>
 
                 {page == "api-keys" ? (
