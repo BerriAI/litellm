@@ -499,6 +499,11 @@ if MCP_AVAILABLE:
                 )
                 
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
+                filtered_tools = filter_tools_by_key_team_permissions(
+                    tools=tools,
+                    server_id=server.server_id,
+                    user_api_key_auth=user_api_key_auth,
+                )
                 all_tools.extend(filtered_tools)
                 
                 verbose_logger.debug(
@@ -514,6 +519,30 @@ if MCP_AVAILABLE:
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
         )
         return all_tools
+    
+    def filter_tools_by_key_team_permissions(
+        tools: List[MCPTool],
+        server_id: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> List[MCPTool]:
+        """Filter tools based on key/team mcp_tool_permissions."""
+        if not user_api_key_auth or not user_api_key_auth.object_permission:
+            return tools
+        
+        mcp_tool_permissions = user_api_key_auth.object_permission.mcp_tool_permissions
+        
+        if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
+            return tools
+        
+        if server_id not in mcp_tool_permissions:
+            return tools
+        
+        allowed_tools = mcp_tool_permissions[server_id]
+        
+        if not allowed_tools or not isinstance(allowed_tools, list):
+            return tools
+        
+        return [t for t in tools if t.name in allowed_tools]
 
     async def _list_mcp_tools(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
