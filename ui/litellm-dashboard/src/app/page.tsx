@@ -244,6 +244,7 @@ export default function CreateKeyPage() {
               organizations={organizations}
               addKey={addKey}
               createClicked={createClicked}
+              userEmail={userEmail}
             />
           ) : (
             <div className="flex flex-col min-h-screen">
@@ -290,6 +291,7 @@ export default function CreateKeyPage() {
                     organizations={organizations}
                     addKey={addKey}
                     createClicked={createClicked}
+                    userEmail={userEmail}
                   />
                 ) : page == "models" ? (
                   <ModelDashboard
