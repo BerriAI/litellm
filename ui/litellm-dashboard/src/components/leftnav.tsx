@@ -12,17 +12,29 @@ import {
   AppstoreOutlined,
   DatabaseOutlined,
   FileTextOutlined,
+  LineOutlined,
   LineChartOutlined,
   SafetyOutlined,
   ExperimentOutlined,
+  ThunderboltOutlined,
+  LockOutlined,
   ToolOutlined,
   TagsOutlined,
   BgColorsOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from "@ant-design/icons";
-import { all_admin_roles, rolesWithWriteAccess, internalUserRoles, isAdminRole } from "../utils/roles";
+import {
+  old_admin_roles,
+  v2_admin_role_names,
+  all_admin_roles,
+  rolesAllowedToSeeUsage,
+  rolesWithWriteAccess,
+  internalUserRoles,
+  isAdminRole,
+} from "../utils/roles";
 import UsageIndicator from "./usage_indicator";
 import { ConfigProvider } from "antd";
-import { useRouter } from "next/navigation";
 const { Sider } = Layout;
 
 // Define the props type
@@ -45,7 +57,6 @@ interface MenuItem {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
-  const router = useRouter();
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
     {
@@ -237,19 +248,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     return true;
   });
 
-  const navigateToPage = (page: string) => {
-    if (page === "api-keys") {
-      // Go to clean route and DO NOT call setPage to avoid any parent sync that re-adds ?page=api-keys
-      router.replace("/virtual-keys");
-      return;
-    }
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    // Use absolute root to replace everything after the domain
-    router.replace(`/?${newSearchParams.toString()}`);
-    setPage(page);
-  };
-
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider
@@ -293,9 +291,21 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
                 key: child.key,
                 icon: child.icon,
                 label: child.label,
-                onClick: () => navigateToPage(child.page),
+                onClick: () => {
+                  const newSearchParams = new URLSearchParams(window.location.search);
+                  newSearchParams.set("page", child.page);
+                  window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+                  setPage(child.page);
+                },
               })),
-              onClick: !item.children ? () => navigateToPage(item.page) : undefined,
+              onClick: !item.children
+                ? () => {
+                    const newSearchParams = new URLSearchParams(window.location.search);
+                    newSearchParams.set("page", item.page);
+                    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+                    setPage(item.page);
+                  }
+                : undefined,
             }))}
           />
         </ConfigProvider>
