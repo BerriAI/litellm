@@ -44,6 +44,24 @@ interface MenuItem {
   icon?: React.ReactNode;
 }
 
+/** ---- BASE URL HELPERS (shared pattern across files) ---- */
+function normalizeBasePrefix(raw: string | undefined | null): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return ""; // no base
+  // strip leading/trailing slashes then rebuild as "/segment/"
+  const core = trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
+  return core ? `/${core}/` : "/";
+}
+const BASE_PREFIX = normalizeBasePrefix(process.env.NEXT_PUBLIC_BASE_URL);
+/** Builds an app-relative path under the configured base prefix. */
+function withBase(path: string): string {
+  // Accepts paths like "/virtual-keys" or "/?page=..." and prefixes with BASE_PREFIX when present.
+  const body = path.startsWith("/") ? path.slice(1) : path;
+  const combined = `${BASE_PREFIX}${body}`;
+  return combined.startsWith("/") ? combined : `/${combined}`;
+}
+/** -------------------------------------------------------- */
+
 const Sidebar2: React.FC<SidebarProps> = ({
   accessToken,
   setPage,
@@ -229,7 +247,7 @@ const Sidebar2: React.FC<SidebarProps> = ({
   const pushToRootWithPage = (page: string, useReplace = false) => {
     const params = new URLSearchParams();
     params.set("page", page);
-    const url = `/?${params.toString()}`;
+    const url = withBase(`/?${params.toString()}`);
     if (useReplace) {
       router.replace(url);
     } else {
@@ -242,8 +260,8 @@ const Sidebar2: React.FC<SidebarProps> = ({
     // Special-case: Virtual Keys target
     if (page === "api-keys") {
       if (refactoredUIFlag) {
-        // Go to the dedicated /virtual-keys page
-        router.push("/virtual-keys");
+        // Go to the dedicated /virtual-keys page (always under base)
+        router.push(withBase("/virtual-keys"));
         return; // do not call setPage here (parity with previous behavior)
       }
       // Legacy behavior
@@ -255,8 +273,8 @@ const Sidebar2: React.FC<SidebarProps> = ({
     // All other pages
     if (refactoredUIFlag) {
       // If currently on /virtual-keys, REPLACE it with /?page=...
-      const onVirtualKeys = pathname?.startsWith("/virtual-keys");
-      pushToRootWithPage(page, onVirtualKeys);
+      const onVirtualKeys = pathname?.startsWith(withBase("/virtual-keys"));
+      pushToRootWithPage(page, !!onVirtualKeys);
     } else {
       pushToRootWithPage(page);
     }

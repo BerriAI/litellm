@@ -40,6 +40,21 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 
+/** ---- BASE URL HELPERS ---- */
+function normalizeBasePrefix(raw: string | undefined | null): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return "";
+  const core = trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
+  return core ? `/${core}/` : "/";
+}
+const BASE_PREFIX = normalizeBasePrefix(process.env.NEXT_PUBLIC_BASE_URL);
+function withBase(path: string): string {
+  const body = path.startsWith("/") ? path.slice(1) : path;
+  const combined = `${BASE_PREFIX}${body}`;
+  return combined.startsWith("/") ? combined : `/${combined}`;
+}
+/** -------------------------------- */
+
 function getCookie(name: string) {
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
   return cookieValue ? cookieValue.split("=")[1] : null;
@@ -128,11 +143,11 @@ export default function CreateKeyPage() {
     setPage(searchParams.get("page") || "api-keys");
   }, [searchParams]);
 
-  // Custom setPage function that updates URL
+  // Custom setPage function that updates URL (always under BASE)
   const updatePage = (newPage: string) => {
     const newSearchParams = new URLSearchParams(searchParams);
     newSearchParams.set("page", newPage);
-    router.push(`/?${newSearchParams.toString()}`); // absolute, not relative
+    router.push(withBase(`/?${newSearchParams.toString()}`));
     setPage(newPage);
   };
 
@@ -160,6 +175,7 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
+      // This is an external auth route (kept as-is, not app navigation).
       window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
     }
   }, [redirectToLogin]);
