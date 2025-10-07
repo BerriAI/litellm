@@ -13,27 +13,6 @@ Track Spend, and control model access via virtual keys for the proxy
 
 :::
 
-## Setup
-
-Requirements: 
-
-- Need a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
-- Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
-- Set a `master key`, this is your Proxy Admin key - you can use this to create other keys (🚨 must start with `sk-`).
-  - ** Set on config.yaml** set your master key under `general_settings:master_key`, example below
-  - ** Set env variable** set `LITELLM_MASTER_KEY`
-
-(the proxy Dockerfile checks if the `DATABASE_URL` is set and then initializes the DB connection)
-
-```shell
-export DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>
-```
-
-
-You can then generate keys by hitting the `/key/generate` endpoint.
-
-[**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
-
 ## **Quick Start - Generate a Key**
 **Step 1: Save postgres db url**
 
@@ -65,6 +44,39 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4"], "metadata": {"user": "ishaan@berri.ai"}}'
 ```
+
+**Expected Response:**
+```json
+{
+  "key": "sk-1234567890abcdef",
+  "expires": "2024-01-15T10:30:00Z",
+  "user_id": "ishaan@berri.ai",
+  "team_id": null,
+  "models": ["gpt-3.5-turbo", "gpt-4"],
+  "spend": 0.0,
+  "max_budget": null
+}
+```
+
+🎉 **Success!** Your virtual key `sk-1234567890abcdef` is ready to use!
+
+**Step 4: Test your key**
+
+```bash
+curl 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Authorization: Bearer sk-1234567890abcdef' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [{"role": "user", "content": "Hello! This is a test."}]
+  }'
+```
+
+#### Generate keys from UI
+
+![virtual_keys](../../img/virtualkey.gif)
+
+
 
 ## 🔁 Scheduled Key Rotations (NEW in v1.77.5)
 
@@ -116,7 +128,7 @@ Get spend per:
 - key - via `/key/info` [Swagger](https://litellm-api.up.railway.app/#/key%20management/info_key_fn_key_info_get)
 - user - via `/user/info` [Swagger](https://litellm-api.up.railway.app/#/user%20management/user_info_user_info_get)
 - team - via `/team/info` [Swagger](https://litellm-api.up.railway.app/#/team%20management/team_info_team_info_get)  
-- ⏳ end-users - via `/end_user/info` - [Comment on this issue for end-user cost tracking](https://github.com/BerriAI/litellm/issues/2633)
+- end-users - via `/customer/info` [Swagger](https://litellm-api.up.railway.app/#/Customer%20Management)
 
 **How is it calculated?**
 
