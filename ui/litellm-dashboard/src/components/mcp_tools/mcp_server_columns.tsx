@@ -62,6 +62,67 @@ export const mcpServerColumns = (
     ),
   },
   {
+    id: "health_status",
+    header: "Health Status",
+    cell: ({ row }) => {
+      const server = row.original;
+      const status = server.status || "unknown";
+      const lastCheck = server.last_health_check;
+      const error = server.health_check_error;
+      
+      const getStatusColor = (status: string) => {
+        switch (status) {
+          case "healthy":
+            return "text-green-500 bg-green-50 hover:bg-green-100";
+          case "unhealthy":
+            return "text-red-500 bg-red-50 hover:bg-red-100";
+          default:
+            return "text-gray-500 bg-gray-50 hover:bg-gray-100";
+        }
+      };
+
+      const getStatusIcon = (status: string) => {
+        switch (status) {
+          case "healthy":
+            return "●";
+          case "unhealthy":
+            return "●";
+          default:
+            return "●";
+        }
+      };
+
+      const tooltipContent = (
+        <div className="max-w-xs">
+          <div className="font-semibold mb-1">Health Status: {status}</div>
+          {lastCheck && (
+            <div className="text-xs mb-1">
+              Last Check: {new Date(lastCheck).toLocaleString()}
+            </div>
+          )}
+          {error && (
+            <div className="text-xs">
+              <div className="font-medium text-red-400 mb-1">Error:</div>
+              <div className="break-words">{error}</div>
+            </div>
+          )}
+          {!lastCheck && !error && (
+            <div className="text-xs text-gray-400">No health check data available</div>
+          )}
+        </div>
+      );
+
+      return (
+        <Tooltip title={tooltipContent} placement="top">
+          <button className={`font-mono text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[10ch] ${getStatusColor(status)}`}>
+            <span className="mr-1">{getStatusIcon(status)}</span>
+            {status.charAt(0).toUpperCase() + status.slice(1)}
+          </button>
+        </Tooltip>
+      );
+    },
+  },
+  {
     id: "mcp_access_groups",
     header: "Access Groups",
     cell: ({ row }) => {

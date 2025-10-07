@@ -108,7 +108,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
-              />
+            />
           </div>
         </div>
       </div>
@@ -222,6 +222,10 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>{handleTransport(mcpServer.transport)}</div>
                   </div>
                   <div>
+                    <Text className="font-medium">Extra Headers</Text>
+                    <div>{mcpServer.extra_headers?.join(", ")}</div>
+                  </div>
+                  <div>
                     <Text className="font-medium">Auth Type</Text>
                     <div>{handleAuth(mcpServer.auth_type)}</div>
                   </div>
@@ -238,6 +242,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                         </div>
                       ) : (
                         <Text className="text-gray-500">No access groups defined</Text>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Text className="font-medium">Allowed Tools</Text>
+                    <div>
+                      {mcpServer.allowed_tools && mcpServer.allowed_tools.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {mcpServer.allowed_tools.map((tool: string, index: number) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-blue-50 border border-blue-200 rounded-md text-sm"
+                            >
+                              {tool}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="text-gray-500">All tools enabled</Text>
                       )}
                     </div>
                   </div>

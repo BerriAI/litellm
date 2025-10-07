@@ -444,12 +444,14 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
-    tools = v._map_function(value=[{"code_execution": {}}])
+    optional_params = {}
+    tools = v._map_function(value=[{"code_execution": {}}], optional_params=optional_params)
     assert len(tools) == 1
     assert tools[0]["code_execution"] == {}
     print(tools)
 
-    new_tools = v._map_function(value=[{"codeExecution": {}}])
+    new_optional_params = {}
+    new_tools = v._map_function(value=[{"codeExecution": {}}], optional_params=new_optional_params)
     assert len(new_tools) == 1
     print("new_tools", new_tools)
     assert new_tools[0]["code_execution"] == {}
@@ -465,6 +467,7 @@ def test_vertex_ai_map_tool_with_anyof():
     Ensure if anyof is present, only the anyof field and its contents are kept - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
     """
     v = VertexGeminiConfig()
+    optional_params = {}
     value = [
         {
             "type": "function",
@@ -488,7 +491,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    tools = v._map_function(value=value)
+    tools = v._map_function(value=value, optional_params=optional_params)
 
     assert tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -496,6 +499,7 @@ def test_vertex_ai_map_tool_with_anyof():
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
 
+    new_optional_params = {}
     new_value = [
         {
             "type": "function",
@@ -518,7 +522,7 @@ def test_vertex_ai_map_tool_with_anyof():
             },
         }
     ]
-    new_tools = v._map_function(value=new_value)
+    new_tools = v._map_function(value=new_value, optional_params=new_optional_params)
 
     assert new_tools[0]["function_declarations"][0]["parameters"]["properties"][
         "base_branch"
@@ -1056,3 +1060,94 @@ def test_vertex_ai_code_line_length():
     
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_map_google_maps_tool_simple():
+    """
+    Test googleMaps tool transformation without location data.
+    
+    Input:
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
+        optional_params={} (unchanged)
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
+    assert "toolConfig" not in optional_params
+
+
+def test_vertex_ai_map_google_maps_tool_with_location():
+    """
+    Test googleMaps tool transformation with location data.
+    Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
+    
+    Input:
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }]
+        optional_params={}
+    
+    Expected Output:
+        tools=[{
+            "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
+        }]
+        optional_params={
+            "toolConfig": {
+                "retrievalConfig": {
+                    "latLng": {
+                        "latitude": 37.7749,
+                        "longitude": -122.4194
+                    },
+                    "languageCode": "en_US"
+                }
+            }
+        }
+    """
+    v = VertexGeminiConfig()
+    optional_params = {}
+    
+    tools = v._map_function(
+        value=[{
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }],
+        optional_params=optional_params
+    )
+    
+    assert len(tools) == 1
+    assert "googleMaps" in tools[0]
+    
+    google_maps_tool = tools[0]["googleMaps"]
+    assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
+    assert "latitude" not in google_maps_tool
+    assert "longitude" not in google_maps_tool
+    assert "languageCode" not in google_maps_tool
+    
+    assert "toolConfig" in optional_params
+    assert "retrievalConfig" in optional_params["toolConfig"]
+    
+    retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
+    assert retrieval_config["latLng"]["latitude"] == 37.7749
+    assert retrieval_config["latLng"]["longitude"] == -122.4194
+    assert retrieval_config["languageCode"] == "en_US"

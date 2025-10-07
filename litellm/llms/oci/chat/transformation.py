@@ -207,9 +207,9 @@ class OCIChatConfig(BaseConfig):
             alias = open_ai_to_oci_param_map.get(key)
 
             if alias is False:
-                if drop_params:
+                # Workaround for mypy issue
+                if drop_params or litellm.drop_params:
                     continue
-
                 raise Exception(f"param `{key}` is not supported on OCI")
 
             if alias is None:
@@ -450,12 +450,26 @@ class OCIChatConfig(BaseConfig):
                 "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
             )
         else:
-            data = OCICompletionPayload(
-                compartmentId=oci_compartment_id,
-                servingMode=OCIServingMode(
+            oci_serving_mode = optional_params.get("oci_serving_mode", "ON_DEMAND")
+            if oci_serving_mode not in ["ON_DEMAND", "DEDICATED"]:
+                raise Exception(
+                    "kwarg `oci_serving_mode` must be either 'ON_DEMAND' or 'DEDICATED'"
+                )
+
+            if oci_serving_mode == "DEDICATED":
+                servingMode = OCIServingMode(
+                    servingType="DEDICATED",
+                    endpointId=model,
+                )
+            else:
+                servingMode = OCIServingMode(
                     servingType="ON_DEMAND",
                     modelId=model,
-                ),
+                )
+
+            data = OCICompletionPayload(
+                compartmentId=oci_compartment_id,
+                servingMode=servingMode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
                     messages=adapt_messages_to_generic_oci_standard(messages),

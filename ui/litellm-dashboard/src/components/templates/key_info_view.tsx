@@ -109,6 +109,12 @@ export default function KeyInfoView({
       const currentKey = formValues.token
       formValues.key = currentKey
 
+      // Guard premium features
+      if (!premiumUser) {
+        delete formValues.guardrails;
+        delete formValues.prompts;
+      }
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {

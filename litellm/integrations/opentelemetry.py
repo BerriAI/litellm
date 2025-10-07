@@ -576,7 +576,7 @@ class OpenTelemetry(CustomLogger):
             return
 
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {})
+        metadata = litellm_params.get("metadata") or {}
         generation_name = metadata.get("generation_name")
 
         raw_span_name = generation_name if generation_name else RAW_REQUEST_SPAN_NAME
@@ -1178,7 +1178,7 @@ class OpenTelemetry(CustomLogger):
 
     def _get_span_name(self, kwargs):
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {})
+        metadata = litellm_params.get("metadata") or {}
         generation_name = metadata.get("generation_name")
 
         if generation_name:

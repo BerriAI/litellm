@@ -1511,7 +1511,10 @@ def test_key_generate_with_custom_auth(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.message)
+        if hasattr(e, "message"):
+            print(e.message)
+        else:
+            print(e)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 

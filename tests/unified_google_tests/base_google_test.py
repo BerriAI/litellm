@@ -17,7 +17,8 @@ from litellm.google_genai import (
     generate_content_stream,
     agenerate_content_stream,
 )
-from google.genai.types import ContentDict, PartDict, GenerateContentResponse
+from google.genai.types import ContentDict, PartDict
+from litellm.types.google_genai.main import GenerateContentResponse
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
@@ -107,11 +108,11 @@ class BaseGoogleGenAITest:
     
     def _validate_non_streaming_response(self, response: Any):
         """Validate non-streaming response structure"""
-        # Handle type checking - response should be a dict for non-streaming
+        # Handle type checking - response should be a GenerateContentResponse for non-streaming
         if isinstance(response, AsyncIterator):
             pytest.fail("Expected non-streaming response but got AsyncIterator")
         
-        assert isinstance(response, GenerateContentResponse), f"Expected dict response, got {type(response)}"
+        assert isinstance(response, GenerateContentResponse), f"Expected GenerateContentResponse, got {type(response)}"
         print(f"Response: {response.model_dump_json(indent=4)}")
         
         # Basic validation - adjust based on actual Google GenAI response structure

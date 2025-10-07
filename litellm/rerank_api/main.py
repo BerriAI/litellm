@@ -12,7 +12,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.router import *
 from litellm.utils import ProviderConfigManager, client, exception_type
 
@@ -136,7 +136,7 @@ def rerank(  # noqa: PLR0915
             )
         )
 
-        optional_rerank_params: OptionalRerankParams = get_optional_rerank_params(
+        optional_rerank_params: Dict = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
@@ -173,7 +173,7 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == "cohere" or _custom_llm_provider == "litellm_proxy":
+        if _custom_llm_provider == litellm.LlmProviders.COHERE or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY:
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -205,7 +205,7 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
-        elif _custom_llm_provider == "azure_ai":
+        elif _custom_llm_provider == litellm.LlmProviders.AZURE_AI:
             api_base = (
                 dynamic_api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or optional_params.api_base
@@ -226,7 +226,7 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
-        elif _custom_llm_provider == "infinity":
+        elif _custom_llm_provider == litellm.LlmProviders.INFINITY:
             # Implement Infinity rerank logic
             api_key = dynamic_api_key or optional_params.api_key or litellm.api_key
 
@@ -256,7 +256,7 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
-        elif _custom_llm_provider == "together_ai":
+        elif _custom_llm_provider == litellm.LlmProviders.TOGETHER_AI:
             # Implement Together AI rerank logic
             api_key = (
                 dynamic_api_key
@@ -282,7 +282,7 @@ def rerank(  # noqa: PLR0915
                 api_key=api_key,
                 _is_async=_is_async,
             )
-        elif _custom_llm_provider == "jina_ai":
+        elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
             if dynamic_api_key is None:
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
@@ -309,7 +309,35 @@ def rerank(  # noqa: PLR0915
                 client=client,
                 model_response=model_response,
             )
-        elif _custom_llm_provider == "bedrock":
+        elif _custom_llm_provider == litellm.LlmProviders.NVIDIA_NIM:
+            if dynamic_api_key is None:
+                raise ValueError(
+                    "Nvidia NIM API key is required, please set 'NVIDIA_NIM_API_KEY' in your environment"
+                )
+
+            # Note: For rerank, the base URL is different from chat/embeddings
+            # Rerank uses ai.api.nvidia.com instead of integrate.api.nvidia.com
+            api_base = (
+                optional_params.api_base
+                or get_secret("NVIDIA_NIM_API_BASE")  # type: ignore
+                or "https://ai.api.nvidia.com"  # Default for rerank
+            )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                provider_config=rerank_provider_config,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.BEDROCK:
             api_base = (
                 dynamic_api_base
                 or optional_params.api_base
@@ -331,7 +359,7 @@ def rerank(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 client=client,
             )
-        elif _custom_llm_provider == "hosted_vllm":
+        elif _custom_llm_provider == litellm.LlmProviders.HOSTED_VLLM:
             # Implement Hosted VLLM rerank logic
             api_key = (
                 dynamic_api_key
@@ -365,7 +393,7 @@ def rerank(  # noqa: PLR0915
                 model_response=model_response,
             )
 
-        elif _custom_llm_provider == "deepinfra":
+        elif _custom_llm_provider == litellm.LlmProviders.DEEPINFRA:
             api_key = (
                 dynamic_api_key
                 or optional_params.api_key

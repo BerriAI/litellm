@@ -621,6 +621,163 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 
 
+#### **Google Maps**
+
+Use Google Maps to provide location-based context to your Gemini models.
+
+[**Relevant Vertex AI Docs**](https://ai.google.dev/gemini-api/docs/grounding#google-maps)
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Basic Usage - Enable Widget Only**
+
+```python showLineNumbers
+from litellm import completion
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}] # 👈 ADD GOOGLE MAPS
+
+resp = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=tools,
+)
+
+print(resp)
+```
+
+**With Location Data**
+
+You can specify a location to ground the model's responses with location-specific information:
+
+```python showLineNumbers
+from litellm import completion
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+tools = [{
+    "googleMaps": {
+        "enableWidget": "ENABLE_WIDGET",
+        "latitude": 37.7749,        # San Francisco latitude
+        "longitude": -122.4194,     # San Francisco longitude
+        "languageCode": "en_US"     # Optional: language for results
+    }
+}] # 👈 ADD GOOGLE MAPS WITH LOCATION
+
+resp = litellm.completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=tools,
+)
+
+print(resp)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python SDK">
+
+**Basic Usage - Enable Widget Only**
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
+)
+
+print(response)
+```
+
+**With Location Data**
+
+```python showLineNumbers
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # pass litellm proxy key, if you're using virtual keys
+    base_url="http://0.0.0.0:4000/v1/" # point to litellm proxy
+)
+
+response = client.chat.completions.create(
+    model="gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What restaurants are nearby?"}],
+    tools=[{
+        "googleMaps": {
+            "enableWidget": "ENABLE_WIDGET",
+            "latitude": 37.7749,        # San Francisco latitude
+            "longitude": -122.4194,     # San Francisco longitude
+            "languageCode": "en_US"     # Optional: language for results
+        }
+    }],
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="curl" label="cURL">
+
+**Basic Usage - Enable Widget Only**
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+      {"role": "user", "content": "What restaurants are nearby?"}
+    ],
+   "tools": [
+        {
+            "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
+        }
+    ]
+  }'
+```
+
+**With Location Data**
+
+```bash showLineNumbers
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [
+      {"role": "user", "content": "What restaurants are nearby?"}
+    ],
+   "tools": [
+        {
+            "googleMaps": {
+                "enableWidget": "ENABLE_WIDGET",
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US"
+            }
+        }
+    ]
+  }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+</Tabs>
+
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
 

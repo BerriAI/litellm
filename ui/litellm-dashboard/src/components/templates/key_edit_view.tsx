@@ -13,6 +13,7 @@ import { fetchMCPAccessGroups } from "../networking"
 import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector"
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings"
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem"
 
 interface KeyEditViewProps {
   keyData: KeyResponse
@@ -137,8 +138,8 @@ export function KeyEditView({
     token: keyData.token || keyData.token_id,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(keyData.metadata),
-    guardrails: keyData.metadata?.guardrails || [],
-    prompts: keyData.metadata?.prompts || [],
+    guardrails: keyData.metadata?.guardrails,
+    prompts: keyData.metadata?.prompts,
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
@@ -158,8 +159,8 @@ export function KeyEditView({
       token: keyData.token || keyData.token_id,
       budget_duration: getBudgetDuration(keyData.budget_duration),
       metadata: formatMetadataForDisplay(keyData.metadata),
-      guardrails: keyData.metadata?.guardrails || [],
-      prompts: keyData.metadata?.prompts || [],
+      guardrails: keyData.metadata?.guardrails,
+      prompts: keyData.metadata?.prompts,
       vector_stores: keyData.object_permission?.vector_stores || [],
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
@@ -222,9 +223,21 @@ export function KeyEditView({
         <NumericalInput min={0} />
       </Form.Item>
 
+      <RateLimitTypeFormItem
+        type="tpm"
+        name="tpm_limit_type"
+        showDetailedDescriptions={false}
+      />
+
       <Form.Item label="RPM Limit" name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
+
+      <RateLimitTypeFormItem
+        type="rpm"
+        name="rpm_limit_type"
+        showDetailedDescriptions={false}
+      />
 
       <Form.Item label="Max Parallel Requests" name="max_parallel_requests">
         <NumericalInput min={0} />
@@ -240,7 +253,7 @@ export function KeyEditView({
 
       <Form.Item label="Guardrails" name="guardrails">
         { accessToken &&
-          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} />
+          <GuardrailSelector onChange={(v) => {form.setFieldValue("guardrails", v)}} accessToken={accessToken} disabled={!premiumUser}/>
         }
       </Form.Item>
 

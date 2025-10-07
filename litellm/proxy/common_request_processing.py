@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.utils import ServerToolUse
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -734,7 +736,6 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
-        from litellm.types.utils import ModelResponse, ModelResponseStream
 
         verbose_proxy_logger.debug("inside generator")
         try:
@@ -758,6 +759,10 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                     response_str = litellm.get_response_string(response_obj=chunk)
                     str_so_far += response_str
+
+                # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
+                model_name = request_data.get("model", "")
+                chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, model_name)
 
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
@@ -790,3 +795,147 @@ class ProxyBaseLLMRequestProcessing:
             )
             error_returned = json.dumps({"error": proxy_exception.to_dict()})
             yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+    @staticmethod
+    def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
+        """
+        Process a streaming chunk and inject cost information if enabled.
+        
+        Args:
+            chunk: The streaming chunk (dict, str, bytes, or bytearray)
+            model_name: Model name for cost calculation
+            
+        Returns:
+            The processed chunk with cost information injected if applicable
+        """
+        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+            return chunk
+            
+        try:
+            if isinstance(chunk, dict):
+                maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(chunk, model_name)
+                if maybe_modified is not None:
+                    return maybe_modified
+            elif isinstance(chunk, (bytes, bytearray)):
+                # Decode to str, inject, and rebuild as bytes
+                try:
+                    s = chunk.decode("utf-8", errors="ignore")
+                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                    if maybe_mod is not None:
+                        return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                except Exception:
+                    pass
+            elif isinstance(chunk, str):
+                # Try to parse SSE frame and inject cost into the data line
+                maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(chunk, model_name)
+                if maybe_mod is not None:
+                    # Ensure trailing frame separator
+                    return maybe_mod if maybe_mod.endswith("\n\n") else (maybe_mod + "\n\n")
+        except Exception:
+            # Never break streaming on optional cost injection
+            pass
+            
+        return chunk
+    
+    @staticmethod
+    def _inject_cost_into_sse_frame_str(frame_str: str, model_name: str) -> Optional[str]:
+        """
+        Inject cost information into an SSE frame string by modifying the JSON in the 'data:' line.
+        
+        Args:
+            frame_str: SSE frame string that may contain multiple lines
+            model_name: Model name for cost calculation
+            
+        Returns:
+            Modified SSE frame string with cost injected, or None if no modification needed
+        """
+        try:
+            # Split preserving lines
+            lines = frame_str.split("\n")
+            for idx, ln in enumerate(lines):
+                stripped_ln = ln.strip()
+                if stripped_ln.startswith("data:"):
+                    json_part = stripped_ln.split("data:", 1)[1].strip()
+                    if json_part and json_part != "[DONE]":
+                        obj = json.loads(json_part)
+                        maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
+                        if maybe_modified is not None:
+                            # Replace just this line with updated JSON using safe_dumps
+                            lines[idx] = f"data: {safe_dumps(maybe_modified)}"
+                            return "\n".join(lines)
+            return None
+        except Exception:
+            return None
+    
+    @staticmethod
+    def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:
+        """
+        Inject cost information into a usage dictionary for message_delta events.
+        
+        Args:
+            obj: Dictionary containing the SSE event data
+            model_name: Model name for cost calculation
+            
+        Returns:
+            Modified dictionary with cost injected, or None if no modification needed
+        """
+        if (
+            obj.get("type") == "message_delta"
+            and isinstance(obj.get("usage"), dict)
+        ):
+            _usage = obj["usage"]
+            prompt_tokens = int(_usage.get("input_tokens", 0) or 0)
+            completion_tokens = int(_usage.get("output_tokens", 0) or 0)
+            total_tokens = int(
+                _usage.get("total_tokens", prompt_tokens + completion_tokens)
+                or (prompt_tokens + completion_tokens)
+            )
+
+            # Extract additional usage fields
+            cache_creation_input_tokens = _usage.get("cache_creation_input_tokens")
+            cache_read_input_tokens = _usage.get("cache_read_input_tokens")
+            web_search_requests = _usage.get("web_search_requests")
+            completion_tokens_details = _usage.get("completion_tokens_details")
+            prompt_tokens_details = _usage.get("prompt_tokens_details")
+
+            
+            usage_kwargs: dict[str, Any] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+            
+            # Add optional named parameters
+            if completion_tokens_details is not None:
+                usage_kwargs["completion_tokens_details"] = completion_tokens_details
+            if prompt_tokens_details is not None:
+                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
+            
+            # Handle web_search_requests by wrapping in ServerToolUse
+            if web_search_requests is not None:
+                usage_kwargs["server_tool_use"] = ServerToolUse(
+                    web_search_requests=web_search_requests
+                )
+            
+            # Add cache-related fields to **params (handled by Usage.__init__)
+            if cache_creation_input_tokens is not None:
+                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
+            if cache_read_input_tokens is not None:
+                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
+
+            _mr = ModelResponse(
+                usage=Usage(**usage_kwargs)
+            )
+            
+            try:
+                cost_val = litellm.completion_cost(
+                    completion_response=_mr,
+                    model=model_name,
+                )
+            except Exception:
+                cost_val = None
+                
+            if cost_val is not None:
+                obj.setdefault("usage", {})["cost"] = cost_val
+                return obj
+        return None
