@@ -566,6 +566,13 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       required: true,
     },
   ],
+  [Providers.Infinity]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "http://localhost:7997",
+    },
+  ],
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
