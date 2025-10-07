@@ -514,34 +514,35 @@ def sync_transform_request_body(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        (
-            messages,
-            optional_params,
-            cached_content,
-        ) = context_caching_endpoints.check_and_create_cache(
-            messages=messages,
-            optional_params=optional_params,
-            api_key=gemini_api_key,
-            api_base=api_base,
-            model=model,
-            client=client,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            cached_content=optional_params.pop("cached_content", None),
-            logging_obj=logging_obj,
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = None
-        if "cached_content" in optional_params:
-            cached_content = optional_params.pop("cached_content")
-        elif "cachedContent" in optional_params:
-            cached_content = optional_params.pop("cachedContent")
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = context_caching_endpoints.check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
+
 
     return _transform_request_body(
         messages=messages,
@@ -565,34 +566,34 @@ async def async_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        (
-            messages,
-            optional_params,
-            cached_content,
-        ) = await context_caching_endpoints.async_check_and_create_cache(
-            messages=messages,
-            optional_params=optional_params,
-            api_key=gemini_api_key,
-            api_base=api_base,
-            model=model,
-            client=client,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            cached_content=optional_params.pop("cached_content", None),
-            logging_obj=logging_obj,
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = None
-        if "cached_content" in optional_params:
-            cached_content = optional_params.pop("cached_content")
-        elif "cachedContent" in optional_params:
-            cached_content = optional_params.pop("cachedContent")
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = await context_caching_endpoints.async_check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
 
     return _transform_request_body(
         messages=messages,
