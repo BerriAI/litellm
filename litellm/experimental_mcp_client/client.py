@@ -5,8 +5,9 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 from datetime import timedelta
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -17,6 +18,8 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
@@ -48,6 +51,7 @@ class MCPClient:
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        ssl_verify: Optional[VerifyTypes] = None,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -62,6 +66,7 @@ class MCPClient:
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
+        self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -104,10 +109,12 @@ class MCPClient:
                 await self._session.initialize()
             elif self.transport_type == MCPTransport.sse:
                 headers = self._get_auth_headers()
+                httpx_client_factory = self._create_httpx_client_factory()
                 self._transport_ctx = sse_client(
                     url=self.server_url,
                     timeout=self.timeout,
                     headers=headers,
+                    httpx_client_factory=httpx_client_factory,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
                 self._session_ctx = ClientSession(
@@ -117,6 +124,7 @@ class MCPClient:
                 await self._session.initialize()
             else:  # http
                 headers = self._get_auth_headers()
+                httpx_client_factory = self._create_httpx_client_factory()
                 verbose_logger.debug(
                     "litellm headers for streamablehttp_client: %s", headers
                 )
@@ -124,6 +132,7 @@ class MCPClient:
                     url=self.server_url,
                     timeout=timedelta(seconds=self.timeout),
                     headers=headers,
+                    httpx_client_factory=httpx_client_factory,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
                 self._session_ctx = ClientSession(
@@ -214,6 +223,41 @@ class MCPClient:
             headers.update(self.extra_headers)
 
         return headers
+
+    def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
+        """
+        Create a custom httpx client factory that uses LiteLLM's SSL configuration.
+
+        This factory follows the same CA bundle path logic as http_handler.py:
+        1. Check ssl_verify parameter (can be SSLContext, bool, or path to CA bundle)
+        2. Check SSL_VERIFY environment variable
+        3. Check SSL_CERT_FILE environment variable
+        4. Fall back to certifi CA bundle
+        """
+
+        def factory(
+            *,
+            headers: Optional[Dict[str, str]] = None,
+            timeout: Optional[httpx.Timeout] = None,
+            auth: Optional[httpx.Auth] = None,
+        ) -> httpx.AsyncClient:
+            """Create an httpx.AsyncClient with LiteLLM's SSL configuration."""
+            # Get unified SSL configuration using the same logic as http_handler.py
+            ssl_config = get_ssl_configuration(self.ssl_verify)
+
+            verbose_logger.debug(
+                f"MCP client using SSL configuration: {type(ssl_config).__name__}"
+            )
+
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+                verify=ssl_config,
+                follow_redirects=True,
+            )
+
+        return factory
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""

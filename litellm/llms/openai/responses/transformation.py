@@ -1,12 +1,4 @@
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Optional,
-    Union,
-    cast,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -127,7 +119,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         2. Create a ResponseReasoningItem object with the item data
         3. Convert it back to dict with exclude_none=True to filter None values
         """
-        verbose_logger.debug(f"Handling reasoning item: {item}")
         if item.get("type") == "reasoning":
             try:
                 # Ensure required fields are present for ResponseReasoningItem
