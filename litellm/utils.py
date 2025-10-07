@@ -910,159 +910,169 @@ def _get_wrapper_timeout(
 
     return timeout
 
+def check_coroutine(value) -> bool:
+    return get_coroutine_checker().is_async_callable(value)
+
+
+async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
+    """
+    Allow modifying the request just before it's sent to the deployment.
+
+    Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
+    """
+    try:
+        typed_call_type = CallTypes(call_type)
+    except ValueError:
+        typed_call_type = None  # unknown call type
+
+    modified_kwargs = kwargs.copy()
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            result = await callback.async_pre_call_deployment_hook(
+                modified_kwargs, typed_call_type
+            )
+            if result is not None:
+                modified_kwargs = result
+
+    return modified_kwargs
+
+
+async def async_post_call_success_deployment_hook(
+    request_data: dict, response: Any, call_type: Optional[CallTypes]
+) -> Optional[Any]:
+    """
+    Allow modifying / reviewing the response just after it's received from the deployment.
+    """
+    try:
+        typed_call_type = CallTypes(call_type)
+    except ValueError:
+        typed_call_type = None  # unknown call type
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            result = await callback.async_post_call_success_deployment_hook(
+                request_data, cast(LLMResponseTypes, response), typed_call_type
+            )
+            if result is not None:
+                return result
+
+    return response
+
+
+def post_call_processing(
+    original_response,
+    model,
+    optional_params: Optional[dict],
+    original_function,
+    rules_obj,
+):
+    try:
+        if original_response is None:
+            pass
+        else:
+            call_type = original_function.__name__
+            if (
+                call_type == CallTypes.completion.value
+                or call_type == CallTypes.acompletion.value
+            ):
+                is_coroutine = check_coroutine(original_response)
+                if is_coroutine is True:
+                    pass
+                else:
+                    if (
+                        isinstance(original_response, ModelResponse)
+                        and len(original_response.choices) > 0
+                    ):
+                        model_response: Optional[str] = original_response.choices[
+                            0
+                        ].message.content  # type: ignore
+                        if model_response is not None:
+                            ### POST-CALL RULES ###
+                            rules_obj.post_call_rules(
+                                input=model_response, model=model
+                            )
+                            ### JSON SCHEMA VALIDATION ###
+                            if litellm.enable_json_schema_validation is True:
+                                try:
+                                    if (
+                                        optional_params is not None
+                                        and "response_format" in optional_params
+                                        and optional_params["response_format"]
+                                        is not None
+                                    ):
+                                        json_response_format: Optional[dict] = None
+                                        if (
+                                            isinstance(
+                                                optional_params["response_format"],
+                                                dict,
+                                            )
+                                            and optional_params[
+                                                "response_format"
+                                            ].get("json_schema")
+                                            is not None
+                                        ):
+                                            json_response_format = optional_params[
+                                                "response_format"
+                                            ]
+                                        elif _parsing._completions.is_basemodel_type(
+                                            optional_params["response_format"]  # type: ignore
+                                        ):
+                                            json_response_format = (
+                                                type_to_response_format_param(
+                                                    response_format=optional_params[
+                                                        "response_format"
+                                                    ]
+                                                )
+                                            )
+                                        if json_response_format is not None:
+                                            litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                                                schema=json_response_format[
+                                                    "json_schema"
+                                                ]["schema"],
+                                                response=model_response,
+                                            )
+                                except TypeError:
+                                    pass
+                            if (
+                                optional_params is not None
+                                and "response_format" in optional_params
+                                and isinstance(
+                                    optional_params["response_format"], dict
+                                )
+                                and "type" in optional_params["response_format"]
+                                and optional_params["response_format"]["type"]
+                                == "json_object"
+                                and "response_schema"
+                                in optional_params["response_format"]
+                                and isinstance(
+                                    optional_params["response_format"][
+                                        "response_schema"
+                                    ],
+                                    dict,
+                                )
+                                and "enforce_validation"
+                                in optional_params["response_format"]
+                                and optional_params["response_format"][
+                                    "enforce_validation"
+                                ]
+                                is True
+                            ):
+                                # schema given, json response expected, and validation enforced
+                                litellm.litellm_core_utils.json_validation_rule.validate_schema(
+                                    schema=optional_params["response_format"][
+                                        "response_schema"
+                                    ],
+                                    response=model_response,
+                                )
+
+    except Exception as e:
+        raise e
+
 
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
-    def check_coroutine(value) -> bool:
-        return get_coroutine_checker().is_async_callable(value)
-
-    async def async_pre_call_deployment_hook(kwargs: Dict[str, Any], call_type: str):
-        """
-        Allow modifying the request just before it's sent to the deployment.
-
-        Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
-        """
-        try:
-            typed_call_type = CallTypes(call_type)
-        except ValueError:
-            typed_call_type = None  # unknown call type
-
-        modified_kwargs = kwargs.copy()
-
-        for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
-                result = await callback.async_pre_call_deployment_hook(
-                    modified_kwargs, typed_call_type
-                )
-                if result is not None:
-                    modified_kwargs = result
-
-        return modified_kwargs
-
-    async def async_post_call_success_deployment_hook(
-        request_data: dict, response: Any, call_type: Optional[CallTypes]
-    ) -> Optional[Any]:
-        """
-        Allow modifying / reviewing the response just after it's received from the deployment.
-        """
-        try:
-            typed_call_type = CallTypes(call_type)
-        except ValueError:
-            typed_call_type = None  # unknown call type
-
-        for callback in litellm.callbacks:
-            if isinstance(callback, CustomLogger):
-                result = await callback.async_post_call_success_deployment_hook(
-                    request_data, cast(LLMResponseTypes, response), typed_call_type
-                )
-                if result is not None:
-                    return result
-
-        return response
-
-    def post_call_processing(original_response, model, optional_params: Optional[dict]):
-        try:
-            if original_response is None:
-                pass
-            else:
-                call_type = original_function.__name__
-                if (
-                    call_type == CallTypes.completion.value
-                    or call_type == CallTypes.acompletion.value
-                ):
-                    is_coroutine = check_coroutine(original_response)
-                    if is_coroutine is True:
-                        pass
-                    else:
-                        if (
-                            isinstance(original_response, ModelResponse)
-                            and len(original_response.choices) > 0
-                        ):
-                            model_response: Optional[str] = original_response.choices[
-                                0
-                            ].message.content  # type: ignore
-                            if model_response is not None:
-                                ### POST-CALL RULES ###
-                                rules_obj.post_call_rules(
-                                    input=model_response, model=model
-                                )
-                                ### JSON SCHEMA VALIDATION ###
-                                if litellm.enable_json_schema_validation is True:
-                                    try:
-                                        if (
-                                            optional_params is not None
-                                            and "response_format" in optional_params
-                                            and optional_params["response_format"]
-                                            is not None
-                                        ):
-                                            json_response_format: Optional[dict] = None
-                                            if (
-                                                isinstance(
-                                                    optional_params["response_format"],
-                                                    dict,
-                                                )
-                                                and optional_params[
-                                                    "response_format"
-                                                ].get("json_schema")
-                                                is not None
-                                            ):
-                                                json_response_format = optional_params[
-                                                    "response_format"
-                                                ]
-                                            elif _parsing._completions.is_basemodel_type(
-                                                optional_params["response_format"]  # type: ignore
-                                            ):
-                                                json_response_format = (
-                                                    type_to_response_format_param(
-                                                        response_format=optional_params[
-                                                            "response_format"
-                                                        ]
-                                                    )
-                                                )
-                                            if json_response_format is not None:
-                                                litellm.litellm_core_utils.json_validation_rule.validate_schema(
-                                                    schema=json_response_format[
-                                                        "json_schema"
-                                                    ]["schema"],
-                                                    response=model_response,
-                                                )
-                                    except TypeError:
-                                        pass
-                                if (
-                                    optional_params is not None
-                                    and "response_format" in optional_params
-                                    and isinstance(
-                                        optional_params["response_format"], dict
-                                    )
-                                    and "type" in optional_params["response_format"]
-                                    and optional_params["response_format"]["type"]
-                                    == "json_object"
-                                    and "response_schema"
-                                    in optional_params["response_format"]
-                                    and isinstance(
-                                        optional_params["response_format"][
-                                            "response_schema"
-                                        ],
-                                        dict,
-                                    )
-                                    and "enforce_validation"
-                                    in optional_params["response_format"]
-                                    and optional_params["response_format"][
-                                        "enforce_validation"
-                                    ]
-                                    is True
-                                ):
-                                    # schema given, json response expected, and validation enforced
-                                    litellm.litellm_core_utils.json_validation_rule.validate_schema(
-                                        schema=optional_params["response_format"][
-                                            "response_schema"
-                                        ],
-                                        response=model_response,
-                                    )
-
-        except Exception as e:
-            raise e
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
@@ -1273,6 +1283,8 @@ def client(original_function):  # noqa: PLR0915
                 original_response=result,
                 model=model or None,
                 optional_params=kwargs,
+                original_function=original_function,
+                rules_obj=rules_obj,
             )
 
             # [OPTIONAL] ADD TO CACHE
@@ -1489,7 +1501,11 @@ def client(original_function):  # noqa: PLR0915
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
-                original_response=result, model=model, optional_params=kwargs
+                original_response=result,
+                model=model,
+                optional_params=kwargs,
+                original_function=original_function,
+                rules_obj=rules_obj,
             )
             # Only run if call_type is a valid value in CallTypes
             if call_type in [ct.value for ct in CallTypes]:

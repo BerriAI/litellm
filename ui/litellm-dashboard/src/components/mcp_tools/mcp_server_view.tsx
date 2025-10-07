@@ -1,26 +1,26 @@
-import React, { useState } from "react"
-import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline"
-import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react"
+import React, { useState } from "react";
+import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline";
+import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react";
 
-import { MCPServer, handleTransport, handleAuth } from "./types"
+import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
-import { MCPToolsViewer } from "."
-import MCPServerEdit from "./mcp_server_edit"
-import MCPServerCostDisplay from "./mcp_server_cost_display"
-import { getMaskedAndFullUrl } from "./utils"
-import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
-import { CheckIcon, CopyIcon } from "lucide-react"
-import { Button as AntdButton } from "antd"
+import { MCPToolsViewer } from ".";
+import MCPServerEdit from "./mcp_server_edit";
+import MCPServerCostDisplay from "./mcp_server_cost_display";
+import { getMaskedAndFullUrl } from "./utils";
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { Button as AntdButton } from "antd";
 
 interface MCPServerViewProps {
-  mcpServer: MCPServer
-  onBack: () => void
-  isProxyAdmin: boolean
-  isEditing: boolean
-  accessToken: string | null
-  userRole: string | null
-  userID: string | null
-  availableAccessGroups: string[]
+  mcpServer: MCPServer;
+  onBack: () => void;
+  isProxyAdmin: boolean;
+  isEditing: boolean;
+  accessToken: string | null;
+  userRole: string | null;
+  userID: string | null;
+  availableAccessGroups: string[];
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -33,30 +33,30 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userID,
   availableAccessGroups,
 }) => {
-  const [editing, setEditing] = useState(isEditing)
-  const [showFullUrl, setShowFullUrl] = useState(false)
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [editing, setEditing] = useState(isEditing);
+  const [showFullUrl, setShowFullUrl] = useState(false);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const handleSuccess = (updated: MCPServer) => {
-    setEditing(false)
-    onBack()
-  }
+    setEditing(false);
+    onBack();
+  };
 
-  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url)
+  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url);
 
   const renderUrlWithToggle = (url: string, showFull: boolean) => {
-    if (!hasToken) return url
-    return showFull ? url : maskedUrl
-  }
+    if (!hasToken) return url;
+    return showFull ? url : maskedUrl;
+  };
 
   const copyToClipboard = async (text: string | null | undefined, key: string) => {
-    const success = await utilCopyToClipboard(text)
+    const success = await utilCopyToClipboard(text);
     if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }))
-      }, 2000)
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
     }
-  }
+  };
 
   return (
     <div className="p-4 max-w-full">
@@ -275,5 +275,5 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabPanels>
       </TabGroup>
     </div>
-  )
-}
+  );
+};

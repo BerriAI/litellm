@@ -81,4 +81,4 @@ export interface MultimodalContent {
   type: "input_text" | "input_image";
   text?: string;
   image_url?: string;
-} 
+}

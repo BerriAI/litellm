@@ -15,12 +15,12 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
   value = {},
   onChange,
   tools = [],
-  disabled = false
+  disabled = false,
 }) => {
   const handleDefaultCostChange = (defaultCost: number | null) => {
     const updated = {
       ...value,
-      default_cost_per_query: defaultCost
+      default_cost_per_query: defaultCost,
     };
     onChange?.(updated);
   };
@@ -30,8 +30,8 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
       ...value,
       tool_name_to_cost_per_query: {
         ...value.tool_name_to_cost_per_query,
-        [toolName]: cost
-      }
+        [toolName]: cost,
+      },
     };
     onChange?.(updated);
   };
@@ -63,7 +63,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
               value={value.default_cost_per_query}
               onChange={handleDefaultCostChange}
               disabled={disabled}
-              style={{ width: '200px' }}
+              style={{ width: "200px" }}
               addonBefore="$"
             />
             <Text className="block mt-1 text-gray-500 text-sm">
@@ -82,17 +82,17 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
               <Collapse
                 items={[
                   {
-                    key: '1',
+                    key: "1",
                     label: (
                       <div className="flex items-center">
                         <ToolOutlined className="mr-2 text-blue-500" />
                         <span className="font-medium">Available Tools</span>
-                        <Badge 
-                          count={tools.length} 
-                          style={{ 
-                            backgroundColor: '#52c41a', 
-                            marginLeft: '8px' 
-                          }} 
+                        <Badge
+                          count={tools.length}
+                          style={{
+                            backgroundColor: "#52c41a",
+                            marginLeft: "8px",
+                          }}
                         />
                       </div>
                     ),
@@ -103,9 +103,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
                             <div className="flex-1">
                               <Text className="font-medium text-gray-900">{tool.name}</Text>
                               {tool.description && (
-                                <Text className="text-gray-500 text-sm block mt-1">
-                                  {tool.description}
-                                </Text>
+                                <Text className="text-gray-500 text-sm block mt-1">{tool.description}</Text>
                               )}
                             </div>
                             <div className="ml-4">
@@ -117,7 +115,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
                                 value={value.tool_name_to_cost_per_query?.[tool.name]}
                                 onChange={(cost) => handleToolCostChange(tool.name, cost)}
                                 disabled={disabled}
-                                style={{ width: '120px' }}
+                                style={{ width: "120px" }}
                                 addonBefore="$"
                               />
                             </div>
@@ -132,7 +130,8 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
           )}
         </div>
 
-        {(value.default_cost_per_query || (value.tool_name_to_cost_per_query && Object.keys(value.tool_name_to_cost_per_query).length > 0)) && (
+        {(value.default_cost_per_query ||
+          (value.tool_name_to_cost_per_query && Object.keys(value.tool_name_to_cost_per_query).length > 0)) && (
           <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <Text className="text-blue-800 font-medium">Cost Summary:</Text>
             <div className="mt-2 space-y-1">
@@ -141,13 +140,16 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
                   • Default cost: ${value.default_cost_per_query.toFixed(4)} per query
                 </Text>
               )}
-              {value.tool_name_to_cost_per_query && Object.entries(value.tool_name_to_cost_per_query).map(([toolName, cost]) => 
-                cost !== null && cost !== undefined && (
-                  <Text key={toolName} className="text-blue-700">
-                    • {toolName}: ${cost.toFixed(4)} per query
-                  </Text>
-                )
-              )}
+              {value.tool_name_to_cost_per_query &&
+                Object.entries(value.tool_name_to_cost_per_query).map(
+                  ([toolName, cost]) =>
+                    cost !== null &&
+                    cost !== undefined && (
+                      <Text key={toolName} className="text-blue-700">
+                        • {toolName}: ${cost.toFixed(4)} per query
+                      </Text>
+                    ),
+                )}
             </div>
           </div>
         )}
@@ -156,4 +158,4 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
   );
 };
 
-export default MCPServerCostConfig; 
+export default MCPServerCostConfig;

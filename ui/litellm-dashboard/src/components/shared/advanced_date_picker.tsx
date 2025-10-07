@@ -1,20 +1,20 @@
-import React, { useCallback, useState, useRef, useEffect } from "react"
-import { DateRangePickerValue, Text, Button } from "@tremor/react"
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons"
-import moment from "moment"
+import React, { useCallback, useState, useRef, useEffect } from "react";
+import { DateRangePickerValue, Text, Button } from "@tremor/react";
+import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
+import moment from "moment";
 
 interface AdvancedDatePickerProps {
-  value: DateRangePickerValue
-  onValueChange: (value: DateRangePickerValue) => void
-  label?: string
-  className?: string
-  showTimeRange?: boolean
+  value: DateRangePickerValue;
+  onValueChange: (value: DateRangePickerValue) => void;
+  label?: string;
+  className?: string;
+  showTimeRange?: boolean;
 }
 
 interface RelativeTimeOption {
-  label: string
-  shortLabel: string
-  getValue: () => { from: Date; to: Date }
+  label: string;
+  shortLabel: string;
+  getValue: () => { from: Date; to: Date };
 }
 
 const relativeTimeOptions: RelativeTimeOption[] = [
@@ -58,7 +58,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
       to: moment().endOf("day").toDate(),
     }),
   },
-]
+];
 
 /**
  * Advanced Date Range Picker with dropdown, relative times, and custom inputs
@@ -69,208 +69,208 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   label = "Select Time Range",
   showTimeRange = true,
 }) => {
-  const [isOpen, setIsOpen] = useState(false)
-  const [tempValue, setTempValue] = useState<DateRangePickerValue>(value)
-  const [selectedOption, setSelectedOption] = useState<string | null>(null)
+  const [isOpen, setIsOpen] = useState(false);
+  const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
 
   // Custom date inputs only - removed time inputs
-  const [startDate, setStartDate] = useState("")
-  const [endDate, setEndDate] = useState("")
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
-  const dropdownRef = useRef<HTMLDivElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
   const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
-    if (!currentValue.from || !currentValue.to) return null
+    if (!currentValue.from || !currentValue.to) return null;
 
     for (const option of relativeTimeOptions) {
-      const optionRange = option.getValue()
+      const optionRange = option.getValue();
 
       // Compare dates with some tolerance (to account for time differences)
-      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day")
-      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day")
+      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
+      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
 
       if (fromMatches && toMatches) {
-        return option.shortLabel
+        return option.shortLabel;
       }
     }
 
-    return null
-  }, [])
+    return null;
+  }, []);
 
   // Update selected option when value changes
   useEffect(() => {
-    const matchingOption = getMatchingOption(value)
-    setSelectedOption(matchingOption)
-  }, [value, getMatchingOption])
+    const matchingOption = getMatchingOption(value);
+    setSelectedOption(matchingOption);
+  }, [value, getMatchingOption]);
 
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
     if (!startDate || !endDate) {
-      return { isValid: true, error: "" }
+      return { isValid: true, error: "" };
     }
 
-    const start = moment(startDate, "YYYY-MM-DD")
-    const end = moment(endDate, "YYYY-MM-DD")
+    const start = moment(startDate, "YYYY-MM-DD");
+    const end = moment(endDate, "YYYY-MM-DD");
 
     if (!start.isValid() || !end.isValid()) {
-      return { isValid: false, error: "Invalid date format" }
+      return { isValid: false, error: "Invalid date format" };
     }
 
     if (end.isBefore(start)) {
-      return { isValid: false, error: "End date cannot be before start date" }
+      return { isValid: false, error: "End date cannot be before start date" };
     }
 
-    return { isValid: true, error: "" }
-  }, [startDate, endDate])
+    return { isValid: true, error: "" };
+  }, [startDate, endDate]);
 
-  const validation = validateDateRange()
+  const validation = validateDateRange();
 
   // Initialize form inputs when component mounts or value changes
   useEffect(() => {
     if (value.from) {
-      setStartDate(moment(value.from).format("YYYY-MM-DD"))
+      setStartDate(moment(value.from).format("YYYY-MM-DD"));
     }
     if (value.to) {
-      setEndDate(moment(value.to).format("YYYY-MM-DD"))
+      setEndDate(moment(value.to).format("YYYY-MM-DD"));
     }
-    setTempValue(value)
-  }, [value])
+    setTempValue(value);
+  }, [value]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
+        setIsOpen(false);
       }
-    }
+    };
 
     if (isOpen) {
-      document.addEventListener("mousedown", handleClickOutside)
+      document.addEventListener("mousedown", handleClickOutside);
     }
 
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside)
-    }
-  }, [isOpen])
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isOpen]);
 
   const formatDisplayRange = useCallback((from: Date | undefined, to: Date | undefined) => {
-    if (!from || !to) return "Select date range"
+    if (!from || !to) return "Select date range";
 
     const formatDateTime = (date: Date) => {
-      return moment(date).format("D MMM, HH:mm")
-    }
+      return moment(date).format("D MMM, HH:mm");
+    };
 
-    return `${formatDateTime(from)} - ${formatDateTime(to)}`
-  }, [])
+    return `${formatDateTime(from)} - ${formatDateTime(to)}`;
+  }, []);
 
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
-    if (!newValue.from) return newValue
+    if (!newValue.from) return newValue;
 
-    const adjustedValue = { ...newValue }
-    const adjustedStartTime = new Date(newValue.from)
-    let adjustedEndTime: Date
+    const adjustedValue = { ...newValue };
+    const adjustedStartTime = new Date(newValue.from);
+    let adjustedEndTime: Date;
 
     if (newValue.to) {
-      adjustedEndTime = new Date(newValue.to)
+      adjustedEndTime = new Date(newValue.to);
     } else {
-      adjustedEndTime = new Date(newValue.from)
+      adjustedEndTime = new Date(newValue.from);
     }
 
-    const isSameDay = adjustedStartTime.toDateString() === adjustedEndTime.toDateString()
+    const isSameDay = adjustedStartTime.toDateString() === adjustedEndTime.toDateString();
 
     if (isSameDay) {
-      adjustedStartTime.setHours(0, 0, 0, 0)
-      adjustedEndTime.setHours(23, 59, 59, 999)
+      adjustedStartTime.setHours(0, 0, 0, 0);
+      adjustedEndTime.setHours(23, 59, 59, 999);
     } else {
-      adjustedStartTime.setHours(0, 0, 0, 0)
-      adjustedEndTime.setHours(23, 59, 59, 999)
+      adjustedStartTime.setHours(0, 0, 0, 0);
+      adjustedEndTime.setHours(23, 59, 59, 999);
     }
 
-    adjustedValue.from = adjustedStartTime
-    adjustedValue.to = adjustedEndTime
+    adjustedValue.from = adjustedStartTime;
+    adjustedValue.to = adjustedEndTime;
 
-    return adjustedValue
-  }, [])
+    return adjustedValue;
+  }, []);
 
   const handleRelativeTimeSelect = (option: RelativeTimeOption) => {
-    const { from, to } = option.getValue()
-    const newValue = { from, to }
+    const { from, to } = option.getValue();
+    const newValue = { from, to };
 
     // Update local state to reflect the selection (don't apply immediately)
-    setTempValue(newValue)
-    setSelectedOption(option.shortLabel)
+    setTempValue(newValue);
+    setSelectedOption(option.shortLabel);
 
     // Update the form inputs to reflect the selection
-    setStartDate(moment(from).format("YYYY-MM-DD"))
-    setEndDate(moment(to).format("YYYY-MM-DD"))
+    setStartDate(moment(from).format("YYYY-MM-DD"));
+    setEndDate(moment(to).format("YYYY-MM-DD"));
 
     // Don't close the dropdown - let user click Apply to confirm
-  }
+  };
 
   const updateTempValueFromInputs = useCallback(() => {
     try {
       if (startDate && endDate && validation.isValid) {
         // Set times to start and end of day
-        const from = moment(startDate, "YYYY-MM-DD").startOf("day")
-        const to = moment(endDate, "YYYY-MM-DD").endOf("day")
+        const from = moment(startDate, "YYYY-MM-DD").startOf("day");
+        const to = moment(endDate, "YYYY-MM-DD").endOf("day");
 
         if (from.isValid() && to.isValid()) {
-          const newValue = { from: from.toDate(), to: to.toDate() }
-          setTempValue(newValue)
+          const newValue = { from: from.toDate(), to: to.toDate() };
+          setTempValue(newValue);
 
           // Check if this matches any preset option
-          const matchingOption = getMatchingOption(newValue)
-          setSelectedOption(matchingOption)
+          const matchingOption = getMatchingOption(newValue);
+          setSelectedOption(matchingOption);
         }
       }
     } catch (error) {
-      console.warn("Invalid date format:", error)
+      console.warn("Invalid date format:", error);
     }
-  }, [startDate, endDate, validation.isValid, getMatchingOption])
+  }, [startDate, endDate, validation.isValid, getMatchingOption]);
 
   // Update tempValue when inputs change
   useEffect(() => {
-    updateTempValueFromInputs()
-  }, [updateTempValueFromInputs])
+    updateTempValueFromInputs();
+  }, [updateTempValueFromInputs]);
 
   const handleApply = () => {
     if (tempValue.from && tempValue.to && validation.isValid) {
       // First call with immediate value for UI responsiveness
-      onValueChange(tempValue)
+      onValueChange(tempValue);
 
       // Then do the same background adjustment logic as the original component
       requestIdleCallback(
         () => {
-          const adjustedValue = adjustDateRange(tempValue)
-          onValueChange(adjustedValue)
+          const adjustedValue = adjustDateRange(tempValue);
+          onValueChange(adjustedValue);
         },
         { timeout: 100 },
-      )
+      );
 
-      setIsOpen(false)
+      setIsOpen(false);
     }
-  }
+  };
 
   const handleCancel = () => {
     // Reset to original value
-    setTempValue(value)
+    setTempValue(value);
 
     // Reset form inputs
     if (value.from) {
-      setStartDate(moment(value.from).format("YYYY-MM-DD"))
+      setStartDate(moment(value.from).format("YYYY-MM-DD"));
     }
     if (value.to) {
-      setEndDate(moment(value.to).format("YYYY-MM-DD"))
+      setEndDate(moment(value.to).format("YYYY-MM-DD"));
     }
 
     // Reset selected option
-    const matchingOption = getMatchingOption(value)
-    setSelectedOption(matchingOption)
+    const matchingOption = getMatchingOption(value);
+    setSelectedOption(matchingOption);
 
-    setIsOpen(false)
-  }
+    setIsOpen(false);
+  };
 
   return (
     <div>
@@ -309,7 +309,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 </div>
                 <div className="h-[350px] overflow-y-auto">
                   {relativeTimeOptions.map((option) => {
-                    const isSelected = selectedOption === option.shortLabel
+                    const isSelected = selectedOption === option.shortLabel;
                     return (
                       <div
                         key={option.label}
@@ -329,7 +329,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                           {option.shortLabel}
                         </span>
                       </div>
-                    )
+                    );
                   })}
                 </div>
               </div>
@@ -424,7 +424,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
         </Text>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default AdvancedDatePicker
+export default AdvancedDatePicker;

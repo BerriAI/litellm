@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest",
-    "test:watch": "vitest -w"
+    "test:watch": "vitest -w",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",

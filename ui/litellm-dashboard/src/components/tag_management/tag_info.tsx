@@ -1,79 +1,79 @@
-import React, { useState, useEffect } from "react"
-import { Card, Text, Title, Button, Badge } from "@tremor/react"
-import { Form, Input, Select as Select2, message, Tooltip } from "antd"
-import { InfoCircleOutlined } from "@ant-design/icons"
-import { fetchUserModels } from "../organisms/create_key_button"
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key"
-import { tagInfoCall, tagUpdateCall } from "../networking"
-import { Tag, TagInfoResponse } from "./types"
+import React, { useState, useEffect } from "react";
+import { Card, Text, Title, Button, Badge } from "@tremor/react";
+import { Form, Input, Select as Select2, message, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { fetchUserModels } from "../organisms/create_key_button";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { tagInfoCall, tagUpdateCall } from "../networking";
+import { Tag, TagInfoResponse } from "./types";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface TagInfoViewProps {
-  tagId: string
-  onClose: () => void
-  accessToken: string | null
-  is_admin: boolean
-  editTag: boolean
+  tagId: string;
+  onClose: () => void;
+  accessToken: string | null;
+  is_admin: boolean;
+  editTag: boolean;
 }
 
 const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
-  const [form] = Form.useForm()
-  const [tagDetails, setTagDetails] = useState<Tag | null>(null)
-  const [isEditing, setIsEditing] = useState<boolean>(editTag)
-  const [userModels, setUserModels] = useState<string[]>([])
+  const [form] = Form.useForm();
+  const [tagDetails, setTagDetails] = useState<Tag | null>(null);
+  const [isEditing, setIsEditing] = useState<boolean>(editTag);
+  const [userModels, setUserModels] = useState<string[]>([]);
 
   const fetchTagDetails = async () => {
-    if (!accessToken) return
+    if (!accessToken) return;
     try {
-      const response = await tagInfoCall(accessToken, [tagId])
-      const tagData = response[tagId]
+      const response = await tagInfoCall(accessToken, [tagId]);
+      const tagData = response[tagId];
       if (tagData) {
-        setTagDetails(tagData)
+        setTagDetails(tagData);
         if (editTag) {
           form.setFieldsValue({
             name: tagData.name,
             description: tagData.description,
             models: tagData.models,
-          })
+          });
         }
       }
     } catch (error) {
-      console.error("Error fetching tag details:", error)
-      NotificationsManager.fromBackend("Error fetching tag details: " + error)
+      console.error("Error fetching tag details:", error);
+      NotificationsManager.fromBackend("Error fetching tag details: " + error);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchTagDetails()
-  }, [tagId, accessToken])
+    fetchTagDetails();
+  }, [tagId, accessToken]);
 
   useEffect(() => {
     if (accessToken) {
       // Using dummy values for userID and userRole since they're required by the function
       // TODO: Pass these as props if needed for the actual API implementation
-      fetchUserModels("dummy-user", "Admin", accessToken, setUserModels)
+      fetchUserModels("dummy-user", "Admin", accessToken, setUserModels);
     }
-  }, [accessToken])
+  }, [accessToken]);
 
   const handleSave = async (values: any) => {
-    if (!accessToken) return
+    if (!accessToken) return;
     try {
       await tagUpdateCall(accessToken, {
         name: values.name,
         description: values.description,
         models: values.models,
-      })
-      NotificationsManager.success("Tag updated successfully")
-      setIsEditing(false)
-      fetchTagDetails()
+      });
+      NotificationsManager.success("Tag updated successfully");
+      setIsEditing(false);
+      fetchTagDetails();
     } catch (error) {
-      console.error("Error updating tag:", error)
-      NotificationsManager.fromBackend("Error updating tag: " + error)
+      console.error("Error updating tag:", error);
+      NotificationsManager.fromBackend("Error updating tag: " + error);
     }
-  }
+  };
 
   if (!tagDetails) {
-    return <div>Loading...</div>
+    return <div>Loading...</div>;
   }
 
   return (
@@ -166,7 +166,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         </div>
       )}
     </div>
-  )
-}
+  );
+};
 
-export default TagInfoView
+export default TagInfoView;

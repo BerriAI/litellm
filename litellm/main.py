@@ -2872,7 +2872,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 client=client,
                 api_base=api_base,
-                extra_headers=extra_headers,
+                extra_headers=headers,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -2941,7 +2941,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     custom_llm_provider=custom_llm_provider,  # type: ignore
                     client=client,
                     api_base=api_base,
-                    extra_headers=extra_headers,
+                    extra_headers=headers,
                 )
             elif "openai" in model:
                 # Vertex Model Garden - OpenAI compatible models

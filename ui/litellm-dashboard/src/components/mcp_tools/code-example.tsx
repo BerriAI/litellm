@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 
 const codeString = `import asyncio
 from openai import AsyncOpenAI
@@ -71,7 +71,7 @@ export const CodeExample: React.FC = () => {
           <div className="flex-1">
             <div className="text-sm font-medium text-gray-700">Python integration</div>
           </div>
-          <button 
+          <button
             className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded-md transition-colors"
             onClick={() => {
               navigator.clipboard.writeText(codeString);
@@ -80,13 +80,11 @@ export const CodeExample: React.FC = () => {
             Copy
           </button>
         </div>
-        
+
         <div className="overflow-auto rounded-md bg-gray-50 border" style={{ maxHeight: "calc(100vh - 280px)" }}>
-          <pre className="p-3 text-xs font-mono text-gray-800 whitespace-pre overflow-x-auto">
-            {codeString}
-          </pre>
+          <pre className="p-3 text-xs font-mono text-gray-800 whitespace-pre overflow-x-auto">{codeString}</pre>
         </div>
       </div>
     </div>
   );
-}; 
+};

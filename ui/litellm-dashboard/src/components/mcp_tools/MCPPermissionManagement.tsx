@@ -1,18 +1,18 @@
-import React, { useState, useEffect } from "react"
-import { Form, Select, Tooltip, Collapse } from "antd"
-import { InfoCircleOutlined } from "@ant-design/icons"
-import { MCPServer } from "./types"
-const { Panel } = Collapse
+import React, { useState, useEffect } from "react";
+import { Form, Select, Tooltip, Collapse } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { MCPServer } from "./types";
+const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
-  availableAccessGroups: string[]
-  mcpServer: MCPServer | null
-  searchValue: string
-  setSearchValue: (value: string) => void
+  availableAccessGroups: string[];
+  mcpServer: MCPServer | null;
+  searchValue: string;
+  setSearchValue: (value: string) => void;
   getAccessGroupOptions: () => Array<{
-    value: string
-    label: React.ReactNode
-  }>
+    value: string;
+    label: React.ReactNode;
+  }>;
 }
 
 const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
@@ -22,25 +22,20 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   setSearchValue,
   getAccessGroupOptions,
 }) => {
-  const form = Form.useFormInstance()
+  const form = Form.useFormInstance();
 
   // Set initial values when mcpServer changes
   useEffect(() => {
     if (mcpServer) {
       // Set extra_headers if they exist
       if (mcpServer.extra_headers) {
-        form.setFieldValue('extra_headers', mcpServer.extra_headers)
+        form.setFieldValue("extra_headers", mcpServer.extra_headers);
       }
-
     }
-  }, [mcpServer, form])
+  }, [mcpServer, form]);
 
   return (
-    <Collapse
-      className="bg-gray-50 border border-gray-200 rounded-lg"
-      expandIconPosition="end"
-      ghost={false}
-    >
+    <Collapse className="bg-gray-50 border border-gray-200 rounded-lg" expandIconPosition="end" ghost={false}>
       <Panel
         header={
           <div className="flex items-center">
@@ -48,9 +43,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
               <h3 className="text-lg font-semibold text-gray-900">Permission Management / Access Control</h3>
             </div>
-            <p className="text-sm text-gray-600 ml-4">
-              Configure access permissions and security settings (Optional)
-            </p>
+            <p className="text-sm text-gray-600 ml-4">Configure access permissions and security settings (Optional)</p>
           </div>
         }
         key="permissions"
@@ -103,7 +96,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               mode="tags"
               placeholder={
                 mcpServer?.extra_headers && mcpServer.extra_headers.length > 0
-                  ? `Currently: ${mcpServer.extra_headers.join(', ')}`
+                  ? `Currently: ${mcpServer.extra_headers.join(", ")}`
                   : "Enter header names (e.g., Authorization, X-Custom-Header)"
               }
               className="rounded-lg"
@@ -115,7 +108,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         </div>
       </Panel>
     </Collapse>
-  )
-}
+  );
+};
 
-export default MCPPermissionManagement
+export default MCPPermissionManagement;

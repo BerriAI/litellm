@@ -1,24 +1,24 @@
-import React from "react"
-import { Form, Select, Tooltip } from "antd"
-import { InfoCircleOutlined } from "@ant-design/icons"
+import React from "react";
+import { Form, Select, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 
-const { Option } = Select
+const { Option } = Select;
 
 interface RateLimitTypeFormItemProps {
   /** The type of rate limit - either 'tpm' or 'rpm' */
-  type: 'tpm' | 'rpm'
+  type: "tpm" | "rpm";
   /** The form field name */
-  name: string
+  name: string;
   /** Whether to show detailed descriptions (default: true) */
-  showDetailedDescriptions?: boolean
+  showDetailedDescriptions?: boolean;
   /** Additional CSS classes */
-  className?: string
+  className?: string;
   /** Initial value for the field */
-  initialValue?: string | null
+  initialValue?: string | null;
   /** Form instance for setting field values */
-  form?: any
+  form?: any;
   /** Custom onChange handler */
-  onChange?: (value: string) => void
+  onChange?: (value: string) => void;
 }
 
 export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
@@ -28,29 +28,29 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
   className = "",
   initialValue = null,
   form,
-  onChange
+  onChange,
 }) => {
-  const limitTypeUpper = type.toUpperCase()
-  const limitTypeLower = type.toLowerCase()
+  const limitTypeUpper = type.toUpperCase();
+  const limitTypeLower = type.toLowerCase();
 
   const handleChange = (value: string) => {
     if (form) {
-      form.setFieldValue(name, value)
+      form.setFieldValue(name, value);
     }
     if (onChange) {
-      onChange(value)
+      onChange(value);
     }
-  }
+  };
 
-  const tooltipTitle = `Select 'guaranteed_throughput' to prevent overallocating ${limitTypeUpper} limit when the key belongs to a Team with specific ${limitTypeUpper} limits.`
+  const tooltipTitle = `Select 'guaranteed_throughput' to prevent overallocating ${limitTypeUpper} limit when the key belongs to a Team with specific ${limitTypeUpper} limits.`;
 
   return (
     <Form.Item
       label={
         <span>
-          {limitTypeUpper} Rate Limit Type{' '}
+          {limitTypeUpper} Rate Limit Type{" "}
           <Tooltip title={tooltipTitle}>
-            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
           </Tooltip>
         </span>
       }
@@ -68,18 +68,20 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
         {showDetailedDescriptions ? (
           <>
             <Option value="best_effort_throughput" label="Default">
-              <div style={{ padding: '4px 0' }}>
+              <div style={{ padding: "4px 0" }}>
                 <div style={{ fontWeight: 500 }}>Default</div>
-                <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                  Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits checked at runtime).
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                  Best effort throughput - no error if we&apos;re overallocating {limitTypeLower} (Team/Key Limits
+                  checked at runtime).
                 </div>
               </div>
             </Option>
             <Option value="guaranteed_throughput" label="Guaranteed throughput">
-              <div style={{ padding: '4px 0' }}>
+              <div style={{ padding: "4px 0" }}>
                 <div style={{ fontWeight: 500 }}>Guaranteed throughput</div>
-                <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                  Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks model-specific limits)
+                <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                  Guaranteed throughput - raise an error if we&apos;re overallocating {limitTypeLower} (also checks
+                  model-specific limits)
                 </div>
               </div>
             </Option>
@@ -92,7 +94,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
         )}
       </Select>
     </Form.Item>
-  )
-}
+  );
+};
 
-export default RateLimitTypeFormItem
+export default RateLimitTypeFormItem;

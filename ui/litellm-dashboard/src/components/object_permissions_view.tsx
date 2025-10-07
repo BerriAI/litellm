@@ -17,8 +17,8 @@ interface ObjectPermissionsViewProps {
   accessToken?: string | null;
 }
 
-export function ObjectPermissionsView({ 
-  objectPermission, 
+export function ObjectPermissionsView({
+  objectPermission,
   variant = "card",
   className = "",
   accessToken,
@@ -29,15 +29,8 @@ export function ObjectPermissionsView({
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "space-y-4"}>
-      <VectorStorePermissions 
-        vectorStores={vectorStores} 
-        accessToken={accessToken} 
-      />
-      <MCPServerPermissions 
-        mcpServers={mcpServers} 
-        mcpAccessGroups={mcpAccessGroups}
-        accessToken={accessToken} 
-      />
+      <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
+      <MCPServerPermissions mcpServers={mcpServers} mcpAccessGroups={mcpAccessGroups} accessToken={accessToken} />
     </div>
   );
 
@@ -47,9 +40,7 @@ export function ObjectPermissionsView({
         <div className="flex items-center gap-2 mb-6">
           <div>
             <Text className="font-semibold text-gray-900">Object Permissions</Text>
-            <Text className="text-xs text-gray-500">
-              Access control for Vector Stores and MCP Servers
-            </Text>
+            <Text className="text-xs text-gray-500">Access control for Vector Stores and MCP Servers</Text>
           </div>
         </div>
         {content}
@@ -65,4 +56,4 @@ export function ObjectPermissionsView({
   );
 }
 
-export default ObjectPermissionsView; 
+export default ObjectPermissionsView;

@@ -1,85 +1,85 @@
-"use client"
+"use client";
 
-import React, { Suspense, useEffect, useState } from "react"
-import { useSearchParams } from "next/navigation"
-import { jwtDecode } from "jwt-decode"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { Team } from "@/components/key_team_helpers/key_list"
-import Navbar from "@/components/navbar"
-import { ThemeProvider } from "@/contexts/ThemeContext"
-import UserDashboard from "@/components/user_dashboard"
-import ModelDashboard from "@/components/templates/model_dashboard"
-import ViewUserDashboard from "@/components/view_users"
-import Teams from "@/components/teams"
-import Organizations from "@/components/organizations"
-import { fetchOrganizations } from "@/components/organizations"
-import AdminPanel from "@/components/admins"
-import Settings from "@/components/settings"
-import GeneralSettings from "@/components/general_settings"
-import PassThroughSettings from "@/components/pass_through_settings"
-import BudgetPanel from "@/components/budgets/budget_panel"
-import SpendLogsTable from "@/components/view_logs"
-import ModelHubTable from "@/components/model_hub_table"
-import NewUsagePage from "@/components/new_usage"
-import APIRef from "@/components/api_ref"
-import ChatUI from "@/components/chat_ui/ChatUI"
-import Sidebar from "@/components/leftnav"
-import Usage from "@/components/usage"
-import CacheDashboard from "@/components/cache_dashboard"
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking"
-import { Organization } from "@/components/networking"
-import GuardrailsPanel from "@/components/guardrails"
-import PromptsPanel from "@/components/prompts"
-import TransformRequestPanel from "@/components/transform_request"
-import { fetchUserModels } from "@/components/organisms/create_key_button"
-import { fetchTeams } from "@/components/common_components/fetch_teams"
-import { MCPServers } from "@/components/mcp_tools"
-import TagManagement from "@/components/tag_management"
-import VectorStoreManagement from "@/components/vector_store_management"
-import UIThemeSettings from "@/components/ui_theme_settings"
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner"
-import { cx } from "@/lib/cva.config"
+import React, { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { jwtDecode } from "jwt-decode";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Team } from "@/components/key_team_helpers/key_list";
+import Navbar from "@/components/navbar";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import UserDashboard from "@/components/user_dashboard";
+import ModelDashboard from "@/components/templates/model_dashboard";
+import ViewUserDashboard from "@/components/view_users";
+import Teams from "@/components/teams";
+import Organizations from "@/components/organizations";
+import { fetchOrganizations } from "@/components/organizations";
+import AdminPanel from "@/components/admins";
+import Settings from "@/components/settings";
+import GeneralSettings from "@/components/general_settings";
+import PassThroughSettings from "@/components/pass_through_settings";
+import BudgetPanel from "@/components/budgets/budget_panel";
+import SpendLogsTable from "@/components/view_logs";
+import ModelHubTable from "@/components/model_hub_table";
+import NewUsagePage from "@/components/new_usage";
+import APIRef from "@/components/api_ref";
+import ChatUI from "@/components/chat_ui/ChatUI";
+import Sidebar from "@/components/leftnav";
+import Usage from "@/components/usage";
+import CacheDashboard from "@/components/cache_dashboard";
+import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import { Organization } from "@/components/networking";
+import GuardrailsPanel from "@/components/guardrails";
+import PromptsPanel from "@/components/prompts";
+import TransformRequestPanel from "@/components/transform_request";
+import { fetchUserModels } from "@/components/organisms/create_key_button";
+import { fetchTeams } from "@/components/common_components/fetch_teams";
+import { MCPServers } from "@/components/mcp_tools";
+import TagManagement from "@/components/tag_management";
+import VectorStoreManagement from "@/components/vector_store_management";
+import UIThemeSettings from "@/components/ui_theme_settings";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cx } from "@/lib/cva.config";
 
 function getCookie(name: string) {
-  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="))
-  return cookieValue ? cookieValue.split("=")[1] : null
+  const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
+  return cookieValue ? cookieValue.split("=")[1] : null;
 }
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
-    return "Undefined Role"
+    return "Undefined Role";
   }
   switch (userRole.toLowerCase()) {
     case "app_owner":
-      return "App Owner"
+      return "App Owner";
     case "demo_app_owner":
-      return "App Owner"
+      return "App Owner";
     case "app_admin":
-      return "Admin"
+      return "Admin";
     case "proxy_admin":
-      return "Admin"
+      return "Admin";
     case "proxy_admin_viewer":
-      return "Admin Viewer"
+      return "Admin Viewer";
     case "org_admin":
-      return "Org Admin"
+      return "Org Admin";
     case "internal_user":
-      return "Internal User"
+      return "Internal User";
     case "internal_user_viewer":
     case "internal_viewer": // TODO:remove if deprecated
-      return "Internal Viewer"
+      return "Internal Viewer";
     case "app_user":
-      return "App User"
+      return "App User";
     default:
-      return "Unknown Role"
+      return "Unknown Role";
   }
 }
 
 interface ProxySettings {
-  PROXY_BASE_URL: string
-  PROXY_LOGOUT_URL: string
+  PROXY_BASE_URL: string;
+  PROXY_LOGOUT_URL: string;
 }
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient();
 
 function LoadingScreen() {
   return (
@@ -91,51 +91,51 @@ function LoadingScreen() {
         <span className="text-gray-600 text-sm">Loading...</span>
       </div>
     </div>
-  )
+  );
 }
 
 export default function CreateKeyPage() {
-  const [userRole, setUserRole] = useState("")
-  const [premiumUser, setPremiumUser] = useState(false)
-  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false)
-  const [userEmail, setUserEmail] = useState<null | string>(null)
-  const [teams, setTeams] = useState<Team[] | null>(null)
-  const [keys, setKeys] = useState<null | any[]>([])
-  const [organizations, setOrganizations] = useState<Organization[]>([])
-  const [userModels, setUserModels] = useState<string[]>([])
+  const [userRole, setUserRole] = useState("");
+  const [premiumUser, setPremiumUser] = useState(false);
+  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
+  const [userEmail, setUserEmail] = useState<null | string>(null);
+  const [teams, setTeams] = useState<Team[] | null>(null);
+  const [keys, setKeys] = useState<null | any[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [userModels, setUserModels] = useState<string[]>([]);
   const [proxySettings, setProxySettings] = useState<ProxySettings>({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "",
-  })
+  });
 
-  const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true)
-  const searchParams = useSearchParams()!
-  const [modelData, setModelData] = useState<any>({ data: [] })
-  const [token, setToken] = useState<string | null>(null)
-  const [createClicked, setCreateClicked] = useState<boolean>(false)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [userID, setUserID] = useState<string | null>(null)
+  const [showSSOBanner, setShowSSOBanner] = useState<boolean>(true);
+  const searchParams = useSearchParams()!;
+  const [modelData, setModelData] = useState<any>({ data: [] });
+  const [token, setToken] = useState<string | null>(null);
+  const [createClicked, setCreateClicked] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [userID, setUserID] = useState<string | null>(null);
 
-  const invitation_id = searchParams.get("invitation_id")
+  const invitation_id = searchParams.get("invitation_id");
 
   // Get page from URL, default to 'api-keys' if not present
   const [page, setPage] = useState(() => {
-    return searchParams.get("page") || "api-keys"
-  })
+    return searchParams.get("page") || "api-keys";
+  });
 
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
     // Update URL without full page reload
-    const newSearchParams = new URLSearchParams(searchParams)
-    newSearchParams.set("page", newPage)
+    const newSearchParams = new URLSearchParams(searchParams);
+    newSearchParams.set("page", newPage);
 
     // Use Next.js router to update URL
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`)
+    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
 
-    setPage(newPage)
-  }
+    setPage(newPage);
+  };
 
-  const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const toggleSidebar = () => {
@@ -143,83 +143,83 @@ export default function CreateKeyPage() {
   };
 
   const addKey = (data: any) => {
-    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
-    setCreateClicked(() => !createClicked)
-  }
-  const redirectToLogin = authLoading === false && token === null && invitation_id === null
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
+    setCreateClicked(() => !createClicked);
+  };
+  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
 
   useEffect(() => {
-    const token = getCookie("token")
+    const token = getCookie("token");
     getUiConfig().then((data) => {
       // get the information for constructing the proxy base url, and then set the token and auth loading
-      setToken(token)
-      setAuthLoading(false)
-    })
-  }, [])
+      setToken(token);
+      setAuthLoading(false);
+    });
+  }, []);
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
     }
-  }, [redirectToLogin])
+  }, [redirectToLogin]);
 
   useEffect(() => {
     if (!token) {
-      return
+      return;
     }
 
-    const decoded = jwtDecode(token) as { [key: string]: any }
+    const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
       // set accessToken
-      setAccessToken(decoded.key)
+      setAccessToken(decoded.key);
 
-      setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation)
+      setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
 
       // check if userRole is defined
       if (decoded.user_role) {
-        const formattedUserRole = formatUserRole(decoded.user_role)
-        setUserRole(formattedUserRole)
+        const formattedUserRole = formatUserRole(decoded.user_role);
+        setUserRole(formattedUserRole);
         if (formattedUserRole == "Admin Viewer") {
-          setPage("usage")
+          setPage("usage");
         }
       }
 
       if (decoded.user_email) {
-        setUserEmail(decoded.user_email)
+        setUserEmail(decoded.user_email);
       }
 
       if (decoded.login_method) {
-        setShowSSOBanner(decoded.login_method == "username_password" ? true : false)
+        setShowSSOBanner(decoded.login_method == "username_password" ? true : false);
       }
 
       if (decoded.premium_user) {
-        setPremiumUser(decoded.premium_user)
+        setPremiumUser(decoded.premium_user);
       }
 
       if (decoded.auth_header_name) {
-        setGlobalLitellmHeaderName(decoded.auth_header_name)
+        setGlobalLitellmHeaderName(decoded.auth_header_name);
       }
 
       if (decoded.user_id) {
-        setUserID(decoded.user_id)
+        setUserID(decoded.user_id);
       }
     }
-  }, [token])
+  }, [token]);
 
   useEffect(() => {
     if (accessToken && userID && userRole) {
-      fetchUserModels(userID, userRole, accessToken, setUserModels)
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
     if (accessToken && userID && userRole) {
-      fetchTeams(accessToken, userID, userRole, null, setTeams)
+      fetchTeams(accessToken, userID, userRole, null, setTeams);
     }
     if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations)
+      fetchOrganizations(accessToken, setOrganizations);
     }
-  }, [accessToken, userID, userRole])
+  }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   return (
@@ -425,5 +425,5 @@ export default function CreateKeyPage() {
         </ThemeProvider>
       </QueryClientProvider>
     </Suspense>
-  )
+  );
 }

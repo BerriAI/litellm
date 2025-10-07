@@ -1,95 +1,97 @@
 import { MessageType } from "./types";
 import { EndpointType } from "./mode_endpoint_mapping";
 
-
 interface CodeGenMetadata {
-	tags?: string[];
-	vector_stores?: string[];
-	guardrails?: string[];
+  tags?: string[];
+  vector_stores?: string[];
+  guardrails?: string[];
 }
 
 interface GenerateCodeParams {
-	apiKeySource: 'session' | 'custom';
-	accessToken: string | null;
-	apiKey: string;
-	inputMessage: string;
-	chatHistory: MessageType[];
-	selectedTags: string[];
-	selectedVectorStores: string[];
-	selectedGuardrails: string[];
-	selectedMCPTools: string[];
-	endpointType: string;
-	selectedModel: string | undefined;
-	selectedSdk: 'openai' | 'azure';
+  apiKeySource: "session" | "custom";
+  accessToken: string | null;
+  apiKey: string;
+  inputMessage: string;
+  chatHistory: MessageType[];
+  selectedTags: string[];
+  selectedVectorStores: string[];
+  selectedGuardrails: string[];
+  selectedMCPTools: string[];
+  endpointType: string;
+  selectedModel: string | undefined;
+  selectedSdk: "openai" | "azure";
 }
 
 export const generateCodeSnippet = (params: GenerateCodeParams): string => {
-	const {
-		apiKeySource,
-		accessToken,
-		apiKey,
-		inputMessage,
-		chatHistory,
-		selectedTags,
-		selectedVectorStores,
-		selectedGuardrails,
-		selectedMCPTools,
-		endpointType,
-		selectedModel,
-		selectedSdk,
-	} = params;
-	const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
-	const apiBase = window.location.origin;
+  const {
+    apiKeySource,
+    accessToken,
+    apiKey,
+    inputMessage,
+    chatHistory,
+    selectedTags,
+    selectedVectorStores,
+    selectedGuardrails,
+    selectedMCPTools,
+    endpointType,
+    selectedModel,
+    selectedSdk,
+  } = params;
+  const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
+  const apiBase = window.location.origin;
 
-	// Always get the input message early on, regardless of what happens later
-	const userPrompt = inputMessage || "Your prompt here"; // Fallback if inputMessage is empty
+  // Always get the input message early on, regardless of what happens later
+  const userPrompt = inputMessage || "Your prompt here"; // Fallback if inputMessage is empty
 
-	// Safely escape the prompt to prevent issues with quotes
-	const safePrompt = userPrompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  // Safely escape the prompt to prevent issues with quotes
+  const safePrompt = userPrompt.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
 
-	const messages = chatHistory
-			.filter(msg => !msg.isImage)
-			.map(({ role, content }) => ({ role, content }));
+  const messages = chatHistory.filter((msg) => !msg.isImage).map(({ role, content }) => ({ role, content }));
 
-	const metadata: CodeGenMetadata = {};
-	if (selectedTags.length > 0) metadata.tags = selectedTags;
-	if (selectedVectorStores.length > 0) metadata.vector_stores = selectedVectorStores;
-	if (selectedGuardrails.length > 0) metadata.guardrails = selectedGuardrails;
+  const metadata: CodeGenMetadata = {};
+  if (selectedTags.length > 0) metadata.tags = selectedTags;
+  if (selectedVectorStores.length > 0) metadata.vector_stores = selectedVectorStores;
+  if (selectedGuardrails.length > 0) metadata.guardrails = selectedGuardrails;
 
-	const modelNameForCode = selectedModel || 'your-model-name';
+  const modelNameForCode = selectedModel || "your-model-name";
 
-	const clientInitialization = selectedSdk === 'azure'
-			? `import openai
+  const clientInitialization =
+    selectedSdk === "azure"
+      ? `import openai
 
 client = openai.AzureOpenAI(
-	api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+	api_key="${effectiveApiKey || "YOUR_LITELLM_API_KEY"}",
 	azure_endpoint="${apiBase}",
 	api_version="2024-02-01"
 )`
-			: `import openai
+      : `import openai
 
 client = openai.OpenAI(
-	api_key="${effectiveApiKey || 'YOUR_LITELLM_API_KEY'}",
+	api_key="${effectiveApiKey || "YOUR_LITELLM_API_KEY"}",
 	base_url="${apiBase}"
 )`;
 
-	let endpointSpecificCode;
-	switch (endpointType) {
-			case EndpointType.CHAT: {
-					const metadataIsNotEmpty = Object.keys(metadata).length > 0;
-					let extraBodyCode = '';
-					if (metadataIsNotEmpty) {
-						const extraBodyObject = { metadata };
-						const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
-						const indentedExtraBodyString = extraBodyString.split('\n').map(line => ' '.repeat(4) + line).join('\n').trim();
+  let endpointSpecificCode;
+  switch (endpointType) {
+    case EndpointType.CHAT: {
+      const metadataIsNotEmpty = Object.keys(metadata).length > 0;
+      let extraBodyCode = "";
+      if (metadataIsNotEmpty) {
+        const extraBodyObject = { metadata };
+        const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
+        const indentedExtraBodyString = extraBodyString
+          .split("\n")
+          .map((line) => " ".repeat(4) + line)
+          .join("\n")
+          .trim();
 
-						extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
-					}
+        extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
+      }
 
-					// Create example for chat completions with optional image support
-					const messagesExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+      // Create example for chat completions with optional image support
+      const messagesExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
 
-					endpointSpecificCode = `
+      endpointSpecificCode = `
 import base64
 
 # Helper function to encode images to base64
@@ -129,23 +131,27 @@ print(response)
 # )
 # print(response_with_file)
 `;
-					break;
-			}
-			case EndpointType.RESPONSES: {
-				const metadataIsNotEmpty = Object.keys(metadata).length > 0;
-				let extraBodyCode = '';
-				if (metadataIsNotEmpty) {
-					const extraBodyObject = { metadata };
-					const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
-					const indentedExtraBodyString = extraBodyString.split('\n').map(line => ' '.repeat(4) + line).join('\n').trim();
+      break;
+    }
+    case EndpointType.RESPONSES: {
+      const metadataIsNotEmpty = Object.keys(metadata).length > 0;
+      let extraBodyCode = "";
+      if (metadataIsNotEmpty) {
+        const extraBodyObject = { metadata };
+        const extraBodyString = JSON.stringify(extraBodyObject, null, 2);
+        const indentedExtraBodyString = extraBodyString
+          .split("\n")
+          .map((line) => " ".repeat(4) + line)
+          .join("\n")
+          .trim();
 
-					extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
-				}
+        extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
+      }
 
-				// Create example for responses API with optional image support
-				const inputExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
-				
-				endpointSpecificCode = `
+      // Create example for responses API with optional image support
+      const inputExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+
+      endpointSpecificCode = `
 import base64
 
 # Helper function to encode images to base64
@@ -180,11 +186,11 @@ print(response.output_text)
 # )
 # print(response_with_file.output_text)
 `;
-				break;
-			}
-			case EndpointType.IMAGE:
-				if (selectedSdk === 'azure') {
-						endpointSpecificCode = `
+      break;
+    }
+    case EndpointType.IMAGE:
+      if (selectedSdk === "azure") {
+        endpointSpecificCode = `
 # NOTE: The Azure SDK does not have a direct equivalent to the multi-modal 'responses.create' method shown for OpenAI.
 # This snippet uses 'client.images.generate' and will create a new image based on your prompt.
 # It does not use the uploaded image, as 'client.images.generate' does not support image inputs in this context.
@@ -232,8 +238,8 @@ except Exception as e:
 	print(f"An error occurred: {e}")
 	print("Full response:", json_response)
 `;
-					} else {
-						endpointSpecificCode = `
+      } else {
+        endpointSpecificCode = `
 import base64
 import os
 import time
@@ -318,12 +324,12 @@ else:
 	print("Full response for debugging:")
 	print(response)
 `;
-				}
-				break;
+      }
+      break;
 
-			case EndpointType.IMAGE_EDITS:
-				if (selectedSdk === 'azure') {
-						endpointSpecificCode = `
+    case EndpointType.IMAGE_EDITS:
+      if (selectedSdk === "azure") {
+        endpointSpecificCode = `
 import base64
 import os
 import time
@@ -402,8 +408,8 @@ else:
 	print("Full response for debugging:")
 	print(response)
 `;
-					} else {
-							endpointSpecificCode = `
+      } else {
+        endpointSpecificCode = `
 import base64
 import os
 import time
@@ -485,13 +491,13 @@ else:
 	print("Full response for debugging:")
 	print(response)
 `;
-				}
-				break;
-		default:
-				endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
-	}
+      }
+      break;
+    default:
+      endpointSpecificCode = "\n# Code generation for this endpoint is not implemented yet.";
+  }
 
-	const finalCode = `${clientInitialization}\n${endpointSpecificCode}`;
+  const finalCode = `${clientInitialization}\n${endpointSpecificCode}`;
 
-	return finalCode;
-}; 
+  return finalCode;
+};

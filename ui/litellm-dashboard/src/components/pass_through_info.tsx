@@ -14,10 +14,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import { Button, Form, Input, Switch, message, InputNumber } from "antd";
-import { 
-  updatePassThroughEndpoint,
-  deletePassThroughEndpointsCall 
-} from "./networking";
+import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -43,33 +40,25 @@ interface PassThroughEndpoint {
 const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
   const [showPassword, setShowPassword] = useState(false);
   const headerString = JSON.stringify(value, null, 2);
-  
+
   return (
     <div className="flex items-center space-x-2">
       <pre className="font-mono text-xs bg-gray-50 p-2 rounded max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
-      <button
-        onClick={() => setShowPassword(!showPassword)}
-        className="p-1 hover:bg-gray-100 rounded"
-        type="button"
-      >
-        {showPassword ? (
-          <EyeOff className="w-4 h-4 text-gray-500" />
-        ) : (
-          <Eye className="w-4 h-4 text-gray-500" />
-        )}
+      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded" type="button">
+        {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
   );
 };
 
-const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({ 
+const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   endpointData: initialEndpointData,
-  onClose, 
+  onClose,
   accessToken,
   isAdmin,
-  onEndpointUpdated
+  onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
   const [loading, setLoading] = useState(false);
@@ -79,14 +68,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   const handleEndpointUpdate = async (values: any) => {
     try {
       if (!accessToken || !endpointData?.id) return;
-      
+
       // Parse headers if provided as string
       let headers = {};
       if (values.headers) {
         try {
-          headers = typeof values.headers === 'string' 
-            ? JSON.parse(values.headers)
-            : values.headers;
+          headers = typeof values.headers === "string" ? JSON.parse(values.headers) : values.headers;
         } catch (e) {
           NotificationsManager.fromBackend("Invalid JSON format for headers");
           return;
@@ -100,7 +87,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
       };
-      
+
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
 
       // Update local state with the new values
@@ -108,7 +95,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         ...endpointData,
         ...updateData,
       });
-      
+
       setIsEditing(false);
       if (onEndpointUpdated) {
         onEndpointUpdated();
@@ -122,7 +109,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   const handleDeleteEndpoint = async () => {
     try {
       if (!accessToken || !endpointData?.id) return;
-      
+
       await deletePassThroughEndpointsCall(accessToken, endpointData.id);
       NotificationsManager.success("Pass through endpoint deleted successfully");
       onClose();
@@ -147,7 +134,9 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">← Back</Button>
+          <Button onClick={onClose} className="mb-4">
+            ← Back
+          </Button>
           <Title>Pass Through Endpoint: {endpointData.path}</Title>
           <Text className="text-gray-500 font-mono">{endpointData.id}</Text>
         </div>
@@ -196,7 +185,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
 
             {/* Route Preview Section */}
             <div className="mt-6">
-              <RoutePreview 
+              <RoutePreview
                 pathValue={endpointData.path}
                 targetValue={endpointData.target}
                 includeSubpath={endpointData.include_subpath || false}
@@ -207,9 +196,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
               <Card className="mt-6">
                 <div className="flex justify-between items-center">
                   <Text className="font-medium">Headers</Text>
-                  <Badge color="blue">
-                    {Object.keys(endpointData.headers).length} headers configured
-                  </Badge>
+                  <Badge color="blue">{Object.keys(endpointData.headers).length} headers configured</Badge>
                 </div>
                 <div className="mt-4">
                   <PasswordField value={endpointData.headers} />
@@ -227,16 +214,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   <div className="space-x-2">
                     {!isEditing && (
                       <>
-                        <TremorButton 
-                          onClick={() => setIsEditing(true)}
-                        >
-                          Edit Settings
-                        </TremorButton>
-                        <TremorButton 
-                          onClick={handleDeleteEndpoint}
-                          variant="secondary"
-                          color="red"
-                        >
+                        <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                        <TremorButton onClick={handleDeleteEndpoint} variant="secondary" color="red">
                           Delete Endpoint
                         </TremorButton>
                       </>
@@ -250,9 +229,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     onFinish={handleEndpointUpdate}
                     initialValues={{
                       target: endpointData.target,
-                      headers: endpointData.headers 
-                        ? JSON.stringify(endpointData.headers, null, 2) 
-                        : "",
+                      headers: endpointData.headers ? JSON.stringify(endpointData.headers, null, 2) : "",
                       include_subpath: endpointData.include_subpath || false,
                       cost_per_request: endpointData.cost_per_request,
                     }}
@@ -265,45 +242,25 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     >
                       <TextInput placeholder="https://api.example.com" />
                     </Form.Item>
-                    
-                    <Form.Item
-                      label="Headers (JSON)"
-                      name="headers"
-                    >
-                      <Input.TextArea 
-                        rows={5} 
+
+                    <Form.Item label="Headers (JSON)" name="headers">
+                      <Input.TextArea
+                        rows={5}
                         placeholder='{"Authorization": "Bearer your-token", "Content-Type": "application/json"}'
                       />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Include Subpath"
-                      name="include_subpath"
-                      valuePropName="checked"
-                    >
+                    <Form.Item label="Include Subpath" name="include_subpath" valuePropName="checked">
                       <Switch />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Cost per Request"
-                      name="cost_per_request"
-                    >
-                      <InputNumber 
-                        min={0}
-                        step={0.01}
-                        precision={2}
-                        placeholder="0.00"
-                        addonBefore="$"
-                      />
+                    <Form.Item label="Cost per Request" name="cost_per_request">
+                      <InputNumber min={0} step={0.01} precision={2} placeholder="0.00" addonBefore="$" />
                     </Form.Item>
 
                     <div className="flex justify-end gap-2 mt-6">
-                      <Button onClick={() => setIsEditing(false)}>
-                        Cancel
-                      </Button>
-                      <TremorButton>
-                        Save Changes
-                      </TremorButton>
+                      <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+                      <TremorButton>Save Changes</TremorButton>
                     </div>
                   </Form>
                 ) : (
@@ -349,4 +306,4 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   );
 };
 
-export default PassThroughInfoView; 
+export default PassThroughInfoView;

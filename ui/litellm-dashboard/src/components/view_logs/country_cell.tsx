@@ -10,17 +10,19 @@ export const CountryCell: React.FC<CountryCellProps> = ({ ipAddress }) => {
 
   React.useEffect(() => {
     if (!ipAddress) return;
-    
+
     let mounted = true;
     getCountryFromIP(ipAddress)
-      .then(result => {
+      .then((result) => {
         if (mounted) setCountry(result);
       })
       .catch(() => {
         if (mounted) setCountry("-");
       });
 
-    return () => { mounted = false };
+    return () => {
+      mounted = false;
+    };
   }, [ipAddress]);
 
   return <span>{country}</span>;

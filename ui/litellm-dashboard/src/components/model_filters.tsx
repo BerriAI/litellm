@@ -41,15 +41,15 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   // Helper functions to get unique values
   const getUniqueProviders = (data: ModelGroupInfo[]) => {
     const providers = new Set<string>();
-    data.forEach(model => {
-      model.providers.forEach(provider => providers.add(provider));
+    data.forEach((model) => {
+      model.providers.forEach((provider) => providers.add(provider));
     });
     return Array.from(providers);
   };
 
   const getUniqueModes = (data: ModelGroupInfo[]) => {
     const modes = new Set<string>();
-    data.forEach(model => {
+    data.forEach((model) => {
       if (model.mode) modes.add(model.mode);
     });
     return Array.from(modes);
@@ -57,15 +57,15 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
 
   const getUniqueFeatures = (data: ModelGroupInfo[]) => {
     const features = new Set<string>();
-    data.forEach(model => {
+    data.forEach((model) => {
       Object.entries(model)
-        .filter(([key, value]) => key.startsWith('supports_') && value === true)
+        .filter(([key, value]) => key.startsWith("supports_") && value === true)
         .forEach(([key]) => {
           const featureName = key
-            .replace(/^supports_/, '')
-            .split('_')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
+            .replace(/^supports_/, "")
+            .split("_")
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ");
           features.add(featureName);
         });
     });
@@ -74,36 +74,37 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
 
   // Memoized filtered data
   const filteredData = useMemo(() => {
-    return modelHubData?.filter(model => {
-      const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-      const matchesMode = selectedMode === "" || model.mode === selectedMode;
-      
-      // Check if model has the selected feature
-      const matchesFeature = selectedFeature === "" || 
-        Object.entries(model)
-          .filter(([key, value]) => key.startsWith('supports_') && value === true)
-          .some(([key]) => {
-            const featureName = key
-              .replace(/^supports_/, '')
-              .split('_')
-              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-              .join(' ');
-            return featureName === selectedFeature;
-          });
-      
-      return matchesSearch && matchesProvider && matchesMode && matchesFeature;
-    }) || [];
+    return (
+      modelHubData?.filter((model) => {
+        const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
+        const matchesMode = selectedMode === "" || model.mode === selectedMode;
+
+        // Check if model has the selected feature
+        const matchesFeature =
+          selectedFeature === "" ||
+          Object.entries(model)
+            .filter(([key, value]) => key.startsWith("supports_") && value === true)
+            .some(([key]) => {
+              const featureName = key
+                .replace(/^supports_/, "")
+                .split("_")
+                .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(" ");
+              return featureName === selectedFeature;
+            });
+
+        return matchesSearch && matchesProvider && matchesMode && matchesFeature;
+      }) || []
+    );
   }, [modelHubData, searchTerm, selectedProvider, selectedMode, selectedFeature]);
 
   // Update parent component when filtered data changes
   useEffect(() => {
     // Only call the callback if the filtered data actually changed
-    const hasChanged = 
+    const hasChanged =
       filteredData.length !== previousFilteredDataRef.current.length ||
-      filteredData.some((model, index) => 
-        model.model_group !== previousFilteredDataRef.current[index]?.model_group
-      );
+      filteredData.some((model, index) => model.model_group !== previousFilteredDataRef.current[index]?.model_group);
 
     if (hasChanged) {
       previousFilteredDataRef.current = filteredData;
@@ -147,10 +148,15 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           onChange={(e) => setSelectedProvider(e.target.value)}
           className="border rounded px-3 py-2 text-sm text-gray-600 w-40 h-10"
         >
-          <option value="" className="text-sm text-gray-600">All Providers</option>
-          {modelHubData && getUniqueProviders(modelHubData).map(provider => (
-            <option key={provider} value={provider} className="text-sm text-gray-800">{provider}</option>
-          ))}
+          <option value="" className="text-sm text-gray-600">
+            All Providers
+          </option>
+          {modelHubData &&
+            getUniqueProviders(modelHubData).map((provider) => (
+              <option key={provider} value={provider} className="text-sm text-gray-800">
+                {provider}
+              </option>
+            ))}
         </select>
       </div>
       <div>
@@ -160,10 +166,15 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           onChange={(e) => setSelectedMode(e.target.value)}
           className="border rounded px-3 py-2 text-sm text-gray-600 w-32 h-10"
         >
-          <option value="" className="text-sm text-gray-600">All Modes</option>
-          {modelHubData && getUniqueModes(modelHubData).map(mode => (
-            <option key={mode} value={mode} className="text-sm text-gray-800">{mode}</option>
-          ))}
+          <option value="" className="text-sm text-gray-600">
+            All Modes
+          </option>
+          {modelHubData &&
+            getUniqueModes(modelHubData).map((mode) => (
+              <option key={mode} value={mode} className="text-sm text-gray-800">
+                {mode}
+              </option>
+            ))}
         </select>
       </div>
       <div>
@@ -173,13 +184,18 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           onChange={(e) => setSelectedFeature(e.target.value)}
           className="border rounded px-3 py-2 text-sm text-gray-600 w-48 h-10"
         >
-          <option value="" className="text-sm text-gray-600">All Features</option>
-          {modelHubData && getUniqueFeatures(modelHubData).map(feature => (
-            <option key={feature} value={feature} className="text-sm text-gray-800">{feature}</option>
-          ))}
+          <option value="" className="text-sm text-gray-600">
+            All Features
+          </option>
+          {modelHubData &&
+            getUniqueFeatures(modelHubData).map((feature) => (
+              <option key={feature} value={feature} className="text-sm text-gray-800">
+                {feature}
+              </option>
+            ))}
         </select>
       </div>
-      
+
       {/* Clear filters button */}
       {(searchTerm || selectedProvider || selectedMode || selectedFeature) && (
         <div className="flex items-end">
@@ -195,18 +211,10 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   );
 
   if (showFiltersCard) {
-    return (
-      <Card className={`mb-6 ${className}`}>
-        {filtersContent}
-      </Card>
-    );
+    return <Card className={`mb-6 ${className}`}>{filtersContent}</Card>;
   }
 
-  return (
-    <div className={className}>
-      {filtersContent}
-    </div>
-  );
+  return <div className={className}>{filtersContent}</div>;
 };
 
-export default ModelFilters; 
+export default ModelFilters;

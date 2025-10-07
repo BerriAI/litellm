@@ -14,11 +14,11 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   value,
   onChange,
   className = "",
-  style = {}
+  style = {},
 }) => {
   return (
     <Select
-      style={{ width: '100%', ...style }}
+      style={{ width: "100%", ...style }}
       value={value || undefined}
       onChange={onChange}
       className={className}
@@ -33,14 +33,14 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
 
 export const getBudgetDurationLabel = (value: string | null | undefined): string => {
   if (!value) return "Not set";
-  
+
   const budgetDurationMap: Record<string, string> = {
     "24h": "daily",
     "7d": "weekly",
-    "30d": "monthly"
+    "30d": "monthly",
   };
-  
+
   return budgetDurationMap[value] || value;
 };
 
-export default BudgetDurationDropdown; 
+export default BudgetDurationDropdown;
