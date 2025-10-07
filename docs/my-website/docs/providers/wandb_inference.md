@@ -173,6 +173,24 @@ The integration uses the standard LiteLLM error handling. Further, here's a list
 | 403 | Country, region, or territory not supported | Accessing the API from an unsupported location. | Please see [Geographic restrictions](https://docs.wandb.ai/guides/inference/usage-limits/#geographic-restrictions) |
 | 429 | Concurrency limit reached for requests | Too many concurrent requests. | Reduce the number of concurrent requests or increase your limits. For more information, see [Usage information and limits](https://docs.wandb.ai/guides/inference/usage-limits/). |
 | 429 | You exceeded your current quota, please check your plan and billing details | Out of credits or reached monthly spending cap. | Get more credits or increase your limits. For more information, see [Usage information and limits](https://docs.wandb.ai/guides/inference/usage-limits/). |
-| 429 | W&B Inference isn't available for personal accounts. Please switch to a non-personal account to access W&B Inference | The user is on a personal account, which doesn't have access to W&B Inference. | Switch to a non-personal account. If one isn't available, create a Team to create a non-personal account. For more information, see [Personal entities unsupported](https://docs.wandb.ai/guides/inference/usage-limits/#personal-entities-unsupported). |
+| 429 | W&B Inference isn't available for personal accounts. | Switch to a non-personal account.  | Follow [the instructions below](#error-429-personal-entities-unsupported) for a work around. |
 | 500 | The server had an error while processing your request | Internal server error. | Retry after a brief wait and contact support if it persists. |
 | 503 | The engine is currently overloaded, please try again later | Server is experiencing high traffic. | Retry your request after a short delay. |
+
+
+### Error 429: Personal entities unsupported
+
+The user is on a personal account, which doesn't have access to W&B Inference. If one isn't available, create a Team to create a non-personal account. 
+
+Once done, add the `openai-project` header to your request as shown below:
+
+```python
+response = completion(
+    model="...",
+    extra_headers={"openai-project": "team_name/project_name"},
+    ...
+```
+
+For more information, see [Personal entities unsupported](https://docs.wandb.ai/guides/inference/usage-limits/#personal-entities-unsupported).
+
+You can find more ways of using custom headers with LiteLLM here - https://docs.litellm.ai/docs/proxy/request_headers.
