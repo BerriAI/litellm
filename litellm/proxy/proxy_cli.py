@@ -121,6 +121,8 @@ class ProxyInitializationHelpers:
         port: int,
         log_config: Optional[str] = None,
         keepalive_timeout: Optional[int] = None,
+        limit_concurrency: Optional[int] = None,
+        backlog: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -140,6 +142,10 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = None
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        if limit_concurrency is not None:
+            uvicorn_args["limit_concurrency"] = limit_concurrency
+        if backlog is not None:
+            uvicorn_args["backlog"] = backlog
         return uvicorn_args
 
     @staticmethod
@@ -498,6 +504,20 @@ class ProxyInitializationHelpers:
     help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
+@click.option(
+    "--limit_concurrency",
+    default=None,
+    type=int,
+    help="Set the maximum number of concurrent requests to the proxy (uvicorn limit_concurrency parameter)",
+    envvar="LIMIT_CONCURRENCY",
+)
+@click.option(
+    "--backlog",
+    default=None,
+    type=int,
+    help="Set the maximum number of pending connections (uvicorn backlog parameter)",
+    envvar="BACKLOG",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -537,6 +557,8 @@ def run_server(  # noqa: PLR0915
     skip_server_startup,
     keepalive_timeout,
     max_requests_before_restart,
+    limit_concurrency,
+    backlog,
 ):
     args = locals()
     if local:
@@ -825,6 +847,8 @@ def run_server(  # noqa: PLR0915
             port=port,
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
+            limit_concurrency=limit_concurrency,
+            backlog=backlog,
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
