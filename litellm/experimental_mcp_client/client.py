@@ -118,7 +118,7 @@ class MCPClient:
             else:  # http
                 headers = self._get_auth_headers()
                 verbose_logger.debug(
-                    "litellm headers for streamablehttp_client: ", headers
+                    "litellm headers for streamablehttp_client: %s", headers
                 )
                 self._transport_ctx = streamablehttp_client(
                     url=self.server_url,

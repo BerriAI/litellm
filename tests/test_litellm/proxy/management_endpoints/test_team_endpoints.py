@@ -337,6 +337,90 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
+async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_auth):
+    """
+    Test that /team/new correctly handles mcp_tool_permissions in object_permission.
+    
+    This test verifies that:
+    1. mcp_tool_permissions is accepted in the object_permission field
+    2. The field is properly stored in the LiteLLM_ObjectPermissionTable
+    3. The team is correctly linked to the object_permission record
+    """
+    # Configure mocked prisma client
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    # Track what data is passed to object permission create
+    created_permission_data = {}
+
+    async def mock_obj_perm_create(**kwargs):
+        created_permission_data.update(kwargs.get("data", {}))
+        return MagicMock(object_permission_id="objperm_team_mcp_456")
+
+    mock_db_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_db_client.db.litellm_objectpermissiontable.create = mock_obj_perm_create
+
+    # Mock model table
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model456")
+    )
+
+    # Mock team table
+    team_create_result = MagicMock(
+        team_id="team-mcp-789",
+        object_permission_id="objperm_team_mcp_456",
+    )
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-mcp-789",
+        "object_permission_id": "objperm_team_mcp_456",
+    }
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+
+    # Mock user table
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Create team with mcp_tool_permissions
+    team_request = NewTeamRequest(
+        team_alias="mcp-team",
+        object_permission=LiteLLM_ObjectPermissionBase(
+            mcp_servers=["server_a", "server_b"],
+            mcp_tool_permissions={
+                "server_a": ["read_wiki_structure", "read_wiki_contents"],
+                "server_b": ["ask_question"],
+            },
+        ),
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    await new_team(
+        data=team_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Verify mcp_tool_permissions was stored
+    assert "mcp_tool_permissions" in created_permission_data
+    assert created_permission_data["mcp_tool_permissions"] == {
+        "server_a": ["read_wiki_structure", "read_wiki_contents"],
+        "server_b": ["ask_question"],
+    }
+    assert created_permission_data["mcp_servers"] == ["server_a", "server_b"]
+
+
+@pytest.mark.asyncio
 async def test_team_update_object_permissions_existing_permission(monkeypatch):
     """
     Test updating object permissions when a team already has an existing object_permission_id.

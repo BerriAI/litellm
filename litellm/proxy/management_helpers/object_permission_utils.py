@@ -9,6 +9,8 @@ from typing import Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        
 
 
 async def attach_object_permission_to_dict(
@@ -113,6 +115,15 @@ async def handle_update_object_permission_common(
 
     if isinstance(new_object_permission, dict):
         existing_object_permissions_dict.update(new_object_permission)
+
+    #########################################################
+    # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
+    # (e.g., server IDs starting with "3e64" being interpreted as floats)
+    #########################################################
+    if "mcp_tool_permissions" in existing_object_permissions_dict:
+        existing_object_permissions_dict["mcp_tool_permissions"] = safe_dumps(
+            existing_object_permissions_dict["mcp_tool_permissions"]
+        )
 
     #########################################################
     # Commit the update to the LiteLLM_ObjectPermissionTable

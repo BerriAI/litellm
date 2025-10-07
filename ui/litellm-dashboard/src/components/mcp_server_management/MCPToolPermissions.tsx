@@ -90,10 +90,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       ? currentTools.filter(name => name !== toolName)
       : [...currentTools, toolName];
     
-    onChange({
+    const updatedPermissions = {
       ...toolPermissions,
       [serverId]: newTools,
-    });
+    };
+    onChange(updatedPermissions);
   };
 
   const handleSelectAll = (serverId: string) => {
