@@ -59,20 +59,12 @@ RUN NPM_CONFIG_OFFLINE=false \
     python -c "import prisma.cli.prisma as p; p.ensure_cached()" && \
     echo "Prisma CLI downloaded via Python package"
 
-# Now explicitly install Prisma CLI to the location our code expects
-RUN mkdir -p /app/.cache/prisma-python/nodeenv && \
-    cd /app/.cache/prisma-python/nodeenv && \
-    npm init -y && \
-    npm install prisma@5.4.2 --cache=/app/.cache/npm && \
-    echo "Prisma CLI installed at expected location"
+# Verify Prisma CLI was installed by Python package
+RUN ls -la /app/.cache/prisma-python/binaries/node_modules/.bin/ 2>/dev/null || true && \
+    echo "Checking Prisma installation..."
 
-# Verify the CLI is actually there
-RUN ls -la /app/.cache/prisma-python/nodeenv/node_modules/.bin/ || true && \
-    test -f /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma && \
-    echo "✅ Prisma CLI verified at expected path"
-
-# Now run a test migration to ensure all binaries are downloaded
-RUN /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma migrate deploy --dry-run || true
+# Run test commands to ensure all binaries are downloaded
+RUN prisma migrate deploy --dry-run || true
 
 # Generate client to download query engine
 RUN prisma generate
@@ -152,19 +144,19 @@ ENV PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 RUN echo "Checking for Prisma CLI in cache..." && \
     ls -la /app/.cache/ 2>/dev/null || echo "Cache directory not found" && \
     ls -la /app/.cache/prisma-python/ 2>/dev/null || echo "prisma-python directory not found" && \
-    ls -la /app/.cache/prisma-python/nodeenv/ 2>/dev/null || echo "nodeenv directory not found" && \
-    ls -la /app/.cache/prisma-python/nodeenv/node_modules/.bin/ 2>/dev/null || echo "node_modules/.bin directory not found" && \
-    if [ -f /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma ]; then \
+    ls -la /app/.cache/prisma-python/binaries/ 2>/dev/null || echo "binaries directory not found" && \
+    ls -la /app/.cache/prisma-python/binaries/node_modules/.bin/ 2>/dev/null || echo "node_modules/.bin directory not found" && \
+    if [ -f /app/.cache/prisma-python/binaries/node_modules/.bin/prisma ]; then \
         echo "✅ Prisma CLI found at expected path"; \
-        /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma --version || true; \
+        /app/.cache/prisma-python/binaries/node_modules/.bin/prisma --version || true; \
     else \
-        echo "⚠️  WARNING: Prisma CLI not found at /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma"; \
+        echo "⚠️  WARNING: Prisma CLI not found at /app/.cache/prisma-python/binaries/node_modules/.bin/prisma"; \
         echo "Looking for alternative Prisma locations..."; \
         find /app/.cache -name prisma -type f 2>/dev/null || echo "No prisma binary found in cache"; \
     fi
 
 # Create symlink to ensure Prisma CLI is found where expected
-RUN ln -sf /app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma /usr/local/bin/prisma 2>/dev/null || true
+RUN ln -sf /app/.cache/prisma-python/binaries/node_modules/.bin/prisma /usr/local/bin/prisma 2>/dev/null || true
 
 # Test that Prisma works with pre-cached binaries (no downloads)
 # This will fail if binaries aren't properly cached
@@ -221,7 +213,7 @@ ENV NPM_CONFIG_PREFER_OFFLINE=true
 # Enable Prisma offline mode flag for litellm-proxy-extras
 ENV PRISMA_OFFLINE_MODE=true
 # Optional: Override the Prisma CLI path if it's in a different location
-# ENV PRISMA_CLI_PATH=/app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma
+# ENV PRISMA_CLI_PATH=/app/.cache/prisma-python/binaries/node_modules/.bin/prisma
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp

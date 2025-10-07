@@ -39,7 +39,7 @@ def get_prisma_command() -> str:
         
         # List of possible Prisma CLI locations to check
         possible_paths = [
-            "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma",  # This is the correct location!
+            "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma",
             "/app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma",
             "/app/.cache/prisma-python/nodeenv/node_modules/prisma/build/index.js",
             "/usr/local/bin/prisma",
