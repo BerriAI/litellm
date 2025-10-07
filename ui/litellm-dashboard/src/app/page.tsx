@@ -39,7 +39,6 @@ import VectorStoreManagement from "@/components/vector_store_management";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
-import useFeatureFlags, { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 
