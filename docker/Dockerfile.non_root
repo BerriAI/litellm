@@ -194,6 +194,8 @@ ENV NPM_CONFIG_PREFER_OFFLINE=true
 # ENV NPM_CONFIG_OFFLINE=true
 # Enable Prisma offline mode flag for litellm-proxy-extras
 ENV PRISMA_OFFLINE_MODE=true
+# Optional: Override the Prisma CLI path if it's in a different location
+# ENV PRISMA_CLI_PATH=/app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp

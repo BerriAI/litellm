@@ -28,6 +28,28 @@ def get_prisma_env() -> dict:
     return prisma_env
 
 
+def get_prisma_command() -> str:
+    """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
+    if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
+        # First check if a custom CLI path is provided via environment variable
+        custom_cli_path = os.getenv("PRISMA_CLI_PATH")
+        if custom_cli_path and os.path.exists(custom_cli_path):
+            logger.info(f"Using custom Prisma CLI at {custom_cli_path}")
+            return custom_cli_path
+        
+        # Otherwise, use the default cached location
+        # This bypasses the Python wrapper that tries to download the CLI
+        default_cli_path = "/app/.cache/prisma-python/nodeenv/node_modules/.bin/prisma"
+        if os.path.exists(default_cli_path):
+            logger.info(f"Using cached Prisma CLI at {default_cli_path}")
+            return default_cli_path
+        
+        logger.warning("Prisma CLI not found at expected locations, falling back to wrapper")
+    
+    # Fall back to the Python wrapper
+    return "prisma"
+
+
 class ProxyExtrasDBManager:
     @staticmethod
     def _get_prisma_dir() -> str:
@@ -80,7 +102,7 @@ class ProxyExtrasDBManager:
             migration_file = init_dir / "migration.sql"
             subprocess.run(
                 [
-                    "prisma",
+                    get_prisma_command(),
                     "migrate",
                     "diff",
                     "--from-empty",
@@ -98,7 +120,7 @@ class ProxyExtrasDBManager:
             logger.info("Marking baseline migration as applied...")
             subprocess.run(
                 [
-                    "prisma",
+                    get_prisma_command(),
                     "migrate",
                     "resolve",
                     "--applied",
@@ -135,7 +157,7 @@ class ProxyExtrasDBManager:
         prisma_env = get_prisma_env()
         
         subprocess.run(
-            ["prisma", "migrate", "resolve", "--rolled-back", migration_name],
+            [get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
             timeout=60,
             check=True,
             capture_output=True,
@@ -149,7 +171,7 @@ class ProxyExtrasDBManager:
         prisma_env = get_prisma_env()
         
         subprocess.run(
-            ["prisma", "migrate", "resolve", "--applied", migration_name],
+            [get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
             timeout=60,
             check=True,
             capture_output=True,
@@ -189,7 +211,7 @@ class ProxyExtrasDBManager:
             with open(diff_sql_path, "w") as f:
                 subprocess.run(
                     [
-                        "prisma",
+                        get_prisma_command(),
                         "migrate",
                         "diff",
                         "--from-url",
@@ -219,7 +241,7 @@ class ProxyExtrasDBManager:
             logger.info("Running prisma db execute to apply the migration diff...")
             result = subprocess.run(
                 [
-                    "prisma",
+                    get_prisma_command(),
                     "db",
                     "execute",
                     "--file",
@@ -251,7 +273,7 @@ class ProxyExtrasDBManager:
             try:
                 logger.info(f"Resolving migration: {migration_name}")
                 subprocess.run(
-                    ["prisma", "migrate", "resolve", "--applied", migration_name],
+                    [get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
                     timeout=60,
                     check=True,
                     capture_output=True,
@@ -298,7 +320,7 @@ class ProxyExtrasDBManager:
                         
                         # Set migrations directory for Prisma
                         result = subprocess.run(
-                            ["prisma", "migrate", "deploy"],
+                            [get_prisma_command(), "migrate", "deploy"],
                             timeout=60,
                             check=True,
                             capture_output=True,
@@ -324,7 +346,7 @@ class ProxyExtrasDBManager:
                                 # Mark the failed migration as rolled back
                                 subprocess.run(
                                     [
-                                        "prisma",
+                                        get_prisma_command(),
                                         "migrate",
                                         "resolve",
                                         "--rolled-back",
@@ -381,7 +403,7 @@ class ProxyExtrasDBManager:
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
-                        ["prisma", "db", "push", "--accept-data-loss"],
+                        [get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
                         env=prisma_env,
