@@ -190,70 +190,146 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def _should_penalize_exception(self, exc: Optional[BaseException]) -> bool:
         """
-        Check if Timeout Error, if timeout set deployment latency -> 100
+        Decide whether to penalize a deployment for a given exception.
+
+        We penalize on transient/unavailability style failures so the router
+        quickly prefers other instances even before cooldown kicks in.
+
+        Penalize when:
+        - Timeout
+        - 5xx server errors
+        - 408 Request Timeout
+        - 429 Rate limit
+        - API connection errors / service unavailable
+        - 401/404 (misconfig on this deployment) — nudge router away
+        """
+        try:
+            if exc is None:
+                return False
+            # Explicit type checks for common transient errors
+            if isinstance(
+                exc,
+                (
+                    litellm.Timeout,
+                    litellm.APIConnectionError,
+                    litellm.ServiceUnavailableError,
+                    litellm.InternalServerError,
+                    litellm.APIError,
+                    litellm.RateLimitError,
+                ),
+            ):
+                return True
+
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, str):
+                try:
+                    status = int(status)
+                except Exception:
+                    status = None
+            if isinstance(status, int):
+                if status >= 500:
+                    return True
+                if status in (408, 429, 401, 404):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _penalize_deployment_latency(self, request_count_dict: Dict, id: str) -> None:
+        """Append a high latency value to penalize a deployment in selection."""
+        penalty_value = 1000.0
+        if (
+            len(request_count_dict[id].get("latency", []))
+            < self.routing_args.max_latency_list_size
+        ):
+            request_count_dict[id].setdefault("latency", []).append(penalty_value)
+        else:
+            request_count_dict[id]["latency"] = request_count_dict[id]["latency"][
+                : self.routing_args.max_latency_list_size - 1
+            ] + [penalty_value]
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Sync failure hook: penalize deployment latency for transient/unavailable errors.
         """
         try:
             metadata_field = self._select_metadata_field(kwargs)
             _exception = kwargs.get("exception", None)
-            if isinstance(_exception, litellm.Timeout):
-                if kwargs["litellm_params"].get(metadata_field) is None:
-                    pass
-                else:
-                    model_group = kwargs["litellm_params"][metadata_field].get(
-                        "model_group", None
-                    )
-
-                    id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                    if model_group is None or id is None:
-                        return
-                    elif isinstance(id, int):
-                        id = str(id)
-
-                    # ------------
-                    # Setup values
-                    # ------------
-                    """
-                    {
-                        {model_group}_map: {
-                            id: {
-                                "latency": [..]
-                                f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
-                            }
-                        }
-                    }
-                    """
-                    latency_key = f"{model_group}_map"
-                    request_count_dict = (
-                        await self.router_cache.async_get_cache(key=latency_key) or {}
-                    )
-
-                    if id not in request_count_dict:
-                        request_count_dict[id] = {}
-
-                    ## Latency - give 1000s penalty for failing
-                    if (
-                        len(request_count_dict[id].get("latency", []))
-                        < self.routing_args.max_latency_list_size
-                    ):
-                        request_count_dict[id].setdefault("latency", []).append(1000.0)
-                    else:
-                        request_count_dict[id]["latency"] = request_count_dict[id][
-                            "latency"
-                        ][: self.routing_args.max_latency_list_size - 1] + [1000.0]
-
-                    await self.router_cache.async_set_cache(
-                        key=latency_key,
-                        value=request_count_dict,
-                        ttl=self.routing_args.ttl,
-                    )  # reset map within window
-            else:
-                # do nothing if it's not a timeout error
+            if not self._should_penalize_exception(_exception):
                 return
+
+            if kwargs["litellm_params"].get(metadata_field) is None:
+                return
+
+            model_group = kwargs["litellm_params"][metadata_field].get(
+                "model_group", None
+            )
+            id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+            if model_group is None or id is None:
+                return
+            if isinstance(id, int):
+                id = str(id)
+
+            latency_key = f"{model_group}_map"
+            request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
+            if id not in request_count_dict:
+                request_count_dict[id] = {}
+            self._penalize_deployment_latency(request_count_dict, id)
+            self.router_cache.set_cache(
+                key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
+            )
+            if self.test_flag:
+                self.logged_failure += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.router_strategy.lowest_latency.py::log_failure_event(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Async failure hook: penalize deployment latency for transient/unavailable errors.
+        """
+        try:
+            metadata_field = self._select_metadata_field(kwargs)
+            _exception = kwargs.get("exception", None)
+            if not self._should_penalize_exception(_exception):
+                return
+
+            if kwargs["litellm_params"].get(metadata_field) is None:
+                return
+
+            model_group = kwargs["litellm_params"][metadata_field].get(
+                "model_group", None
+            )
+            id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+            if model_group is None or id is None:
+                return
+            if isinstance(id, int):
+                id = str(id)
+
+            latency_key = f"{model_group}_map"
+            request_count_dict = (
+                await self.router_cache.async_get_cache(key=latency_key) or {}
+            )
+            if id not in request_count_dict:
+                request_count_dict[id] = {}
+
+            self._penalize_deployment_latency(request_count_dict, id)
+            await self.router_cache.async_set_cache(
+                key=latency_key,
+                value=request_count_dict,
+                ttl=self.routing_args.ttl,
+            )
+            if self.test_flag:
+                self.logged_failure += 1
+        except Exception as e:
+            verbose_logger.exception(
+                "litellm.router_strategy.lowest_latency.py::async_log_failure_event(): Exception occured - {}".format(
                     str(e)
                 )
             )
