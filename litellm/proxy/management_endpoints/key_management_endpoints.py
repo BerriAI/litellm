@@ -21,6 +21,7 @@ import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps        
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
@@ -1125,6 +1126,13 @@ async def _set_object_permission(
         return data_json
 
     if "object_permission" in data_json:
+        # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
+        # (e.g., server IDs starting with "3e64" being interpreted as floats)
+        if "mcp_tool_permissions" in data_json["object_permission"]:
+            data_json["object_permission"]["mcp_tool_permissions"] = safe_dumps(
+                data_json["object_permission"]["mcp_tool_permissions"]
+            )
+        
         created_object_permission = (
             await prisma_client.db.litellm_objectpermissiontable.create(
                 data=data_json["object_permission"],
