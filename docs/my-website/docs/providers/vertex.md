@@ -1125,6 +1125,9 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ```
 
+</TabItem>
+</Tabs>
+
 #### Calling provider api directly
 
 [**Go straight to provider**](../pass_through/vertex_ai.md#context-caching)
