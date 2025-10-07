@@ -188,10 +188,11 @@ class TestResponseAPILoggingUtils:
         """Test transformation handles None values properly"""
         # Setup
         usage = {
-            "input_tokens": 0,  # Changed from None to 0
+            "input_tokens": None,
             "output_tokens": 20,
-            "total_tokens": 20,
-            "output_tokens_details": {"reasoning_tokens": 5},
+            "total_tokens": None,
+            "input_tokens_details": None,
+            "output_tokens_details": {"reasoning_tokens": None},
         }
 
         # Execute
@@ -203,3 +204,5 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 0
         assert result.completion_tokens == 20
         assert result.total_tokens == 20
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 0
