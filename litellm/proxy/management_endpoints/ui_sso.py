@@ -669,11 +669,11 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID from the state
-        key_id = state.split(":", 1)[1]
-
-        # Get existing_key from query parameters if provided
-        existing_key = request.query_params.get("existing_key")
+        # Extract the key ID and existing_key from the state
+        # State format: {PREFIX}:{key}:{existing_key} or {PREFIX}:{key}
+        state_parts = state.split(":", 2)  # Split into max 3 parts
+        key_id = state_parts[1] if len(state_parts) > 1 else None
+        existing_key = state_parts[2] if len(state_parts) > 2 else None
 
         verbose_proxy_logger.info(
             f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}"
@@ -1145,6 +1145,9 @@ class SSOAuthenticationHandler:
     ) -> str:
         """
         Get the redirect URL for SSO
+        
+        Note: existing_key is not added to the URL to avoid changing the callback URL.
+        It should be passed via the state parameter instead.
         """
         from litellm.proxy.utils import get_custom_url
 
@@ -1153,10 +1156,6 @@ class SSOAuthenticationHandler:
             redirect_url += sso_callback_route
         else:
             redirect_url += "/" + sso_callback_route
-
-        # Append existing_key as query parameter if provided
-        if existing_key:
-            redirect_url += f"?existing_key={existing_key}"
 
         return redirect_url
 
@@ -1348,7 +1347,11 @@ class SSOAuthenticationHandler:
         """
         Checks the request 'source' if a cli state token was passed in
 
-        This is used to authenticate through the CLI login flow
+        This is used to authenticate through the CLI login flow.
+        
+        The state parameter format is: {PREFIX}:{key}:{existing_key}
+        - If existing_key is provided, it's included in the state
+        - The state parameter is used to pass data through the OAuth flow without changing the callback URL
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
@@ -1356,8 +1359,10 @@ class SSOAuthenticationHandler:
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
-            # Just use the key - existing_key will be passed separately via query params
-            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+            if existing_key:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{existing_key}"
+            else:
+                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
             return None
 
