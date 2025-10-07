@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -23,7 +23,6 @@ import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui/ChatUI";
-import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
 import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
@@ -40,7 +39,6 @@ import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
-import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
@@ -97,6 +95,7 @@ function LoadingScreen() {
 }
 
 export default function CreateKeyPage() {
+  const router = useRouter();
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
@@ -131,13 +130,9 @@ export default function CreateKeyPage() {
 
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
-    // Update URL without full page reload
     const newSearchParams = new URLSearchParams(searchParams);
     newSearchParams.set("page", newPage);
-
-    // Use Next.js router to update URL
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-
+    router.push(`/?${newSearchParams.toString()}`); // absolute, not relative
     setPage(newPage);
   };
 
@@ -264,7 +259,12 @@ export default function CreateKeyPage() {
               />
               <div className="flex flex-1 overflow-auto">
                 <div className="mt-2">
-                  <SidebarProvider defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} setPage={updatePage} />
+                  <Sidebar2
+                    defaultSelectedKey={page}
+                    setPage={updatePage}
+                    accessToken={accessToken}
+                    userRole={userRole}
+                  />
                 </div>
 
                 {page == "api-keys" ? (
