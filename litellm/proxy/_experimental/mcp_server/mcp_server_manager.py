@@ -602,6 +602,45 @@ class MCPServerManager:
             return tool_name not in server.disallowed_tools
         return True
 
+    async def check_tool_permission_for_key_team(
+        self,
+        tool_name: str,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """
+        Check if a tool is allowed based on key/team object_permission.mcp_tool_permissions.
+        Uses MCPRequestHandler.is_tool_allowed_for_server for consistent inheritance logic.
+        Raises HTTPException if tool is not allowed.
+
+        Args:
+            tool_name: Name of the tool to check
+            server: MCPServer object
+            user_api_key_auth: User authentication
+
+        Raises:
+            HTTPException: If tool is not allowed for this key/team
+        """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        
+        if not user_api_key_auth:
+            return
+        
+        # Check if tool is allowed
+        is_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name=tool_name,
+            server_id=server.server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+        
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool '{tool_name}' is not allowed for your key/team on server '{server.name}'. Contact proxy admin for access."
+                },
+            )
+
     async def pre_call_tool_check(
         self,
         name: str,
@@ -620,6 +659,13 @@ class MCPServerManager:
                     "error": f"Tool {name} is not allowed for server {server.name}. Contact proxy admin to allow this tool."
                 },
             )
+
+        ## check tool-level permissions from object_permission
+        await self.check_tool_permission_for_key_team(
+            tool_name=name,
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+        )
 
         pre_hook_kwargs = {
             "name": name,
