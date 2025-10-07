@@ -60,13 +60,14 @@ def test_google_stream_generate_content_endpoint():
     # Create a test client
     client = TestClient(google_router)
     
-    # Mock the router's agenerate_content method to return a stream
-    mock_stream = AsyncMock()
-    mock_stream.__aiter__ = lambda self: mock_stream
-    mock_stream.__anext__.side_effect = StopAsyncIteration
+    # Mock the router's agenerate_content_stream method to return a stream
+    async def mock_stream_generator():
+        yield 'data: {"test": "stream_chunk_1"}\n\n'
+        yield 'data: {"test": "stream_chunk_2"}\n\n'
+        yield "data: [DONE]\n\n"
     
     with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
-        mock_router.agenerate_content = AsyncMock(return_value=mock_stream)
+        mock_router.agenerate_content_stream = AsyncMock(return_value=mock_stream_generator())
         
         # Send a request to the endpoint
         response = client.post(
@@ -79,9 +80,9 @@ def test_google_stream_generate_content_endpoint():
         # Verify the response
         assert response.status_code == 200
         
-        # Verify that agenerate_content was called with correct parameters
-        mock_router.agenerate_content.assert_called_once()
-        call_args = mock_router.agenerate_content.call_args
+        # Verify that agenerate_content_stream was called with correct parameters
+        mock_router.agenerate_content_stream.assert_called_once()
+        call_args = mock_router.agenerate_content_stream.call_args
         assert call_args[1]["stream"] is True
         assert call_args[1]["model"] == "test-model"
         assert call_args[1]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
