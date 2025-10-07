@@ -674,6 +674,7 @@ const sidebars = {
       items: [
         "data_security",
         "data_retention",
+        "proxy/security_encryption_faq",
         "migration_policy",
         {
           type: "category",
