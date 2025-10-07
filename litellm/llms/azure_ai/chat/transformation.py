@@ -46,14 +46,12 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _supports_stop_reason(self, model: str) -> bool:
         """
         Check if the model supports stop tokens.
-        Grok models don't support stop tokens.
         """
-        if "grok-3-mini" in model:
-            return False
-        elif "grok-4" in model:
-            return False
-        elif "grok-code-fast" in model:
-            return False
+        if "grok" in model:
+            # Reuse Xai method for Grok models
+            from litellm.llms.xai.chat.transformation import XAIChatConfig
+            xai_config = XAIChatConfig()
+            return xai_config._supports_stop_reason(model)
         return True
 
     def validate_environment(
