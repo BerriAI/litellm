@@ -506,14 +506,14 @@ class ProxyInitializationHelpers:
 )
 @click.option(
     "--limit_concurrency",
-    default=None,
+    default=10000,
     type=int,
     help="Set the maximum number of concurrent requests to the proxy (uvicorn limit_concurrency parameter)",
     envvar="LIMIT_CONCURRENCY",
 )
 @click.option(
     "--backlog",
-    default=None,
+    default=2048,
     type=int,
     help="Set the maximum number of pending connections (uvicorn backlog parameter)",
     envvar="BACKLOG",
