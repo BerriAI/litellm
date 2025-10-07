@@ -25,19 +25,15 @@ import {
   TabPanels,
   Grid,
 } from "@tremor/react";
-import { Statistic } from "antd"
-import { modelAvailableCall }  from "./networking";
+import { Statistic } from "antd";
+import { modelAvailableCall } from "./networking";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 
 interface ApiRefProps {
   proxySettings: any;
 }
 
-
-const APIRef: React.FC<ApiRefProps> = ({
-  proxySettings,
-}) => {
-
+const APIRef: React.FC<ApiRefProps> = ({ proxySettings }) => {
   let base_url = "<your_proxy_base_url>";
 
   if (proxySettings) {
@@ -45,23 +41,28 @@ const APIRef: React.FC<ApiRefProps> = ({
       base_url = proxySettings.PROXY_BASE_URL;
     }
   }
-    return (
-        <>
-         <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
+  return (
+    <>
+      <Grid className="gap-2 p-8 h-[80vh] w-full mt-2">
         <div className="mb-5">
-            <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">OpenAI Compatible Proxy: API Reference</p>        
-            <Text className="mt-2 mb-2">LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to point to your litellm proxy. Example Below </Text>
+          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
+            OpenAI Compatible Proxy: API Reference
+          </p>
+          <Text className="mt-2 mb-2">
+            LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url
+            to point to your litellm proxy. Example Below{" "}
+          </Text>
 
-                <TabGroup>
-                  <TabList>
-                    <Tab>OpenAI Python SDK</Tab>
-                    <Tab>LlamaIndex</Tab>
-                    <Tab>Langchain Py</Tab>
-                  </TabList>
-                  <TabPanels>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+          <TabGroup>
+            <TabList>
+              <Tab>OpenAI Python SDK</Tab>
+              <Tab>LlamaIndex</Tab>
+              <Tab>Langchain Py</Tab>
+            </TabList>
+            <TabPanels>
+              <TabPanel>
+                <SyntaxHighlighter language="python">
+                  {`
 import openai
 client = openai.OpenAI(
     api_key="your_api_key",
@@ -80,11 +81,11 @@ response = client.chat.completions.create(
 
 print(response)
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+                </SyntaxHighlighter>
+              </TabPanel>
+              <TabPanel>
+                <SyntaxHighlighter language="python">
+                  {`
 import os, dotenv
 
 from llama_index.llms import AzureOpenAI
@@ -116,11 +117,11 @@ response = query_engine.query("What did the author do growing up?")
 print(response)
 
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                    <TabPanel>
-                      <SyntaxHighlighter language="python">
-                        {`
+                </SyntaxHighlighter>
+              </TabPanel>
+              <TabPanel>
+                <SyntaxHighlighter language="python">
+                  {`
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
@@ -148,19 +149,14 @@ response = chat(messages)
 print(response)
 
             `}
-                      </SyntaxHighlighter>
-                    </TabPanel>
-                  </TabPanels>
-                </TabGroup>
-
-        
+                </SyntaxHighlighter>
+              </TabPanel>
+            </TabPanels>
+          </TabGroup>
         </div>
-        </Grid>
-
-        
+      </Grid>
     </>
-    )
-}
+  );
+};
 
 export default APIRef;
-
