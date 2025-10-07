@@ -311,7 +311,7 @@ async def new_team(  # noqa: PLR0915
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -769,7 +769,7 @@ async def update_team(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "mcp_tool_permissions": {"server_id_1": ["tool1", "tool2"]}}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.

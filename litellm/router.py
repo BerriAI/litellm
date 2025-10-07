@@ -6249,6 +6249,20 @@ class Router:
                         returned_models.append(alias_model)
                     else:
                         returned_models.append(model)
+        elif team_id is not None:
+            # Fallback: if team_id is provided and model_name not in index,
+            # check if model_name matches any team_public_model_name
+            # O(n) scan but only when team_id lookup fails
+            for idx, model in enumerate(self.model_list):
+                if self.should_include_deployment(
+                    model_name=model_name, model=model, team_id=team_id
+                ):
+                    if model_alias is not None:
+                        alias_model = copy.deepcopy(model)
+                        alias_model["model_name"] = model_alias
+                        returned_models.append(alias_model)
+                    else:
+                        returned_models.append(model)
 
         return returned_models
 

@@ -43,6 +43,7 @@ import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
@@ -96,6 +97,7 @@ export interface TeamData {
       object_permission_id: string;
       mcp_servers: string[];
       mcp_access_groups?: string[];
+      mcp_tool_permissions?: Record<string, string[]>;
       vector_stores: string[];
     };
     team_member_budget_table: {
@@ -348,7 +350,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         servers: [],
         accessGroups: [],
       };
-      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
+      const mcpToolPermissions = values.mcp_tool_permissions || {};
+      
+      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0) || Object.keys(mcpToolPermissions).length > 0) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -356,8 +360,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         if (accessGroups && accessGroups.length > 0) {
           updateData.object_permission.mcp_access_groups = accessGroups;
         }
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          updateData.object_permission.mcp_tool_permissions = mcpToolPermissions;
+        }
       }
       delete values.mcp_servers_and_groups;
+      delete values.mcp_tool_permissions;
 
       const response = await teamUpdateCall(accessToken, updateData);
 
@@ -552,6 +560,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       servers: info.object_permission?.mcp_servers || [],
                       accessGroups: info.object_permission?.mcp_access_groups || [],
                     },
+                    mcp_tool_permissions: info.object_permission?.mcp_tool_permissions || {},
                   }}
                   layout="vertical"
                 >
@@ -671,6 +680,31 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       placeholder="Select MCP servers or access groups (optional)"
                     />
                   </Form.Item>
+
+                  {/* Hidden field to register mcp_tool_permissions with the form */}
+                  <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+                    <Input type="hidden" />
+                  </Form.Item>
+
+                  <Form.Item 
+                    noStyle
+                    shouldUpdate={(prevValues, currentValues) => 
+                      prevValues.mcp_servers_and_groups !== currentValues.mcp_servers_and_groups ||
+                      prevValues.mcp_tool_permissions !== currentValues.mcp_tool_permissions
+                    }
+                  >
+                    {() => (
+                      <div className="mb-6">
+                        <MCPToolPermissions
+                          accessToken={accessToken || ""}
+                          selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+                          toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
+                          onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+                        />
+                      </div>
+                    )}
+                  </Form.Item>
+
                   <Form.Item label="Organization ID" name="organization_id">
                     <Input type="" />
                   </Form.Item>

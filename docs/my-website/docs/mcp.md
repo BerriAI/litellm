@@ -23,6 +23,43 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 
 ## Adding your MCP
 
+### Prerequisites
+
+To store MCP servers in the database, you need to enable database storage:
+
+**Environment Variable:**
+```bash
+export STORE_MODEL_IN_DB=True
+```
+
+**OR in config.yaml:**
+```yaml
+general_settings:
+  store_model_in_db: true
+```
+
+#### Fine-grained Database Storage Control
+
+By default, when `store_model_in_db` is `true`, all object types (models, MCPs, guardrails, vector stores, etc.) are stored in the database. If you want to store only specific object types, use the `supported_db_objects` setting.
+
+**Example: Store only MCP servers in the database**
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  store_model_in_db: true
+  supported_db_objects: ["mcp"]  # Only store MCP servers in DB
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: sk-xxxxxxx
+```
+
+**See all available object types:** [Config Settings - supported_db_objects](./proxy/config_settings.md#general_settings---reference)
+
+If `supported_db_objects` is not set, all object types are loaded from the database (default behavior).
+
 <Tabs>
 <TabItem value="ui" label="LiteLLM UI">
 

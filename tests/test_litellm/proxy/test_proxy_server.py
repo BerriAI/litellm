@@ -2030,3 +2030,89 @@ def test_add_callback_from_db_to_in_memory_litellm_callbacks():
             existing_callbacks=existing_callbacks_with_item,
         )
         mock_callback_manager.add_litellm_success_callback.assert_not_called()
+
+
+def test_should_load_db_object_with_supported_db_objects():
+    """
+    Test _should_load_db_object method with supported_db_objects configuration.
+    
+    Verifies that when supported_db_objects is set, only specified object types
+    are loaded from the database.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: supported_db_objects not set - all objects should be loaded
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+
+    # Test Case 2: supported_db_objects set to only load MCP
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is False
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 3: supported_db_objects set to load multiple types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": ["mcp", "guardrails", "vector_stores"]},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert proxy_config._should_load_db_object(object_type="prompts") is False
+
+    # Test Case 4: supported_db_objects is not a list (should default to loading all)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": "invalid_type"},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+
+    # Test Case 5: supported_db_objects is an empty list (nothing should be loaded)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"supported_db_objects": []},
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is False
+        assert proxy_config._should_load_db_object(object_type="mcp") is False
+        assert proxy_config._should_load_db_object(object_type="guardrails") is False
+
+    # Test Case 6: Test all available object types
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "supported_db_objects": [
+                "models",
+                "mcp",
+                "guardrails",
+                "vector_stores",
+                "pass_through_endpoints",
+                "prompts",
+                "model_cost_map",
+            ]
+        },
+    ):
+        assert proxy_config._should_load_db_object(object_type="models") is True
+        assert proxy_config._should_load_db_object(object_type="mcp") is True
+        assert proxy_config._should_load_db_object(object_type="guardrails") is True
+        assert proxy_config._should_load_db_object(object_type="vector_stores") is True
+        assert (
+            proxy_config._should_load_db_object(object_type="pass_through_endpoints")
+            is True
+        )
+        assert proxy_config._should_load_db_object(object_type="prompts") is True
+        assert proxy_config._should_load_db_object(object_type="model_cost_map") is True
