@@ -1,8 +1,9 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=python:3.11-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-slim
+
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -11,35 +12,41 @@ WORKDIR /app
 
 USER root
 
-# Install build dependencies
-RUN apk add --no-cache gcc python3-dev openssl openssl-dev
+# Install build dependencies in one layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade pip build
 
+# Copy requirements first for better layer caching
+COPY requirements.txt .
 
-RUN pip install --upgrade pip>=24.3.1 && \
-    pip install build
+# Install Python dependencies with cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# Copy the current directory contents into the container at /app
-COPY . .
+# Fix JWT dependency conflicts early
+RUN pip uninstall jwt -y || true && \
+    pip uninstall PyJWT -y || true && \
+    pip install PyJWT==2.9.0 --no-cache-dir
 
-# Build Admin UI
+# Copy only necessary files for build
+COPY pyproject.toml README.md schema.prisma poetry.lock ./
+COPY litellm/ ./litellm/
+COPY enterprise/ ./enterprise/
+COPY docker/ ./docker/
+
+# Build Admin UI once
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
 
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
-
-# Install the package
+# Install the built package
 RUN pip install dist/*.whl
-
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.9.0 --no-cache-dir
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -47,36 +54,32 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache openssl tzdata
-
-# Upgrade pip to fix CVE-2025-8869
-RUN pip install --upgrade pip>=24.3.1
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
-COPY . .
-RUN ls -la /app
 
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
+# Copy only necessary runtime files
+COPY docker/entrypoint.sh docker/prod_entrypoint.sh ./docker/
+COPY litellm/ ./litellm/
+COPY pyproject.toml README.md schema.prisma poetry.lock ./
+
+# Copy pre-built wheels and install everything at once
 COPY --from=builder /wheels/ /wheels/
+COPY --from=builder /app/dist/*.whl .
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+# Install all dependencies in one step with no-cache for smaller image
+RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ && \
+    rm -f *.whl && \
+    rm -rf /wheels
 
-# Install semantic_router and aurelio-sdk using script
-RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
-
-# Generate prisma client
-RUN prisma generate
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# Generate prisma client and set permissions
+RUN prisma generate && \
+    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
-
-RUN apk add --no-cache supervisor
-COPY docker/supervisord.conf /etc/supervisord.conf
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
