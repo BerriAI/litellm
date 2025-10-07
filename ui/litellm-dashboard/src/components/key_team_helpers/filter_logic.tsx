@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { keyListCall, Organization } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
-import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
+import { fetchAllOrganizations, fetchAllTeams } from "./filter_helpers";
 import { Setter } from "@/types";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
@@ -123,16 +122,6 @@ export function useFilterLogic({
     }
   }, [accessToken]);
 
-  const queryAllKeysQuery = useQuery({
-    queryKey: ["allKeys"],
-    queryFn: async () => {
-      if (!accessToken) throw new Error("Access token required");
-      return await fetchAllKeyAliases(accessToken);
-    },
-    enabled: !!accessToken,
-  });
-  const allKeyAliases = queryAllKeysQuery.data || [];
-
   // Update teams and organizations when props change
   useEffect(() => {
     if (teams && teams.length > 0) {
@@ -182,7 +171,6 @@ export function useFilterLogic({
   return {
     filters,
     filteredKeys,
-    allKeyAliases,
     allTeams,
     allOrganizations,
     handleFilterChange,

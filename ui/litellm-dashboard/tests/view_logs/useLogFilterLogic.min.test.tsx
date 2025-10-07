@@ -6,7 +6,6 @@ import { useLogFilterLogic } from "../../src/components/view_logs/log_filter_log
 
 // Minimal mocks to avoid real network during hook init
 vi.mock("../../src/components/key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 

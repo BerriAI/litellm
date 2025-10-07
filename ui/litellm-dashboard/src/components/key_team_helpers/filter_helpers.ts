@@ -3,53 +3,6 @@ import { Team } from "./key_list";
 import { Organization } from "../networking";
 
 /**
- * Fetches all key aliases across all pages
- * @param accessToken The access token for API authentication
- * @returns Array of all unique key aliases
- */
-export const fetchAllKeyAliases = async (accessToken: string | null): Promise<string[]> => {
-  if (!accessToken) return [];
-
-  try {
-    // Fetch all pages of keys to extract aliases
-    let allAliases: string[] = [];
-    let currentPage = 1;
-    let hasMorePages = true;
-
-    while (hasMorePages) {
-      const response = await keyListCall(
-        accessToken,
-        null, // organization_id
-        "", // team_id
-        null, // selectedKeyAlias
-        null, // user_id
-        null, // key_hash
-        currentPage,
-        100, // larger page size to reduce number of requests
-      );
-
-      // Extract aliases from this page
-      const pageAliases = response.keys.map((key: any) => key.key_alias).filter(Boolean) as string[];
-
-      allAliases = [...allAliases, ...pageAliases];
-
-      // Check if there are more pages
-      if (currentPage < response.total_pages) {
-        currentPage++;
-      } else {
-        hasMorePages = false;
-      }
-    }
-
-    // Remove duplicates
-    return Array.from(new Set(allAliases));
-  } catch (error) {
-    console.error("Error fetching all key aliases:", error);
-    return [];
-  }
-};
-
-/**
  * Fetches all teams across all pages
  * @param accessToken The access token for API authentication
  * @param organizationId Optional organization ID to filter teams

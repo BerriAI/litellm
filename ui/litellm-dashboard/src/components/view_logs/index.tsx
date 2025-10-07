@@ -21,7 +21,6 @@ import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailVie
 import FilterComponent from "../molecules/filter";
 import { FilterOption } from "../molecules/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 import { Tab, TabGroup, TabList, TabPanels, TabPanel, Text, Switch } from "@tremor/react";
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
@@ -237,7 +236,6 @@ export default function SpendLogsTable({
     filters,
     filteredLogs,
     allTeams: hookAllTeams,
-    allKeyAliases,
     handleFilterChange,
     handleFilterReset,
   } = useLogFilterLogic({
@@ -401,16 +399,7 @@ export default function SpendLogsTable({
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!accessToken) return [];
-        const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter((alias) => alias.toLowerCase().includes(searchText.toLowerCase()));
-        return filtered.map((alias) => ({
-          label: alias,
-          value: alias,
-        }));
-      },
+      isSearchable: false,
     },
     {
       name: "End User",

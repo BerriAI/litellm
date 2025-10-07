@@ -152,7 +152,7 @@ export function AllKeysTable({
 
   // Use the filter logic hook
 
-  const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
+  const { filters, filteredKeys, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
       keys,
       teams,
@@ -503,19 +503,7 @@ export function AllKeysTable({
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText) => {
-        const filteredKeyAliases = allKeyAliases.filter((key) => {
-          return key.toLowerCase().includes(searchText.toLowerCase());
-        });
-
-        return filteredKeyAliases.map((key) => {
-          return {
-            label: key,
-            value: key,
-          };
-        });
-      },
+      isSearchable: false,
     },
     {
       name: "User ID",
