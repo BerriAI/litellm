@@ -1,5 +1,5 @@
 import { Layout, Menu } from "antd";
-import { useRouter, usePathname } from "next/navigation"; // UPDATED: also usePathname to detect current route
+import { usePathname } from "next/navigation";
 import {
   KeyOutlined,
   PlayCircleOutlined,
@@ -44,23 +44,29 @@ interface MenuItem {
   icon?: React.ReactNode;
 }
 
-/** ---- BASE URL HELPERS (shared pattern across files) ---- */
+/** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return ""; // no base
-  // strip leading/trailing slashes then rebuild as "/segment/"
   const core = trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
-  return core ? `/${core}/` : "/";
+  return core ? `/${core}` : "";
 }
 const BASE_PREFIX = normalizeBasePrefix(process.env.NEXT_PUBLIC_BASE_URL);
-/** Builds an app-relative path under the configured base prefix. */
+
+/** Build an absolute path under the configured base. */
 function withBase(path: string): string {
-  // Accepts paths like "/virtual-keys" or "/?page=..." and prefixes with BASE_PREFIX when present.
-  const body = path.startsWith("/") ? path.slice(1) : path;
-  const combined = `${BASE_PREFIX}${body}`;
-  return combined.startsWith("/") ? combined : `/${combined}`;
+  // path can be "/virtual-keys" or "/?page=..."
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${BASE_PREFIX}${p}` || p;
 }
-/** -------------------------------------------------------- */
+
+/** History-based navigation to prevent hard reloads / suspense flashes */
+function softNavigate(url: string, replace = false) {
+  if (typeof window === "undefined") return;
+  if (replace) window.history.replaceState(null, "", url);
+  else window.history.pushState(null, "", url);
+}
+/** -------------------------------- */
 
 const Sidebar2: React.FC<SidebarProps> = ({
   accessToken,
@@ -69,7 +75,6 @@ const Sidebar2: React.FC<SidebarProps> = ({
   defaultSelectedKey,
   collapsed = false,
 }) => {
-  const router = useRouter();
   const pathname = usePathname();
   const { refactoredUIFlag } = useFeatureFlags();
 
@@ -243,38 +248,30 @@ const Sidebar2: React.FC<SidebarProps> = ({
     return true;
   });
 
-  // Helper: go to /?page=...; when on /virtual-keys with refactored UI, replace instead of appending
+  // Helper: update /?page=... under the configured base, WITHOUT triggering App Router nav
   const pushToRootWithPage = (page: string, useReplace = false) => {
     const params = new URLSearchParams();
     params.set("page", page);
     const url = withBase(`/?${params.toString()}`);
-    if (useReplace) {
-      router.replace(url);
-    } else {
-      router.push(url);
-    }
+    softNavigate(url, useReplace);
   };
 
-  // Centralized navigation that satisfies the requirement
   const navigateToPage = (page: string) => {
-    // Special-case: Virtual Keys target
     if (page === "api-keys") {
       if (refactoredUIFlag) {
-        // Go to the dedicated /virtual-keys page (always under base)
-        router.push(withBase("/virtual-keys"));
-        return; // do not call setPage here (parity with previous behavior)
+        // vanity URL, keep SPA alive
+        softNavigate(withBase("/virtual-keys"));
+        return; // don't call setPage to keep parity, UI already shows api-keys by default
       }
-      // Legacy behavior
       pushToRootWithPage(page);
       setPage(page);
       return;
     }
 
-    // All other pages
     if (refactoredUIFlag) {
-      // If currently on /virtual-keys, REPLACE it with /?page=...
-      const onVirtualKeys = pathname?.startsWith(withBase("/virtual-keys"));
-      pushToRootWithPage(page, !!onVirtualKeys);
+      const onVirtualKeys =
+        typeof window !== "undefined" && window.location.pathname.startsWith(withBase("/virtual-keys"));
+      pushToRootWithPage(page, onVirtualKeys);
     } else {
       pushToRootWithPage(page);
     }
@@ -308,15 +305,9 @@ const Sidebar2: React.FC<SidebarProps> = ({
                 key: child.key,
                 icon: child.icon,
                 label: child.label,
-                onClick: () => {
-                  navigateToPage(child.page);
-                },
+                onClick: () => navigateToPage(child.page),
               })),
-              onClick: !item.children
-                ? () => {
-                    navigateToPage(item.page);
-                  }
-                : undefined,
+              onClick: !item.children ? () => navigateToPage(item.page) : undefined,
             }))}
           />
         </ConfigProvider>
