@@ -13180,6 +13180,50 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-5-pro": {
+        "cache_read_input_token_cost": 7.5e-07,
+        "cache_read_input_token_cost_flex": 3.75e-07,
+        "cache_read_input_token_cost_priority": 1.5e-06,
+        "input_cost_per_token": 1.5e-05,
+        "input_cost_per_token_flex": 7.5e-06,
+        "input_cost_per_token_priority": 3e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 272000,
+        "max_tokens": 272000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00012,
+        "output_cost_per_token_flex": 6e-05,
+        "output_cost_per_token_priority": 0.00024,
+        "supported_endpoints": [
+            "/v1/responses",
+            "/v1/realtime",
+            "/v1/assistants",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_structured_outputs": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_file_search": true,
+        "supports_image_generation": true,
+        "supports_mcp": true,
+        "knowledge_cutoff": "2024-09-30",
+        "reasoning_effort": "high"
+    },
     "gpt-image-1": {
         "input_cost_per_pixel": 4.0054321e-08,
         "litellm_provider": "openai",
