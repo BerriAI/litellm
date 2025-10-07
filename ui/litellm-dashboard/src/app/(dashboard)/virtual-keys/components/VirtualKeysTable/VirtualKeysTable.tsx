@@ -16,9 +16,9 @@ import { Organization, userListCall } from "@/components/networking";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import FilterComponent, { FilterOption } from "@/components/molecules/filter";
 import { useFilterLogic } from "@/components/key_team_helpers/filter_logic";
-import useTeams from "@/app/dashboard/virtual-keys/hooks/useTeams";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
-import KeyInfoView from "@/app/dashboard/virtual-keys/components/KeyInfoView";
+import useTeams from "@/app/(dashboard)/virtual-keys/hooks/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import KeyInfoView from "@/app/(dashboard)/virtual-keys/components/KeyInfoView";
 
 interface AllKeysTableProps {
   keys: KeyResponse[];

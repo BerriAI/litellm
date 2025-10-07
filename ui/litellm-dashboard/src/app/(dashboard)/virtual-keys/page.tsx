@@ -1,15 +1,15 @@
 "use client";
 
-import VirtualKeysTable from "@/app/dashboard/virtual-keys/components/VirtualKeysTable/VirtualKeysTable";
+import VirtualKeysTable from "@/app/(dashboard)/virtual-keys/components/VirtualKeysTable/VirtualKeysTable";
 import { useState } from "react";
 import useKeyList from "@/components/key_team_helpers/key_list";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Col, Grid } from "@tremor/react";
-import CreateKey from "@/app/dashboard/virtual-keys/components/CreateKey";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized"
+import CreateKey from "@/app/(dashboard)/virtual-keys/components/CreateKey";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const VirtualKeysPage = () => {
-  const {accessToken, userRole} = useAuthorized();
+  const { accessToken, userRole } = useAuthorized();
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
   const queryClient = new QueryClient();

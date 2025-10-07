@@ -6,7 +6,7 @@ import {
   User,
   userFilterUICall,
 } from "@/components/networking";
-import { ModelAvailableResponse, UserOption } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/types";
+import { ModelAvailableResponse, UserOption } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/types";
 
 export const fetchGuardrails = async (accessToken: string) => {
   try {

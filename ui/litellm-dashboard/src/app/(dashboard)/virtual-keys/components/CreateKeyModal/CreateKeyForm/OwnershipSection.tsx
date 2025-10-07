@@ -6,7 +6,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import React from "react";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { UserOption } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/types";
+import { UserOption } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/types";
 
 interface OwnershipSectionProps {
   team: Team | null;

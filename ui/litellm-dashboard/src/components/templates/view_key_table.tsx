@@ -138,7 +138,7 @@ interface CombinedLimits {
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
- * This component is being DEPRECATED in favor of src/app/dashboard/virtual-keys/components/VirtualKeysTable/
+ * This component is being DEPRECATED in favor of src/app/(dashboard)/virtual-keys/components/VirtualKeysTable/
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */

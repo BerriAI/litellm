@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { debounce } from "lodash";
-import { searchUserOptionsByEmail } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/networking";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import { searchUserOptionsByEmail } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 type User = { user_id: string; user_email: string; role?: string };
 export interface UserOption {

@@ -6,9 +6,9 @@ import { Modal, Form } from "antd";
 import { getPossibleUserRoles, Organization } from "@/components/networking";
 import { rolesWithWriteAccess } from "@/utils/roles";
 import { Team } from "@/components/key_team_helpers/key_list";
-import CreateKeyModal from "@/app/dashboard/virtual-keys/components/CreateKeyModal/CreateKeyModal";
-import CreateUserModal from "@/app/dashboard/components/modals/CreateUserModal";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import CreateKeyModal from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/CreateKeyModal";
+import CreateUserModal from "@/app/(dashboard)/components/modals/CreateUserModal";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface CreateKeyProps {
   team: Team | null;

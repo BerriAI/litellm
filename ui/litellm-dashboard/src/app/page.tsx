@@ -40,8 +40,8 @@ import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 import useFeatureFlags, { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
-import Sidebar2 from "@/app/dashboard/components/Sidebar2";
-import SidebarProvider from "@/app/dashboard/components/SidebarProvider";
+import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
+import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie.split("; ").find((row) => row.startsWith(name + "="));
@@ -125,6 +125,10 @@ export default function CreateKeyPage() {
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
   });
+
+  useEffect(() => {
+    setPage(searchParams.get("page") || "api-keys");
+  }, [searchParams]);
 
   // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Team } from "@/components/key_team_helpers/key_list";
-import { fetchTeamModels } from "@/app/dashboard/virtual-keys/components/CreateKeyModal/networking";
-import useAuthorized from "@/app/dashboard/hooks/useAuthorized";
+import { fetchTeamModels } from "@/app/(dashboard)/virtual-keys/components/CreateKeyModal/networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export const useTeamModels = (selectedTeam: Team | null) => {
   const { userId: userID, userRole, accessToken } = useAuthorized();
