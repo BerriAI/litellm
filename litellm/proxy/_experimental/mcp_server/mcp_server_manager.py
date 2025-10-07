@@ -775,14 +775,7 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
 
         # Validate that the server from prefix matches the actual server (if prefix was used)
-        if server_name_from_prefix:
-            expected_prefix = get_server_prefix(mcp_server)
-            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
-                expected_prefix
-            ):
-                raise ValueError(
-                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
-                )
+        self._validate_server_prefix_match(name, server_name_from_prefix, mcp_server)
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -955,6 +948,32 @@ class MCPServerManager:
                     return server
 
         return None
+
+    def _validate_server_prefix_match(
+        self,
+        tool_name: str,
+        server_name_from_prefix: Optional[str],
+        mcp_server: MCPServer,
+    ) -> None:
+        """
+        Validate that the server prefix from the tool name matches the actual server.
+
+        Args:
+            tool_name: Original tool name provided
+            server_name_from_prefix: Server name extracted from tool name prefix (if any)
+            mcp_server: The MCP server that was found for this tool
+
+        Raises:
+            ValueError: If the server prefix doesn't match the expected server
+        """
+        if server_name_from_prefix:
+            expected_prefix = get_server_prefix(mcp_server)
+            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
+                expected_prefix
+            ):
+                raise ValueError(
+                    f"Tool {tool_name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
+                )
 
     async def _add_mcp_servers_from_db_to_in_memory_registry(self):
         from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
