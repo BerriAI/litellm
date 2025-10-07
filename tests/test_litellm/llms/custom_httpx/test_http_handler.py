@@ -79,9 +79,12 @@ async def test_ssl_context_transport():
         # Get the client session and verify SSL context is passed through
         client_session = transport._get_valid_client_session()
         assert isinstance(client_session, ClientSession)
-        assert isinstance(client_session.connector, TCPConnector)
+        connector = client_session.connector
+        assert isinstance(connector, TCPConnector)
         # Verify the connector has SSL context set by checking if it's using SSL
-        assert client_session.connector._ssl is not None
+        assert connector._ssl is not None
+        # Verify connector limit is 0 (no limit)
+        assert connector.limit == 0
 
 
 @pytest.mark.asyncio

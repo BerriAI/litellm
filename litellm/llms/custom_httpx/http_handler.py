@@ -657,7 +657,7 @@ class AsyncHTTPHandler:
         )
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
-                connector=TCPConnector(**connector_kwargs),
+                connector=TCPConnector(limit=0, **connector_kwargs),
                 trust_env=trust_env,
             ),
         )
