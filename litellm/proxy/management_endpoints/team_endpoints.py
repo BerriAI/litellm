@@ -12,7 +12,6 @@ All /team management endpoints
 import asyncio
 import json
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -22,6 +21,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     BlockTeamRequest,
     CommonProxyErrors,
@@ -105,7 +105,7 @@ router = APIRouter()
 
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
-    
+
     @staticmethod
     def should_create_budget(
         team_member_budget: Optional[float] = None,
@@ -113,12 +113,14 @@ class TeamMemberBudgetHandler:
         team_member_tpm_limit: Optional[int] = None,
     ) -> bool:
         """Check if any team member limits are provided"""
-        return any([
-            team_member_budget is not None,
-            team_member_rpm_limit is not None,
-            team_member_tpm_limit is not None,
-        ])
-    
+        return any(
+            [
+                team_member_budget is not None,
+                team_member_rpm_limit is not None,
+                team_member_tpm_limit is not None,
+            ]
+        )
+
     @staticmethod
     async def create_team_member_budget_table(
         data: Union[NewTeamRequest, LiteLLM_TeamTable],
@@ -146,7 +148,7 @@ class TeamMemberBudgetHandler:
             budget_id=budget_id,
             budget_duration=data.budget_duration,
         )
-        
+
         if team_member_budget is not None:
             budget_request.max_budget = team_member_budget
         if team_member_rpm_limit is not None:
@@ -165,12 +167,12 @@ class TeamMemberBudgetHandler:
         new_team_data_json["metadata"][
             "team_member_budget_id"
         ] = team_member_budget_table.budget_id
-        
+
         # Remove team member fields from new_team_data_json
         TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
 
         return new_team_data_json
-    
+
     @staticmethod
     async def upsert_team_member_budget_table(
         team_table: LiteLLM_TeamTable,
@@ -193,14 +195,14 @@ class TeamMemberBudgetHandler:
         if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
             # Budget exists - create update request with only provided values
             budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
-            
+
             if team_member_budget is not None:
                 budget_request.max_budget = team_member_budget
             if team_member_rpm_limit is not None:
                 budget_request.rpm_limit = team_member_rpm_limit
             if team_member_tpm_limit is not None:
                 budget_request.tpm_limit = team_member_tpm_limit
-                
+
             budget_row = await update_budget(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
@@ -221,11 +223,11 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
             )
-        
+
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
         return updated_kv
-    
+
     @staticmethod
     def _clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
@@ -265,7 +267,6 @@ async def get_all_team_memberships(
         returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
     return returned_tm
-
 
 
 #### TEAM MANAGEMENT ####
@@ -383,7 +384,7 @@ async def new_team(  # noqa: PLR0915
                         "error": f"Team id = {data.team_id} already exists. Please use a different team id."
                     },
                 )
-            
+
         # If max_budget is not explicitly provided in the request,
         # check for a default value in the proxy configuration.
         if data.max_budget is None:
@@ -503,7 +504,7 @@ async def new_team(  # noqa: PLR0915
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field) is not None:
+            if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
