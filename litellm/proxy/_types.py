@@ -12,7 +12,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from enum import Enum
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
