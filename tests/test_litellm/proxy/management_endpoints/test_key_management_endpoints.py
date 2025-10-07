@@ -422,6 +422,80 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
+    """
+    Test that /key/generate correctly handles mcp_tool_permissions in object_permission.
+    
+    This test verifies that:
+    1. mcp_tool_permissions is accepted in the object_permission field
+    2. The field is properly stored in the LiteLLM_ObjectPermissionTable
+    3. The key is correctly linked to the object_permission record
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+
+    # Track what data is passed to create
+    created_permission_data = {}
+
+    async def mock_create(**kwargs):
+        created_permission_data.update(kwargs.get("data", {}))
+        return MagicMock(object_permission_id="objperm_mcp_123")
+
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mock_create
+
+    async def _insert_data_side_effect(*args, **kwargs):
+        table_name = kwargs.get("table_name")
+        if table_name == "user":
+            return MagicMock(models=[], spend=0)
+        elif table_name == "key":
+            return MagicMock(
+                token="hashed_token_789",
+                litellm_budget_table=None,
+                object_permission=None,
+            )
+        return MagicMock()
+
+    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    # Create request with mcp_tool_permissions
+    request_data = GenerateKeyRequest(
+        object_permission=LiteLLM_ObjectPermissionBase(
+            mcp_servers=["server_1"],
+            mcp_tool_permissions={"server_1": ["tool1", "tool2", "tool3"]},
+        )
+    )
+
+    await generate_key_fn(
+        data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+            user_id="user-mcp-1",
+        ),
+    )
+
+    # Verify mcp_tool_permissions was stored
+    assert "mcp_tool_permissions" in created_permission_data
+    assert created_permission_data["mcp_tool_permissions"] == {
+        "server_1": ["tool1", "tool2", "tool3"]
+    }
+    assert created_permission_data["mcp_servers"] == ["server_1"]
+
+
+@pytest.mark.asyncio
 async def test_key_update_object_permissions_existing_permission(monkeypatch):
     """
     Test updating object permissions when a key already has an existing object_permission_id.

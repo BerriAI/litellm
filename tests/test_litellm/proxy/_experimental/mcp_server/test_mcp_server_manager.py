@@ -943,6 +943,201 @@ class TestMCPServerManager:
         manager.add_update_server(server)
         assert server.server_id in manager.get_registry()
 
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_allows_permitted_tool(self):
+        """
+        Test that key can call tool when it's in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should succeed
+        await manager.pre_call_tool_check(
+            name="read_wiki_structure",
+            arguments={"repoName": "facebook/react"},
+            server_name_from_prefix="test",
+            user_api_key_auth=user_auth,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    @pytest.mark.asyncio
+    async def test_key_tool_permission_blocks_unpermitted_tool(self):
+        """
+        Test that key cannot call tool when it's NOT in mcp_tool_permissions allowed list.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="test_server_123",
+            name="Test Server",
+            transport=MCPTransport.http,
+            allowed_tools=None,
+            disallowed_tools=None,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_123",
+            mcp_tool_permissions={"test_server_123": ["read_wiki_structure"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+        )
+
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value={}
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        # Should fail with 403
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="ask_question",
+                arguments={"question": "test"},
+                server_name_from_prefix="test",
+                user_api_key_auth=user_auth,
+                proxy_logging_obj=proxy_logging,
+                server=server,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_allows_permitted_tool(self):
+        """
+        Test check_tool_permission_for_key_team directly - should allow permitted tool.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_456",
+            mcp_tool_permissions={"github_server": ["read_repo", "list_issues"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=object_permission,
+        )
+
+        # Should not raise exception for allowed tool
+        await manager.check_tool_permission_for_key_team(
+            tool_name="read_repo",
+            server=server,
+            user_api_key_auth=user_auth,
+        )
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_blocks_unpermitted_tool(self):
+        """
+        Test check_tool_permission_for_key_team directly - should block unpermitted tool.
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_456",
+            mcp_tool_permissions={"github_server": ["read_repo"]},
+        )
+
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=object_permission,
+        )
+
+        # Should raise HTTPException for unpermitted tool
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.check_tool_permission_for_key_team(
+                tool_name="delete_repo",
+                server=server,
+                user_api_key_auth=user_auth,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "delete_repo" in exc_info.value.detail["error"]
+        assert "not allowed" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_check_tool_permission_for_key_team_allows_all_when_no_restrictions(
+        self,
+    ):
+        """
+        Test check_tool_permission_for_key_team - should allow all tools when no restrictions set.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="github_server",
+            name="GitHub Server",
+            transport=MCPTransport.http,
+        )
+
+        # No object_permission set on user_auth
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-456",
+            object_permission=None,
+        )
+
+        # Should allow any tool when no restrictions
+        await manager.check_tool_permission_for_key_team(
+            tool_name="any_tool",
+            server=server,
+            user_api_key_auth=user_auth,
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
