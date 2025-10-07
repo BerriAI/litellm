@@ -521,8 +521,8 @@ if MCP_AVAILABLE:
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
         )
         return all_tools
-    
-    def filter_tools_by_key_team_permissions(
+
+    async def filter_tools_by_key_team_permissions(
         tools: List[MCPTool],
         server_id: str,
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -535,6 +535,9 @@ if MCP_AVAILABLE:
         )
         if allowed_tool_names is not None:
             filtered_tools = [t for t in tools if t.name in allowed_tool_names]
+        else:
+            # No restrictions, return all tools
+            filtered_tools = tools
         
         return filtered_tools
 
